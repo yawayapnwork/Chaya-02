@@ -59,6 +59,9 @@ A refused venue access is audited (`venue.access`, outcome `DENIED`, in the *cal
 | `POST /venues/{id}/scans/{s}/jobs`, `/jobs/{j}/cancel`, `/retry` | ✔ | ✔ | ✔ | ✘ | ✘ | ✘ |
 | `GET /venues/{id}/pois[/{p}]` | ✔ | ✔ | ✔ | ✔ | ✔ | ✘ |
 | `POST/PUT/DELETE /venues/{id}/pois` | ✔ | ✔ | ✘ | ✘ | ✘ | ✘ |
+| `GET/POST /venues/{id}/captures[/...]` (create, upload, complete, processing) | ✔ | ✔ | ✔ | ✘ | ✘ | ✘ |
+| `GET /venues/{id}/floors` | ✔ | ✔ | ✔ | ✔ | ✔ | ✘ |
+| `POST /venues/{id}/floors` | ✔ | ✔ | ✘ | ✘ | ✘ | ✘ |
 | `POST/GET/DELETE /venues/{id}/public-links` | ✔ | ✔ | ✘ | ✘ | ✘ | ✘ |
 | `POST /api/v1/public/viewer-token` | public (link secret is the credential) | | | | | |
 | `GET /api/v1/audit-log` (own org) | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ |

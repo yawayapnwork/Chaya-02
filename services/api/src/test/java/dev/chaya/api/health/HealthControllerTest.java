@@ -41,7 +41,7 @@ class HealthControllerTest {
 
     @Test
     void healthIsUpWhenDatabaseIsUp() throws Exception {
-        when(healthService.check()).thenReturn(new HealthService.HealthReport("UP", "UP"));
+        when(healthService.check()).thenReturn(new HealthService.HealthReport("UP", "UP", "UP"));
         mvc.perform(get("/api/v1/health"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.status").value("UP"));
@@ -49,10 +49,10 @@ class HealthControllerTest {
 
     @Test
     void healthIs503WhenDatabaseIsDown() throws Exception {
-        when(healthService.check()).thenReturn(new HealthService.HealthReport("DOWN", "DOWN"));
+        when(healthService.check()).thenReturn(new HealthService.HealthReport("DOWN", "UP", "DOWN"));
         mvc.perform(get("/api/v1/health"))
             .andExpect(status().isServiceUnavailable())
-            .andExpect(jsonPath("$.database").value("DOWN"));
+            .andExpect(jsonPath("$.storage").value("DOWN"));
     }
 
     @Test

@@ -17,6 +17,17 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return problem(HttpStatus.NOT_FOUND, "NOT_FOUND", e.getMessage());
     }
 
+    @ExceptionHandler(ApiException.class)
+    ProblemDetail api(ApiException e) {
+        return problem(e.status(), e.code(), e.getMessage());
+    }
+
+    @ExceptionHandler(dev.chaya.api.storage.StorageException.class)
+    ProblemDetail storage(dev.chaya.api.storage.StorageException e) {
+        return problem(HttpStatus.SERVICE_UNAVAILABLE, "STORAGE_UNAVAILABLE",
+            "Object storage is unavailable. The request was not completed; retry later.");
+    }
+
     @ExceptionHandler(BadRequestException.class)
     ProblemDetail badRequest(BadRequestException e) {
         return problem(HttpStatus.BAD_REQUEST, "BAD_REQUEST", e.getMessage());

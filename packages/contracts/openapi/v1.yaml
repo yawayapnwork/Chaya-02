@@ -31,14 +31,44 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Version" }
+  /api/v1/venues/{venueId}/floors:
+    get: { summary: List floors of a venue, responses: { "200": { description: Floors } } }
+    post: { summary: Create a floor (admin, venue-manager), responses: { "201": { description: Created } } }
+  /api/v1/venues/{venueId}/captures:
+    get: { summary: List capture sessions, responses: { "200": { description: Capture sessions } } }
+    post: { summary: Create a capture session, responses: { "201": { description: Created (status CREATED) } } }
+  /api/v1/venues/{venueId}/captures/{captureId}:
+    get: { summary: Inspect a capture session, responses: { "200": { description: Capture session } } }
+  /api/v1/venues/{venueId}/captures/{captureId}/media:
+    get: { summary: List capture artifacts, responses: { "200": { description: Media items } } }
+    post:
+      summary: Open a resumable multipart upload for one file
+      responses:
+        "201": { description: "mediaId, partSizeBytes, totalParts" }
+        "413": { description: File larger than the limit for its kind }
+        "415": { description: Content type not allowed }
+  /api/v1/venues/{venueId}/captures/{captureId}/media/{mediaId}:
+    get: { summary: Media status and uploaded parts, responses: { "200": { description: Media item } } }
+  /api/v1/venues/{venueId}/captures/{captureId}/media/{mediaId}/parts/{partNumber}:
+    put:
+      summary: Upload one part (raw body, exact length; optional X-Part-Sha256 header). Idempotent.
+      responses: { "204": { description: Stored }, "422": { description: Part checksum mismatch } }
+  /api/v1/venues/{venueId}/captures/{captureId}/media/{mediaId}/complete:
+    post: { summary: Assemble and start asynchronous validation (also retries QUARANTINED), responses: { "202": { description: Validation started } } }
+  /api/v1/venues/{venueId}/captures/{captureId}/complete-upload:
+    post: { summary: Finish the upload phase, responses: { "200": { description: READY_FOR_PROCESSING }, "409": { description: Not ready } } }
+  /api/v1/venues/{venueId}/captures/{captureId}/processing:
+    get: { summary: Processing status and jobs, responses: { "200": { description: Processing status } } }
+    post: { summary: Start processing (queues the MEDIA_FILTER job), responses: { "202": { description: Accepted } } }
 components:
   schemas:
     Health:
       type: object
-      required: [status, database]
+      required: [status, database, storage]
       properties:
         status: { type: string, enum: [UP, DOWN] }
         database: { type: string, enum: [UP, DOWN] }
+        storage: { type: string, enum: [UP, DOWN] }
     Version:
       type: object
       required: [name, version, apiVersion]

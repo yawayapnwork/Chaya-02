@@ -9,7 +9,7 @@ Each milestone is independently testable and committable. "Done" means its tests
 | M2 | Backend hardening | Redis/MinIO health, problem+json errors, Maven wrapper | `./mvnw verify` |
 | M3 | Identity & tenancy | Keycloak JWT resource server, org/venue/membership tables, venue-scoped authz, audit_event | Integration tests: cross-tenant access returns 404 |
 | M4 | Frontend skeleton | Next.js, Tailwind, OIDC login, venue list from API | Unit + Playwright login test |
-| M5 | Storage & capture sessions | Presigned upload, media_asset, upload verification, capture_session CRUD | Tests against MinIO |
+| M5 | Storage & capture sessions | Done: resumable chunked upload through the backend into MinIO, Tika/ClamAV validation, capture lifecycle, capture UI (see docs/capture-ingestion.md) | Tests against real MinIO |
 | M6 | Job engine | processing_job lifecycle, leasing, heartbeat, retry, worker API, job_event; `PIPELINE_UNAVAILABLE` for missing stages | State-machine and lease-expiry tests |
 | M7 | Media filter worker | FFmpeg frame extraction + quality filtering, real metrics stored | Worker tests on real sample video |
 | M8 | Pose estimation worker | GLOMAP with COLMAP fallback; pose manifest; failure handling | Sample dataset; failure-path test |

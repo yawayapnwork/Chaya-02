@@ -8,39 +8,57 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.DockerClientFactory;
+import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 /**
- * Boots the application against a real PostgreSQL with pgvector; Flyway applies the real
+ * Boots the application against real PostgreSQL (pgvector) and real MinIO; Flyway applies the real
  * migrations. Skipped (not failed) when Docker is unavailable.
  */
 @SpringBootTest(properties = {
     "chaya.security.issuer=" + TestJwt.ISSUER,
-    "chaya.security.audience=" + TestJwt.AUDIENCE
+    "chaya.security.audience=" + TestJwt.AUDIENCE,
+    "chaya.uploads.part-size-bytes=5242880",
+    "chaya.uploads.max-image-bytes=1048576",
+    "chaya.uploads.min-images-without-video=3",
+    "chaya.storage.bucket=chaya-raw-test",
+    "chaya.clamav.enabled=false"
 })
 @AutoConfigureMockMvc
-@Import(TestJwtConfig.class)
+@Import({TestJwtConfig.class, TestScannerConfig.class})
 @Testcontainers(disabledWithoutDocker = true)
 abstract class AbstractIntegrationTest {
 
-    // One container for the whole test JVM: Spring caches the application context across test
-    // classes, so a per-class container would leave cached contexts pointing at a stopped database.
+    // One container of each for the whole test JVM: Spring caches the application context across
+    // test classes, so per-class containers would leave cached contexts pointing at stopped services.
     static final PostgreSQLContainer<?> PG = new PostgreSQLContainer<>(
         DockerImageName.parse("pgvector/pgvector:pg17").asCompatibleSubstituteFor("postgres"));
+
+    static final GenericContainer<?> MINIO = new GenericContainer<>(DockerImageName.parse("quay.io/minio/minio:latest"))
+        .withCommand("server", "/data")
+        .withEnv("MINIO_ROOT_USER", "testaccess")
+        .withEnv("MINIO_ROOT_PASSWORD", "testsecret123")
+        .withExposedPorts(9000)
+        .waitingFor(Wait.forHttp("/minio/health/ready").forPort(9000));
 
     static {
         if (DockerClientFactory.instance().isDockerAvailable()) {
             PG.start();
+            MINIO.start();
         }
     }
 
     @DynamicPropertySource
-    static void datasource(DynamicPropertyRegistry registry) {
+    static void infrastructure(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url", PG::getJdbcUrl);
         registry.add("spring.datasource.username", PG::getUsername);
         registry.add("spring.datasource.password", PG::getPassword);
+        registry.add("chaya.storage.endpoint", () -> "http://" + MINIO.getHost() + ":" + MINIO.getMappedPort(9000));
+        registry.add("chaya.storage.access-key", () -> "testaccess");
+        registry.add("chaya.storage.secret-key", () -> "testsecret123");
     }
 
     @Autowired protected JdbcClient jdbc;

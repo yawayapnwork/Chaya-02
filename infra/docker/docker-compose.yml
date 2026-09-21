@@ -36,7 +36,7 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
 
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:latest
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY}
@@ -51,6 +51,23 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  clamav:
+    image: clamav/clamav:1.4
+    environment:
+      # Videos are large: raise clamd's stream limits (defaults are 25 MB). 4000M is clamd's maximum.
+      CLAMD_CONF_StreamMaxLength: 4000M
+      CLAMD_CONF_MaxFileSize: 4000M
+    ports:
+      - "${CLAMAV_PORT:-3310}:3310"
+    volumes:
+      - clamav-data:/var/lib/clamav
+    healthcheck:
+      test: ["CMD", "clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 180s # first start downloads and loads the signature database
 
   keycloak:
     image: quay.io/keycloak/keycloak:26.0
@@ -82,3 +99,4 @@ volumes:
   redis-data:
   minio-data:
   keycloak-data:
+  clamav-data:

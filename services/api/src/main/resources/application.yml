@@ -23,6 +23,26 @@ chaya:
     viewer-token-ttl: PT10M
     public-link-max-ttl: P30D
 
+  storage:
+    endpoint: ${S3_ENDPOINT}
+    region: ${S3_REGION:us-east-1}
+    access-key: ${S3_ACCESS_KEY}
+    secret-key: ${S3_SECRET_KEY}
+    bucket: ${S3_BUCKET_RAW:chaya-raw}
+  uploads:
+    part-size-bytes: 8388608          # 8 MiB; S3 multipart requires >= 5 MiB except the last part
+    max-video-bytes: 4294967296       # 4 GiB
+    max-image-bytes: 52428800         # 50 MiB
+    max-metadata-bytes: 1048576       # 1 MiB
+    max-files-per-capture: 5000
+    min-images-without-video: 20
+  clamav:
+    enabled: ${CLAMAV_ENABLED:false}  # when false, uploads are quarantined, never accepted unscanned
+    host: ${CLAMAV_HOST:localhost}
+    port: ${CLAMAV_PORT:3310}
+  cors:
+    allowed-origins: ${CHAYA_ALLOWED_ORIGINS:http://localhost:3000}
+
 management:
   endpoints:
     web:

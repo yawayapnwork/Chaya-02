@@ -71,7 +71,7 @@ public class PublicViewerService implements PublicViewerAuthenticator {
             throw new BadRequestException("ttl must be positive and at most " + props.publicLinkMaxTtl());
         }
         String secret = "chl_" + randomToken();
-        Instant expires = Instant.now().plus(ttl);
+        Instant expires = Instant.now().plus(ttl).truncatedTo(java.time.temporal.ChronoUnit.MICROS); // Postgres precision
         UUID id = jdbc.sql("INSERT INTO public_viewer_link (organization_id, venue_id, label, secret_hash, created_by, expires_at) "
                 + "VALUES (:o, :v, :l, :h, :by, :e) RETURNING id")
             .param("o", actor.organizationId()).param("v", venueId).param("l", label).param("h", hash(secret))
@@ -118,7 +118,7 @@ public class PublicViewerService implements PublicViewerAuthenticator {
                 rs.getObject("venue_id", UUID.class), rs.getTimestamp("expires_at").toInstant()))
             .optional().orElseThrow(() -> new NotFoundException("link not found or expired"));
 
-        Instant expires = Instant.now().plus(props.viewerTokenTtl());
+        Instant expires = Instant.now().plus(props.viewerTokenTtl()).truncatedTo(java.time.temporal.ChronoUnit.MICROS);
         if (expires.isAfter(link.expiresAt())) {
             expires = link.expiresAt();
         }
