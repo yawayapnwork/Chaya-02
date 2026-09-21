@@ -11,7 +11,7 @@ import org.springframework.stereotype.Repository;
 @Repository
 public class AuditLogWriter {
 
-    public enum ActorType { USER, SERVICE }
+    public enum ActorType { USER, SERVICE, PUBLIC_VIEWER }
 
     public enum Outcome { SUCCESS, DENIED, FAILURE }
 

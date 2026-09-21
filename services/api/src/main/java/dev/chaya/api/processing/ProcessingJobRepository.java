@@ -32,6 +32,31 @@ public class ProcessingJobRepository {
             .single();
     }
 
+    public record ClaimedJob(UUID id, UUID organizationId, UUID venueId, UUID scanId, UUID scanVersionId, JobStage stage) {}
+
+    public record JobScope(UUID organizationId, UUID venueId) {}
+
+    /** Atomically moves the oldest QUEUED job of a stage to RUNNING. Concurrent workers never get the same job. */
+    public Optional<ClaimedJob> claim(JobStage stage) {
+        return jdbc.sql("""
+                UPDATE processing_job SET status = 'RUNNING', started_at = now()
+                 WHERE id = (SELECT id FROM processing_job WHERE status = 'QUEUED' AND stage = :stage
+                              ORDER BY queued_at FOR UPDATE SKIP LOCKED LIMIT 1)
+                RETURNING id, organization_id, venue_id, scan_id, scan_version_id, stage""")
+            .param("stage", stage.name())
+            .query((rs, i) -> new ClaimedJob(rs.getObject("id", UUID.class), rs.getObject("organization_id", UUID.class),
+                rs.getObject("venue_id", UUID.class), rs.getObject("scan_id", UUID.class),
+                rs.getObject("scan_version_id", UUID.class), JobStage.valueOf(rs.getString("stage"))))
+            .optional();
+    }
+
+    public Optional<JobScope> scope(UUID jobId) {
+        return jdbc.sql("SELECT organization_id, venue_id FROM processing_job WHERE id = :id")
+            .param("id", jobId)
+            .query((rs, i) -> new JobScope(rs.getObject("organization_id", UUID.class), rs.getObject("venue_id", UUID.class)))
+            .optional();
+    }
+
     public Optional<JobStatus> status(UUID jobId) {
         return jdbc.sql("SELECT status FROM processing_job WHERE id = :id")
             .param("id", jobId)

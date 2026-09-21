@@ -15,6 +15,14 @@ spring:
   flyway:
     enabled: true
 
+chaya:
+  security:
+    issuer: ${KEYCLOAK_ISSUER_URI}
+    jwks-uri: ${KEYCLOAK_JWKS_URI:}   # defaults to <issuer>/protocol/openid-connect/certs
+    audience: ${KEYCLOAK_AUDIENCE:chaya-api}
+    viewer-token-ttl: PT10M
+    public-link-max-ttl: P30D
+
 management:
   endpoints:
     web:

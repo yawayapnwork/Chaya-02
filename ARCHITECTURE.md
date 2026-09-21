@@ -68,6 +68,8 @@ Embedding dimension N is fixed by the CLIP model chosen (open decision D3). Ever
 S3-compatible; buckets `chaya-raw` (uploads), `chaya-derived` (frames, poses, splats, meshes, navmeshes). Keys are prefixed `org/{orgId}/venue/{venueId}/…` so tenant isolation is checkable by prefix. Clients upload/download via short-lived presigned URLs minted by the backend after an authorization check. Upload completion is confirmed by the backend (HEAD + checksum), not trusted from the client. Only versioned, immutable objects; a new reconstruction writes new keys.
 
 ## 7. Identity (Keycloak)
+> Superseded in part by [docs/security.md](docs/security.md): tenancy (`org_id`, `venue_id`) and roles travel in the access token, not in a `venue_membership` table; public viewer links and the worker API are described there.
+
 OAuth2/OIDC, one realm. Web: auth code + PKCE. Native/AR: auth code + PKCE via system browser. Access tokens are short-lived JWTs; refresh tokens are rotated. Realm roles: `platform_admin`; venue-scoped roles (`venue_admin`, `operator`, `viewer`) are stored in `venue_membership` in the backend DB, not in the token, so revocation is immediate and tokens stay small. Every request resolves `sub` → membership for the target venue; no membership means 404 (not 403) to avoid venue enumeration. Workers authenticate with a Keycloak client-credentials service account limited to the worker API. Security-relevant events are written to `audit_event`.
 
 ## 8. Navigation

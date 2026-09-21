@@ -1,12 +1,14 @@
 package dev.chaya.api;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.DockerClientFactory;
+import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
@@ -14,7 +16,12 @@ import org.testcontainers.utility.DockerImageName;
  * Boots the application against a real PostgreSQL with pgvector; Flyway applies the real
  * migrations. Skipped (not failed) when Docker is unavailable.
  */
-@SpringBootTest
+@SpringBootTest(properties = {
+    "chaya.security.issuer=" + TestJwt.ISSUER,
+    "chaya.security.audience=" + TestJwt.AUDIENCE
+})
+@AutoConfigureMockMvc
+@Import(TestJwtConfig.class)
 @Testcontainers(disabledWithoutDocker = true)
 abstract class AbstractIntegrationTest {
 
