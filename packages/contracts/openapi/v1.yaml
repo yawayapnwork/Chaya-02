@@ -64,6 +64,8 @@ paths:
     post: { summary: Re-queue the stage a FAILED run stopped at (fresh time budget; bounded retries), responses: { "202": { description: Accepted }, "409": { description: Run is not FAILED or retries are exhausted } } }
   /api/v1/venues/{venueId}/captures/{captureId}/processing/cancel:
     post: { summary: Cancel a RUNNING run, responses: { "200": { description: Cancelled } } }
+  /api/v1/venues/{venueId}/captures/{captureId}/route-plan:
+    post: { summary: "Plan the secondary capture route after the recon lap (deterministic; request: scene, trajectory, optional observedRegions/candidates/config; response: ordered waypoints, route, distance, time, confidence, baseline vs planned coverage, uncovered regions). See docs/route-planning.md", responses: { "200": { description: Route plan }, "409": { description: Capture is no longer being captured }, "422": { description: "Input cannot be planned from (TRAJECTORY_OUTSIDE_SCENE, INVALID_CONFIG, ...)" } } }
   /api/v1/internal/jobs/claim:
     post: { summary: "Worker: claim the oldest queued job of the given stage(s); returns a work order (inputs, output prefix, deadline). Service role only.", responses: { "200": { description: Work order }, "204": { description: Nothing queued } } }
   /api/v1/internal/jobs/{jobId}/heartbeat:

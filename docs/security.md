@@ -60,6 +60,7 @@ A refused venue access is audited (`venue.access`, outcome `DENIED`, in the *cal
 | `GET /venues/{id}/pois[/{p}]` | ✔ | ✔ | ✔ | ✔ | ✔ | ✘ |
 | `POST/PUT/DELETE /venues/{id}/pois` | ✔ | ✔ | ✘ | ✘ | ✘ | ✘ |
 | `GET/POST /venues/{id}/captures[/...]` (create, upload, complete, processing) | ✔ | ✔ | ✔ | ✘ | ✘ | ✘ |
+| `POST .../captures/{c}/route-plan` (stateless planner; capture must be CREATED or UPLOADING) | ✔ | ✔ | ✔ | ✘ | ✘ | ✘ |
 | `GET /venues/{id}/floors` | ✔ | ✔ | ✔ | ✔ | ✔ | ✘ |
 | `POST /venues/{id}/floors` | ✔ | ✔ | ✘ | ✘ | ✘ | ✘ |
 | `POST/GET/DELETE /venues/{id}/public-links` | ✔ | ✔ | ✘ | ✘ | ✘ | ✘ |
