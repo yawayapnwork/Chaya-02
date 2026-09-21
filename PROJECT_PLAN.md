@@ -5,8 +5,8 @@ Each milestone is independently testable and committable. "Done" means its tests
 | # | Milestone | Scope | Verified by |
 |---|-----------|-------|-------------|
 | M0 | Repo foundation | Docs, `.env.example`, `.gitignore`, layout (this commit) | Files exist; no secrets |
-| M1 | Local infrastructure | `docker-compose.yml`: Postgres+pgvector, MinIO, Redis, Keycloak with realm import; healthchecks | `docker compose up`, all healthy |
-| M2 | Backend skeleton | Spring Boot, Flyway, actuator with real DB/Redis/MinIO health, problem+json errors, Testcontainers | `./mvnw verify` |
+| M1 | Local infrastructure, backend/web skeletons | Compose file, health/version endpoints, status page (foundation commit) | Compose config valid; web lint/typecheck/test/build; `mvn verify` |
+| M2 | Backend hardening | Redis/MinIO health, problem+json errors, Maven wrapper | `./mvnw verify` |
 | M3 | Identity & tenancy | Keycloak JWT resource server, org/venue/membership tables, venue-scoped authz, audit_event | Integration tests: cross-tenant access returns 404 |
 | M4 | Frontend skeleton | Next.js, Tailwind, OIDC login, venue list from API | Unit + Playwright login test |
 | M5 | Storage & capture sessions | Presigned upload, media_asset, upload verification, capture_session CRUD | Tests against MinIO |

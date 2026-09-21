@@ -29,10 +29,10 @@ Boundaries are hard: clients never talk to Postgres, Redis, or MinIO directly ex
 ## 2. Frontend (`apps/web`)
 Next.js + TypeScript + Tailwind. Three.js with GaussianSplats3D renders `.ksplat` assets; CSS2DRenderer for object labels/annotations. Navigation queries run against a Recast navmesh (WASM) loaded in-browser, with the backend as the authority on which navmesh version is current. Auth via OIDC authorization code + PKCE against Keycloak; access tokens are held in memory, refresh handled by the OIDC client (see §7). The frontend is a separately deployable container and talks only to `/api/v1`.
 
-## 3. Backend (`apps/api`)
+## 3. Backend (`services/api`)
 Spring Boot (Java), single deployable monolith organised by module packages: `venue`, `capture`, `job`, `asset`, `semantic`, `navigation`, `ar`, `dashboard`, `audit`, `identity`. Spring Security as OAuth2 Resource Server validating Keycloak JWTs. Responsibilities: authorization (role + venue scope), metadata persistence, job lifecycle, presigned URL issuance, semantic search, path-data API, audit logging. It never runs reconstruction. Schema migrations via Flyway. Health via Spring Actuator with real dependency indicators (DB, Redis, MinIO).
 
-## 4. Processing pipeline (`workers/`)
+## 4. Processing pipeline (`services/reconstruction`, `services/vision`, `services/navigation` (created when each worker is implemented))
 Python workers, one per stage, sharing a small common library (job client, S3 client, logging). Stages:
 
 | # | Stage | Tooling |
@@ -89,7 +89,7 @@ Job states: `QUEUED → CLAIMED → RUNNING → SUCCEEDED | FAILED | CANCELLED`,
 Incremental rescan: a capture scoped to a region creates a region-scoped reconstruction that is merged into the venue reconstruction as a new version; the previous version stays available until the new one is complete.
 
 ## 11. Infrastructure
-Docker Compose for local dev: Postgres (pgvector image), MinIO, Redis, Keycloak. App containers are built per-service (`apps/web`, `apps/api`, `workers/*`) and pushed to GHCR by GitHub Actions; each deploys independently. GPU workers run outside Compose on a GPU host. No Kubernetes, Kafka, Celery, or RabbitMQ.
+Docker Compose for local dev: Postgres (pgvector image), MinIO, Redis, Keycloak. App containers are built per-service (`apps/web`, `services/api`, `services/*`) and pushed to GHCR by GitHub Actions; each deploys independently. GPU workers run outside Compose on a GPU host. No Kubernetes, Kafka, Celery, or RabbitMQ.
 
 ## 12. Data flow (summary)
 Capture (AR client) → presigned upload → MinIO raw → job chain (filter → poses → splat → cleanup → segmentation → detection → navmesh) → derived assets + rows in Postgres → web/AR fetch assets via presigned URLs, search via pgvector, route via navmesh → dashboard reads job/coverage/freshness/search-log data.

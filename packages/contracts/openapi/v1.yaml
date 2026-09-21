@@ -1,0 +1,48 @@
+openapi: 3.1.0
+info:
+  title: Chaya 02 API
+  version: 1.0.0
+  description: >
+    Version 1 of the Chaya 02 HTTP API. Breaking changes require a new /api/v2 document.
+    This file is the contract; the backend and clients are checked against it.
+servers:
+  - url: http://localhost:8080
+paths:
+  /api/v1/health:
+    get:
+      summary: Backend health, including real dependency checks
+      responses:
+        "200":
+          description: All checked dependencies are up
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+        "503":
+          description: A dependency is down
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+  /api/v1/version:
+    get:
+      summary: Build and API version
+      responses:
+        "200":
+          description: Version information
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Version" }
+components:
+  schemas:
+    Health:
+      type: object
+      required: [status, database]
+      properties:
+        status: { type: string, enum: [UP, DOWN] }
+        database: { type: string, enum: [UP, DOWN] }
+    Version:
+      type: object
+      required: [name, version, apiVersion]
+      properties:
+        name: { type: string }
+        version: { type: string }
+        apiVersion: { type: string, examples: [v1] }
