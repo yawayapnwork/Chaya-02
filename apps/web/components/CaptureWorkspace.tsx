@@ -8,13 +8,17 @@ import {
   type Floor,
   type ProcessingStatus,
   type Venue,
+  cancelProcessing,
   completeUpload,
   createCapture,
+  getCapture,
   getProcessing,
   listFloors,
   listVenues,
+  retryProcessing,
   startProcessing,
 } from "@/lib/capture-api";
+import ProcessingPanel from "@/components/ProcessingPanel";
 import { type UploadState, retryValidation, uploadFile } from "@/lib/uploader";
 import { checkFileLocally, explainCode, formatBytes } from "@/lib/upload-plan";
 
@@ -62,6 +66,7 @@ export default function CaptureWorkspace() {
   const [processing, setProcessing] = useState<ProcessingStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [timeBudgetMinutes, setTimeBudgetMinutes] = useState(60);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const fail = useCallback((e: unknown) => {
@@ -96,14 +101,25 @@ export default function CaptureWorkspace() {
     listFloors(venueId).then(setFloors, fail);
   }, [venueId, fail]);
 
-  // Poll processing status while the capture is processing.
+  // Poll processing status while processing is going on (or has failed and may be retried).
+  const captureId = capture?.id;
+  const venueOfCapture = capture?.venueId;
+  const captureStatus = capture?.status;
   useEffect(() => {
-    if (!capture || capture.status !== "PROCESSING") return;
-    const tick = () => getProcessing(capture.venueId, capture.id).then(setProcessing, fail);
+    if (!captureId || !venueOfCapture || captureStatus !== "PROCESSING") return;
+    const tick = async () => {
+      try {
+        const p = await getProcessing(venueOfCapture, captureId);
+        setProcessing(p);
+        if (p.captureStatus !== captureStatus) setCapture(await getCapture(venueOfCapture, captureId));
+      } catch (e) {
+        fail(e);
+      }
+    };
     tick();
     const id = setInterval(tick, 3000);
     return () => clearInterval(id);
-  }, [capture, fail]);
+  }, [captureId, venueOfCapture, captureStatus, fail]);
 
   const patchRow = (key: string, state: UploadState) =>
     setRows((rs) => rs.map((r) => (r.key === key ? { ...r, state } : r)));
@@ -177,9 +193,37 @@ export default function CaptureWorkspace() {
     setError(null);
     setBusy(true);
     try {
-      const status = await startProcessing(capture.venueId, capture.id);
+      const status = await startProcessing(capture.venueId, capture.id, { timeBudgetSeconds: timeBudgetMinutes * 60 });
       setProcessing(status);
       setCapture({ ...capture, status: status.captureStatus });
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onRetryProcessing() {
+    if (!capture) return;
+    setError(null);
+    setBusy(true);
+    try {
+      setProcessing(await retryProcessing(capture.venueId, capture.id));
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onCancelProcessing() {
+    if (!capture) return;
+    setError(null);
+    setBusy(true);
+    try {
+      const status = await cancelProcessing(capture.venueId, capture.id);
+      setProcessing(status);
+      setCapture(await getCapture(capture.venueId, capture.id));
     } catch (e) {
       fail(e);
     } finally {
@@ -314,9 +358,25 @@ export default function CaptureWorkspace() {
             <p role="alert" className="text-red-700">Capture failed: {capture.failureMessage ?? capture.failureCode}</p>
           )}
           {capture.status === "READY_FOR_PROCESSING" && (
-            <button className="rounded bg-black px-4 py-2 text-white disabled:opacity-50" disabled={busy} onClick={onProcess}>
-              Start processing
-            </button>
+            <div className="space-y-3">
+              <label className="block text-sm">
+                Time budget (minutes)
+                <input
+                  type="number"
+                  min={1}
+                  max={1440}
+                  value={timeBudgetMinutes}
+                  onChange={(e) => setTimeBudgetMinutes(Math.max(1, Math.min(1440, Number(e.target.value) || 1)))}
+                  className="ml-2 w-24 rounded border p-1"
+                />
+              </label>
+              <p className="text-xs text-zinc-600">
+                If the budget runs out after a reconstruction exists, the result is kept but clearly marked partial quality, never finalized.
+              </p>
+              <button className="rounded bg-black px-4 py-2 text-white disabled:opacity-50" disabled={busy} onClick={onProcess}>
+                Start processing
+              </button>
+            </div>
           )}
         </section>
       )}
@@ -324,18 +384,7 @@ export default function CaptureWorkspace() {
       {processing && (
         <section aria-labelledby="processing" className="space-y-3">
           <h2 id="processing" className="text-lg font-medium">4. Processing</h2>
-          <table className="w-full text-left text-sm">
-            <thead><tr><th className="py-1">Stage</th><th>Status</th><th>Details</th></tr></thead>
-            <tbody>
-              {processing.jobs.map((j) => (
-                <tr key={j.id} className="border-t">
-                  <td className="py-1 font-mono">{j.stage}</td>
-                  <td>{j.status}</td>
-                  <td>{j.errorMessage ?? (j.status === "QUEUED" ? "Waiting for a processing worker to pick this up." : "")}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <ProcessingPanel status={processing} busy={busy} onRetry={onRetryProcessing} onCancel={onCancelProcessing} />
         </section>
       )}
     </main>

@@ -25,6 +25,7 @@ import org.testcontainers.utility.DockerImageName;
     "chaya.uploads.max-image-bytes=1048576",
     "chaya.uploads.min-images-without-video=3",
     "chaya.storage.bucket=chaya-raw-test",
+    "chaya.storage.derived-bucket=chaya-derived-test",
     "chaya.clamav.enabled=false"
 })
 @AutoConfigureMockMvc

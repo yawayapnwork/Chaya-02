@@ -1,9 +1,12 @@
-# Secrets
+# Secrets (only .env.example is committed)
 .env
 .env.*
 !.env.example
 *.pem
 *.key
+*.p12
+*.jks
+credentials*.json
 
 # OS / editor
 .DS_Store
@@ -11,11 +14,45 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+*.iml
 
-# Data volumes and large artifacts
+# Build output and dependencies (also ignored per service)
+node_modules/
+.next/
+out/
+target/
+build/
+dist/
+*.tsbuildinfo
+next-env.d.ts
+coverage/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Worker scratch space (may hold unblurred frames: never commit)
+work/
+/services/reconstruction/work/
+
+# Data volumes, captures and reconstruction outputs
 /data/
+/datasets/*
+!/datasets/README.md
 *.ksplat
+*.splat
 *.ply
+*.mp4
+*.mov
+*.mkv
+*.webm
+!/apps/web/public/**
 
 # Logs
 *.log

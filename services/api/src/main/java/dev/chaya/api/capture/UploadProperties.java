@@ -29,6 +29,19 @@ public record UploadProperties(
         };
     }
 
+    /**
+     * Content types that are the same container format under different names. Content sniffing cannot tell
+     * an MP4 from a QuickTime file (both are ISO base media files, and FFmpeg's default "isom" brand is
+     * reported as video/quicktime by Tika), nor WebM from Matroska.
+     */
+    private static final java.util.List<Set<String>> FAMILIES = java.util.List.of(
+        Set.of("video/mp4", "video/quicktime"),
+        Set.of("video/webm", "video/x-matroska"));
+
+    public static boolean sameFamily(String claimed, String detected) {
+        return claimed.equals(detected) || FAMILIES.stream().anyMatch(f -> f.contains(claimed) && f.contains(detected));
+    }
+
     public long maxBytes(MediaKind kind) {
         return switch (kind) {
             case VIDEO -> maxVideoBytes;

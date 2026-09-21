@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chaya-worker"
+version = "0.1.0"
+description = "Chaya 02 reconstruction execution plane: claims pipeline stage jobs from the Spring Boot control plane and runs them."
+requires-python = ">=3.11"
+dependencies = [
+  "boto3>=1.35",
+  "requests>=2.32",
+  "numpy>=1.26",
+  "opencv-python-headless>=4.9,<5",  # 4.x ships the Haar cascade models the privacy stage needs (5.x does not)
+]
+
+[project.optional-dependencies]
+# A bundled ffmpeg binary for machines without a system ffmpeg (development). Production images use the system one.
+ffmpeg-bundled = ["imageio-ffmpeg>=0.5"]
+dev = ["pytest>=8", "scikit-image>=0.22", "imageio-ffmpeg>=0.5"]
+
+[project.scripts]
+chaya-worker = "chaya_worker.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["chaya_worker*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "orchestration: pipeline orchestration with tiny real fixture files (no GPU, no external services)",
+  "integration: needs real external services (MinIO, the Spring Boot API); skipped when they are not configured",
+  "gpu: needs a GPU and the reconstruction toolchain (COLMAP/GLOMAP/gsplat); skipped, never passed, when unavailable",
+]

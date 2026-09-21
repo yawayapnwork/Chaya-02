@@ -197,7 +197,7 @@ public class MediaValidationService {
         if (!UploadProperties.allowedTypes(j.kind()).contains(detected)) {
             return reject("UNSUPPORTED_CONTENT", "file content is " + detected + ", which is not an accepted " + j.kind() + " format");
         }
-        if (!detected.equals(j.claimed())) {
+        if (!UploadProperties.sameFamily(j.claimed(), detected)) {
             return reject("CONTENT_TYPE_MISMATCH", "file was declared as " + j.claimed() + " but its content is " + detected);
         }
         return null;

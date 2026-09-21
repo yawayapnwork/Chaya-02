@@ -52,7 +52,61 @@ export interface JobItem {
   errorCode: string | null;
   errorMessage: string | null;
 }
-export interface ProcessingStatus { captureId: string; captureStatus: string; scanId: string | null; jobs: JobItem[] }
+export interface ArtifactView {
+  id: string;
+  kind: string;
+  bucket: string;
+  key: string;
+  sizeBytes: number;
+  sha256: string;
+  partial: boolean;
+  containsPii: boolean;
+}
+export interface StageRunView {
+  attempt: number;
+  status: "SUCCEEDED" | "FAILED";
+  startedAt: string;
+  finishedAt: string;
+  exitStatus: number | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  errorDetails: Record<string, unknown> | null;
+  outputSha256: string | null;
+  workerId: string | null;
+  command: Record<string, unknown>;
+  stdout: ArtifactView | null;
+  stderr: ArtifactView | null;
+  artifacts: ArtifactView[];
+}
+export interface StageView {
+  stage: string;
+  state: "PENDING" | "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED" | "NOT_RUN";
+  attempts: number;
+  lastRun: StageRunView | null;
+}
+/** quality is FINAL only for a fully completed run and PARTIAL only for an explicitly time-boxed result. */
+export interface RunView {
+  id: string;
+  status: "RUNNING" | "SUCCEEDED" | "PARTIAL" | "FAILED" | "CANCELLED";
+  quality: "FINAL" | "PARTIAL" | null;
+  privacyEnabled: boolean;
+  timeBudgetSeconds: number;
+  startedAt: string;
+  deadlineAt: string;
+  finishedAt: string | null;
+  failureStage: string | null;
+  failureCode: string | null;
+  failureMessage: string | null;
+  retryable: boolean;
+  stages: StageView[];
+}
+export interface ProcessingStatus {
+  captureId: string;
+  captureStatus: string;
+  scanId: string | null;
+  run: RunView | null;
+  jobs: JobItem[];
+}
 
 async function parseError(res: Response): Promise<ApiError> {
   let code = "HTTP_" + res.status;
@@ -102,8 +156,14 @@ export const completeMedia = (venueId: string, captureId: string, mediaId: strin
 export const completeUpload = (venueId: string, captureId: string, endedAt: string) =>
   api<Capture>(`/venues/${venueId}/captures/${captureId}/complete-upload`, { method: "POST", body: JSON.stringify({ endedAt }) });
 
-export const startProcessing = (venueId: string, captureId: string) =>
-  api<ProcessingStatus>(`/venues/${venueId}/captures/${captureId}/processing`, { method: "POST" });
+export const startProcessing = (venueId: string, captureId: string, options: { timeBudgetSeconds?: number } = {}) =>
+  api<ProcessingStatus>(`/venues/${venueId}/captures/${captureId}/processing`, { method: "POST", body: JSON.stringify(options) });
+
+export const retryProcessing = (venueId: string, captureId: string) =>
+  api<ProcessingStatus>(`/venues/${venueId}/captures/${captureId}/processing/retry`, { method: "POST" });
+
+export const cancelProcessing = (venueId: string, captureId: string) =>
+  api<ProcessingStatus>(`/venues/${venueId}/captures/${captureId}/processing/cancel`, { method: "POST" });
 
 export const getProcessing = (venueId: string, captureId: string) =>
   api<ProcessingStatus>(`/venues/${venueId}/captures/${captureId}/processing`);

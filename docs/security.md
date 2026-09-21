@@ -65,7 +65,9 @@ A refused venue access is audited (`venue.access`, outcome `DENIED`, in the *cal
 | `POST/GET/DELETE /venues/{id}/public-links` | ✔ | ✔ | ✘ | ✘ | ✘ | ✘ |
 | `POST /api/v1/public/viewer-token` | public (link secret is the credential) | | | | | |
 | `GET /api/v1/audit-log` (own org) | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ |
-| `POST /api/v1/internal/jobs/claim`, `/{id}/complete`, `/{id}/fail` | ✘ | ✘ | ✘ | ✘ | ✘ | ✔ |
+| `POST /api/v1/internal/jobs/claim`, `/{id}/heartbeat`, `/{id}/report`, `/{id}/complete`, `/{id}/fail` | ✘ | ✘ | ✘ | ✘ | ✘ | ✔ |
+| `POST .../captures/{c}/processing[/retry\|/cancel]`, `GET .../processing` | ✔ | ✔ | ✔ | ✘ | ✘ | ✘ |
+| `POST .../processing` with `privacyEnabled:false` | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ |
 
 "(own)" = restricted to venues in the `venue_id` claim. Everything not listed is denied.
 
@@ -86,8 +88,8 @@ Workers authenticate to Keycloak with the OAuth2 client-credentials grant as cli
 
 - `/api/v1/internal/**` requires `ROLE_SERVICE` (URL rule and `@PreAuthorize`); anonymous → 401, users (even admins) → 403.
 - Service tokens have no `org_id` and no access to tenant endpoints; a token combining `service` with user roles is rejected.
-- Current contract: `POST /internal/jobs/claim {stage}` (204 when nothing is queued), `POST /internal/jobs/{id}/complete`, `POST /internal/jobs/{id}/fail {errorCode, errorMessage}`. Claiming is atomic (`FOR UPDATE SKIP LOCKED`), transitions follow the job state machine, and each call is audited with actor type `SERVICE`.
-- Artifact registration and heartbeats arrive with the job-engine milestone.
+- Contract: `POST /internal/jobs/claim {stage|stages, workerId}` (204 when nothing is queued), `POST /internal/jobs/{id}/heartbeat`, `POST /internal/jobs/{id}/report` (the stage record; see docs/pipeline.md). `complete`/`fail` remain only for legacy jobs outside a pipeline run. Claiming is atomic (`FOR UPDATE SKIP LOCKED`), transitions follow the job state machine, and each call is audited with actor type `SERVICE`.
+- Artifact registration is part of the stage report and is verified server-side (key prefix, object exists with the reported size, PII rules).
 
 ## Audit
 Written in the same transaction as the operation (so both commit or neither): `venue.create`, `venue.update`, `scan.create`, `job.enqueue`, `job.cancel`, `job.retry`, `job.claim`, `job.complete`, `job.fail`, `poi.create`, `poi.update`, `poi.delete`, `public_link.create`, `public_link.revoke`, `public_link.exchange`. Refused venue access (`venue.access`, `DENIED`) is written in its own transaction so it survives the rejection. Secrets and tokens are never written to the log. The table is append-only at the database level.

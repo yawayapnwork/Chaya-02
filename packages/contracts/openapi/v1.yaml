@@ -58,8 +58,18 @@ paths:
   /api/v1/venues/{venueId}/captures/{captureId}/complete-upload:
     post: { summary: Finish the upload phase, responses: { "200": { description: READY_FOR_PROCESSING }, "409": { description: Not ready } } }
   /api/v1/venues/{venueId}/captures/{captureId}/processing:
-    get: { summary: Processing status and jobs, responses: { "200": { description: Processing status } } }
-    post: { summary: Start processing (queues the MEDIA_FILTER job), responses: { "202": { description: Accepted } } }
+    get: { summary: "Run status (RUNNING/SUCCEEDED/PARTIAL/FAILED/CANCELLED, quality FINAL|PARTIAL|null), per-stage execution records, job history", responses: { "200": { description: Processing status } } }
+    post: { summary: "Start the reconstruction pipeline (body: optional timeBudgetSeconds, privacyEnabled - false is admin only)", responses: { "202": { description: Accepted; first stage queued } } }
+  /api/v1/venues/{venueId}/captures/{captureId}/processing/retry:
+    post: { summary: Re-queue the stage a FAILED run stopped at (fresh time budget; bounded retries), responses: { "202": { description: Accepted }, "409": { description: Run is not FAILED or retries are exhausted } } }
+  /api/v1/venues/{venueId}/captures/{captureId}/processing/cancel:
+    post: { summary: Cancel a RUNNING run, responses: { "200": { description: Cancelled } } }
+  /api/v1/internal/jobs/claim:
+    post: { summary: "Worker: claim the oldest queued job of the given stage(s); returns a work order (inputs, output prefix, deadline). Service role only.", responses: { "200": { description: Work order }, "204": { description: Nothing queued } } }
+  /api/v1/internal/jobs/{jobId}/heartbeat:
+    post: { summary: "Worker: extend the lease; keepGoing=false means stop (cancelled or lease lost)", responses: { "200": { description: "{keepGoing, deadlineAt}" } } }
+  /api/v1/internal/jobs/{jobId}/report:
+    post: { summary: "Worker: submit the stage record (command, timings, exit status, checksums, log locations, artifacts, error). Verified before it is applied.", responses: { "200": { description: Applied }, "409": { description: Rejected (ARTIFACT_MISSING, PII_AFTER_PRIVACY, JOB_NOT_RUNNING ...) } } }
 components:
   schemas:
     Health:

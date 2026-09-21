@@ -29,6 +29,7 @@ chaya:
     access-key: ${S3_ACCESS_KEY}
     secret-key: ${S3_SECRET_KEY}
     bucket: ${S3_BUCKET_RAW:chaya-raw}
+    derived-bucket: ${S3_BUCKET_DERIVED:chaya-derived}
   uploads:
     part-size-bytes: 8388608          # 8 MiB; S3 multipart requires >= 5 MiB except the last part
     max-video-bytes: 4294967296       # 4 GiB
@@ -36,6 +37,11 @@ chaya:
     max-metadata-bytes: 1048576       # 1 MiB
     max-files-per-capture: 5000
     min-images-without-video: 20
+  pipeline:
+    time-budget-seconds: 3600
+    max-time-budget-seconds: 86400
+    lease-seconds: 300
+    deadline-grace-seconds: 60
   clamav:
     enabled: ${CLAMAV_ENABLED:false}  # when false, uploads are quarantined, never accepted unscanned
     host: ${CLAMAV_HOST:localhost}

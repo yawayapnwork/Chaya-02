@@ -67,10 +67,13 @@ class CaptureIngestionTest extends CaptureTestSupport {
             .andExpect(jsonPath("$.durationSeconds").value(42.5))
             .andExpect(jsonPath("$.endedAt").exists());
 
-        // Processing: a real MEDIA_FILTER job is queued. No worker exists yet, so it honestly stays QUEUED.
+        // Processing: a real pipeline run starts and its first stage is queued. No worker has claimed it, so it honestly stays QUEUED.
         post(capUrl(c, capture) + "/processing", c.operator(), null).andExpect(status().isAccepted())
             .andExpect(jsonPath("$.captureStatus").value("PROCESSING"))
-            .andExpect(jsonPath("$.jobs[0].stage").value("MEDIA_FILTER"))
+            .andExpect(jsonPath("$.jobs[0].stage").value("INPUT_VALIDATION"))
+            .andExpect(jsonPath("$.run.status").value("RUNNING")).andExpect(jsonPath("$.run.quality").doesNotExist())
+            .andExpect(jsonPath("$.run.stages.length()").value(12)).andExpect(jsonPath("$.run.stages[0].state").value("QUEUED"))
+            .andExpect(jsonPath("$.run.stages[1].state").value("PENDING"))
             .andExpect(jsonPath("$.jobs[0].status").value("QUEUED"));
         get(capUrl(c, capture) + "/processing", c.operator()).andExpect(status().isOk())
             .andExpect(jsonPath("$.jobs.length()").value(1)).andExpect(jsonPath("$.scanId").exists());

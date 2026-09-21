@@ -3,7 +3,8 @@ package dev.chaya.api.capture;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.chaya.api.audit.AuditService;
-import dev.chaya.api.processing.JobStage;
+import dev.chaya.api.pipeline.PipelineDtos.RunView;
+import dev.chaya.api.pipeline.PipelineService;
 import dev.chaya.api.processing.ProcessingJobRepository;
 import dev.chaya.api.security.Actor;
 import dev.chaya.api.security.TenantGuard;
@@ -35,7 +36,7 @@ public class CaptureService {
     public record JobView(UUID id, String stage, String status, int retryCount, String errorCode,
                           String errorMessage, Instant queuedAt, Instant startedAt, Instant finishedAt) {}
 
-    public record ProcessingStatus(UUID captureId, CaptureStatus captureStatus, UUID scanId, List<JobView> jobs) {}
+    public record ProcessingStatus(UUID captureId, CaptureStatus captureStatus, UUID scanId, RunView run, List<JobView> jobs) {}
 
     private static final int MAX_DEVICE_JSON_BYTES = 16 * 1024;
 
@@ -50,18 +51,18 @@ public class CaptureService {
     private final JdbcClient jdbc;
     private final TenantGuard guard;
     private final AuditService audit;
-    private final ProcessingJobRepository jobs;
+    private final PipelineService pipeline;
     private final ObjectStore store;
     private final UploadProperties uploads;
     private final ObjectMapper mapper;
     private final TransactionTemplate tx;
 
-    public CaptureService(JdbcClient jdbc, TenantGuard guard, AuditService audit, ProcessingJobRepository jobs,
+    public CaptureService(JdbcClient jdbc, TenantGuard guard, AuditService audit, PipelineService pipeline,
                           ObjectStore store, UploadProperties uploads, ObjectMapper mapper, TransactionTemplate tx) {
         this.jdbc = jdbc;
         this.guard = guard;
         this.audit = audit;
-        this.jobs = jobs;
+        this.pipeline = pipeline;
         this.store = store;
         this.uploads = uploads;
         this.mapper = mapper;
@@ -209,7 +210,7 @@ public class CaptureService {
         return null;
     }
 
-    public ProcessingStatus startProcessing(Actor actor, UUID venueId, UUID captureId) {
+    public ProcessingStatus startProcessing(Actor actor, UUID venueId, UUID captureId, Boolean privacyEnabled, Integer timeBudgetSeconds) {
         CaptureView c = get(actor, venueId, captureId);
         if (c.status() != CaptureStatus.READY_FOR_PROCESSING) {
             throw invalid(c.status(), CaptureStatus.PROCESSING);
@@ -218,11 +219,30 @@ public class CaptureService {
             transition(captureId, CaptureStatus.READY_FOR_PROCESSING, CaptureStatus.PROCESSING, null, null);
             UUID scan = jdbc.sql("INSERT INTO scan (organization_id, venue_id, capture_session_id) VALUES (:o, :v, :c) RETURNING id")
                 .param("o", actor.organizationId()).param("v", venueId).param("c", captureId).query(UUID.class).single();
-            UUID job = jobs.enqueue(actor.organizationId(), venueId, scan, null, JobStage.MEDIA_FILTER);
+            UUID run = pipeline.start(actor, venueId, captureId, scan, privacyEnabled, timeBudgetSeconds);
             audit.success(actor, venueId, "capture.start_processing", "capture_session", captureId,
-                Map.of("scanId", scan.toString(), "jobId", job.toString()));
+                Map.of("scanId", scan.toString(), "runId", run.toString()));
         });
         return processingStatus(actor, venueId, captureId);
+    }
+
+    public ProcessingStatus retryProcessing(Actor actor, UUID venueId, UUID captureId) {
+        get(actor, venueId, captureId);
+        UUID scan = scanOf(captureId, venueId);
+        pipeline.retry(actor, venueId, scan);
+        return processingStatus(actor, venueId, captureId);
+    }
+
+    public ProcessingStatus cancelProcessing(Actor actor, UUID venueId, UUID captureId) {
+        get(actor, venueId, captureId);
+        UUID scan = scanOf(captureId, venueId);
+        pipeline.cancel(actor, venueId, scan);
+        return processingStatus(actor, venueId, captureId);
+    }
+
+    private UUID scanOf(UUID captureId, UUID venueId) {
+        return jdbc.sql("SELECT id FROM scan WHERE capture_session_id = :c AND venue_id = :v").param("c", captureId).param("v", venueId)
+            .query(UUID.class).optional().orElseThrow(() -> new NotFoundException("processing has not been started for this capture"));
     }
 
     public ProcessingStatus processingStatus(Actor actor, UUID venueId, UUID captureId) {
@@ -236,11 +256,11 @@ public class CaptureService {
                 rs.getString("error_message"), rs.getTimestamp("queued_at").toInstant(),
                 rs.getTimestamp("started_at") == null ? null : rs.getTimestamp("started_at").toInstant(),
                 rs.getTimestamp("finished_at") == null ? null : rs.getTimestamp("finished_at").toInstant())).list();
-        return new ProcessingStatus(captureId, c.status(), scan, list);
+        return new ProcessingStatus(captureId, c.status(), scan, scan == null ? null : pipeline.runView(scan).orElse(null), list);
     }
 
     /** Compare-and-set transition; refuses anything the state machine does not allow. */
-    void transition(UUID captureId, CaptureStatus from, CaptureStatus to, String failureCode, String failureMessage) {
+    public void transition(UUID captureId, CaptureStatus from, CaptureStatus to, String failureCode, String failureMessage) {
         if (!from.canTransitionTo(to)) {
             throw invalid(from, to);
         }

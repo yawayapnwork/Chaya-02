@@ -32,6 +32,8 @@ Next.js + TypeScript + Tailwind. Three.js with GaussianSplats3D renders `.ksplat
 ## 3. Backend (`services/api`)
 Spring Boot (Java), single deployable monolith organised by module packages: `venue`, `capture`, `job`, `asset`, `semantic`, `navigation`, `ar`, `dashboard`, `audit`, `identity`. Spring Security as OAuth2 Resource Server validating Keycloak JWTs. Responsibilities: authorization (role + venue scope), metadata persistence, job lifecycle, presigned URL issuance, semantic search, path-data API, audit logging. It never runs reconstruction. Schema migrations via Flyway. Health via Spring Actuator with real dependency indicators (DB, Redis, MinIO).
 
+> The pipeline as built (control plane, stage contract, privacy boundary, time box) is documented in [docs/pipeline.md](docs/pipeline.md); it supersedes the stage table below.
+
 ## 4. Processing pipeline (`services/reconstruction`, `services/vision`, `services/navigation` (created when each worker is implemented))
 Python workers, one per stage, sharing a small common library (job client, S3 client, logging). Stages:
 

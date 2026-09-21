@@ -10,8 +10,8 @@ Each milestone is independently testable and committable. "Done" means its tests
 | M3 | Identity & tenancy | Keycloak JWT resource server, org/venue/membership tables, venue-scoped authz, audit_event | Integration tests: cross-tenant access returns 404 |
 | M4 | Frontend skeleton | Next.js, Tailwind, OIDC login, venue list from API | Unit + Playwright login test |
 | M5 | Storage & capture sessions | Done: resumable chunked upload through the backend into MinIO, Tika/ClamAV validation, capture lifecycle, capture UI (see docs/capture-ingestion.md) | Tests against real MinIO |
-| M6 | Job engine | processing_job lifecycle, leasing, heartbeat, retry, worker API, job_event; `PIPELINE_UNAVAILABLE` for missing stages | State-machine and lease-expiry tests |
-| M7 | Media filter worker | FFmpeg frame extraction + quality filtering, real metrics stored | Worker tests on real sample video |
+| M6 | Job engine | Done: pipeline runs, leases/heartbeats, retry, time box, worker API, stage records (docs/pipeline.md) | Java control-plane tests; Python orchestration + integration tests |
+| M7 | Media filter worker | Done: input validation, FFmpeg extraction, quality filter, privacy preprocessing | Worker tests on real media |
 | M8 | Pose estimation worker | GLOMAP with COLMAP fallback; pose manifest; failure handling | Sample dataset; failure-path test |
 | M9 | Splat training worker | gsplat/Nerfstudio → `.ksplat`; asset registration; PARTIAL vs COMPLETE logic | GPU host run; completeness tests |
 | M10 | Splat viewer | GaussianSplats3D viewer in web app, loads real scene assets | Manual + Playwright smoke |

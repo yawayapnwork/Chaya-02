@@ -69,6 +69,30 @@ services:
       retries: 10
       start_period: 180s # first start downloads and loads the signature database
 
+  # The reconstruction worker. Not started by default: `docker compose --profile pipeline up`.
+  # It needs the API running (on the host, port ${API_PORT}) and reaches MinIO and Keycloak over the compose network.
+  reconstruction-worker:
+    profiles: ["pipeline"]
+    build:
+      context: ../../services/reconstruction
+    environment:
+      CHAYA_API_URL: http://host.docker.internal:${API_PORT:-8080}
+      CHAYA_TOKEN_URL: http://keycloak:8080/realms/chaya/protocol/openid-connect/token
+      CHAYA_CLIENT_ID: chaya-worker
+      CHAYA_CLIENT_SECRET: ${CHAYA_WORKER_CLIENT_SECRET:?set CHAYA_WORKER_CLIENT_SECRET}
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY}
+      WORKER_ID: compose-worker
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      minio:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    restart: unless-stopped
+
   keycloak:
     image: quay.io/keycloak/keycloak:26.0
     # Development mode with embedded storage. Production needs `start` and an external database.

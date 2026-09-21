@@ -97,10 +97,26 @@ public class CaptureController {
         return captures.completeUpload(ActorAuthentication.currentActor(), venueId, captureId, b.endedAt(), b.durationSeconds());
     }
 
+    public record StartProcessing(Boolean privacyEnabled, Integer timeBudgetSeconds) {}
+
     @PostMapping("/{captureId}/processing")
     @ResponseStatus(HttpStatus.ACCEPTED)
-    public ProcessingStatus startProcessing(@PathVariable UUID venueId, @PathVariable UUID captureId) {
-        return captures.startProcessing(ActorAuthentication.currentActor(), venueId, captureId);
+    public ProcessingStatus startProcessing(@PathVariable UUID venueId, @PathVariable UUID captureId,
+                                            @RequestBody(required = false) StartProcessing body) {
+        StartProcessing b = body == null ? new StartProcessing(null, null) : body;
+        return captures.startProcessing(ActorAuthentication.currentActor(), venueId, captureId, b.privacyEnabled(), b.timeBudgetSeconds());
+    }
+
+    /** Re-queues the stage a failed run stopped at. */
+    @PostMapping("/{captureId}/processing/retry")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public ProcessingStatus retryProcessing(@PathVariable UUID venueId, @PathVariable UUID captureId) {
+        return captures.retryProcessing(ActorAuthentication.currentActor(), venueId, captureId);
+    }
+
+    @PostMapping("/{captureId}/processing/cancel")
+    public ProcessingStatus cancelProcessing(@PathVariable UUID venueId, @PathVariable UUID captureId) {
+        return captures.cancelProcessing(ActorAuthentication.currentActor(), venueId, captureId);
     }
 
     @GetMapping("/{captureId}/processing")

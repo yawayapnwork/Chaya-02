@@ -6,7 +6,6 @@ import java.util.Comparator;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.core.sync.RequestBody;
@@ -28,8 +27,7 @@ import software.amazon.awssdk.services.s3.model.NoSuchBucketException;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.services.s3.model.UploadPartRequest;
 
-/** S3-compatible implementation, used against MinIO (path-style addressing). */
-@Component
+/** S3-compatible implementation, used against MinIO (path-style addressing). One instance per bucket. */
 public class S3ObjectStore implements ObjectStore {
 
     private static final Logger log = LoggerFactory.getLogger(S3ObjectStore.class);
@@ -38,8 +36,8 @@ public class S3ObjectStore implements ObjectStore {
     private final String bucket;
     private volatile boolean bucketReady;
 
-    public S3ObjectStore(StorageProperties props) {
-        this.bucket = props.bucket();
+    public S3ObjectStore(StorageProperties props, String bucket) {
+        this.bucket = bucket;
         this.s3 = S3Client.builder()
             .endpointOverride(URI.create(props.endpoint()))
             .region(Region.of(props.region()))

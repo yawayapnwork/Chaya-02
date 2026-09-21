@@ -45,6 +45,22 @@ class UploadUnitTest {
             .isEqualTo("application/x-msdownload");
     }
 
+    /** The first 32 bytes of a real FFmpeg-encoded MP4 (major brand isom, compatible brands isom iso2 avc1 mp41). */
+    static final byte[] REAL_FFMPEG_MP4_HEAD = {0, 0, 0, 0x20, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm', 0, 0, 2, 0,
+        'i', 's', 'o', 'm', 'i', 's', 'o', '2', 'a', 'v', 'c', '1', 'm', 'p', '4', '1'};
+
+    @Test
+    void realFfmpegMp4sAreRecognisedAsTheSameContainerFamilyAsTheirClaim() {
+        String detected = new TikaContentTypeDetector().detect(REAL_FFMPEG_MP4_HEAD);
+        assertThat(detected).isIn("video/mp4", "video/quicktime");
+        assertThat(dev.chaya.api.capture.UploadProperties.sameFamily("video/mp4", detected)).isTrue();
+        assertThat(dev.chaya.api.capture.UploadProperties.sameFamily("video/quicktime", detected)).isTrue();
+        assertThat(dev.chaya.api.capture.UploadProperties.sameFamily("video/webm", "video/x-matroska")).isTrue();
+        // Different formats are still different: a PNG is never an MP4, and video is never an image.
+        assertThat(dev.chaya.api.capture.UploadProperties.sameFamily("video/mp4", "image/png")).isFalse();
+        assertThat(dev.chaya.api.capture.UploadProperties.sameFamily("video/mp4", "video/webm")).isFalse();
+    }
+
     // ---- clamd wire protocol against a fake daemon ---------------------------------------------
 
     /** Runs a one-shot clamd stand-in that records the INSTREAM payload and answers with the given reply. */

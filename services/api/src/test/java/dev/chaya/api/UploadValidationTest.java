@@ -136,6 +136,20 @@ class UploadValidationTest extends CaptureTestSupport {
     }
 
     @Test
+    void aRealFfmpegStyleMp4IsAcceptedWhetherClaimedAsMp4OrQuickTime() throws Exception {
+        var c = ctx();
+        UUID capture = newCapture(c);
+        byte[] head = UploadUnitTest.REAL_FFMPEG_MP4_HEAD;
+        for (String claimed : new String[] {"video/mp4", "video/quicktime"}) {
+            byte[] data = new byte[2048];
+            System.arraycopy(head, 0, data, 0, head.length);
+            data[100] = (byte) claimed.length(); // distinct checksum per upload
+            String settled = awaitSettled(c, capture, upload(c, capture, "VIDEO", "clip.mp4", claimed, data).mediaId());
+            assertThat(field(settled, "status")).as(settled).isEqualTo("ACCEPTED");
+        }
+    }
+
+    @Test
     void metadataMustBeAJsonObject() throws Exception {
         var c = ctx();
         UUID capture = newCapture(c);
