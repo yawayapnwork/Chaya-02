@@ -21,9 +21,9 @@ class PlaneFitting:
 
     def run(self, ctx: StageContext) -> StageResult:
         ctx.toolchain.require(["py:open3d"], stage=self.name)
-        splats = ctx.inputs_of("GAUSSIAN_SPLAT_CLEAN")
+        splats = ctx.inputs_of("SPLAT_CLEAN")
         if not splats:
-            raise StageError("no GAUSSIAN_SPLAT_CLEAN was provided by GEOMETRIC_CLEANUP", code="INPUT_INVALID")
+            raise StageError("no SPLAT_CLEAN was provided by GEOMETRIC_CLEANUP", code="INPUT_INVALID")
         labels_inputs = ctx.inputs_of("SEMANTIC_LABELS_CLEAN")
 
         cloud = read_ply(splats[0].path)

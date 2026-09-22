@@ -211,6 +211,6 @@ class SplatReconstruction:
         return StageResult(
             "SUCCEEDED", command_record(ctx, {"gaussian_count": len(cloud), "cameras_used": len(cams), "iterations": s.gsplat_iterations}),
             ctx.runner.last_exit_status(),
-            [ArtifactSpec("GAUSSIAN_SPLAT_PLY", ply_path, "splat.ply", "application/octet-stream"),
+            [ArtifactSpec("SPLAT", ply_path, "splat.ply", "application/octet-stream"),
              ArtifactSpec("KEYFRAME_RENDERS", keyframes_tar, "keyframes.tar", "application/x-tar"),
              ArtifactSpec("SPLAT_TRAINING_REPORT", report, "splat-training-report.json", "application/json")])

@@ -2,6 +2,7 @@
 
 import { accessToken } from "./auth";
 import { publicConfig } from "./env";
+import { currentAuthToken } from "./session";
 import type { MediaKind } from "./upload-plan";
 
 export class ApiError extends Error {
@@ -122,7 +123,7 @@ async function parseError(res: Response): Promise<ApiError> {
 }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const token = await accessToken();
+  const token = await currentAuthToken();
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${token}`);
   if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");

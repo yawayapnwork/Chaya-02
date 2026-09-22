@@ -27,9 +27,9 @@ class GeometricCleanup:
 
     def run(self, ctx: StageContext) -> StageResult:
         ctx.toolchain.require(["py:open3d"], stage=self.name)
-        splats = ctx.inputs_of("GAUSSIAN_SPLAT_PLY")
+        splats = ctx.inputs_of("SPLAT")
         if not splats:
-            raise StageError("no GAUSSIAN_SPLAT_PLY was provided by SPLAT_RECONSTRUCTION", code="INPUT_INVALID")
+            raise StageError("no SPLAT was provided by SPLAT_RECONSTRUCTION", code="INPUT_INVALID")
         labels_inputs = ctx.inputs_of("SEMANTIC_LABELS")
 
         cloud = read_ply(splats[0].path)
@@ -84,7 +84,7 @@ class GeometricCleanup:
             cleaned_labels_artifact = ArtifactSpec("SEMANTIC_LABELS_CLEAN", cleaned_labels_path, "semantic-labels-clean.json",
                                                    "application/json")
 
-        artifacts = [ArtifactSpec("GAUSSIAN_SPLAT_CLEAN", cleaned_path, "splat-clean.ply", "application/octet-stream"),
+        artifacts = [ArtifactSpec("SPLAT_CLEAN", cleaned_path, "splat-clean.ply", "application/octet-stream"),
                     ArtifactSpec("GEOMETRIC_CLEANUP_REPORT", report_path, "geometric-cleanup-report.json", "application/json")]
         if cleaned_labels_artifact:
             artifacts.append(cleaned_labels_artifact)

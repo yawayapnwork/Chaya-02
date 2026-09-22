@@ -64,12 +64,12 @@ class SemanticSegmentation:
         ctx.toolchain.require(["py:torch", "py:transformers", "colmap"], stage=self.name)
         ctx.toolchain.require([f"model:{s.semantic_segmentation_model}"], stage=self.name)
 
-        splats = ctx.inputs_of("GAUSSIAN_SPLAT_PLY")
+        splats = ctx.inputs_of("SPLAT")
         sparse_archives = ctx.inputs_of("SPARSE_MODEL")
         poses_inputs = ctx.inputs_of("POSES")
         frame_archives = ctx.inputs_of("FRAME_ARCHIVE_ANON")
         if not splats or not sparse_archives or not poses_inputs or not frame_archives:
-            raise StageError("SEMANTIC_SEGMENTATION needs GAUSSIAN_SPLAT_PLY, SPARSE_MODEL, POSES and FRAME_ARCHIVE_ANON",
+            raise StageError("SEMANTIC_SEGMENTATION needs SPLAT, SPARSE_MODEL, POSES and FRAME_ARCHIVE_ANON",
                              code="INPUT_INVALID")
 
         import cv2

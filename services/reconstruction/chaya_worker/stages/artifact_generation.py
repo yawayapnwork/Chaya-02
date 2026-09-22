@@ -24,7 +24,7 @@ class ArtifactGeneration:
     name = "ARTIFACT_GENERATION"
 
     def run(self, ctx: StageContext) -> StageResult:
-        splats = ctx.inputs_of("GAUSSIAN_SPLAT_CLEAN") or ctx.inputs_of("GAUSSIAN_SPLAT_PLY")
+        splats = ctx.inputs_of("SPLAT_CLEAN") or ctx.inputs_of("SPLAT")
         if not splats:
             raise StageError("no cleaned (or raw) Gaussian splat was provided to ARTIFACT_GENERATION", code="INPUT_INVALID")
         planes_inputs = ctx.inputs_of("PLANE_MODEL")

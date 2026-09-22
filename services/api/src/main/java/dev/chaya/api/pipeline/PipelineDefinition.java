@@ -21,7 +21,9 @@ public final class PipelineDefinition {
         JobStage.NAVIGATION_BAKING,
         JobStage.SEMANTIC_INDEXING);
 
-    /** Artifact kinds that count as "a reconstruction exists" for time-boxed partial results. */
+    /** Artifact kinds that count as "a reconstruction exists" for time-boxed partial results. Matches the
+     * kind chaya_worker.stages.splat_reconstruction actually publishes (SPLAT) for its trained Gaussian
+     * cloud, plus SPLAT_PARTIAL for a worker that checkpoints before the time budget is fully spent. */
     public static final Set<String> RECONSTRUCTION_KINDS = Set.of("SPLAT", "SPLAT_PARTIAL");
 
     public static final String TIME_LIMIT_EXCEEDED = "TIME_LIMIT_EXCEEDED";

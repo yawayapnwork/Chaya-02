@@ -95,8 +95,8 @@ def test_splat_reconstruction_trains_a_real_gaussian_splat_from_a_posed_dataset(
     report = h.run(h.order("SPLAT_RECONSTRUCTION", inputs))
     assert report["status"] == "SUCCEEDED", report["errorMessage"]
     kinds = {a["kind"] for a in report["artifacts"]}
-    assert kinds == {"GAUSSIAN_SPLAT_PLY", "KEYFRAME_RENDERS", "SPLAT_TRAINING_REPORT"}
-    ply_artifact = next(a for a in report["artifacts"] if a["kind"] == "GAUSSIAN_SPLAT_PLY")
+    assert kinds == {"SPLAT", "KEYFRAME_RENDERS", "SPLAT_TRAINING_REPORT"}
+    ply_artifact = next(a for a in report["artifacts"] if a["kind"] == "SPLAT")
     cloud = read_ply(h.storage.root / DERIVED_BUCKET / ply_artifact["key"])
     assert len(cloud) > 0
 
@@ -119,7 +119,7 @@ def test_geometric_cleanup_and_plane_fitting_run_on_a_real_synthetic_room(tmp_pa
                           np.full(n, 4.0, np.float32), np.zeros((n, 3), np.float32))
     h = Harness(tmp_path)
     ply_path = write_ply(cloud, tmp_path / "splat.ply")
-    splat_input = h.raw_input("GAUSSIAN_SPLAT_PLY", ply_path, "application/octet-stream")
+    splat_input = h.raw_input("SPLAT", ply_path, "application/octet-stream")
     splat_input["containsPii"] = False
 
     cleanup_report = h.run(h.order("GEOMETRIC_CLEANUP", [splat_input]))

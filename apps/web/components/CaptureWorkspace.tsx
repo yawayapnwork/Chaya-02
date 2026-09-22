@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { NotSignedInError, signIn, userManager } from "@/lib/auth";
 import {
   ApiError,
@@ -175,6 +176,14 @@ export default function CaptureWorkspace() {
 
   const settled = rows.length > 0 && rows.every((r) => ["accepted", "rejected"].includes(r.state.phase));
   const anyAccepted = rows.some((r) => r.state.phase === "accepted");
+
+  // A real reconstruction exists once ARTIFACT_GENERATION has succeeded -- independent of the run's own
+  // overall status, which is currently never SUCCEEDED end-to-end (NAVIGATION_BAKING/SEMANTIC_INDEXING are
+  // not implemented yet; see services/reconstruction/docs and ReconstructionService on the backend).
+  const hasViewableReconstruction = processing?.run?.stages.some((s) => s.stage === "ARTIFACT_GENERATION" && s.lastRun?.status === "SUCCEEDED") ?? false;
+  const viewerHref = capture
+    ? `/viewer?venue=${capture.venueId}${capture.floorId ? `&floor=${capture.floorId}` : ""}`
+    : "/viewer";
 
   async function onFinish() {
     if (!capture) return;
@@ -389,6 +398,12 @@ export default function CaptureWorkspace() {
       {processing && (
         <section aria-labelledby="processing" className="space-y-3">
           <h2 id="processing" className="text-lg font-medium">4. Processing</h2>
+          {hasViewableReconstruction && (
+            <p className="rounded border border-green-300 bg-green-50 p-3 text-sm text-green-900">
+              A reconstruction is ready.{" "}
+              <Link className="underline" href={viewerHref}>View reconstruction</Link>
+            </p>
+          )}
           <ProcessingPanel status={processing} busy={busy} onRetry={onRetryProcessing} onCancel={onCancelProcessing} />
         </section>
       )}

@@ -358,7 +358,8 @@ public class PipelineService {
     /** The budget is spent before the next stage: PARTIAL if a reconstruction exists, otherwise FAILED. */
     private void finalizeTimeBoxed(Actor actor, RunRow run, JobStage nextStage) {
         boolean hasReconstruction = jdbc.sql("SELECT count(*) FROM processing_artifact a JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id "
-                + "WHERE sr.run_id = :r AND sr.status = 'SUCCEEDED' AND a.kind = 'SPLAT'").param("r", run.id())
+                + "WHERE sr.run_id = :r AND sr.status = 'SUCCEEDED' AND a.kind IN (:kinds)").param("r", run.id())
+            .param("kinds", PipelineDefinition.RECONSTRUCTION_KINDS)
             .query(Integer.class).single() > 0;
         if (hasReconstruction) {
             finishRun(actor, run, "PARTIAL", "PARTIAL", nextStage.name(), PipelineDefinition.TIME_LIMIT_EXCEEDED,
