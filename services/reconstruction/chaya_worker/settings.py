@@ -47,6 +47,32 @@ class Settings:
     min_frames: int = 10
     min_registered_ratio: float = 0.6
     privacy_screen_detector: str = "heuristic-quad"
+    # SPLAT_RECONSTRUCTION (gsplat)
+    gsplat_iterations: int = 7000
+    gsplat_lr_position: float = 1.6e-4
+    gsplat_lr_other: float = 5e-3
+    gsplat_ssim_weight: float = 0.2
+    gsplat_keyframe_every: int = 500
+    gsplat_min_compute_capability: float = 7.0
+    # SEMANTIC_SEGMENTATION
+    semantic_confidence_min: float = 0.5
+    semantic_sample_every: int = 1  # segment every Nth registered frame (cost control)
+    semantic_segmentation_model: str = "nvidia/segformer-b0-finetuned-ade-512-512"
+    # GEOMETRIC_CLEANUP (Open3D)
+    cleanup_stat_nb_neighbors: int = 20
+    cleanup_stat_std_ratio: float = 2.0
+    cleanup_radius_nb_points: int = 8
+    cleanup_radius: float = 0.05
+    cleanup_opacity_threshold: float = 0.05
+    cleanup_semantic_min_neighbors: int = 3  # clutter points with fewer same-class neighbours in cleanup_radius are dropped
+    # PLANE_FITTING
+    plane_ransac_distance_threshold: float = 0.02
+    plane_ransac_n: int = 3
+    plane_ransac_iterations: int = 1000
+    plane_max_planes: int = 6
+    plane_min_inliers: int = 200
+    # ARTIFACT_GENERATION
+    ksplat_compression_level: int = 0
 
     @staticmethod
     def from_env(env: Mapping[str, str] | None = None) -> "Settings":
@@ -77,6 +103,27 @@ class Settings:
             min_frames=_int(e, "MIN_FRAMES", d.min_frames),
             min_registered_ratio=_float(e, "MIN_REGISTERED_RATIO", d.min_registered_ratio),
             privacy_screen_detector=e.get("PRIVACY_SCREEN_DETECTOR", d.privacy_screen_detector),
+            gsplat_iterations=_int(e, "GSPLAT_ITERATIONS", d.gsplat_iterations),
+            gsplat_lr_position=_float(e, "GSPLAT_LR_POSITION", d.gsplat_lr_position),
+            gsplat_lr_other=_float(e, "GSPLAT_LR_OTHER", d.gsplat_lr_other),
+            gsplat_ssim_weight=_float(e, "GSPLAT_SSIM_WEIGHT", d.gsplat_ssim_weight),
+            gsplat_keyframe_every=_int(e, "GSPLAT_KEYFRAME_EVERY", d.gsplat_keyframe_every),
+            gsplat_min_compute_capability=_float(e, "GSPLAT_MIN_COMPUTE_CAPABILITY", d.gsplat_min_compute_capability),
+            semantic_confidence_min=_float(e, "SEMANTIC_CONFIDENCE_MIN", d.semantic_confidence_min),
+            semantic_sample_every=_int(e, "SEMANTIC_SAMPLE_EVERY", d.semantic_sample_every),
+            semantic_segmentation_model=e.get("SEMANTIC_SEGMENTATION_MODEL", d.semantic_segmentation_model),
+            cleanup_stat_nb_neighbors=_int(e, "CLEANUP_STAT_NB_NEIGHBORS", d.cleanup_stat_nb_neighbors),
+            cleanup_stat_std_ratio=_float(e, "CLEANUP_STAT_STD_RATIO", d.cleanup_stat_std_ratio),
+            cleanup_radius_nb_points=_int(e, "CLEANUP_RADIUS_NB_POINTS", d.cleanup_radius_nb_points),
+            cleanup_radius=_float(e, "CLEANUP_RADIUS", d.cleanup_radius),
+            cleanup_opacity_threshold=_float(e, "CLEANUP_OPACITY_THRESHOLD", d.cleanup_opacity_threshold),
+            cleanup_semantic_min_neighbors=_int(e, "CLEANUP_SEMANTIC_MIN_NEIGHBORS", d.cleanup_semantic_min_neighbors),
+            plane_ransac_distance_threshold=_float(e, "PLANE_RANSAC_DISTANCE_THRESHOLD", d.plane_ransac_distance_threshold),
+            plane_ransac_n=_int(e, "PLANE_RANSAC_N", d.plane_ransac_n),
+            plane_ransac_iterations=_int(e, "PLANE_RANSAC_ITERATIONS", d.plane_ransac_iterations),
+            plane_max_planes=_int(e, "PLANE_MAX_PLANES", d.plane_max_planes),
+            plane_min_inliers=_int(e, "PLANE_MIN_INLIERS", d.plane_min_inliers),
+            ksplat_compression_level=_int(e, "KSPLAT_COMPRESSION_LEVEL", d.ksplat_compression_level),
         )
 
     def require_service_config(self) -> None:
@@ -95,4 +142,17 @@ class Settings:
             "dark_fraction_max": self.dark_fraction_max, "bright_fraction_max": self.bright_fraction_max,
             "duplicate_distance": self.duplicate_distance, "min_frames": self.min_frames,
             "min_registered_ratio": self.min_registered_ratio, "privacy_screen_detector": self.privacy_screen_detector,
+            "gsplat_iterations": self.gsplat_iterations, "gsplat_lr_position": self.gsplat_lr_position,
+            "gsplat_lr_other": self.gsplat_lr_other, "gsplat_ssim_weight": self.gsplat_ssim_weight,
+            "gsplat_keyframe_every": self.gsplat_keyframe_every,
+            "gsplat_min_compute_capability": self.gsplat_min_compute_capability,
+            "semantic_confidence_min": self.semantic_confidence_min, "semantic_sample_every": self.semantic_sample_every,
+            "semantic_segmentation_model": self.semantic_segmentation_model,
+            "cleanup_stat_nb_neighbors": self.cleanup_stat_nb_neighbors, "cleanup_stat_std_ratio": self.cleanup_stat_std_ratio,
+            "cleanup_radius_nb_points": self.cleanup_radius_nb_points, "cleanup_radius": self.cleanup_radius,
+            "cleanup_opacity_threshold": self.cleanup_opacity_threshold,
+            "cleanup_semantic_min_neighbors": self.cleanup_semantic_min_neighbors,
+            "plane_ransac_distance_threshold": self.plane_ransac_distance_threshold, "plane_ransac_n": self.plane_ransac_n,
+            "plane_ransac_iterations": self.plane_ransac_iterations, "plane_max_planes": self.plane_max_planes,
+            "plane_min_inliers": self.plane_min_inliers, "ksplat_compression_level": self.ksplat_compression_level,
         }

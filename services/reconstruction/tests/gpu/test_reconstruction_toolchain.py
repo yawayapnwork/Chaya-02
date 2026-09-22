@@ -31,6 +31,11 @@ needs_glomap = pytest.mark.skipif(not (_tc.colmap().available and _tc.glomap().a
 needs_dataset = pytest.mark.skipif(not DATASET or not Path(DATASET).is_dir(), reason="CHAYA_TEST_IMAGE_SEQUENCE is not set to a folder of real overlapping photos")
 needs_gsplat = pytest.mark.skipif(not all(_tc.status(r).available for r in ("py:torch", "py:gsplat", "cuda")),
                                   reason="torch + gsplat + a CUDA device are not all available")
+needs_open3d = pytest.mark.skipif(not _tc.module("open3d").available, reason="Open3D is not installed")
+needs_segmentation = pytest.mark.skipif(
+    not all(_tc.status(r).available for r in ("py:torch", "py:transformers")) or
+    not _tc.huggingface_model("nvidia/segformer-b0-finetuned-ade-512-512").available,
+    reason="torch + transformers + a locally cached SegFormer checkpoint are not all available")
 
 
 def _anon_archive(h: Harness, tmp_path: Path) -> dict:
@@ -73,9 +78,55 @@ def test_glomap_is_used_when_available_and_any_fallback_to_colmap_is_recorded(tm
 
 
 @needs_gsplat
-def test_the_reconstruction_stage_does_not_pretend_to_exist_even_when_the_toolchain_is_present(tmp_path):
-    """Guard against fake success: until gsplat training is implemented this stage must FAIL, not produce a splat.
-    When the implementation lands, replace this test with one that trains on a real posed dataset."""
+@needs_colmap
+@needs_dataset
+def test_splat_reconstruction_trains_a_real_gaussian_splat_from_a_posed_dataset(tmp_path):
+    """SPLAT_RECONSTRUCTION is implemented (chaya_worker.stages.splat_reconstruction): it must produce a
+    real, non-empty Gaussian cloud trained against the actual registered frames -- never a placeholder."""
+    from chaya_worker.ply import read_ply
+
+    h = Harness(tmp_path, gsplat_iterations=50, gsplat_keyframe_every=25)
+    pose_report = h.run(h.order("POSE_ESTIMATION", [_anon_archive(h, tmp_path)]))
+    assert pose_report["status"] == "SUCCEEDED", pose_report["errorMessage"]
+
+    frame_archive = h.raw_input("FRAME_ARCHIVE_ANON", tmp_path / "anon.tar", "application/x-tar")
+    frame_archive["containsPii"] = False
+    inputs = h.outputs_as_inputs(pose_report) + [frame_archive]
+    report = h.run(h.order("SPLAT_RECONSTRUCTION", inputs))
+    assert report["status"] == "SUCCEEDED", report["errorMessage"]
+    kinds = {a["kind"] for a in report["artifacts"]}
+    assert kinds == {"GAUSSIAN_SPLAT_PLY", "KEYFRAME_RENDERS", "SPLAT_TRAINING_REPORT"}
+    ply_artifact = next(a for a in report["artifacts"] if a["kind"] == "GAUSSIAN_SPLAT_PLY")
+    cloud = read_ply(h.storage.root / DERIVED_BUCKET / ply_artifact["key"])
+    assert len(cloud) > 0
+
+
+@needs_open3d
+def test_geometric_cleanup_and_plane_fitting_run_on_a_real_synthetic_room(tmp_path):
+    """No GPU needed (Open3D-only): a synthetic point cloud shaped like a floor + wall + a scattering of
+    noise must come out of GEOMETRIC_CLEANUP smaller and PLANE_FITTING must find the two real planes."""
+    import numpy as np
+
+    from chaya_worker.ply import GaussianCloud, write_ply
+
+    rng = np.random.default_rng(0)
+    floor = np.stack([rng.uniform(-2, 2, 400), rng.uniform(-2, 2, 400), np.zeros(400)], axis=1)
+    wall = np.stack([rng.uniform(-2, 2, 400), np.zeros(400), rng.uniform(0, 2, 400)], axis=1)
+    noise = rng.uniform(-3, 3, (60, 3))  # sparse floating debris, no structure
+    positions = np.concatenate([floor, wall, noise]).astype(np.float32)
+    n = len(positions)
+    cloud = GaussianCloud(positions, np.zeros((n, 3), np.float32), np.tile([1, 0, 0, 0], (n, 1)).astype(np.float32),
+                          np.full(n, 4.0, np.float32), np.zeros((n, 3), np.float32))
     h = Harness(tmp_path)
-    report = h.run(h.order("SPLAT_RECONSTRUCTION", []))
-    assert report["status"] == "FAILED" and report["errorCode"] == "STAGE_NOT_IMPLEMENTED" and report["artifacts"] == []
+    ply_path = write_ply(cloud, tmp_path / "splat.ply")
+    splat_input = h.raw_input("GAUSSIAN_SPLAT_PLY", ply_path, "application/octet-stream")
+    splat_input["containsPii"] = False
+
+    cleanup_report = h.run(h.order("GEOMETRIC_CLEANUP", [splat_input]))
+    assert cleanup_report["status"] == "SUCCEEDED", cleanup_report["errorMessage"]
+    assert cleanup_report["command"]["config"]["gaussian_count_after"] <= n
+
+    clean_inputs = h.outputs_as_inputs(cleanup_report)
+    plane_report = h.run(h.order("PLANE_FITTING", clean_inputs))
+    assert plane_report["status"] == "SUCCEEDED", plane_report["errorMessage"]
+    assert plane_report["command"]["config"]["planes_found"] >= 2

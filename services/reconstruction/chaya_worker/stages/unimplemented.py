@@ -1,8 +1,13 @@
-"""Stages 6-12 exist in the pipeline plan, but their implementations are not written yet.
+"""Stages 11-12 exist in the pipeline plan, but their implementations are not written yet.
 
 They never fabricate output. Each one first reports missing dependencies (structured, actionable); if the
 dependencies are present it still fails with STAGE_NOT_IMPLEMENTED. There is deliberately no code path
-that returns SUCCEEDED or writes a .ply/.splat/.ksplat/mesh without the real algorithm behind it.
+that returns SUCCEEDED or writes a navmesh/embedding index without the real algorithm behind it.
+
+Stages 6-10 (SPLAT_RECONSTRUCTION, SEMANTIC_SEGMENTATION, GEOMETRIC_CLEANUP, PLANE_FITTING,
+ARTIFACT_GENERATION) are implemented -- see chaya_worker/stages/{splat_reconstruction,semantic_segmentation,
+geometric_cleanup,plane_fitting,artifact_generation}.py -- and are registered directly in
+chaya_worker/stages/__init__.py, not here.
 """
 
 from __future__ import annotations
@@ -12,11 +17,6 @@ from ..errors import StageNotImplemented
 
 # stage -> (requirements, what it will do)
 PLANNED: dict[str, tuple[list[str], str]] = {
-    "SPLAT_RECONSTRUCTION": (["py:torch", "py:gsplat", "cuda"], "3D Gaussian Splatting training with gsplat"),
-    "SEMANTIC_SEGMENTATION": (["py:torch", "py:transformers"], "semantic segmentation (SegFormer / Mask2Former)"),
-    "GEOMETRIC_CLEANUP": (["py:open3d"], "Open3D geometric cleanup"),
-    "PLANE_FITTING": (["py:open3d"], "plane fitting on the cleaned geometry"),
-    "ARTIFACT_GENERATION": (["py:open3d"], "generation of the deliverable artifacts (.ksplat, mesh)"),
     "NAVIGATION_BAKING": (["exe:recast-cli"], "Recast navigation mesh baking"),
     "SEMANTIC_INDEXING": (["py:torch", "py:open_clip"], "object detection and CLIP semantic indexing"),
 }

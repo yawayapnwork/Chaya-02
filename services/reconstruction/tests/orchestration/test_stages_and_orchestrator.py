@@ -254,6 +254,23 @@ def test_unwritten_stages_never_succeed_and_never_create_reconstruction_files(ha
     assert not [k for k in harness.storage.keys(DERIVED_BUCKET) if k.endswith((".ply", ".splat", ".ksplat", ".obj", ".glb"))]
 
 
+@pytest.mark.parametrize("stage", ["SPLAT_RECONSTRUCTION", "SEMANTIC_SEGMENTATION", "GEOMETRIC_CLEANUP", "PLANE_FITTING"])
+def test_implemented_reconstruction_stages_refuse_to_run_without_their_real_dependencies(harness, stage):
+    """SPLAT_RECONSTRUCTION..PLANE_FITTING are real implementations (not PlannedStage placeholders), but on a
+    worker without torch/gsplat/CUDA/Open3D/transformers they must still fail structured, produce nothing,
+    and never reach the point of touching (nonexistent) inputs with a fake result."""
+    report = harness.run(harness.order(stage, []), toolchain=NO_TOOLS)
+    assert report["status"] == "FAILED" and report["errorCode"] == "DEPENDENCY_UNAVAILABLE"
+    assert report["artifacts"] == [] and report["errorDetails"]["missing"]
+    assert not [k for k in harness.storage.keys(DERIVED_BUCKET) if k.endswith((".ply", ".ksplat"))]
+
+
+def test_artifact_generation_refuses_to_run_without_a_splat_and_never_writes_a_placeholder_ksplat(harness):
+    report = harness.run(harness.order("ARTIFACT_GENERATION", []))
+    assert report["status"] == "FAILED" and report["errorCode"] == "INPUT_INVALID" and report["artifacts"] == []
+    assert not [k for k in harness.storage.keys(DERIVED_BUCKET) if k.endswith(".ksplat")]
+
+
 # ---- time box, crashes, storage, transport ------------------------------------------------------------
 
 class _Stage:

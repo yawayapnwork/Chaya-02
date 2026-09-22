@@ -113,7 +113,57 @@ class Toolchain:
         """nvidia-smi answers. Used only to decide COLMAP's GPU flags."""
         return self._which("nvidia-smi") is not None
 
+    def cuda_devices(self) -> list[dict]:
+        """Per-device name and compute capability, via torch. Empty if torch or CUDA is unavailable."""
+        if importlib.util.find_spec("torch") is None:
+            return []
+        try:
+            import torch
+
+            if not torch.cuda.is_available():
+                return []
+            devices = []
+            for i in range(torch.cuda.device_count()):
+                major, minor = torch.cuda.get_device_capability(i)
+                props = torch.cuda.get_device_properties(i)
+                devices.append({"index": i, "name": props.name, "compute_capability": f"{major}.{minor}",
+                                "compute_capability_value": major + minor / 10, "total_memory_bytes": props.total_memory})
+            return devices
+        except Exception:  # noqa: BLE001 - device introspection failing means "treat as unavailable"
+            return []
+
+    def require_cuda_compute_capability(self, minimum: float, *, stage: str) -> None:
+        """Raise a structured DependencyError if no CUDA device meets the minimum compute capability."""
+        devices = self.cuda_devices()
+        if not devices:
+            raise DependencyError(f"{stage} needs a CUDA device but none was detected", details={"missing": ["cuda"]})
+        best = max(d["compute_capability_value"] for d in devices)
+        if best < minimum:
+            raise DependencyError(
+                f"{stage} needs a CUDA device with compute capability >= {minimum}, best available is {best}",
+                details={"missing": ["cuda-compute-capability"], "devices": devices, "required_minimum": minimum})
+
     # ---- requirements -----------------------------------------------------------------------
+
+    def huggingface_model(self, model_id: str) -> ToolStatus:
+        """Is `model_id` available without a network call (weights already cached locally)? We never
+        silently fall back to downloading mid-stage: if it is not cached, the stage fails with a structured
+        DependencyError naming the model, rather than blocking on (or failing deep inside) a download."""
+        key = f"hf:{model_id}"
+        if key in self._cache:
+            return self._cache[key]
+        if importlib.util.find_spec("huggingface_hub") is None:
+            status = ToolStatus(model_id, False, detail="huggingface_hub is not installed, so model cache availability cannot be checked")
+        else:
+            try:
+                from huggingface_hub import scan_cache_dir
+
+                cached = any(repo.repo_id == model_id for repo in scan_cache_dir().repos)
+                status = ToolStatus(model_id, cached, detail=None if cached else f"model {model_id!r} is not present in the local HF cache")
+            except Exception as exc:  # noqa: BLE001
+                status = ToolStatus(model_id, False, detail=f"could not inspect the local HF cache: {exc}")
+        self._cache[key] = status
+        return status
 
     def status(self, requirement: str) -> ToolStatus:
         if requirement == "ffmpeg":
@@ -126,6 +176,8 @@ class Toolchain:
             return self.cuda()
         if requirement.startswith("py:"):
             return self.module(requirement[3:])
+        if requirement.startswith("model:"):
+            return self.huggingface_model(requirement[len("model:"):])
         if requirement.startswith("exe:"):
             name = requirement[4:]
             return self._executable(name, name.upper().replace("-", "_") + "_BIN")

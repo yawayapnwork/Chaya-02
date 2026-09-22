@@ -41,13 +41,23 @@ belongs to the artifact-generation milestone, and a `PARTIAL` result must be fin
 | 3 | `FRAME_QUALITY_FILTER` | drops blurred (Laplacian variance), under/over-exposed and near-duplicate frames, with reasons | **executes** |
 | 4 | `PRIVACY_PREPROCESS` | face and screen/document detection, blurring, verification pass; fails closed | **executes** |
 | 5 | `POSE_ESTIMATION` | COLMAP feature extraction + matching, GLOMAP mapper, COLMAP mapper fallback, poses.json | implemented; **needs COLMAP** (GLOMAP optional); fails with `DEPENDENCY_UNAVAILABLE` here |
-| 6 | `SPLAT_RECONSTRUCTION` | gsplat training | **not implemented**: `DEPENDENCY_UNAVAILABLE` (torch, gsplat, CUDA) or `STAGE_NOT_IMPLEMENTED` |
-| 7-12 | segmentation, Open3D cleanup, plane fitting, artifact generation, navigation baking, semantic indexing | | **not implemented**: same structured errors |
+| 6 | `SPLAT_RECONSTRUCTION` | gsplat training (Adam, L1+D-SSIM) seeded from the SfM point cloud; periodic keyframe renders | implemented; **needs torch + gsplat + CUDA + COLMAP**; fails with `DEPENDENCY_UNAVAILABLE` here |
+| 7 | `SEMANTIC_SEGMENTATION` | per-frame SegFormer (or any configured HF model) segmentation, projected onto the splat and bucketed into floor/wall/furniture/clutter | implemented; **needs torch + transformers + the model cached locally + COLMAP**; fails with `DEPENDENCY_UNAVAILABLE` here |
+| 8 | `GEOMETRIC_CLEANUP` | Open3D statistical + radius outlier removal, then semantic class-aware filtering (never opacity alone) | implemented; **needs Open3D**; fails with `DEPENDENCY_UNAVAILABLE` here |
+| 9 | `PLANE_FITTING` | iterative Open3D RANSAC plane extraction, floor/wall classification from a data-driven up axis | implemented; **needs Open3D**; fails with `DEPENDENCY_UNAVAILABLE` here |
+| 10 | `ARTIFACT_GENERATION` | `.ksplat` conversion (compression level 0), the artifact manifest, the compressed viewer bundle | implemented; only needs the cleaned splat as input |
+| 11-12 | navigation baking, semantic indexing | | **not implemented**: `DEPENDENCY_UNAVAILABLE` or `STAGE_NOT_IMPLEMENTED` |
 
-There is no code path that produces a `.ply`/`.splat`/`.ksplat`/mesh without the real algorithm. Stages 6-12
-check their dependencies (so the error names what to install) and then fail with `STAGE_NOT_IMPLEMENTED`;
-they can never return success. Consequently **no run can currently finish as `SUCCEEDED`**; on this milestone
-every run ends `FAILED` at the first stage that cannot run, which is the intended honest behaviour.
+There is no code path that produces a `.ply`/`.ksplat`/mesh without the real algorithm behind it: stages 6-10
+run real gsplat/Open3D/transformers code gated by `chaya_worker.toolchain` dependency checks, and stages
+11-12 check their dependencies and then fail with `STAGE_NOT_IMPLEMENTED` -- they can never return success.
+On a worker with only FFmpeg/OpenCV/COLMAP (no CUDA, gsplat, Open3D or transformers) a run still ends
+`FAILED` at `SPLAT_RECONSTRUCTION`, which is the intended honest behaviour; the reconstruction toolchain
+(`pip install chaya-worker[reconstruction]`) and a CUDA GPU are needed for a run to reach `SUCCEEDED`.
+The cleanup benchmark harness (`python -m chaya_worker.benchmarks.cleanup_benchmark`) compares no-cleanup,
+opacity-threshold, statistical-outlier, density/radius-outlier and semantic-aware cleanup on a trained
+splat; point counts and timings are always reported, PSNR/SSIM only when reference frames/poses and the
+GPU toolchain are available -- otherwise it says so instead of inventing a number.
 
 ## The stage contract
 Every attempt of every stage produces one immutable `pipeline_stage_run` row (returned by
