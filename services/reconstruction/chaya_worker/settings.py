@@ -85,6 +85,23 @@ class Settings:
     clip_pretrained: str = "openai"  # 512-d, matches poi_version.embedding vector(512)
     semantic_indexing_sample_every: int = 3
     object_cluster_distance: float = 0.75  # scene units; detections closer than this are one object
+    # NAVIGATION_BAKING (Recast). Names/defaults match Recast's own rcConfig fields.
+    navmesh_cell_size: float = 0.3
+    navmesh_cell_height: float = 0.2
+    navmesh_agent_height: float = 1.8
+    navmesh_agent_radius: float = 0.35
+    navmesh_agent_max_climb: float = 0.4
+    navmesh_agent_max_slope_deg: float = 45.0
+    navmesh_region_min_size: float = 8.0
+    navmesh_region_merge_size: float = 20.0
+    navmesh_edge_max_len: float = 12.0
+    navmesh_edge_max_error: float = 1.3
+    navmesh_verts_per_poly: float = 6.0
+    navmesh_detail_sample_dist: float = 6.0
+    navmesh_detail_sample_max_error: float = 1.0
+    # ADA-inspired accessible-ramp threshold (1:12 rise:run ~= 4.8 degrees); a polygon steeper than this
+    # is excluded from the STEP_FREE routing graph regardless of whether Recast still considers it walkable.
+    navmesh_max_ramp_slope_deg: float = 5.0
 
     @staticmethod
     def from_env(env: Mapping[str, str] | None = None) -> "Settings":
@@ -144,6 +161,20 @@ class Settings:
             clip_pretrained=e.get("CLIP_PRETRAINED", d.clip_pretrained),
             semantic_indexing_sample_every=_int(e, "SEMANTIC_INDEXING_SAMPLE_EVERY", d.semantic_indexing_sample_every),
             object_cluster_distance=_float(e, "OBJECT_CLUSTER_DISTANCE", d.object_cluster_distance),
+            navmesh_cell_size=_float(e, "NAVMESH_CELL_SIZE", d.navmesh_cell_size),
+            navmesh_cell_height=_float(e, "NAVMESH_CELL_HEIGHT", d.navmesh_cell_height),
+            navmesh_agent_height=_float(e, "NAVMESH_AGENT_HEIGHT", d.navmesh_agent_height),
+            navmesh_agent_radius=_float(e, "NAVMESH_AGENT_RADIUS", d.navmesh_agent_radius),
+            navmesh_agent_max_climb=_float(e, "NAVMESH_AGENT_MAX_CLIMB", d.navmesh_agent_max_climb),
+            navmesh_agent_max_slope_deg=_float(e, "NAVMESH_AGENT_MAX_SLOPE_DEG", d.navmesh_agent_max_slope_deg),
+            navmesh_region_min_size=_float(e, "NAVMESH_REGION_MIN_SIZE", d.navmesh_region_min_size),
+            navmesh_region_merge_size=_float(e, "NAVMESH_REGION_MERGE_SIZE", d.navmesh_region_merge_size),
+            navmesh_edge_max_len=_float(e, "NAVMESH_EDGE_MAX_LEN", d.navmesh_edge_max_len),
+            navmesh_edge_max_error=_float(e, "NAVMESH_EDGE_MAX_ERROR", d.navmesh_edge_max_error),
+            navmesh_verts_per_poly=_float(e, "NAVMESH_VERTS_PER_POLY", d.navmesh_verts_per_poly),
+            navmesh_detail_sample_dist=_float(e, "NAVMESH_DETAIL_SAMPLE_DIST", d.navmesh_detail_sample_dist),
+            navmesh_detail_sample_max_error=_float(e, "NAVMESH_DETAIL_SAMPLE_MAX_ERROR", d.navmesh_detail_sample_max_error),
+            navmesh_max_ramp_slope_deg=_float(e, "NAVMESH_MAX_RAMP_SLOPE_DEG", d.navmesh_max_ramp_slope_deg),
         )
 
     def require_service_config(self) -> None:
@@ -181,4 +212,12 @@ class Settings:
             "clip_model_name": self.clip_model_name, "clip_pretrained": self.clip_pretrained,
             "semantic_indexing_sample_every": self.semantic_indexing_sample_every,
             "object_cluster_distance": self.object_cluster_distance,
+            "navmesh_cell_size": self.navmesh_cell_size, "navmesh_cell_height": self.navmesh_cell_height,
+            "navmesh_agent_height": self.navmesh_agent_height, "navmesh_agent_radius": self.navmesh_agent_radius,
+            "navmesh_agent_max_climb": self.navmesh_agent_max_climb, "navmesh_agent_max_slope_deg": self.navmesh_agent_max_slope_deg,
+            "navmesh_region_min_size": self.navmesh_region_min_size, "navmesh_region_merge_size": self.navmesh_region_merge_size,
+            "navmesh_edge_max_len": self.navmesh_edge_max_len, "navmesh_edge_max_error": self.navmesh_edge_max_error,
+            "navmesh_verts_per_poly": self.navmesh_verts_per_poly, "navmesh_detail_sample_dist": self.navmesh_detail_sample_dist,
+            "navmesh_detail_sample_max_error": self.navmesh_detail_sample_max_error,
+            "navmesh_max_ramp_slope_deg": self.navmesh_max_ramp_slope_deg,
         }

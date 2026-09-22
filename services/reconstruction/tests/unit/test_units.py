@@ -48,7 +48,7 @@ def test_settings_come_from_the_environment_and_secrets_have_no_default():
 def test_the_registry_covers_every_planned_stage_in_order():
     assert list(STAGE_ORDER) == [
         "INPUT_VALIDATION", "FFMPEG_PREPROCESS", "FRAME_QUALITY_FILTER", "PRIVACY_PREPROCESS", "POSE_ESTIMATION", "SPLAT_RECONSTRUCTION",
-        "SEMANTIC_SEGMENTATION", "GEOMETRIC_CLEANUP", "PLANE_FITTING", "ARTIFACT_GENERATION", "NAVIGATION_BAKING", "SEMANTIC_INDEXING"]
+        "SEMANTIC_SEGMENTATION", "GEOMETRIC_CLEANUP", "PLANE_FITTING", "ARTIFACT_GENERATION", "SEMANTIC_INDEXING", "NAVIGATION_BAKING"]
     assert set(default_registry()) == set(STAGE_ORDER)
     assert not runs_after_privacy("FRAME_QUALITY_FILTER") and not runs_after_privacy("PRIVACY_PREPROCESS")
     assert runs_after_privacy("POSE_ESTIMATION") and runs_after_privacy("SEMANTIC_INDEXING")

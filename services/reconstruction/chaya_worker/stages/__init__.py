@@ -8,6 +8,7 @@ from .ffmpeg_preprocess import FfmpegPreprocess
 from .frame_quality import FrameQualityFilter
 from .geometric_cleanup import GeometricCleanup
 from .input_validation import InputValidation
+from .navigation_baking import NavigationBaking
 from .plane_fitting import PlaneFitting
 from .pose_estimation import PoseEstimation
 from .privacy import PrivacyPreprocess
@@ -19,15 +20,21 @@ from .unimplemented import PLANNED, PlannedStage
 STAGE_ORDER = [
     "INPUT_VALIDATION", "FFMPEG_PREPROCESS", "FRAME_QUALITY_FILTER", "PRIVACY_PREPROCESS", "POSE_ESTIMATION",
     "SPLAT_RECONSTRUCTION", "SEMANTIC_SEGMENTATION", "GEOMETRIC_CLEANUP", "PLANE_FITTING", "ARTIFACT_GENERATION",
-    "NAVIGATION_BAKING", "SEMANTIC_INDEXING",
+    "SEMANTIC_INDEXING", "NAVIGATION_BAKING",
 ]
+# SEMANTIC_INDEXING runs before NAVIGATION_BAKING (not the order the two were originally planned in):
+# neither stage depends on the other's output, and a stage failure stops the run from advancing (see
+# dev.chaya.api.pipeline.PipelineService#advance). recast-cli (NAVIGATION_BAKING's hard dependency) is a
+# much rarer thing to have installed than the reconstruction toolchain SEMANTIC_INDEXING needs, so putting
+# it last means a worker without it still gets a fully searchable reconstruction -- only routing is
+# unavailable, not search too.
 PRIVACY_STAGE = "PRIVACY_PREPROCESS"
 
 
 def default_registry() -> dict[str, Stage]:
     stages: list[Stage] = [InputValidation(), FfmpegPreprocess(), FrameQualityFilter(), PrivacyPreprocess(), PoseEstimation(),
                            SplatReconstruction(), SemanticSegmentation(), GeometricCleanup(), PlaneFitting(), ArtifactGeneration(),
-                           SemanticIndexing(), *(PlannedStage(name) for name in PLANNED)]
+                           NavigationBaking(), SemanticIndexing(), *(PlannedStage(name) for name in PLANNED)]
     registry = {s.name: s for s in stages}
     missing = [n for n in STAGE_ORDER if n not in registry]
     if missing:

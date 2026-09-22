@@ -14,8 +14,9 @@ interface SplatViewerCanvasProps {
   pois: Poi[];
   selectedPoiId: string | null;
   onSelectPoi: (id: string | null) => void;
-  routeFrom: Poi | null;
-  routeTo: Poi | null;
+  /** A real route's waypoints (POST /api/v1/navigation/routes), already filtered to this floor, in order.
+   * null/empty draws nothing -- there is no synthetic fallback line when a real route is unavailable. */
+  routeWaypoints: { x: number; y: number; z: number }[] | null;
   onProgress: (percent: number) => void;
   onLoaded: (splatCount: number) => void;
   onError: (message: string) => void;
@@ -31,8 +32,7 @@ export default function SplatViewerCanvas({
   pois,
   selectedPoiId,
   onSelectPoi,
-  routeFrom,
-  routeTo,
+  routeWaypoints,
   onProgress,
   onLoaded,
   onError,
@@ -195,9 +195,9 @@ export default function SplatViewerCanvas({
     });
   }, [selectedPoiId]);
 
-  // Navigation route overlay: a straight preview line between two selected POIs. This is NOT a routed
-  // path (no navmesh exists yet -- NAVIGATION_BAKING is not implemented on the worker, see
-  // docs/pipeline.md), so it must never be presented as one; ViewerWorkspace labels it accordingly.
+  // Navigation route overlay: the real waypoint sequence from POST /api/v1/navigation/routes (real
+  // Dijkstra over the baked navmesh graph -- see docs/navigation.md). Nothing is drawn when a route
+  // could not be found; ViewerWorkspace never fabricates a straight-line substitute.
   useEffect(() => {
     const scene = threeSceneRef.current;
     if (!scene) return;
@@ -207,17 +207,14 @@ export default function SplatViewerCanvas({
       (routeLineRef.current.material as THREE.Material).dispose();
       routeLineRef.current = null;
     }
-    if (!routeFrom || !routeTo) return;
-    const geometry = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(routeFrom.x, routeFrom.y, routeFrom.z),
-      new THREE.Vector3(routeTo.x, routeTo.y, routeTo.z),
-    ]);
+    if (!routeWaypoints || routeWaypoints.length < 2) return;
+    const geometry = new THREE.BufferGeometry().setFromPoints(routeWaypoints.map((w) => new THREE.Vector3(w.x, w.y, w.z)));
     const material = new THREE.LineDashedMaterial({ color: 0xf59e0b, dashSize: 0.15, gapSize: 0.1, linewidth: 2 });
     const line = new THREE.Line(geometry, material);
     line.computeLineDistances();
     scene.add(line);
     routeLineRef.current = line;
-  }, [routeFrom, routeTo, blobUrl]);
+  }, [routeWaypoints, blobUrl]);
 
   return (
     <div

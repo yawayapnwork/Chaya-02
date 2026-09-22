@@ -18,8 +18,13 @@ public final class PipelineDefinition {
         JobStage.GEOMETRIC_CLEANUP,
         JobStage.PLANE_FITTING,
         JobStage.ARTIFACT_GENERATION,
-        JobStage.NAVIGATION_BAKING,
-        JobStage.SEMANTIC_INDEXING);
+        // SEMANTIC_INDEXING before NAVIGATION_BAKING: neither depends on the other's output, and a
+        // stage failure stops the run from advancing (see PipelineService#advance). recast-cli
+        // (NAVIGATION_BAKING's hard dependency) is a much rarer thing to have installed than the
+        // reconstruction toolchain SEMANTIC_INDEXING needs, so putting it last means a worker without it
+        // still produces a fully searchable reconstruction -- only routing is unavailable, not search too.
+        JobStage.SEMANTIC_INDEXING,
+        JobStage.NAVIGATION_BAKING);
 
     /** Artifact kinds that count as "a reconstruction exists" for time-boxed partial results. Matches the
      * kind chaya_worker.stages.splat_reconstruction actually publishes (SPLAT) for its trained Gaussian

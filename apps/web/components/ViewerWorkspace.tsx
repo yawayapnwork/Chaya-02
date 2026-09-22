@@ -15,8 +15,9 @@ import {
   listReconstructions,
 } from "@/lib/reconstruction-api";
 import { detectDeviceProfile, type DeviceProfile } from "@/lib/device-profile";
-import { formatBytes, formatDate, straightLineDistance } from "@/lib/viewer-format";
+import { formatBytes, formatDate } from "@/lib/viewer-format";
 import { type SearchResult } from "@/lib/search-api";
+import { type RouteResponse, planRoute } from "@/lib/navigation-api";
 import SplatViewerCanvas from "@/components/SplatViewerCanvas";
 import SemanticSearchPanel from "@/components/SemanticSearchPanel";
 
@@ -61,6 +62,10 @@ export default function ViewerWorkspace() {
   const [selectedPoiId, setSelectedPoiId] = useState<string | null>(null);
   const [routeFromId, setRouteFromId] = useState<string>("");
   const [routeToId, setRouteToId] = useState<string>("");
+  const [accessibleRoute, setAccessibleRoute] = useState(false);
+  const [routeResponse, setRouteResponse] = useState<RouteResponse | null>(null);
+  const [routeError, setRouteError] = useState<string | null>(null);
+  const [routeBusy, setRouteBusy] = useState(false);
 
   const [sceneLoad, setSceneLoad] = useState<SceneLoad>({ phase: "idle" });
   const blobUrlRef = useRef<string | null>(null);
@@ -243,6 +248,45 @@ export default function ViewerWorkspace() {
     setSelectedPoiId(result.poiId);
   }
 
+  // Real routing (POST /api/v1/navigation/routes): "from" POI stands in for the traveller's current
+  // position (a live AR client would send its own tracked position instead). No client-side fallback is
+  // drawn when the call fails or no route exists -- see SplatViewerCanvas's route-overlay effect.
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      if (!routeFrom || !routeTo || !venueId) {
+        setRouteResponse(null);
+        setRouteError(null);
+        return;
+      }
+      setRouteBusy(true);
+      setRouteError(null);
+      try {
+        const response = await planRoute({
+          venueId,
+          floorId: routeFrom.floorId ?? floorId,
+          start: [routeFrom.x, routeFrom.y, routeFrom.z],
+          destinationPoiId: routeTo.id,
+          accessibility: accessibleRoute ? "STEP_FREE" : "STANDARD",
+        });
+        if (!cancelled) setRouteResponse(response);
+      } catch (e) {
+        if (!cancelled) {
+          setRouteResponse(null);
+          setRouteError(message(e));
+        }
+      } finally {
+        if (!cancelled) setRouteBusy(false);
+      }
+    };
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [routeFrom, routeTo, venueId, floorId, accessibleRoute]);
+
+  const routeWaypointsOnCurrentFloor = routeResponse ? routeResponse.waypoints.filter((w) => w.floorId === floorId) : null;
+
   if (phase === "checking") return <p className="p-8">Loading…</p>;
 
   if (phase === "signed-out") {
@@ -336,8 +380,7 @@ export default function ViewerWorkspace() {
               pois={pois}
               selectedPoiId={selectedPoiId}
               onSelectPoi={setSelectedPoiId}
-              routeFrom={routeFrom}
-              routeTo={routeTo}
+              routeWaypoints={routeWaypointsOnCurrentFloor}
               onProgress={(percent) => setSceneLoad({ phase: "preparing", percent })}
               onLoaded={(splatCount) => setSceneLoad({ phase: "ready", splatCount })}
               onError={(msg) => setSceneLoad({ phase: "error", message: msg })}
@@ -436,11 +479,29 @@ export default function ViewerWorkspace() {
                     {pois.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
                   </select>
                 </label>
-                {routeFrom && routeTo && (
-                  <p className="text-xs text-zinc-600">
-                    Straight-line preview only ({straightLineDistance(routeFrom, routeTo).toFixed(1)} scene units) — no baked navigation
-                    route is available for this floor yet.
-                  </p>
+                <label className="flex items-center gap-1 text-xs">
+                  <input type="checkbox" checked={accessibleRoute} onChange={(e) => setAccessibleRoute(e.target.checked)} />
+                  Accessible route (step-free)
+                </label>
+                {routeBusy && <p className="text-xs text-zinc-500">Finding a route…</p>}
+                {routeError && (
+                  <p role="alert" className="text-xs text-red-700">No route available: {routeError}</p>
+                )}
+                {routeResponse && (
+                  <div className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-zinc-700">
+                    <p>{routeResponse.distanceMeters.toFixed(1)} m · ~{Math.round(routeResponse.estimatedDurationSeconds / 60)} min</p>
+                    {routeResponse.floorTransitions.length > 0 && (
+                      <p className="mt-1">
+                        Via {routeResponse.floorTransitions.map((t) => t.connectorType.toLowerCase()).join(", ")}
+                        {" "}({routeResponse.floorTransitions.length} floor transition{routeResponse.floorTransitions.length > 1 ? "s" : ""})
+                      </p>
+                    )}
+                    {routeResponse.accessibilityConstraintsApplied.length > 0 && (
+                      <ul className="mt-1 list-disc pl-4">
+                        {routeResponse.accessibilityConstraintsApplied.map((c) => <li key={c}>{c}</li>)}
+                      </ul>
+                    )}
+                  </div>
                 )}
               </div>
             </section>

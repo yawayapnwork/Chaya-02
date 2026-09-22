@@ -254,7 +254,8 @@ def test_unwritten_stages_never_succeed_and_never_create_reconstruction_files(ha
     assert not [k for k in harness.storage.keys(DERIVED_BUCKET) if k.endswith((".ply", ".splat", ".ksplat", ".obj", ".glb"))]
 
 
-@pytest.mark.parametrize("stage", ["SPLAT_RECONSTRUCTION", "SEMANTIC_SEGMENTATION", "GEOMETRIC_CLEANUP", "PLANE_FITTING", "SEMANTIC_INDEXING"])
+@pytest.mark.parametrize("stage", ["SPLAT_RECONSTRUCTION", "SEMANTIC_SEGMENTATION", "GEOMETRIC_CLEANUP", "PLANE_FITTING",
+                                   "NAVIGATION_BAKING", "SEMANTIC_INDEXING"])
 def test_implemented_reconstruction_stages_refuse_to_run_without_their_real_dependencies(harness, stage):
     """SPLAT_RECONSTRUCTION..PLANE_FITTING are real implementations (not PlannedStage placeholders), but on a
     worker without torch/gsplat/CUDA/Open3D/transformers they must still fail structured, produce nothing,

@@ -1,13 +1,9 @@
-"""Stage 11 exists in the pipeline plan, but its implementation is not written yet.
+"""No stage in the pipeline plan is unimplemented anymore -- all twelve stages (INPUT_VALIDATION through
+SEMANTIC_INDEXING) have real implementations, registered directly in chaya_worker/stages/__init__.py.
 
-It never fabricates output: it first reports missing dependencies (structured, actionable); if they are
-present it still fails with STAGE_NOT_IMPLEMENTED. There is deliberately no code path that returns
-SUCCEEDED or writes a navmesh without the real algorithm behind it.
-
-Stages 6-10 and 12 (SPLAT_RECONSTRUCTION, SEMANTIC_SEGMENTATION, GEOMETRIC_CLEANUP, PLANE_FITTING,
-ARTIFACT_GENERATION, SEMANTIC_INDEXING) are implemented -- see chaya_worker/stages/{splat_reconstruction,
-semantic_segmentation,geometric_cleanup,plane_fitting,artifact_generation,semantic_indexing}.py -- and are
-registered directly in chaya_worker/stages/__init__.py, not here.
+This module (and PlannedStage) stays as the pattern a future stage should follow: report missing
+dependencies first (structured, actionable), and never fabricate output. There is deliberately no code
+path anywhere in this worker that returns SUCCEEDED without the real algorithm behind it.
 """
 
 from __future__ import annotations
@@ -16,9 +12,7 @@ from ..contract import StageContext, StageResult
 from ..errors import StageNotImplemented
 
 # stage -> (requirements, what it will do)
-PLANNED: dict[str, tuple[list[str], str]] = {
-    "NAVIGATION_BAKING": (["exe:recast-cli"], "Recast navigation mesh baking"),
-}
+PLANNED: dict[str, tuple[list[str], str]] = {}
 
 
 class PlannedStage:

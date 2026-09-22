@@ -61,6 +61,14 @@ chaya:
     vision-timeout: PT5S
     default-top-k: 10
     max-top-k: 50
+  navigation:
+    standard-walking-speed-mps: 1.3
+    accessible-walking-speed-mps: 1.0
+    min-accessible-clearance-m: 0.9
+    stairs-transition-seconds: 20
+    elevator-transition-seconds: 45
+    transition-match-radius-meters: 5.0
+    node-snap-max-distance-meters: 10.0
 
 management:
   endpoints:

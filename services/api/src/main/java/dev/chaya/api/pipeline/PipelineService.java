@@ -317,6 +317,9 @@ public class PipelineService {
         if (ok && job.stage() == JobStage.SEMANTIC_INDEXING) {
             ingestDetectedObjects(job, run, outputs);
         }
+        if (ok && job.stage() == JobStage.NAVIGATION_BAKING) {
+            ingestNavigationGraph(run, outputs);
+        }
 
         if (ok) {
             jobs.succeed(job.id());
@@ -555,6 +558,101 @@ public class PipelineService {
             sb.append(values.get(i).doubleValue());
         }
         return sb.append(']').toString();
+    }
+
+    /**
+     * NAVIGATION_BAKING (chaya_worker.stages.navigation_baking) publishes a NAVIGATION_GRAPH artifact
+     * with two profile graphs (STANDARD, STEP_FREE -- see chaya_worker.navmesh.build_routing_graphs);
+     * this turns each into a navigation_graph/navigation_node/navigation_edge DRAFT, then promotes it to
+     * ACTIVE (retiring whichever graph was previously ACTIVE for that venue/floor/profile), so
+     * dev.chaya.api.navigation.RouteService always finds at most one ACTIVE graph to route against. A
+     * missing or unparseable artifact is logged and skipped, same as ingestDetectedObjects.
+     */
+    private void ingestNavigationGraph(RunRow run, List<ArtifactReport> outputs) {
+        ArtifactReport artifact = outputs.stream().filter(a -> a.kind().equals("NAVIGATION_GRAPH")).findFirst().orElse(null);
+        if (artifact == null) {
+            return;
+        }
+        Map<String, Object> doc;
+        try (InputStream in = derived.open(artifact.key())) {
+            doc = mapper.readValue(in, MAP);
+        } catch (IOException | StorageException e) {
+            log.error("could not read NAVIGATION_GRAPH artifact {}: {}", artifact.key(), e.getMessage());
+            return;
+        }
+        UUID floorId = jdbc.sql("SELECT floor_id FROM capture_session WHERE id = :c")
+            .param("c", run.captureId()).query(UUID.class).optional().orElse(null);
+        if (floorId == null) {
+            log.warn("run {} has no floor on its capture session; skipping navigation graph ingestion", run.id());
+            return;
+        }
+        Object graphsRaw = doc.get("graphs");
+        if (!(graphsRaw instanceof Map<?, ?> graphs)) {
+            return;
+        }
+        int ingested = 0;
+        for (String profile : List.of("STANDARD", "STEP_FREE")) {
+            Object graphRaw = graphs.get(profile);
+            if (graphRaw instanceof Map<?, ?> graph && ingestOneNavigationGraph(run, floorId, profile, graph)) {
+                ingested++;
+            }
+        }
+        log.info("ingested {} navigation graph profile(s) for run {}", ingested, run.id());
+        audit.successInOrganization(SYSTEM, run.orgId(), run.venueId(), "navigation_baking.ingested", "pipeline_run", run.id(),
+            Map.of("profilesIngested", ingested));
+    }
+
+    @SuppressWarnings("unchecked")
+    private boolean ingestOneNavigationGraph(RunRow run, UUID floorId, String profile, Map<?, ?> graph) {
+        Object nodesRaw = graph.get("nodes");
+        Object edgesRaw = graph.get("edges");
+        List<Map<String, Object>> nodesDoc = nodesRaw instanceof List<?> l ? (List<Map<String, Object>>) l : List.of();
+        List<Map<String, Object>> edgesDoc = edgesRaw instanceof List<?> l ? (List<Map<String, Object>>) l : List.of();
+        if (nodesDoc.isEmpty()) {
+            return false;
+        }
+
+        UUID previousActive = jdbc.sql("SELECT id FROM navigation_graph WHERE venue_id = :v AND floor_id = :f AND profile = :p AND status = 'ACTIVE'")
+            .param("v", run.venueId()).param("f", floorId).param("p", profile).query(UUID.class).optional().orElse(null);
+        if (previousActive != null) {
+            jdbc.sql("UPDATE navigation_graph SET status = 'RETIRED' WHERE id = :g").param("g", previousActive).update();
+        }
+
+        UUID graphId = jdbc.sql("INSERT INTO navigation_graph (organization_id, venue_id, floor_id, profile, status) "
+                + "VALUES (:o, :v, :f, :p, 'DRAFT') RETURNING id")
+            .param("o", run.orgId()).param("v", run.venueId()).param("f", floorId).param("p", profile).query(UUID.class).single();
+
+        Map<String, UUID> nodeIds = new LinkedHashMap<>();
+        for (Map<String, Object> n : nodesDoc) {
+            String localId = String.valueOf(n.get("local_id"));
+            String kind = String.valueOf(n.getOrDefault("kind", "WAYPOINT"));
+            String connectorType = n.get("connector_type") == null ? null : String.valueOf(n.get("connector_type"));
+            UUID nodeId = jdbc.sql("INSERT INTO navigation_node (organization_id, venue_id, graph_id, floor_id, kind, x, y, z, connector_type) "
+                    + "VALUES (:o, :v, :g, :f, :kind, :x, :y, :z, :ct) RETURNING id")
+                .param("o", run.orgId()).param("v", run.venueId()).param("g", graphId).param("f", floorId).param("kind", kind)
+                .param("x", ((Number) n.get("x")).doubleValue()).param("y", ((Number) n.get("y")).doubleValue())
+                .param("z", ((Number) n.get("z")).doubleValue()).param("ct", connectorType).query(UUID.class).single();
+            nodeIds.put(localId, nodeId);
+        }
+        for (Map<String, Object> e : edgesDoc) {
+            UUID from = nodeIds.get(String.valueOf(e.get("from")));
+            UUID to = nodeIds.get(String.valueOf(e.get("to")));
+            Object lengthRaw = e.get("length_m");
+            if (from == null || to == null || !(lengthRaw instanceof Number lengthNumber) || lengthNumber.doubleValue() <= 0) {
+                continue; // length_m has a CHECK (> 0); a degenerate/unmapped edge is skipped, not fatal
+            }
+            boolean stepFree = Boolean.TRUE.equals(e.get("step_free"));
+            Object clearanceRaw = e.get("min_clearance_m");
+            // min_clearance_m has a CHECK (> 0): a non-positive value means "no real clearance measurement",
+            // stored as NULL (unknown) rather than violating the constraint or claiming a false measurement.
+            Double clearance = clearanceRaw instanceof Number n && n.doubleValue() > 0 ? n.doubleValue() : null;
+            jdbc.sql("INSERT INTO navigation_edge (organization_id, venue_id, graph_id, from_node_id, to_node_id, length_m, step_free, "
+                    + "bidirectional, min_clearance_m) VALUES (:o, :v, :g, :from, :to, :len, :sf, true, :clear)")
+                .param("o", run.orgId()).param("v", run.venueId()).param("g", graphId).param("from", from).param("to", to)
+                .param("len", lengthNumber.doubleValue()).param("sf", stepFree).param("clear", clearance).update();
+        }
+        jdbc.sql("UPDATE navigation_graph SET status = 'ACTIVE' WHERE id = :g").param("g", graphId).update();
+        return true;
     }
 
     // =========================================================================================

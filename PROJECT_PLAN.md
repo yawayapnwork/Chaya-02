@@ -12,12 +12,12 @@ Each milestone is independently testable and committable. "Done" means its tests
 | M5 | Storage & capture sessions | Done: resumable chunked upload through the backend into MinIO, Tika/ClamAV validation, capture lifecycle, capture UI (see docs/capture-ingestion.md) | Tests against real MinIO |
 | M6 | Job engine | Done: pipeline runs, leases/heartbeats, retry, time box, worker API, stage records (docs/pipeline.md) | Java control-plane tests; Python orchestration + integration tests |
 | M7 | Media filter worker | Done: input validation, FFmpeg extraction, quality filter, privacy preprocessing | Worker tests on real media |
-| M8 | Pose estimation worker | GLOMAP with COLMAP fallback; pose manifest; failure handling | Sample dataset; failure-path test |
-| M9 | Splat training worker | gsplat/Nerfstudio → `.ksplat`; asset registration; PARTIAL vs COMPLETE logic | GPU host run; completeness tests |
-| M10 | Splat viewer | GaussianSplats3D viewer in web app, loads real scene assets | Manual + Playwright smoke |
-| M11 | Geometry & segmentation | Open3D cleanup, SegFormer/Mask2Former | Output validation tests |
-| M12 | Object detection & search | Grounding DINO + CLIP, pgvector index, search API, search log | Recall check on labelled scene |
-| M13 | Navmesh & routing | Recast worker, Detour/WASM client, accessibility profiles | Route tests on known geometry |
+| M8 | Pose estimation worker | Done: GLOMAP with COLMAP fallback; poses.json; structured failure when tools are missing | Unit tests; real-dataset gpu-marked tests |
+| M9 | Splat training worker | Done: gsplat training (Adam, L1+D-SSIM), `.ksplat` export, artifact manifest (docs/pipeline.md) | Unit tests; gpu-marked tests |
+| M10 | Splat viewer | Done: Three.js + GaussianSplats3D viewer, real reconstruction selection, POI overlays, voice-assisted search | Playwright smoke |
+| M11 | Geometry & segmentation | Done: Open3D statistical/radius/semantic-aware cleanup, RANSAC plane fitting, SegFormer segmentation | Unit tests; cleanup benchmark harness |
+| M12 | Object detection & search | Done: Grounding DINO (stock checkpoint) + CLIP embeddings, pgvector HNSW index, search API with lexical fallback, search_query log (docs/search.md) | Unit tests; integration tests (venue isolation, ranking, unavailable-model fallback) |
+| M13 | Navmesh & routing | Done: Recast-baked STANDARD/STEP_FREE navmesh graphs, Dijkstra routing API with multi-floor transitions and dynamic obstacle exclusion (docs/navigation.md) | Unit tests; integration tests (route exists/unavailable, obstacle, accessibility, multi-floor, cross-venue) |
 | M14 | Capture guidance | Path planning and coverage metric done (docs/route-planning.md, synthetic-fixture tests + benchmark). Live capture-quality and coverage HUD done: client-side blur/motion/exposure/feature/spacing signals, manual position marking, coverage/planned-path replayed live through the same planner (docs/capture-hud.md). Still to do: bounds estimation from an automatic recon lap, on-device SLAM-lite/AR positioning, field validation against real reconstructions | Field capture |
 | M15 | AR navigation | Android WebXR, iOS ARKit, fiducial anchors, VIO interpolation, path-data API | On-device tests |
 | M16 | Incremental rescan | Region-scoped reconstruction and versioned merge | Rescan test preserves prior version |
