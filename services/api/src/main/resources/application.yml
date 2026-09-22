@@ -46,6 +46,14 @@ chaya:
     enabled: ${CLAMAV_ENABLED:false}  # when false, uploads are quarantined, never accepted unscanned
     host: ${CLAMAV_HOST:localhost}
     port: ${CLAMAV_PORT:3310}
+  hud:
+    max-pose-samples-per-request: 500
+    max-quality-samples-per-request: 200
+    max-pose-samples-considered: 4000  # bounds live re-planning cost; oldest poses beyond this are trimmed
+    position-stale-after-ms: 8000      # no pose sample within this long -> tracking shown as unavailable
+    broadcast-interval-ms: 750         # minimum spacing between SSE pushes for one capture
+    heartbeat-interval-ms: 15000       # SSE comment sent when nothing changed, to keep the connection open
+    emitter-timeout-ms: 300000         # server-side SSE connection lifetime; the client reconnects
   cors:
     allowed-origins: ${CHAYA_ALLOWED_ORIGINS:http://localhost:3000}
 

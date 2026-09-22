@@ -51,8 +51,12 @@ public final class RoutePlanDtos {
     static final int MAX_VERTICES = 2000;
     static final int MAX_LIST = 500;
 
-    /** Validates size limits and converts to the planner's domain model. Throws PlanningException for unusable input. */
-    static PlanRequest toDomain(RoutePlanRequest r) {
+    /**
+     * Validates size limits and converts to the planner's domain model. Throws PlanningException for unusable input.
+     * Public so other request producers (for example the live capture HUD, which re-plans from the same scene as
+     * the trajectory grows) can reuse the same validated conversion instead of duplicating it.
+     */
+    public static PlanRequest toDomain(RoutePlanRequest r) {
         if (r.trajectory().size() > MAX_SAMPLES) {
             throw new PlanningException("TOO_MANY_SAMPLES", "trajectory is limited to " + MAX_SAMPLES + " samples");
         }
@@ -94,7 +98,7 @@ public final class RoutePlanDtos {
         return new Polygon(ring.stream().map(PointDto::toPoint).toList());
     }
 
-    static PlannerConfig config(Map<String, Double> overrides) {
+    public static PlannerConfig config(Map<String, Double> overrides) {
         PlannerConfig.Builder b = PlannerConfig.defaults().toBuilder();
         if (overrides != null) {
             for (var e : overrides.entrySet()) {

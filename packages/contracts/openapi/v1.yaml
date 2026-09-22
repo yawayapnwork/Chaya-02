@@ -66,6 +66,16 @@ paths:
     post: { summary: Cancel a RUNNING run, responses: { "200": { description: Cancelled } } }
   /api/v1/venues/{venueId}/captures/{captureId}/route-plan:
     post: { summary: "Plan the secondary capture route after the recon lap (deterministic; request: scene, trajectory, optional observedRegions/candidates/config; response: ordered waypoints, route, distance, time, confidence, baseline vs planned coverage, uncovered regions). See docs/route-planning.md", responses: { "200": { description: Route plan }, "409": { description: Capture is no longer being captured }, "422": { description: "Input cannot be planned from (TRAJECTORY_OUTSIDE_SCENE, INVALID_CONFIG, ...)" } } }
+  /api/v1/venues/{venueId}/captures/{captureId}/hud/scene:
+    put: { summary: "Set (or replace) the room outline the live HUD measures coverage against; validated immediately against the planner. See docs/capture-hud.md", responses: { "204": { description: Stored }, "409": { description: Capture is no longer being captured }, "422": { description: Invalid geometry } } }
+  /api/v1/venues/{venueId}/captures/{captureId}/hud/pose:
+    post: { summary: Append device pose samples (position, optional heading) reported while capturing, responses: { "202": { description: Accepted }, "400": { description: Too many samples in one request } } }
+  /api/v1/venues/{venueId}/captures/{captureId}/hud/quality:
+    post: { summary: Append client-computed frame-quality samples (blur/motion/exposure/feature/spacing; never image bytes), responses: { "202": { description: Accepted } } }
+  /api/v1/venues/{venueId}/captures/{captureId}/hud/status:
+    get: { summary: "Durable, poll-friendly HUD status: tracking, coverage, uncovered zones, planned path, quality summary, reshoot recommendations", responses: { "200": { description: HUD status } } }
+  /api/v1/venues/{venueId}/captures/{captureId}/hud/stream:
+    get: { summary: The same HUD status, pushed over Server-Sent Events as it changes, responses: { "200": { description: "text/event-stream of HUD status" } } }
   /api/v1/internal/jobs/claim:
     post: { summary: "Worker: claim the oldest queued job of the given stage(s); returns a work order (inputs, output prefix, deadline). Service role only.", responses: { "200": { description: Work order }, "204": { description: Nothing queued } } }
   /api/v1/internal/jobs/{jobId}/heartbeat:

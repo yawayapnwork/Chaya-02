@@ -19,6 +19,7 @@ import {
   startProcessing,
 } from "@/lib/capture-api";
 import ProcessingPanel from "@/components/ProcessingPanel";
+import CaptureHud from "@/components/CaptureHud";
 import { type UploadState, retryValidation, uploadFile } from "@/lib/uploader";
 import { checkFileLocally, explainCode, formatBytes } from "@/lib/upload-plan";
 
@@ -344,6 +345,10 @@ export default function CaptureWorkspace() {
           </button>
           {!settled && rows.length > 0 && <p className="text-sm text-zinc-600">Waiting for all files to be accepted or rejected.</p>}
         </section>
+      )}
+
+      {capture && ["CREATED", "UPLOADING"].includes(capture.status) && (
+        <CaptureHud venueId={capture.venueId} captureId={capture.id} />
       )}
 
       {capture && ["READY_FOR_PROCESSING", "PROCESSING", "COMPLETED", "FAILED"].includes(capture.status) && (

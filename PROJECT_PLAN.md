@@ -18,7 +18,7 @@ Each milestone is independently testable and committable. "Done" means its tests
 | M11 | Geometry & segmentation | Open3D cleanup, SegFormer/Mask2Former | Output validation tests |
 | M12 | Object detection & search | Grounding DINO + CLIP, pgvector index, search API, search log | Recall check on labelled scene |
 | M13 | Navmesh & routing | Recast worker, Detour/WASM client, accessibility profiles | Route tests on known geometry |
-| M14 | Capture guidance | Path planning and coverage metric done (docs/route-planning.md, synthetic-fixture tests + benchmark). Still to do: bounds estimation from the lap, AR breadcrumb UI, field validation against real reconstructions | Field capture |
+| M14 | Capture guidance | Path planning and coverage metric done (docs/route-planning.md, synthetic-fixture tests + benchmark). Live capture-quality and coverage HUD done: client-side blur/motion/exposure/feature/spacing signals, manual position marking, coverage/planned-path replayed live through the same planner (docs/capture-hud.md). Still to do: bounds estimation from an automatic recon lap, on-device SLAM-lite/AR positioning, field validation against real reconstructions | Field capture |
 | M15 | AR navigation | Android WebXR, iOS ARKit, fiducial anchors, VIO interpolation, path-data API | On-device tests |
 | M16 | Incremental rescan | Region-scoped reconstruction and versioned merge | Rescan test preserves prior version |
 | M17 | Operations dashboard | Freshness, job state, coverage gaps, search analytics | Dashboard tests against real data |
