@@ -18,10 +18,13 @@ dependencies = [
 [project.optional-dependencies]
 # A bundled ffmpeg binary for machines without a system ffmpeg (development). Production images use the system one.
 ffmpeg-bundled = ["imageio-ffmpeg>=0.5"]
-# The reconstruction toolchain: SPLAT_RECONSTRUCTION/SEMANTIC_SEGMENTATION/GEOMETRIC_CLEANUP/PLANE_FITTING
-# detect these at runtime (chaya_worker.toolchain) and fail with a structured DependencyError when absent;
-# they are never required just to import chaya_worker.
-reconstruction = ["torch>=2.2", "gsplat>=1.0", "open3d>=0.18", "transformers>=4.40", "huggingface-hub>=0.23"]
+# The reconstruction toolchain: SPLAT_RECONSTRUCTION/SEMANTIC_SEGMENTATION/GEOMETRIC_CLEANUP/PLANE_FITTING/
+# SEMANTIC_INDEXING detect these at runtime (chaya_worker.toolchain) and fail with a structured
+# DependencyError when absent; they are never required just to import chaya_worker.
+reconstruction = [
+  "torch>=2.2", "gsplat>=1.0", "open3d>=0.18", "transformers>=4.40", "huggingface-hub>=0.23",
+  "open_clip_torch>=2.24", "pillow>=10.0",
+]
 dev = ["pytest>=8", "scikit-image>=0.22", "imageio-ffmpeg>=0.5"]
 
 [project.scripts]

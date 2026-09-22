@@ -73,6 +73,18 @@ class Settings:
     plane_min_inliers: int = 200
     # ARTIFACT_GENERATION
     ksplat_compression_level: int = 0
+    # SEMANTIC_INDEXING (Grounding DINO + CLIP)
+    grounding_dino_model: str = "IDEA-Research/grounding-dino-tiny"
+    object_detection_prompt: str = (
+        "chair. table. sofa. couch. desk. door. window. sign. elevator. stairs. plant. artwork. "
+        "reception desk. bench. shelf. counter. restroom sign. exit sign. fire extinguisher."
+    )
+    object_detection_box_threshold: float = 0.35
+    object_detection_text_threshold: float = 0.25
+    clip_model_name: str = "ViT-B-32"
+    clip_pretrained: str = "openai"  # 512-d, matches poi_version.embedding vector(512)
+    semantic_indexing_sample_every: int = 3
+    object_cluster_distance: float = 0.75  # scene units; detections closer than this are one object
 
     @staticmethod
     def from_env(env: Mapping[str, str] | None = None) -> "Settings":
@@ -124,6 +136,14 @@ class Settings:
             plane_max_planes=_int(e, "PLANE_MAX_PLANES", d.plane_max_planes),
             plane_min_inliers=_int(e, "PLANE_MIN_INLIERS", d.plane_min_inliers),
             ksplat_compression_level=_int(e, "KSPLAT_COMPRESSION_LEVEL", d.ksplat_compression_level),
+            grounding_dino_model=e.get("GROUNDING_DINO_MODEL", d.grounding_dino_model),
+            object_detection_prompt=e.get("OBJECT_DETECTION_PROMPT", d.object_detection_prompt),
+            object_detection_box_threshold=_float(e, "OBJECT_DETECTION_BOX_THRESHOLD", d.object_detection_box_threshold),
+            object_detection_text_threshold=_float(e, "OBJECT_DETECTION_TEXT_THRESHOLD", d.object_detection_text_threshold),
+            clip_model_name=e.get("CLIP_MODEL_NAME", d.clip_model_name),
+            clip_pretrained=e.get("CLIP_PRETRAINED", d.clip_pretrained),
+            semantic_indexing_sample_every=_int(e, "SEMANTIC_INDEXING_SAMPLE_EVERY", d.semantic_indexing_sample_every),
+            object_cluster_distance=_float(e, "OBJECT_CLUSTER_DISTANCE", d.object_cluster_distance),
         )
 
     def require_service_config(self) -> None:
@@ -155,4 +175,10 @@ class Settings:
             "plane_ransac_distance_threshold": self.plane_ransac_distance_threshold, "plane_ransac_n": self.plane_ransac_n,
             "plane_ransac_iterations": self.plane_ransac_iterations, "plane_max_planes": self.plane_max_planes,
             "plane_min_inliers": self.plane_min_inliers, "ksplat_compression_level": self.ksplat_compression_level,
+            "grounding_dino_model": self.grounding_dino_model, "object_detection_prompt": self.object_detection_prompt,
+            "object_detection_box_threshold": self.object_detection_box_threshold,
+            "object_detection_text_threshold": self.object_detection_text_threshold,
+            "clip_model_name": self.clip_model_name, "clip_pretrained": self.clip_pretrained,
+            "semantic_indexing_sample_every": self.semantic_indexing_sample_every,
+            "object_cluster_distance": self.object_cluster_distance,
         }

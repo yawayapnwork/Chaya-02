@@ -20,8 +20,11 @@ import dev.chaya.api.security.Actor;
 import dev.chaya.api.security.Role;
 import dev.chaya.api.storage.ObjectStore;
 import dev.chaya.api.storage.StorageProperties;
+import dev.chaya.api.storage.StorageException;
 import dev.chaya.api.web.ApiException;
 import dev.chaya.api.web.NotFoundException;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -311,6 +314,10 @@ public class PipelineService {
         if (r.stdout() != null) insertArtifact(stdoutId, job, stageRunId, forceLog(r.stdout(), "LOG_STDOUT"));
         if (r.stderr() != null) insertArtifact(stderrId, job, stageRunId, forceLog(r.stderr(), "LOG_STDERR"));
 
+        if (ok && job.stage() == JobStage.SEMANTIC_INDEXING) {
+            ingestDetectedObjects(job, run, outputs);
+        }
+
         if (ok) {
             jobs.succeed(job.id());
         } else {
@@ -468,6 +475,86 @@ public class PipelineService {
         tx.executeWithoutResult(s -> audit.successInOrganization(SYSTEM, run.orgId(), run.venueId(),
             f == 0 ? "pipeline.pii_purged" : "pipeline.pii_purge_incomplete", "pipeline_run", run.id(),
             Map.of("reason", reason, "deleted", d, "failed", f)));
+    }
+
+    /**
+     * SEMANTIC_INDEXING (chaya_worker.stages.semantic_indexing) has no database access itself -- workers
+     * never touch the database, see ARCHITECTURE.md -- so it publishes a DETECTED_OBJECTS artifact and
+     * this is where those detections become real poi/poi_version rows with pgvector embeddings
+     * (source = 'AUTO_DETECTED'). A missing or unparseable artifact is logged and skipped, never treated
+     * as a reason to fail the stage retroactively: the stage itself already succeeded and reported its
+     * output; this is best-effort ingestion of that output.
+     */
+    private void ingestDetectedObjects(JobRow job, RunRow run, List<ArtifactReport> outputs) {
+        ArtifactReport artifact = outputs.stream().filter(a -> a.kind().equals("DETECTED_OBJECTS")).findFirst().orElse(null);
+        if (artifact == null) {
+            return;
+        }
+        Map<String, Object> doc;
+        try (InputStream in = derived.open(artifact.key())) {
+            doc = mapper.readValue(in, MAP);
+        } catch (IOException | StorageException e) {
+            log.error("could not read DETECTED_OBJECTS artifact {}: {}", artifact.key(), e.getMessage());
+            return;
+        }
+        UUID floorId = jdbc.sql("SELECT floor_id FROM capture_session WHERE id = :c")
+            .param("c", run.captureId()).query(UUID.class).optional().orElse(null);
+        if (floorId == null) {
+            log.warn("run {} has no floor on its capture session; skipping AUTO_DETECTED POI ingestion", run.id());
+            return;
+        }
+        String embeddingModel = (String) doc.get("embedding_model");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> objects = (List<Map<String, Object>>) doc.getOrDefault("objects", List.of());
+        int inserted = 0;
+        for (Map<String, Object> obj : objects) {
+            if (insertDetectedPoi(job, run, floorId, obj, embeddingModel)) {
+                inserted++;
+            }
+        }
+        log.info("ingested {} of {} auto-detected objects as POIs for run {}", inserted, objects.size(), run.id());
+        audit.successInOrganization(SYSTEM, run.orgId(), run.venueId(), "semantic_indexing.ingested", "pipeline_run", run.id(),
+            Map.of("objectsDetected", objects.size(), "poisCreated", inserted));
+    }
+
+    @SuppressWarnings("unchecked")
+    private boolean insertDetectedPoi(JobRow job, RunRow run, UUID floorId, Map<String, Object> obj, String embeddingModel) {
+        List<Number> position = obj.get("position") instanceof List<?> p ? (List<Number>) p : null;
+        List<Number> embedding = obj.get("embedding") instanceof List<?> e ? (List<Number>) e : null;
+        if (position == null || position.size() != 3 || embedding == null || embedding.isEmpty()) {
+            log.warn("job {}: skipping a detected object with a malformed position/embedding", job.id());
+            return false;
+        }
+        String label = String.valueOf(obj.getOrDefault("label", "object"));
+        double confidence = obj.get("confidence") instanceof Number n ? n.doubleValue() : 0.0;
+        String bboxJson = null;
+        if (obj.get("bbox_px") != null) {
+            try {
+                bboxJson = mapper.writeValueAsString(obj.get("bbox_px"));
+            } catch (JsonProcessingException e) {
+                bboxJson = null;
+            }
+        }
+        UUID poiId = jdbc.sql("INSERT INTO poi (organization_id, venue_id, floor_id) VALUES (:o, :v, :f) RETURNING id")
+            .param("o", run.orgId()).param("v", run.venueId()).param("f", floorId).query(UUID.class).single();
+        jdbc.sql("INSERT INTO poi_version (organization_id, venue_id, poi_id, version_number, label, tags, x, y, z, "
+                + "embedding, embedding_model, source, detection_confidence, bounding_box, pipeline_run_id, created_by) "
+                + "VALUES (:o, :v, :p, 1, :label, '{}', :x, :y, :z, CAST(:emb AS vector), :model, 'AUTO_DETECTED', :conf, "
+                + "CAST(:bbox AS jsonb), :run, 'system:semantic-indexing')")
+            .param("o", run.orgId()).param("v", run.venueId()).param("p", poiId).param("label", label)
+            .param("x", position.get(0).doubleValue()).param("y", position.get(1).doubleValue()).param("z", position.get(2).doubleValue())
+            .param("emb", vectorLiteral(embedding)).param("model", embeddingModel).param("conf", confidence)
+            .param("bbox", bboxJson).param("run", run.id()).update();
+        return true;
+    }
+
+    private static String vectorLiteral(List<Number> values) {
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < values.size(); i++) {
+            if (i > 0) sb.append(',');
+            sb.append(values.get(i).doubleValue());
+        }
+        return sb.append(']').toString();
     }
 
     // =========================================================================================

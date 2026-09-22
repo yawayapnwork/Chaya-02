@@ -1,13 +1,13 @@
-"""Stages 11-12 exist in the pipeline plan, but their implementations are not written yet.
+"""Stage 11 exists in the pipeline plan, but its implementation is not written yet.
 
-They never fabricate output. Each one first reports missing dependencies (structured, actionable); if the
-dependencies are present it still fails with STAGE_NOT_IMPLEMENTED. There is deliberately no code path
-that returns SUCCEEDED or writes a navmesh/embedding index without the real algorithm behind it.
+It never fabricates output: it first reports missing dependencies (structured, actionable); if they are
+present it still fails with STAGE_NOT_IMPLEMENTED. There is deliberately no code path that returns
+SUCCEEDED or writes a navmesh without the real algorithm behind it.
 
-Stages 6-10 (SPLAT_RECONSTRUCTION, SEMANTIC_SEGMENTATION, GEOMETRIC_CLEANUP, PLANE_FITTING,
-ARTIFACT_GENERATION) are implemented -- see chaya_worker/stages/{splat_reconstruction,semantic_segmentation,
-geometric_cleanup,plane_fitting,artifact_generation}.py -- and are registered directly in
-chaya_worker/stages/__init__.py, not here.
+Stages 6-10 and 12 (SPLAT_RECONSTRUCTION, SEMANTIC_SEGMENTATION, GEOMETRIC_CLEANUP, PLANE_FITTING,
+ARTIFACT_GENERATION, SEMANTIC_INDEXING) are implemented -- see chaya_worker/stages/{splat_reconstruction,
+semantic_segmentation,geometric_cleanup,plane_fitting,artifact_generation,semantic_indexing}.py -- and are
+registered directly in chaya_worker/stages/__init__.py, not here.
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ from ..errors import StageNotImplemented
 # stage -> (requirements, what it will do)
 PLANNED: dict[str, tuple[list[str], str]] = {
     "NAVIGATION_BAKING": (["exe:recast-cli"], "Recast navigation mesh baking"),
-    "SEMANTIC_INDEXING": (["py:torch", "py:open_clip"], "object detection and CLIP semantic indexing"),
 }
 
 

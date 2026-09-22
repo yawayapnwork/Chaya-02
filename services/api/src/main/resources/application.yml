@@ -56,6 +56,11 @@ chaya:
     emitter-timeout-ms: 300000         # server-side SSE connection lifetime; the client reconnects
   cors:
     allowed-origins: ${CHAYA_ALLOWED_ORIGINS:http://localhost:3000}
+  search:
+    vision-service-url: ${VISION_SERVICE_URL:http://localhost:8090}
+    vision-timeout: PT5S
+    default-top-k: 10
+    max-top-k: 50
 
 management:
   endpoints:

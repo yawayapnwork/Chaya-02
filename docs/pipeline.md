@@ -46,11 +46,13 @@ belongs to the artifact-generation milestone, and a `PARTIAL` result must be fin
 | 8 | `GEOMETRIC_CLEANUP` | Open3D statistical + radius outlier removal, then semantic class-aware filtering (never opacity alone) | implemented; **needs Open3D**; fails with `DEPENDENCY_UNAVAILABLE` here |
 | 9 | `PLANE_FITTING` | iterative Open3D RANSAC plane extraction, floor/wall classification from a data-driven up axis | implemented; **needs Open3D**; fails with `DEPENDENCY_UNAVAILABLE` here |
 | 10 | `ARTIFACT_GENERATION` | `.ksplat` conversion (compression level 0), the artifact manifest, the compressed viewer bundle | implemented; only needs the cleaned splat as input |
-| 11-12 | navigation baking, semantic indexing | | **not implemented**: `DEPENDENCY_UNAVAILABLE` or `STAGE_NOT_IMPLEMENTED` |
+| 11 | `NAVIGATION_BAKING` | Recast navigation mesh baking | **not implemented**: `DEPENDENCY_UNAVAILABLE` or `STAGE_NOT_IMPLEMENTED` |
+| 12 | `SEMANTIC_INDEXING` | Grounding DINO open-vocabulary detection (stock checkpoint, not fine-tuned) + 3D localisation against the splat + real CLIP embeddings; see [docs/search.md](docs/search.md) | implemented; **needs torch + transformers + open_clip + Pillow + the Grounding DINO checkpoint cached locally + COLMAP**; fails with `DEPENDENCY_UNAVAILABLE` here |
 
-There is no code path that produces a `.ply`/`.ksplat`/mesh without the real algorithm behind it: stages 6-10
-run real gsplat/Open3D/transformers code gated by `chaya_worker.toolchain` dependency checks, and stages
-11-12 check their dependencies and then fail with `STAGE_NOT_IMPLEMENTED` -- they can never return success.
+There is no code path that produces a `.ply`/`.ksplat`/mesh/detection without the real algorithm behind
+it: stages 6-10 and 12 run real gsplat/Open3D/transformers/Grounding-DINO/CLIP code gated by
+`chaya_worker.toolchain` dependency checks, and stage 11 checks its dependencies and then fails with
+`STAGE_NOT_IMPLEMENTED` -- it can never return success.
 On a worker with only FFmpeg/OpenCV/COLMAP (no CUDA, gsplat, Open3D or transformers) a run still ends
 `FAILED` at `SPLAT_RECONSTRUCTION`, which is the intended honest behaviour; the reconstruction toolchain
 (`pip install chaya-worker[reconstruction]`) and a CUDA GPU are needed for a run to reach `SUCCEEDED`.

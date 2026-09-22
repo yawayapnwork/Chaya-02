@@ -380,4 +380,58 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
         String otherVenueOp = TestJwt.user(s.c().org(), "operator").venues(fx.venue(s.c().org())).token();
         get(capUrl(s.c(), s.capture()) + "/processing", otherVenueOp).andExpect(status().isNotFound());
     }
+
+    // ---- SEMANTIC_INDEXING ingestion (DETECTED_OBJECTS -> poi/poi_version rows) -------------------
+
+    private static String detectedObjectsJson(double x, double y, double z, String label, double confidence) {
+        StringBuilder embedding = new StringBuilder();
+        for (int i = 0; i < 512; i++) {
+            if (i > 0) embedding.append(',');
+            embedding.append(String.format(java.util.Locale.ROOT, "%.4f", Math.sin(i * 0.017)));
+        }
+        return "{\"detector_model\":\"IDEA-Research/grounding-dino-tiny\",\"detector_fine_tuned\":false,"
+            + "\"embedding_model\":\"open_clip:ViT-B-32:openai\",\"frames_processed\":4,\"raw_detection_count\":3,"
+            + "\"objects\":[{\"label\":\"" + label + "\",\"confidence\":" + confidence + ",\"position\":[" + x + "," + y + "," + z + "],"
+            + "\"embedding\":[" + embedding + "],"
+            + "\"bbox_px\":{\"x\":10,\"y\":20,\"width\":50,\"height\":80,\"frameWidth\":640,\"frameHeight\":480},"
+            + "\"source_frame\":\"000012.jpg\",\"detections_merged\":3,\"support_points\":9}]}";
+    }
+
+    @Test
+    void semanticIndexingDetectionsAreIngestedAsAutoDetectedPoisWithProvenance() throws Exception {
+        var s = startRun();
+        for (var stage : PipelineDefinition.STAGES) {
+            JsonNode order = claimExpecting(stage.name());
+            if (stage.name().equals("SEMANTIC_INDEXING")) {
+                Map<String, Object> detected = artifact(order, "detected-objects.json", "DETECTED_OBJECTS", false, false,
+                    detectedObjectsJson(1.5, 2.5, 0.75, "reception chair", 0.87));
+                send(order, report("SUCCEEDED", List.of(detected), null, null), svc).andExpect(status().isOk());
+                break;
+            }
+            succeed(order);
+        }
+
+        List<Map<String, Object>> rows = jdbc.sql(
+                "SELECT p.floor_id, v.label, v.x, v.y, v.z, v.source, v.detection_confidence, v.embedding_model, "
+                    + "v.bounding_box, v.pipeline_run_id FROM poi p JOIN poi_version v ON v.poi_id = p.id "
+                    + "WHERE p.venue_id = :v AND v.source = 'AUTO_DETECTED'")
+            .param("v", s.c().venue())
+            .query((rs, i) -> Map.<String, Object>of(
+                "floorId", rs.getObject("floor_id", UUID.class), "label", rs.getString("label"), "x", rs.getDouble("x"),
+                "y", rs.getDouble("y"), "z", rs.getDouble("z"), "source", rs.getString("source"),
+                "confidence", rs.getDouble("detection_confidence"), "model", rs.getString("embedding_model"),
+                "boundingBox", rs.getString("bounding_box"), "runId", rs.getObject("pipeline_run_id", UUID.class)))
+            .list();
+
+        assertThat(rows).hasSize(1);
+        Map<String, Object> row = rows.get(0);
+        assertThat(row.get("floorId")).isEqualTo(s.c().floor());
+        assertThat(row.get("label")).isEqualTo("reception chair");
+        assertThat((Double) row.get("x")).isCloseTo(1.5, org.assertj.core.data.Offset.offset(1e-6));
+        assertThat(row.get("source")).isEqualTo("AUTO_DETECTED");
+        assertThat((Double) row.get("confidence")).isCloseTo(0.87, org.assertj.core.data.Offset.offset(1e-6));
+        assertThat(row.get("model")).isEqualTo("open_clip:ViT-B-32:openai");
+        assertThat((String) row.get("boundingBox")).contains("\"frameWidth\"");
+        assertThat(row.get("runId")).isEqualTo(s.run());
+    }
 }

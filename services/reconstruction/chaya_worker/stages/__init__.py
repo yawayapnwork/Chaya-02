@@ -11,6 +11,7 @@ from .input_validation import InputValidation
 from .plane_fitting import PlaneFitting
 from .pose_estimation import PoseEstimation
 from .privacy import PrivacyPreprocess
+from .semantic_indexing import SemanticIndexing
 from .semantic_segmentation import SemanticSegmentation
 from .splat_reconstruction import SplatReconstruction
 from .unimplemented import PLANNED, PlannedStage
@@ -26,7 +27,7 @@ PRIVACY_STAGE = "PRIVACY_PREPROCESS"
 def default_registry() -> dict[str, Stage]:
     stages: list[Stage] = [InputValidation(), FfmpegPreprocess(), FrameQualityFilter(), PrivacyPreprocess(), PoseEstimation(),
                            SplatReconstruction(), SemanticSegmentation(), GeometricCleanup(), PlaneFitting(), ArtifactGeneration(),
-                           *(PlannedStage(name) for name in PLANNED)]
+                           SemanticIndexing(), *(PlannedStage(name) for name in PLANNED)]
     registry = {s.name: s for s in stages}
     missing = [n for n in STAGE_ORDER if n not in registry]
     if missing:

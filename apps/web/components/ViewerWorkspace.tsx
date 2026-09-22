@@ -16,7 +16,9 @@ import {
 } from "@/lib/reconstruction-api";
 import { detectDeviceProfile, type DeviceProfile } from "@/lib/device-profile";
 import { formatBytes, formatDate, straightLineDistance } from "@/lib/viewer-format";
+import { type SearchResult } from "@/lib/search-api";
 import SplatViewerCanvas from "@/components/SplatViewerCanvas";
+import SemanticSearchPanel from "@/components/SemanticSearchPanel";
 
 type Phase = "checking" | "signed-out" | "ready";
 type SceneLoad =
@@ -236,6 +238,11 @@ export default function ViewerWorkspace() {
   const routeTo = pois.find((p) => p.id === routeToId) ?? null;
   const selectedPoi = pois.find((p) => p.id === selectedPoiId) ?? null;
 
+  function onSelectSearchResult(result: SearchResult) {
+    if (result.floorId !== floorId) setFloorId(result.floorId);
+    setSelectedPoiId(result.poiId);
+  }
+
   if (phase === "checking") return <p className="p-8">Loading…</p>;
 
   if (phase === "signed-out") {
@@ -358,26 +365,30 @@ export default function ViewerWorkspace() {
           )}
         </div>
 
-        {reconstruction && (
+        {venueId && (
           <aside className="w-80 shrink-0 space-y-4 overflow-y-auto border-l bg-white p-4 text-sm">
-            <section>
-              <h2 className="font-medium">Reconstruction</h2>
-              <dl className="mt-1 grid grid-cols-[6rem_1fr] gap-1 text-xs text-zinc-700">
-                <dt>Generated</dt><dd>{formatDate(reconstruction.generatedAt)}</dd>
-                <dt>Run status</dt><dd>{reconstruction.runStatus}</dd>
-                <dt>Quality</dt><dd>{reconstruction.runQuality ?? "—"}</dd>
-                {sceneLoad.phase === "ready" && <>
-                  <dt>Splats</dt><dd>{sceneLoad.splatCount.toLocaleString()}</dd>
-                </>}
-                {reconstruction.artifacts.find((a) => a.kind === "KSPLAT") && (
-                  <>
-                    <dt>Asset size</dt>
-                    <dd>{formatBytes(reconstruction.artifacts.find((a) => a.kind === "KSPLAT")!.sizeBytes)}</dd>
-                  </>
-                )}
-                <dt>Device tier</dt><dd className="capitalize">{deviceProfile.tier}</dd>
-              </dl>
-            </section>
+            <SemanticSearchPanel venueId={venueId} floorId={floorId} onSelectResult={onSelectSearchResult} />
+
+            {reconstruction && (
+              <section>
+                <h2 className="font-medium">Reconstruction</h2>
+                <dl className="mt-1 grid grid-cols-[6rem_1fr] gap-1 text-xs text-zinc-700">
+                  <dt>Generated</dt><dd>{formatDate(reconstruction.generatedAt)}</dd>
+                  <dt>Run status</dt><dd>{reconstruction.runStatus}</dd>
+                  <dt>Quality</dt><dd>{reconstruction.runQuality ?? "—"}</dd>
+                  {sceneLoad.phase === "ready" && <>
+                    <dt>Splats</dt><dd>{sceneLoad.splatCount.toLocaleString()}</dd>
+                  </>}
+                  {reconstruction.artifacts.find((a) => a.kind === "KSPLAT") && (
+                    <>
+                      <dt>Asset size</dt>
+                      <dd>{formatBytes(reconstruction.artifacts.find((a) => a.kind === "KSPLAT")!.sizeBytes)}</dd>
+                    </>
+                  )}
+                  <dt>Device tier</dt><dd className="capitalize">{deviceProfile.tier}</dd>
+                </dl>
+              </section>
+            )}
 
             <section>
               <h2 className="font-medium">Points of interest ({pois.length})</h2>

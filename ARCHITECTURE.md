@@ -37,6 +37,11 @@ Spring Boot (Java), single deployable monolith organised by module packages: `ve
 ## 4. Processing pipeline (`services/reconstruction`, `services/vision`, `services/navigation` (created when each worker is implemented))
 Python workers, one per stage, sharing a small common library (job client, S3 client, logging). Stages:
 
+`services/vision` is not a pipeline worker: it is a small, always-on FastAPI service with one job --
+embedding a live search query's text with the same CLIP model `services/reconstruction`'s SEMANTIC_INDEXING
+stage used to embed detected objects (chaya_worker.clip_embeddings), so `dev.chaya.api.search` can rank
+POIs by real cosine similarity. See docs/search.md.
+
 | # | Stage | Tooling |
 |---|-------|---------|
 | 1 | Media filtering (blur/exposure/duplicate rejection, frame extraction) | FFmpeg, OpenCV |

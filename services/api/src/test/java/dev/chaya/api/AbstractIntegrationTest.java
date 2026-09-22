@@ -29,7 +29,7 @@ import org.testcontainers.utility.DockerImageName;
     "chaya.clamav.enabled=false"
 })
 @AutoConfigureMockMvc
-@Import({TestJwtConfig.class, TestScannerConfig.class})
+@Import({TestJwtConfig.class, TestScannerConfig.class, TestEmbeddingConfig.class})
 @Testcontainers(disabledWithoutDocker = true)
 abstract class AbstractIntegrationTest {
 
