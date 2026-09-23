@@ -95,7 +95,7 @@ Job states: `QUEUED → CLAIMED → RUNNING → SUCCEEDED | FAILED | CANCELLED`,
 5. Every transition inserts a `job_event` and, for user-visible ones, an `audit_event`.
 6. Clients poll job status (SSE later if needed). No HTTP request blocks on reconstruction.
 
-Incremental rescan: a capture scoped to a region creates a region-scoped reconstruction that is merged into the venue reconstruction as a new version; the previous version stays available until the new one is complete.
+Incremental rescan: a capture scoped to a region creates a region-scoped reconstruction that is merged into the venue reconstruction as a new version; the previous version stays available until the new one is complete. See [docs/rescan.md](docs/rescan.md) for the full flow: version/region selection, real feature-matching + ICP alignment, the splice, the alignment confidence quality gate, and how navigation/search updates are scoped to only the changed region.
 
 ## 11. Infrastructure
 Docker Compose for local dev: Postgres (pgvector image), MinIO, Redis, Keycloak. App containers are built per-service (`apps/web`, `services/api`, `services/*`) and pushed to GHCR by GitHub Actions; each deploys independently. GPU workers run outside Compose on a GPU host. No Kubernetes, Kafka, Celery, or RabbitMQ.

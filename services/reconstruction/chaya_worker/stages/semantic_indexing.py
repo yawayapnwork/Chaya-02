@@ -96,7 +96,7 @@ class SemanticIndexing:
         ctx.toolchain.require(["py:torch", "py:transformers", "py:open_clip", "py:PIL", "colmap"], stage=self.name)
         ctx.toolchain.require([f"model:{s.grounding_dino_model}"], stage=self.name)
 
-        splats = ctx.inputs_of("SPLAT_CLEAN") or ctx.inputs_of("SPLAT")
+        splats = ctx.inputs_of("SPLAT_MERGED") or ctx.inputs_of("SPLAT_CLEAN") or ctx.inputs_of("SPLAT")
         sparse_archives = ctx.inputs_of("SPARSE_MODEL")
         poses_inputs = ctx.inputs_of("POSES")
         frame_archives = ctx.inputs_of("FRAME_ARCHIVE_ANON")

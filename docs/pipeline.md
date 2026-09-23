@@ -103,6 +103,16 @@ explicit `REPORT_REJECTED` failure. (Content checksums are recorded, not re-hash
 - Worker-side, a stage crash, missing tool, timeout, corrupt input or storage failure becomes a structured
   `FAILED` report with logs uploaded; a bug in a stage cannot take the worker down.
 
+## Incremental re-scan
+A capture whose `capture_session.parent_scan_version_id` is set (created by `POST
+/venues/{v}/floors/{f}/rescan`) runs `PipelineDefinition.INCREMENTAL_STAGES` instead of the plan above:
+the same first seven stages, against only the newly captured region, then `REGION_ALIGNMENT` (real
+feature-matching + ICP against the selected parent version's reconstruction) and `REGION_SPLICE` (replaces
+just the changed region), before the usual `PLANE_FITTING`/`ARTIFACT_GENERATION`/`SEMANTIC_INDEXING`/
+`NAVIGATION_BAKING` re-run on the spliced result. See [docs/rescan.md](docs/rescan.md) for the full design,
+including the alignment confidence quality gate and how navigation/search updates are scoped to only the
+changed region.
+
 ## Time-boxed reconstruction
 Each run has `time_budget_seconds` (default 3600, max 86400) and a `deadline_at`. Work orders carry the deadline;
 external commands are killed when it passes (`TIME_LIMIT_EXCEEDED`). The control plane never hands out a job of an

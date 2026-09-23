@@ -14,6 +14,10 @@ public enum JobStage {
     SPLAT_RECONSTRUCTION,
     SEMANTIC_SEGMENTATION,
     GEOMETRIC_CLEANUP,
+    // Incremental re-scan only (see PipelineDefinition.INCREMENTAL_STAGES, docs/rescan.md); never part of
+    // a full-venue reconstruction plan.
+    REGION_ALIGNMENT,
+    REGION_SPLICE,
     PLANE_FITTING,
     ARTIFACT_GENERATION,
     NAVIGATION_BAKING,

@@ -21,7 +21,9 @@ class PlaneFitting:
 
     def run(self, ctx: StageContext) -> StageResult:
         ctx.toolchain.require(["py:open3d"], stage=self.name)
-        splats = ctx.inputs_of("SPLAT_CLEAN")
+        # SPLAT_MERGED (REGION_SPLICE's venue-wide spliced result) takes priority when present -- an
+        # incremental re-scan's plane fit must run on the full merged geometry, not the region alone.
+        splats = ctx.inputs_of("SPLAT_MERGED") or ctx.inputs_of("SPLAT_CLEAN")
         if not splats:
             raise StageError("no SPLAT_CLEAN was provided by GEOMETRIC_CLEANUP", code="INPUT_INVALID")
         labels_inputs = ctx.inputs_of("SEMANTIC_LABELS_CLEAN")

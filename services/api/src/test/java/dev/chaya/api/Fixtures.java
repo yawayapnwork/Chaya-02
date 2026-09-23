@@ -54,6 +54,15 @@ final class Fixtures {
             .query(UUID.class).single();
     }
 
+    /** A FINALIZED version -- the only kind RescanService accepts as a re-scan's source. */
+    UUID finalizedScanVersion(UUID org, UUID venue, UUID scan, UUID floor, int number) {
+        return jdbc.sql("""
+                INSERT INTO scan_version (organization_id, venue_id, scan_id, floor_id, version_number, status, provenance, finalized_at)
+                VALUES (:o, :v, :s, :f, :n, 'FINALIZED', '{"bootstrap": true}'::jsonb, now()) RETURNING id""")
+            .param("o", org).param("v", venue).param("s", scan).param("f", floor).param("n", number)
+            .query(UUID.class).single();
+    }
+
     /** A venue with a floor, capture session, scan and one draft version. */
     Tree tree() {
         UUID org = organization();

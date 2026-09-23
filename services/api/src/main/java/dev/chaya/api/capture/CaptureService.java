@@ -6,6 +6,7 @@ import dev.chaya.api.audit.AuditService;
 import dev.chaya.api.pipeline.PipelineDtos.RunView;
 import dev.chaya.api.pipeline.PipelineService;
 import dev.chaya.api.processing.ProcessingJobRepository;
+import dev.chaya.api.rescan.RescanService;
 import dev.chaya.api.security.Actor;
 import dev.chaya.api.security.TenantGuard;
 import dev.chaya.api.storage.ObjectStore;
@@ -52,17 +53,19 @@ public class CaptureService {
     private final TenantGuard guard;
     private final AuditService audit;
     private final PipelineService pipeline;
+    private final RescanService rescan;
     private final ObjectStore store;
     private final UploadProperties uploads;
     private final ObjectMapper mapper;
     private final TransactionTemplate tx;
 
-    public CaptureService(JdbcClient jdbc, TenantGuard guard, AuditService audit, PipelineService pipeline,
+    public CaptureService(JdbcClient jdbc, TenantGuard guard, AuditService audit, PipelineService pipeline, RescanService rescan,
                           ObjectStore store, UploadProperties uploads, ObjectMapper mapper, TransactionTemplate tx) {
         this.jdbc = jdbc;
         this.guard = guard;
         this.audit = audit;
         this.pipeline = pipeline;
+        this.rescan = rescan;
         this.store = store;
         this.uploads = uploads;
         this.mapper = mapper;
@@ -210,20 +213,42 @@ public class CaptureService {
         return null;
     }
 
+    private record RescanLink(UUID parentVersionId, String regionGeometryJson) {}
+
     public ProcessingStatus startProcessing(Actor actor, UUID venueId, UUID captureId, Boolean privacyEnabled, Integer timeBudgetSeconds) {
         CaptureView c = get(actor, venueId, captureId);
         if (c.status() != CaptureStatus.READY_FOR_PROCESSING) {
             throw invalid(c.status(), CaptureStatus.PROCESSING);
         }
+        RescanLink rescanLink = jdbc.sql("SELECT parent_scan_version_id, region_geometry FROM capture_session WHERE id = :c")
+            .param("c", captureId)
+            .query((rs, i) -> new RescanLink(rs.getObject("parent_scan_version_id", UUID.class), rs.getString("region_geometry")))
+            .single();
         tx.executeWithoutResult(s -> {
             transition(captureId, CaptureStatus.READY_FOR_PROCESSING, CaptureStatus.PROCESSING, null, null);
             UUID scan = jdbc.sql("INSERT INTO scan (organization_id, venue_id, capture_session_id) VALUES (:o, :v, :c) RETURNING id")
                 .param("o", actor.organizationId()).param("v", venueId).param("c", captureId).query(UUID.class).single();
-            UUID run = pipeline.start(actor, venueId, captureId, scan, privacyEnabled, timeBudgetSeconds);
+            UUID run;
+            if (rescanLink.parentVersionId() != null) {
+                Map<String, Object> regionGeometry = fromJson(rescanLink.regionGeometryJson());
+                run = rescan.startIncrementalProcessing(actor, venueId, captureId, scan, c.floorId(), rescanLink.parentVersionId(),
+                    regionGeometry, privacyEnabled, timeBudgetSeconds);
+            } else {
+                run = pipeline.start(actor, venueId, captureId, scan, privacyEnabled, timeBudgetSeconds);
+            }
             audit.success(actor, venueId, "capture.start_processing", "capture_session", captureId,
                 Map.of("scanId", scan.toString(), "runId", run.toString()));
         });
         return processingStatus(actor, venueId, captureId);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> fromJson(String json) {
+        try {
+            return mapper.readValue(json, Map.class);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("corrupt region_geometry on capture_session", e);
+        }
     }
 
     public ProcessingStatus retryProcessing(Actor actor, UUID venueId, UUID captureId) {

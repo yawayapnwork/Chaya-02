@@ -16,6 +16,8 @@ import dev.chaya.api.pipeline.PipelineDtos.WorkOrder;
 import dev.chaya.api.processing.JobStage;
 import dev.chaya.api.processing.ProcessingJobRepository;
 import dev.chaya.api.processing.ProcessingJobRepository.ClaimedJob;
+import dev.chaya.api.rescan.PolygonGeometry;
+import dev.chaya.api.rescan.RescanProperties;
 import dev.chaya.api.security.Actor;
 import dev.chaya.api.security.Role;
 import dev.chaya.api.storage.ObjectStore;
@@ -76,7 +78,7 @@ public class PipelineService {
     private static final Pattern KIND = Pattern.compile("^[A-Z][A-Z0-9_]{1,39}$");
     private static final TypeReference<Map<String, Object>> MAP = new TypeReference<>() {};
 
-    private record RunRow(UUID id, UUID orgId, UUID venueId, UUID scanId, UUID captureId, String status,
+    private record RunRow(UUID id, UUID orgId, UUID venueId, UUID scanId, UUID scanVersionId, UUID captureId, String status,
                           List<JobStage> stages, boolean privacy, int budgetSeconds, Instant deadline,
                           String failureStage) {}
 
@@ -88,12 +90,14 @@ public class PipelineService {
     private final AuditService audit;
     private final ObjectStore derived;
     private final PipelineProperties props;
+    private final RescanProperties rescanProps;
     private final TransactionTemplate tx;
     private final ObjectMapper mapper;
     private final String derivedBucketName;
 
     public PipelineService(JdbcClient jdbc, ProcessingJobRepository jobs, AuditService audit,
                            @Qualifier("derived") ObjectStore derived, PipelineProperties props,
+                           RescanProperties rescanProps,
                            TransactionTemplate tx, ObjectMapper mapper, StorageProperties storage) {
         this.derivedBucketName = storage.derivedBucket();
         this.jdbc = jdbc;
@@ -101,6 +105,7 @@ public class PipelineService {
         this.audit = audit;
         this.derived = derived;
         this.props = props;
+        this.rescanProps = rescanProps;
         this.tx = tx;
         this.mapper = mapper;
     }
@@ -111,6 +116,19 @@ public class PipelineService {
 
     /** Creates the run and queues its first stage. Must be called inside the caller's transaction. */
     public UUID start(Actor actor, UUID venueId, UUID captureId, UUID scanId, Boolean privacyEnabled, Integer timeBudgetSeconds) {
+        return start(actor, venueId, captureId, scanId, null, null, privacyEnabled, timeBudgetSeconds);
+    }
+
+    /**
+     * Same as the four-stage-agnostic {@link #start(Actor, UUID, UUID, UUID, Boolean, Integer)}, but for an
+     * incremental re-scan: {@code scanVersionId} is the DRAFT ScanVersion this run will finalize (or leave
+     * DRAFT, on failure -- see {@link #advance}), and {@code plan} is
+     * {@link PipelineDefinition#incrementalPlan} rather than the full-venue plan. Called by
+     * {@link dev.chaya.api.rescan.RescanService}; ordinary captures go through the other overload with
+     * {@code scanVersionId} null and {@code plan} defaulted from {@link PipelineDefinition#plan}.
+     */
+    public UUID start(Actor actor, UUID venueId, UUID captureId, UUID scanId, UUID scanVersionId, List<JobStage> plan,
+                      Boolean privacyEnabled, Integer timeBudgetSeconds) {
         boolean privacy = privacyEnabled == null || privacyEnabled;
         if (!privacy && !actor.roles().contains(Role.ADMIN)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "PRIVACY_OPT_OUT_REQUIRES_ADMIN",
@@ -122,15 +140,15 @@ public class PipelineService {
                 "timeBudgetSeconds must be between 1 and " + props.maxTimeBudgetSeconds());
         }
         derived.ensureBucket();
-        List<JobStage> plan = PipelineDefinition.plan(privacy);
-        UUID runId = jdbc.sql("INSERT INTO pipeline_run (organization_id, venue_id, scan_id, capture_session_id, stages, "
-                + "privacy_enabled, time_budget_seconds, deadline_at, requested_by) "
-                + "VALUES (:o, :v, :s, :c, ARRAY(SELECT jsonb_array_elements_text(CAST(:stages AS jsonb))), :p, :b, "
+        List<JobStage> resolvedPlan = plan != null ? plan : PipelineDefinition.plan(privacy);
+        UUID runId = jdbc.sql("INSERT INTO pipeline_run (organization_id, venue_id, scan_id, scan_version_id, capture_session_id, "
+                + "stages, privacy_enabled, time_budget_seconds, deadline_at, requested_by) "
+                + "VALUES (:o, :v, :s, :sv, :c, ARRAY(SELECT jsonb_array_elements_text(CAST(:stages AS jsonb))), :p, :b, "
                 + "now() + make_interval(secs => :b), :by) RETURNING id")
-            .param("o", actor.organizationId()).param("v", venueId).param("s", scanId).param("c", captureId)
-            .param("stages", json(plan.stream().map(Enum::name).toList())).param("p", privacy).param("b", budget)
+            .param("o", actor.organizationId()).param("v", venueId).param("s", scanId).param("sv", scanVersionId).param("c", captureId)
+            .param("stages", json(resolvedPlan.stream().map(Enum::name).toList())).param("p", privacy).param("b", budget)
             .param("by", actor.subject()).query(UUID.class).single();
-        UUID first = jobs.enqueueForRun(actor.organizationId(), venueId, scanId, runId, plan.get(0));
+        UUID first = jobs.enqueueForRun(actor.organizationId(), venueId, scanId, scanVersionId, runId, resolvedPlan.get(0));
         audit.success(actor, venueId, "pipeline.start", "pipeline_run", runId,
             Map.of("privacyEnabled", privacy, "timeBudgetSeconds", budget, "firstJobId", first.toString()));
         return runId;
@@ -148,7 +166,7 @@ public class PipelineService {
             if (last.isPresent() && last.get().status().equals("FAILED")) {
                 jobs.retry(last.get().id()); // bounded by max_retries; 409 when exhausted
             } else {
-                jobs.enqueueForRun(run.orgId(), run.venueId(), run.scanId(), run.id(), stage);
+                jobs.enqueueForRun(run.orgId(), run.venueId(), run.scanId(), run.scanVersionId(), run.id(), stage);
             }
             jdbc.sql("UPDATE pipeline_run SET status = 'RUNNING', finished_at = NULL, failure_stage = NULL, failure_code = NULL, "
                     + "failure_message = NULL, deadline_at = now() + make_interval(secs => time_budget_seconds) WHERE id = :r")
@@ -193,12 +211,19 @@ public class PipelineService {
     private WorkOrder workOrder(ClaimedJob j) {
         if (j.runId() == null) { // legacy job: no run, no inputs
             return new WorkOrder(j.id(), j.organizationId(), j.venueId(), j.scanId(), j.scanVersionId(), j.stage().name(),
-                null, j.retryCount() + 1, null, false, null, null, List.of());
+                null, j.retryCount() + 1, null, false, null, null, List.of(), null);
         }
         RunRow run = loadRun(j.runId());
         int attempt = j.retryCount() + 1;
+        Map<String, Object> regionGeometry = run.scanVersionId() == null ? null : regionGeometryOf(run.scanVersionId());
         return new WorkOrder(j.id(), j.organizationId(), j.venueId(), j.scanId(), j.scanVersionId(), j.stage().name(),
-            run.id(), attempt, run.deadline(), run.privacy(), derivedBucketName, prefix(run, j.stage(), attempt), inputs(run, j.stage()));
+            run.id(), attempt, run.deadline(), run.privacy(), derivedBucketName, prefix(run, j.stage(), attempt),
+            inputs(run, j.stage()), regionGeometry);
+    }
+
+    private Map<String, Object> regionGeometryOf(UUID scanVersionId) {
+        return jdbc.sql("SELECT region_geometry FROM scan_version WHERE id = :v").param("v", scanVersionId)
+            .query((rs, i) -> rs.getString("region_geometry")).optional().map(this::parse).orElse(null);
     }
 
     /** Keys a stage attempt may write: everything under this prefix, and nothing else. */
@@ -233,7 +258,35 @@ public class PipelineService {
                     rs.getString("bucket"), rs.getString("object_key"), rs.getString("checksum_sha256"),
                     rs.getString("content_type"), rs.getLong("size_bytes"), rs.getBoolean("contains_pii"))).list());
         }
+        if (run.scanVersionId() != null && (stage == JobStage.REGION_ALIGNMENT || stage == JobStage.REGION_SPLICE)) {
+            globalCloudInput(run.scanVersionId()).ifPresent(inputs::add);
+        }
         return inputs;
+    }
+
+    /**
+     * The venue's existing reconstruction to align the new region against and splice into: the most
+     * recent successful GEOMETRIC_CLEANUP/REGION_SPLICE output (kind SPLAT_MERGED, else SPLAT_CLEAN) of
+     * the selected parent ScanVersion's own scan. Never the current (still-building) run's own output --
+     * that would be aligning the region against itself. Returned as kind GLOBAL_CLOUD so
+     * chaya_worker.stages.region_alignment/region_splice can tell it apart from this run's own SPLAT_CLEAN.
+     */
+    private Optional<InputRef> globalCloudInput(UUID incrementalScanVersionId) {
+        return jdbc.sql("""
+                SELECT a.id, a.bucket, a.object_key, a.checksum_sha256, a.content_type, a.size_bytes
+                  FROM scan_version incoming
+                  JOIN scan_version parent ON parent.id = incoming.parent_version_id
+                  JOIN processing_artifact a ON a.scan_id = parent.scan_id
+                  JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id
+                 WHERE incoming.id = :v AND sr.status = 'SUCCEEDED' AND a.kind IN ('SPLAT_MERGED', 'SPLAT_CLEAN')
+                 ORDER BY CASE a.kind WHEN 'SPLAT_MERGED' THEN 0 ELSE 1 END, a.created_at DESC
+                 LIMIT 1
+                """)
+            .param("v", incrementalScanVersionId)
+            .query((rs, i) -> new InputRef(rs.getObject("id", UUID.class), "GLOBAL_CLOUD", null,
+                rs.getString("bucket"), rs.getString("object_key"), rs.getString("checksum_sha256"),
+                rs.getString("content_type"), rs.getLong("size_bytes"), false))
+            .optional();
     }
 
     public Heartbeat heartbeat(UUID jobId, String workerId) {
@@ -314,6 +367,19 @@ public class PipelineService {
         if (r.stdout() != null) insertArtifact(stdoutId, job, stageRunId, forceLog(r.stdout(), "LOG_STDOUT"));
         if (r.stderr() != null) insertArtifact(stderrId, job, stageRunId, forceLog(r.stderr(), "LOG_STDERR"));
 
+        String failCode = r.errorCode();
+        String failMessage = r.errorMessage();
+        if (ok && job.stage() == JobStage.REGION_ALIGNMENT && run.scanVersionId() != null) {
+            String rejection = recordAlignmentAndCheckGate(run, r.command());
+            if (rejection != null) {
+                ok = false;
+                failCode = "ALIGNMENT_CONFIDENCE_BELOW_THRESHOLD";
+                failMessage = rejection;
+            }
+        }
+        if (ok && job.stage() == JobStage.REGION_SPLICE && run.scanVersionId() != null) {
+            appendChangedArtifactKind(run.scanVersionId(), "SPLAT_MERGED");
+        }
         if (ok && job.stage() == JobStage.SEMANTIC_INDEXING) {
             ingestDetectedObjects(job, run, outputs);
         }
@@ -324,14 +390,14 @@ public class PipelineService {
         if (ok) {
             jobs.succeed(job.id());
         } else {
-            jobs.fail(job.id(), r.errorCode(), r.errorMessage());
+            jobs.fail(job.id(), failCode, failMessage);
         }
         audit.successInOrganization(actor, job.orgId(), job.venueId(), ok ? "pipeline.stage_succeeded" : "pipeline.stage_failed",
             "processing_job", job.id(), ok ? Map.of("stage", job.stage().name(), "attempt", attempt)
-                : Map.of("stage", job.stage().name(), "attempt", attempt, "code", r.errorCode()));
+                : Map.of("stage", job.stage().name(), "attempt", attempt, "code", String.valueOf(failCode)));
 
         boolean purge = ok && job.stage() == JobStage.PRIVACY_PREPROCESS && run.privacy();
-        advance(actor, run, job.stage(), ok, r);
+        advance(actor, run, job.stage(), ok, failCode, failMessage, r);
         return () -> {
             if (purge) {
                 purgePii(run, "privacy-stage-complete");
@@ -339,7 +405,49 @@ public class PipelineService {
         };
     }
 
-    private void advance(Actor actor, RunRow run, JobStage stage, boolean ok, StageReport r) {
+    /**
+     * REGION_ALIGNMENT's own report already carries the real, measured numbers (see
+     * chaya_worker.stages.region_alignment); this records them on the ScanVersion being built regardless
+     * of outcome (docs/rescan.md "VERSIONING": a version records its alignment method and confidence even
+     * when the run goes on to fail) and independently re-checks confidence against
+     * {@link RescanProperties#minAlignmentConfidence()} -- the control plane's own threshold, not merely
+     * trusting the worker's. Returns null when the gate passes, or a rejection message when it does not.
+     */
+    private String recordAlignmentAndCheckGate(RunRow run, Map<String, Object> command) {
+        Map<String, Object> config = asMap(command == null ? null : command.get("config"));
+        Map<String, Object> alignment = asMap(config == null ? null : config.get("alignment"));
+        if (alignment == null || !(alignment.get("confidence") instanceof Number confidenceNumber)) {
+            return "REGION_ALIGNMENT reported success without a usable alignment report";
+        }
+        double confidence = confidenceNumber.doubleValue();
+        String method = alignment.get("method") == null ? null : String.valueOf(alignment.get("method"));
+        Double residual = alignment.get("inlier_rmse_m") instanceof Number n ? n.doubleValue() : null;
+        jdbc.sql("UPDATE scan_version SET alignment_method = :m, alignment_confidence = :c, alignment_residual_m = :r WHERE id = :v")
+            .param("m", method).param("c", confidence).param("r", residual).param("v", run.scanVersionId()).update();
+        if (confidence < rescanProps.minAlignmentConfidence()) {
+            return "alignment confidence " + confidence + " is below the configured threshold "
+                + rescanProps.minAlignmentConfidence() + "; refusing to splice a badly aligned region";
+        }
+        return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> asMap(Object o) {
+        return o instanceof Map<?, ?> m ? (Map<String, Object>) m : null;
+    }
+
+    /** Appends `kind` to changed_artifact_kinds exactly once (docs/rescan.md "VERSIONING": a version
+     * records which artifacts it actually changed). No-op for a full-venue run (scanVersionId null). */
+    private void appendChangedArtifactKind(UUID scanVersionId, String kind) {
+        if (scanVersionId == null) {
+            return;
+        }
+        jdbc.sql("UPDATE scan_version SET changed_artifact_kinds = array_append(changed_artifact_kinds, :k) "
+                + "WHERE id = :v AND NOT (:k = ANY(changed_artifact_kinds))")
+            .param("k", kind).param("v", scanVersionId).update();
+    }
+
+    private void advance(Actor actor, RunRow run, JobStage stage, boolean ok, String failCode, String failMessage, StageReport r) {
         List<JobStage> plan = run.stages();
         int idx = plan.indexOf(stage);
         if (ok) {
@@ -350,18 +458,18 @@ public class PipelineService {
             } else if (Instant.now().isAfter(run.deadline())) {
                 finalizeTimeBoxed(actor, run, plan.get(idx + 1));
             } else {
-                jobs.enqueueForRun(run.orgId(), run.venueId(), run.scanId(), run.id(), plan.get(idx + 1));
+                jobs.enqueueForRun(run.orgId(), run.venueId(), run.scanId(), run.scanVersionId(), run.id(), plan.get(idx + 1));
             }
             return;
         }
-        boolean partialOutput = PipelineDefinition.TIME_LIMIT_EXCEEDED.equals(r.errorCode()) && stage == JobStage.SPLAT_RECONSTRUCTION
+        boolean partialOutput = PipelineDefinition.TIME_LIMIT_EXCEEDED.equals(failCode) && stage == JobStage.SPLAT_RECONSTRUCTION
             && r.artifacts() != null && r.artifacts().stream().anyMatch(a -> a.partial() && PipelineDefinition.RECONSTRUCTION_KINDS.contains(a.kind()));
         if (partialOutput) {
             finishRun(actor, run, "PARTIAL", "PARTIAL", stage.name(), PipelineDefinition.TIME_LIMIT_EXCEEDED,
                 "The time budget ran out during " + stage + ". A partial-quality reconstruction was kept; it is not a finalized reconstruction.");
             completeCapture(run);
         } else {
-            finishRun(actor, run, "FAILED", null, stage.name(), r.errorCode(), r.errorMessage());
+            finishRun(actor, run, "FAILED", null, stage.name(), failCode, failMessage);
         }
     }
 
@@ -392,6 +500,36 @@ public class PipelineService {
             .param("r", run.id()).update();
         audit.successInOrganization(actor, run.orgId(), run.venueId(), "pipeline." + status.toLowerCase(), "pipeline_run", run.id(),
             failCode == null ? Map.of() : Map.of("stage", String.valueOf(failStage), "code", failCode));
+        if (run.scanVersionId() != null) {
+            recordRescanOutcome(actor, run, status, failCode);
+        }
+    }
+
+    /**
+     * The AUDIT record docs/rescan.md requires: who initiated the re-scan (the run's own audit trail
+     * already has that, from RescanService's "rescan.initiate"), which region and source version (read
+     * from the ScanVersion itself, which recorded them at creation and never changes), the resulting
+     * version, and the outcome. Only a true SUCCEEDED run finalizes the ScanVersion -- FAILED, PARTIAL and
+     * CANCELLED all leave it DRAFT forever (an abandoned attempt, never silently promoted).
+     */
+    private void recordRescanOutcome(Actor actor, RunRow run, String status, String failCode) {
+        UUID parentVersionId = jdbc.sql("SELECT parent_version_id FROM scan_version WHERE id = :v").param("v", run.scanVersionId())
+            .query((rs, i) -> rs.getObject("parent_version_id", UUID.class)).optional().orElse(null);
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("sourceVersionId", String.valueOf(parentVersionId));
+        meta.put("resultingVersionId", run.scanVersionId().toString());
+        meta.put("outcome", status);
+        if (failCode != null) {
+            meta.put("failureCode", failCode);
+        }
+        audit.successInOrganization(actor, run.orgId(), run.venueId(), "rescan.outcome", "scan_version", run.scanVersionId(), meta);
+        if ("SUCCEEDED".equals(status)) {
+            Map<String, Object> provenance = Map.of("runId", run.id().toString(), "stages",
+                run.stages().stream().map(Enum::name).toList());
+            jdbc.sql("UPDATE scan_version SET status = 'FINALIZED', finalized_at = now(), provenance = CAST(:p AS jsonb) "
+                    + "WHERE id = :v AND status = 'DRAFT'")
+                .param("p", json(provenance)).param("v", run.scanVersionId()).update();
+        }
     }
 
     // =========================================================================================
@@ -506,6 +644,14 @@ public class PipelineService {
             log.warn("run {} has no floor on its capture session; skipping AUTO_DETECTED POI ingestion", run.id());
             return;
         }
+        int superseded = 0;
+        if (run.scanVersionId() != null) {
+            // Incremental re-scan: SEMANTIC_INDEXING only ever saw the captured region (the worker has no
+            // way to detect objects outside frames it was never given), so only that region's POIs are
+            // stale. Everything outside it is left completely untouched -- "only affected semantic objects
+            // need re-indexing" (docs/rescan.md "SEARCH") is a direct consequence of that, not extra logic.
+            superseded = supersedePoisInRegion(run, floorId);
+        }
         String embeddingModel = (String) doc.get("embedding_model");
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> objects = (List<Map<String, Object>>) doc.getOrDefault("objects", List.of());
@@ -515,9 +661,42 @@ public class PipelineService {
                 inserted++;
             }
         }
-        log.info("ingested {} of {} auto-detected objects as POIs for run {}", inserted, objects.size(), run.id());
+        if (inserted > 0) {
+            appendChangedArtifactKind(run.scanVersionId(), "DETECTED_OBJECTS");
+        }
+        log.info("ingested {} of {} auto-detected objects as POIs for run {} ({} superseded in the changed region)",
+            inserted, objects.size(), run.id(), superseded);
         audit.successInOrganization(SYSTEM, run.orgId(), run.venueId(), "semantic_indexing.ingested", "pipeline_run", run.id(),
-            Map.of("objectsDetected", objects.size(), "poisCreated", inserted));
+            Map.of("objectsDetected", objects.size(), "poisCreated", inserted, "poisSuperseded", superseded));
+    }
+
+    /** Soft-deletes every non-deleted POI on this floor whose latest position falls inside the ScanVersion's
+     * region_geometry polygon -- the "affected" set that SEMANTIC_INDEXING's fresh region-only detections
+     * are about to replace. A POI outside the polygon is never touched. */
+    @SuppressWarnings("unchecked")
+    private int supersedePoisInRegion(RunRow run, UUID floorId) {
+        Map<String, Object> geometry = regionGeometryOf(run.scanVersionId());
+        List<List<Number>> points = geometry == null ? null : (List<List<Number>>) geometry.get("points");
+        if (points == null || points.size() < 3) {
+            log.warn("run {} is an incremental re-scan but its ScanVersion has no usable region_geometry; "
+                + "no existing POIs will be superseded", run.id());
+            return 0;
+        }
+        List<Map<String, Object>> candidates = jdbc.sql("""
+                SELECT p.id, v.x, v.y FROM poi p JOIN poi_version v ON v.poi_id = p.id
+                 WHERE p.venue_id = :venue AND p.floor_id = :floor AND p.deleted_at IS NULL
+                   AND v.version_number = (SELECT max(version_number) FROM poi_version WHERE poi_id = p.id)
+                """).param("venue", run.venueId()).param("floor", floorId).query().listOfRows();
+        int superseded = 0;
+        for (Map<String, Object> row : candidates) {
+            double x = ((Number) row.get("x")).doubleValue();
+            double y = ((Number) row.get("y")).doubleValue();
+            if (PolygonGeometry.pointInPolygon(x, y, points)) {
+                jdbc.sql("UPDATE poi SET deleted_at = now() WHERE id = :p").param("p", row.get("id")).update();
+                superseded++;
+            }
+        }
+        return superseded;
     }
 
     @SuppressWarnings("unchecked")
@@ -596,6 +775,9 @@ public class PipelineService {
             if (graphRaw instanceof Map<?, ?> graph && ingestOneNavigationGraph(run, floorId, profile, graph)) {
                 ingested++;
             }
+        }
+        if (ingested > 0) {
+            appendChangedArtifactKind(run.scanVersionId(), "NAVIGATION_GRAPH");
         }
         log.info("ingested {} navigation graph profile(s) for run {}", ingested, run.id());
         audit.successInOrganization(SYSTEM, run.orgId(), run.venueId(), "navigation_baking.ingested", "pipeline_run", run.id(),
@@ -786,9 +968,9 @@ public class PipelineService {
             stages.add(JobStage.valueOf(o.toString()));
         }
         return new RunRow(rs.getObject("id", UUID.class), rs.getObject("organization_id", UUID.class), rs.getObject("venue_id", UUID.class),
-            rs.getObject("scan_id", UUID.class), rs.getObject("capture_session_id", UUID.class), rs.getString("status"), stages,
-            rs.getBoolean("privacy_enabled"), rs.getInt("time_budget_seconds"), rs.getTimestamp("deadline_at").toInstant(),
-            rs.getString("failure_stage"));
+            rs.getObject("scan_id", UUID.class), rs.getObject("scan_version_id", UUID.class), rs.getObject("capture_session_id", UUID.class),
+            rs.getString("status"), stages, rs.getBoolean("privacy_enabled"), rs.getInt("time_budget_seconds"),
+            rs.getTimestamp("deadline_at").toInstant(), rs.getString("failure_stage"));
     }
 
     private JobRow lockJob(UUID jobId) {

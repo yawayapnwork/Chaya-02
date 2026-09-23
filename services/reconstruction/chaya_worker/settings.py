@@ -102,6 +102,12 @@ class Settings:
     # ADA-inspired accessible-ramp threshold (1:12 rise:run ~= 4.8 degrees); a polygon steeper than this
     # is excluded from the STEP_FREE routing graph regardless of whether Recast still considers it walkable.
     navmesh_max_ramp_slope_deg: float = 5.0
+    # REGION_ALIGNMENT / REGION_SPLICE (incremental re-scan; see docs/rescan.md)
+    alignment_voxel_size_m: float = 0.05
+    # The control plane independently re-checks this against chaya.rescan.min-alignment-confidence
+    # (RescanProperties) before ever finalizing a ScanVersion -- this is the worker's own gate so a bad
+    # splice is refused even before the report reaches the server. Never merge below this line.
+    min_alignment_confidence: float = 0.6
 
     @staticmethod
     def from_env(env: Mapping[str, str] | None = None) -> "Settings":
@@ -175,6 +181,8 @@ class Settings:
             navmesh_detail_sample_dist=_float(e, "NAVMESH_DETAIL_SAMPLE_DIST", d.navmesh_detail_sample_dist),
             navmesh_detail_sample_max_error=_float(e, "NAVMESH_DETAIL_SAMPLE_MAX_ERROR", d.navmesh_detail_sample_max_error),
             navmesh_max_ramp_slope_deg=_float(e, "NAVMESH_MAX_RAMP_SLOPE_DEG", d.navmesh_max_ramp_slope_deg),
+            alignment_voxel_size_m=_float(e, "ALIGNMENT_VOXEL_SIZE_M", d.alignment_voxel_size_m),
+            min_alignment_confidence=_float(e, "MIN_ALIGNMENT_CONFIDENCE", d.min_alignment_confidence),
         )
 
     def require_service_config(self) -> None:
@@ -220,4 +228,6 @@ class Settings:
             "navmesh_verts_per_poly": self.navmesh_verts_per_poly, "navmesh_detail_sample_dist": self.navmesh_detail_sample_dist,
             "navmesh_detail_sample_max_error": self.navmesh_detail_sample_max_error,
             "navmesh_max_ramp_slope_deg": self.navmesh_max_ramp_slope_deg,
+            "alignment_voxel_size_m": self.alignment_voxel_size_m,
+            "min_alignment_confidence": self.min_alignment_confidence,
         }

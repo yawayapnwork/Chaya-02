@@ -16,10 +16,12 @@ public final class PipelineDtos {
     public record InputRef(UUID artifactId, String kind, String stage, String bucket, String key, String sha256,
                            String contentType, long sizeBytes, boolean containsPii) {}
 
-    /** Everything a worker needs to execute one stage. */
+    /** Everything a worker needs to execute one stage. `regionGeometry` is set only for an incremental
+     * re-scan run (see dev.chaya.api.rescan.RescanService, chaya_worker.stages.region_alignment): the
+     * selected region's polygon, {@code {"points": [[x, y], ...]}} in the floor's venue frame. */
     public record WorkOrder(UUID id, UUID organizationId, UUID venueId, UUID scanId, UUID scanVersionId, String stage,
                             UUID runId, int attempt, Instant deadlineAt, boolean privacyEnabled, String derivedBucket,
-                            String outputPrefix, List<InputRef> inputs) {}
+                            String outputPrefix, List<InputRef> inputs, Map<String, Object> regionGeometry) {}
 
     public record ArtifactReport(String kind, String key, String sha256, String contentType, long sizeBytes,
                                  boolean containsPii, boolean partial) {}

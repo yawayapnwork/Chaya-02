@@ -39,7 +39,7 @@ class NavigationBaking:
         s = ctx.settings
         ctx.toolchain.require(["exe:recast-cli"], stage=self.name)
 
-        splats = ctx.inputs_of("SPLAT_CLEAN") or ctx.inputs_of("SPLAT")
+        splats = ctx.inputs_of("SPLAT_MERGED") or ctx.inputs_of("SPLAT_CLEAN") or ctx.inputs_of("SPLAT")
         planes_inputs = ctx.inputs_of("PLANE_MODEL")
         labels_inputs = ctx.inputs_of("SEMANTIC_LABELS_CLEAN")
         if not splats or not planes_inputs:

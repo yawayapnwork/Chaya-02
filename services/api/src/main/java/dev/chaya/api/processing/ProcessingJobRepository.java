@@ -70,11 +70,17 @@ public class ProcessingJobRepository {
     }
 
     public UUID enqueueForRun(UUID organizationId, UUID venueId, UUID scanId, UUID runId, JobStage stage) {
+        return enqueueForRun(organizationId, venueId, scanId, null, runId, stage);
+    }
+
+    /** Same, but tags the job with the ScanVersion an incremental re-scan run is building (null for an
+     * ordinary full-venue run). Threaded onto the job so the worker's WorkOrder carries it. */
+    public UUID enqueueForRun(UUID organizationId, UUID venueId, UUID scanId, UUID scanVersionId, UUID runId, JobStage stage) {
         return jdbc.sql("""
-                INSERT INTO processing_job (organization_id, venue_id, scan_id, run_id, stage)
-                VALUES (:org, :venue, :scan, :run, :stage) RETURNING id""")
-            .param("org", organizationId).param("venue", venueId).param("scan", scanId).param("run", runId)
-            .param("stage", stage.name()).query(UUID.class).single();
+                INSERT INTO processing_job (organization_id, venue_id, scan_id, scan_version_id, run_id, stage)
+                VALUES (:org, :venue, :scan, :version, :run, :stage) RETURNING id""")
+            .param("org", organizationId).param("venue", venueId).param("scan", scanId).param("version", scanVersionId)
+            .param("run", runId).param("stage", stage.name()).query(UUID.class).single();
     }
 
     public Optional<JobScope> scope(UUID jobId) {
