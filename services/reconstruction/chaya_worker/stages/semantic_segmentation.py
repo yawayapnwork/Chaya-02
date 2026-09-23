@@ -23,6 +23,7 @@ import numpy as np
 from .. import archive
 from ..colmap_txt import parse_cameras_txt
 from ..contract import ArtifactSpec, StageContext, StageError, StageResult
+from ..model_loading import load_pretrained
 from ..ply import read_ply
 from ..semantic_classes import CLUTTER, FLOOR, FURNITURE, UNKNOWN, WALL, bucket_all
 from .base import command_record, write_json
@@ -91,8 +92,10 @@ class SemanticSegmentation:
         archive.unpack(frame_archives[0].path, images_dir)
 
         device = "cuda" if ctx.toolchain.cuda().available else "cpu"
-        processor = AutoImageProcessor.from_pretrained(s.semantic_segmentation_model)
-        model = AutoModelForSemanticSegmentation.from_pretrained(s.semantic_segmentation_model).to(device).eval()
+        rev = s.semantic_segmentation_revision
+        processor = AutoImageProcessor.from_pretrained(s.semantic_segmentation_model, **({"revision": rev} if rev else {}))
+        model = load_pretrained(AutoModelForSemanticSegmentation.from_pretrained, s.semantic_segmentation_model, revision=rev,
+                                allow_pickle=s.allow_pickle_weights, what="semantic segmentation model").to(device).eval()
         buckets = bucket_all(model.config.id2label)
 
         n = len(cloud)

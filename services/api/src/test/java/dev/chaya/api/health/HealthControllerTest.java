@@ -2,6 +2,7 @@ package dev.chaya.api.health;
 
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -39,20 +40,45 @@ class HealthControllerTest {
     @MockitoBean JwtDecoder jwtDecoder;
     @MockitoBean PublicViewerAuthenticator viewerAuthenticator;
 
-    @Test
-    void healthIsUpWhenDatabaseIsUp() throws Exception {
-        when(healthService.check()).thenReturn(new HealthService.HealthReport("UP", "UP", "UP"));
-        mvc.perform(get("/api/v1/health"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.status").value("UP"));
+    private static HealthService.HealthReport report(String db, String storage, String idp, String scanner, String processing) {
+        return HealthService.assemble(db, storage, idp, scanner,
+            new HealthService.Processing(processing, 0L, 0L, null), java.time.Instant.now());
     }
 
     @Test
-    void healthIs503WhenDatabaseIsDown() throws Exception {
-        when(healthService.check()).thenReturn(new HealthService.HealthReport("DOWN", "UP", "DOWN"));
+    void healthIsUpWhenEverythingIsUp() throws Exception {
+        when(healthService.check()).thenReturn(report("UP", "UP", "UP", "UP", "IDLE"));
+        mvc.perform(get("/api/v1/health"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("UP"))
+            .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("no-store")));
+    }
+
+    @Test
+    void healthIs503WhenStorageIsDown() throws Exception {
+        when(healthService.check()).thenReturn(report("UP", "DOWN", "UP", "UP", "IDLE"));
         mvc.perform(get("/api/v1/health"))
             .andExpect(status().isServiceUnavailable())
+            .andExpect(jsonPath("$.status").value("DOWN"))
             .andExpect(jsonPath("$.storage").value("DOWN"));
+    }
+
+    @Test
+    void healthIs503WhenTheDatabaseOrIdentityProviderIsDown() throws Exception {
+        when(healthService.check()).thenReturn(report("DOWN", "UP", "UP", "UP", "UNKNOWN"));
+        mvc.perform(get("/api/v1/health")).andExpect(status().isServiceUnavailable()).andExpect(jsonPath("$.database").value("DOWN"));
+        when(healthService.check()).thenReturn(report("UP", "UP", "DOWN", "UP", "IDLE"));
+        mvc.perform(get("/api/v1/health")).andExpect(status().isServiceUnavailable()).andExpect(jsonPath("$.identityProvider").value("DOWN"));
+    }
+
+    @Test
+    void aStalledQueueOrMissingScannerIsDegradedAndSaysWhy() throws Exception {
+        when(healthService.check()).thenReturn(report("UP", "UP", "UP", "UP", "STALLED"));
+        mvc.perform(get("/api/v1/health")).andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("DEGRADED")).andExpect(jsonPath("$.processing.status").value("STALLED"));
+        when(healthService.check()).thenReturn(report("UP", "UP", "UP", "DISABLED", "IDLE"));
+        mvc.perform(get("/api/v1/health")).andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("DEGRADED")).andExpect(jsonPath("$.malwareScanner").value("DISABLED"));
     }
 
     @Test

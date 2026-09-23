@@ -1,0 +1,22 @@
+# Prometheus for Chaya 02 (docs/monitoring.md).
+global:
+  scrape_interval: 15s
+  evaluation_interval: 30s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  # The API runs on the host (./mvnw spring-boot:run) or in its own container; /actuator/prometheus is closed unless
+  # METRICS_SCRAPE_PASSWORD is set, and then requires HTTP Basic with user "prometheus".
+  - job_name: chaya-api
+    metrics_path: /actuator/prometheus
+    basic_auth:
+      username: prometheus
+      password_file: /run/secrets/metrics_scrape_password
+    static_configs:
+      - targets: ["host.docker.internal:8080"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

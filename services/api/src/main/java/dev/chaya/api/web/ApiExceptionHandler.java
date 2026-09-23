@@ -28,6 +28,13 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
             "Object storage is unavailable. The request was not completed; retry later.");
     }
 
+    /** No database connection (Hikari timeout, refused connection): say so, instead of a generic 500. */
+    @ExceptionHandler(org.springframework.dao.DataAccessResourceFailureException.class)
+    ProblemDetail databaseUnavailable(org.springframework.dao.DataAccessResourceFailureException e) {
+        return problem(HttpStatus.SERVICE_UNAVAILABLE, "DATABASE_UNAVAILABLE",
+            "The database is unavailable. The request was not completed; retry later.");
+    }
+
     @ExceptionHandler(BadRequestException.class)
     ProblemDetail badRequest(BadRequestException e) {
         return problem(HttpStatus.BAD_REQUEST, "BAD_REQUEST", e.getMessage());

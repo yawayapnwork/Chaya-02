@@ -21,4 +21,12 @@ class TestJwtConfig {
         decoder.setJwtValidator(JwtValidation.validator(TestJwt.ISSUER, TestJwt.AUDIENCE));
         return decoder;
     }
+
+    /** The test issuer has no JWKS endpoint; its key is the fixed one above, so it is always "reachable". The real
+     * probe against an unreachable identity provider is covered by IdentityProviderUnavailableTest. */
+    @Bean
+    @Primary
+    dev.chaya.api.health.IdentityProviderProbe testIdentityProviderProbe() {
+        return () -> true;
+    }
 }

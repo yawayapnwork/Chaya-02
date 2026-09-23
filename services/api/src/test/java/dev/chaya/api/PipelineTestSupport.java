@@ -86,11 +86,20 @@ abstract class PipelineTestSupport extends CaptureTestSupport {
         a.put("kind", kind);
         a.put("key", key);
         a.put("sha256", sha256(data));
-        a.put("contentType", "application/octet-stream");
+        a.put("contentType", contentTypeOf(name)); // as the real worker labels its outputs (chaya_worker.stages)
         a.put("sizeBytes", data.length);
         a.put("containsPii", pii);
         a.put("partial", partial);
         return a;
+    }
+
+    static String contentTypeOf(String name) {
+        if (name.endsWith(".json")) return "application/json";
+        if (name.endsWith(".png")) return "image/png";
+        if (name.endsWith(".jpg")) return "image/jpeg";
+        if (name.endsWith(".tar")) return "application/x-tar";
+        if (name.endsWith(".log") || name.endsWith(".txt")) return "text/plain";
+        return "application/octet-stream";
     }
 
     protected Map<String, Object> report(String status, List<Map<String, Object>> artifacts, String errorCode, String message) {

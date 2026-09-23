@@ -139,6 +139,19 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
     }
 
     @Test
+    void imageOutputBeforePrivacyMustBeFlaggedAsPiiWhateverTheWorkerSays() throws Exception {
+        startRun();
+        JsonNode validation = claimExpecting("INPUT_VALIDATION");
+        // A frame reported as "no PII" before faces/screens/documents were anonymised would otherwise be handed to
+        // every later stage and never purged.
+        Map<String, Object> unflagged = artifact(validation, "frame.png", "FRAME", false, false, "raw-face");
+        send(validation, report("SUCCEEDED", List.of(unflagged), null, null), svc).andExpect(status().isConflict())
+            .andExpect(jsonPath("$.code").value("PII_FLAG_REQUIRED"));
+        // Reports stay unflagged, as the real worker publishes them.
+        succeed(validation);
+    }
+
+    @Test
     void thePrivacyBoundaryHoldsOnTheServer() throws Exception {
         var s = startRun();
         succeed(claimExpecting("INPUT_VALIDATION"));

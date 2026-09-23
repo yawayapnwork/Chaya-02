@@ -1,0 +1,448 @@
+{
+  "uid": "chaya-platform",
+  "title": "Chaya 02 — platform",
+  "tags": [
+    "chaya"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "API",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [],
+      "id": 1
+    },
+    {
+      "type": "timeseries",
+      "title": "API latency p50 / p95 / p99",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(http_server_requests_seconds_bucket{application=\"chaya-api\", uri!~\".*/stream\"}[5m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{application=\"chaya-api\", uri!~\".*/stream\"}[5m])))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_server_requests_seconds_bucket{application=\"chaya-api\", uri!~\".*/stream\"}[5m])))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "Spring http.server.requests histogram; SSE streams excluded (they are long-lived by design).",
+      "id": 2
+    },
+    {
+      "type": "timeseries",
+      "title": "API requests by status class",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 1,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(http_server_requests_seconds_count{application=\"chaya-api\"}[5m]))",
+          "legendFormat": "{{outcome}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "id": 3
+    },
+    {
+      "type": "timeseries",
+      "title": "503 responses (dependency down)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(http_server_requests_seconds_count{application=\"chaya-api\", status=\"503\"}[5m]))",
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE, AUTHENTICATION_UNAVAILABLE. Check /api/v1/health for which.",
+      "id": 4
+    },
+    {
+      "type": "timeseries",
+      "title": "429 responses (rate limited)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 9,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(http_server_requests_seconds_count{application=\"chaya-api\", status=\"429\"}[5m]))",
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "id": 5
+    },
+    {
+      "type": "timeseries",
+      "title": "p95 latency by endpoint (top 10)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 9,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(10, histogram_quantile(0.95, sum by (le, uri) (rate(http_server_requests_seconds_bucket{application=\"chaya-api\", uri!~\".*/stream\"}[5m]))))",
+          "legendFormat": "{{uri}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "id": 6
+    },
+    {
+      "type": "row",
+      "title": "Processing",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 17,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [],
+      "id": 7
+    },
+    {
+      "type": "timeseries",
+      "title": "Queue depth",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 18,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "chaya_jobs{status=\"QUEUED\"}",
+          "legendFormat": "queued"
+        },
+        {
+          "refId": "B",
+          "expr": "chaya_jobs{status=\"RUNNING\"}",
+          "legendFormat": "running"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {},
+      "id": 8
+    },
+    {
+      "type": "timeseries",
+      "title": "Oldest queued job age",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 18,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "chaya_jobs_queued_oldest_age_seconds",
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "Empty when nothing is queued. Rising with nothing running = no worker is claiming jobs.",
+      "id": 9
+    },
+    {
+      "type": "stat",
+      "title": "Metrics refresh OK",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 18,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "chaya_metrics_refresh_ok",
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {},
+      "description": "0 means the pipeline/storage gauges could not be read from the database; those panels are then empty, never stale.",
+      "id": 10
+    },
+    {
+      "type": "timeseries",
+      "title": "Stage duration p95 (last 24 h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 26,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "chaya_stage_duration_24h_seconds{quantile=\"0.95\"}",
+          "legendFormat": "{{stage}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "From the durable pipeline_stage_run records.",
+      "id": 11
+    },
+    {
+      "type": "timeseries",
+      "title": "Stage failure rate (last 24 h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 26,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (stage) (chaya_stage_runs_24h{outcome=\"FAILED\"}) / sum by (stage) (chaya_stage_runs_24h)",
+          "legendFormat": "{{stage}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "id": 12
+    },
+    {
+      "type": "stat",
+      "title": "Reconstruction success rate (runs finished in last 24 h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 34,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(sum(chaya_pipeline_runs_finished_24h{status=\"SUCCEEDED\"}) or vector(0)) / sum(chaya_pipeline_runs_finished_24h)",
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "SUCCEEDED / all finished (SUCCEEDED, PARTIAL, FAILED, CANCELLED). PARTIAL is not counted as success.",
+      "id": 13
+    },
+    {
+      "type": "bargauge",
+      "title": "Runs finished by status (last 24 h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 34,
+        "w": 16,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "chaya_pipeline_runs_finished_24h",
+          "legendFormat": "{{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {},
+      "id": 14
+    },
+    {
+      "type": "row",
+      "title": "Storage",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 42,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [],
+      "id": 15
+    },
+    {
+      "type": "timeseries",
+      "title": "Recorded storage",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 43,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "chaya_storage_recorded_bytes",
+          "legendFormat": "{{store}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "Sizes recorded in the database at verification time (accepted/validating/quarantined raw media; non-PII derived artifacts). Not a bucket listing: use MinIO's own metrics for physical usage.",
+      "id": 16
+    }
+  ]
+}

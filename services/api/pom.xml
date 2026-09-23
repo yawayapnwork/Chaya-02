@@ -40,7 +40,9 @@
     <dependency>
       <groupId>org.apache.tika</groupId>
       <artifactId>tika-core</artifactId>
-      <version>3.0.0</version>
+      <!-- 3.2.2+: fixes the critical XXE advisory CVE-2025-66516 affecting tika-core 1.13-3.2.1. Only magic-byte
+           detection is used here (no PDF/XML parsing), but the vulnerable range is not kept. -->
+      <version>3.2.2</version>
     </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
@@ -57,6 +59,11 @@
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+    <dependency>
+      <!-- /actuator/prometheus (scrape-credential protected, see SecurityConfig and docs/monitoring.md) -->
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-registry-prometheus</artifactId>
     </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>

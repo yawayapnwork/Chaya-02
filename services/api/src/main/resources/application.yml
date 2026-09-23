@@ -1,13 +1,21 @@
 server:
   port: ${API_PORT:8080}
+  error:
+    # Explicit (these are Boot's defaults): error responses never carry exception messages or stack traces.
+    include-message: never
+    include-stacktrace: never
+    include-exception: false
 
 spring:
   application:
     name: chaya-api
   datasource:
     url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB}
-    username: ${POSTGRES_USER}
-    password: ${POSTGRES_PASSWORD}
+    # Runtime role: owns the schema, is NOT a superuser (infra/docker/postgres/initdb). See docs/security-hardening.md.
+    username: ${POSTGRES_APP_USER}
+    password: ${POSTGRES_APP_PASSWORD}
+    hikari:
+      connection-timeout: 5000   # fail fast (503 DATABASE_UNAVAILABLE) instead of holding requests for 30 s
   jpa:
     open-in-view: false
     hibernate:
@@ -32,7 +40,7 @@ chaya:
     derived-bucket: ${S3_BUCKET_DERIVED:chaya-derived}
   uploads:
     part-size-bytes: 8388608          # 8 MiB; S3 multipart requires >= 5 MiB except the last part
-    max-video-bytes: 4294967296       # 4 GiB
+    max-video-bytes: 4194304000       # 4000 MiB: clamd's maximum stream (StreamMaxLength 4000M); larger could never be scanned
     max-image-bytes: 52428800         # 50 MiB
     max-metadata-bytes: 1048576       # 1 MiB
     max-files-per-capture: 5000
@@ -56,6 +64,18 @@ chaya:
     emitter-timeout-ms: 300000         # server-side SSE connection lifetime; the client reconnects
   cors:
     allowed-origins: ${CHAYA_ALLOWED_ORIGINS:http://localhost:3000}
+  rate-limit:
+    enabled: ${CHAYA_RATE_LIMIT_ENABLED:true}
+    public-link-exchange-per-minute: 10
+    anonymous-per-minute: 120
+    authenticated-per-minute: 1200
+    search-per-minute: 60
+  health:
+    cache-ttl: PT5S
+    queue-stall-after: PT15M
+  metrics:
+    scrape-password: ${METRICS_SCRAPE_PASSWORD:}   # empty: /actuator/prometheus is closed to everyone
+    refresh-interval: PT30S
   search:
     vision-service-url: ${VISION_SERVICE_URL:http://localhost:8090}
     vision-timeout: PT5S
@@ -82,7 +102,13 @@ management:
   endpoints:
     web:
       exposure:
-        include: health
+        include: health,prometheus
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+    tags:
+      application: chaya-api
   endpoint:
     health:
       show-details: never

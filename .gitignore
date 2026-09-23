@@ -56,3 +56,9 @@ work/
 
 # Logs
 *.log
+
+# Backups (may contain raw captures and personal data)
+/backups/
+
+# Local scan reports
+/reports/

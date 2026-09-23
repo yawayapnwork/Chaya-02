@@ -26,7 +26,11 @@ import org.testcontainers.utility.DockerImageName;
     "chaya.uploads.min-images-without-video=3",
     "chaya.storage.bucket=chaya-raw-test",
     "chaya.storage.derived-bucket=chaya-derived-test",
-    "chaya.clamav.enabled=false"
+    "chaya.clamav.enabled=false",
+    // Shared context: many tests call from one address and must not trip the limiter (RateLimiterTest covers it),
+    // and health must be recomputed per request (HealthServiceTest covers the cache).
+    "chaya.rate-limit.enabled=false",
+    "chaya.health.cache-ttl=PT0S"
 })
 @AutoConfigureMockMvc
 @Import({TestJwtConfig.class, TestScannerConfig.class, TestEmbeddingConfig.class})

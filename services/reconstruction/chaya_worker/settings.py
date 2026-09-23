@@ -58,6 +58,7 @@ class Settings:
     semantic_confidence_min: float = 0.5
     semantic_sample_every: int = 1  # segment every Nth registered frame (cost control)
     semantic_segmentation_model: str = "nvidia/segformer-b0-finetuned-ade-512-512"
+    semantic_segmentation_revision: str = ""  # commit SHA; empty = unpinned (logged)
     # GEOMETRIC_CLEANUP (Open3D)
     cleanup_stat_nb_neighbors: int = 20
     cleanup_stat_std_ratio: float = 2.0
@@ -75,6 +76,9 @@ class Settings:
     ksplat_compression_level: int = 0
     # SEMANTIC_INDEXING (Grounding DINO + CLIP)
     grounding_dino_model: str = "IDEA-Research/grounding-dino-tiny"
+    grounding_dino_revision: str = ""  # commit SHA; empty = unpinned (logged)
+    # Pickle weights can run code on load; only safetensors unless this is set deliberately.
+    allow_pickle_weights: bool = False
     object_detection_prompt: str = (
         "chair. table. sofa. couch. desk. door. window. sign. elevator. stairs. plant. artwork. "
         "reception desk. bench. shelf. counter. restroom sign. exit sign. fire extinguisher."
@@ -147,6 +151,7 @@ class Settings:
             semantic_confidence_min=_float(e, "SEMANTIC_CONFIDENCE_MIN", d.semantic_confidence_min),
             semantic_sample_every=_int(e, "SEMANTIC_SAMPLE_EVERY", d.semantic_sample_every),
             semantic_segmentation_model=e.get("SEMANTIC_SEGMENTATION_MODEL", d.semantic_segmentation_model),
+            semantic_segmentation_revision=e.get("SEMANTIC_SEGMENTATION_REVISION", d.semantic_segmentation_revision),
             cleanup_stat_nb_neighbors=_int(e, "CLEANUP_STAT_NB_NEIGHBORS", d.cleanup_stat_nb_neighbors),
             cleanup_stat_std_ratio=_float(e, "CLEANUP_STAT_STD_RATIO", d.cleanup_stat_std_ratio),
             cleanup_radius_nb_points=_int(e, "CLEANUP_RADIUS_NB_POINTS", d.cleanup_radius_nb_points),
@@ -160,6 +165,8 @@ class Settings:
             plane_min_inliers=_int(e, "PLANE_MIN_INLIERS", d.plane_min_inliers),
             ksplat_compression_level=_int(e, "KSPLAT_COMPRESSION_LEVEL", d.ksplat_compression_level),
             grounding_dino_model=e.get("GROUNDING_DINO_MODEL", d.grounding_dino_model),
+            grounding_dino_revision=e.get("GROUNDING_DINO_REVISION", d.grounding_dino_revision),
+            allow_pickle_weights=e.get("MODEL_ALLOW_PICKLE_WEIGHTS", "false").strip().lower() == "true",
             object_detection_prompt=e.get("OBJECT_DETECTION_PROMPT", d.object_detection_prompt),
             object_detection_box_threshold=_float(e, "OBJECT_DETECTION_BOX_THRESHOLD", d.object_detection_box_threshold),
             object_detection_text_threshold=_float(e, "OBJECT_DETECTION_TEXT_THRESHOLD", d.object_detection_text_threshold),
@@ -207,6 +214,7 @@ class Settings:
             "gsplat_min_compute_capability": self.gsplat_min_compute_capability,
             "semantic_confidence_min": self.semantic_confidence_min, "semantic_sample_every": self.semantic_sample_every,
             "semantic_segmentation_model": self.semantic_segmentation_model,
+            "semantic_segmentation_revision": self.semantic_segmentation_revision or None,
             "cleanup_stat_nb_neighbors": self.cleanup_stat_nb_neighbors, "cleanup_stat_std_ratio": self.cleanup_stat_std_ratio,
             "cleanup_radius_nb_points": self.cleanup_radius_nb_points, "cleanup_radius": self.cleanup_radius,
             "cleanup_opacity_threshold": self.cleanup_opacity_threshold,
@@ -215,6 +223,7 @@ class Settings:
             "plane_ransac_iterations": self.plane_ransac_iterations, "plane_max_planes": self.plane_max_planes,
             "plane_min_inliers": self.plane_min_inliers, "ksplat_compression_level": self.ksplat_compression_level,
             "grounding_dino_model": self.grounding_dino_model, "object_detection_prompt": self.object_detection_prompt,
+            "grounding_dino_revision": self.grounding_dino_revision or None, "allow_pickle_weights": self.allow_pickle_weights,
             "object_detection_box_threshold": self.object_detection_box_threshold,
             "object_detection_text_threshold": self.object_detection_text_threshold,
             "clip_model_name": self.clip_model_name, "clip_pretrained": self.clip_pretrained,

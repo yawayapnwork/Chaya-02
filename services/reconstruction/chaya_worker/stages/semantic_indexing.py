@@ -121,7 +121,8 @@ class SemanticIndexing:
 
         device = "cuda" if ctx.toolchain.cuda().available else "cpu"
         detector = GroundingDinoDetector(s.grounding_dino_model, device=device, box_threshold=s.object_detection_box_threshold,
-                                         text_threshold=s.object_detection_text_threshold)
+                                         text_threshold=s.object_detection_text_threshold,
+                                         revision=s.grounding_dino_revision, allow_pickle=s.allow_pickle_weights)
         embedder = ClipEmbedder(s.clip_model_name, s.clip_pretrained, device=device)
 
         raw_objects: list[dict[str, Any]] = []

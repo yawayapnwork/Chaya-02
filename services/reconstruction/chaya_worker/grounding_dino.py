@@ -34,16 +34,22 @@ class GroundingDinoDetector:
     not this module's.
     """
 
-    def __init__(self, model_id: str, *, device: str = "cpu", box_threshold: float = 0.35, text_threshold: float = 0.25) -> None:
+    def __init__(self, model_id: str, *, device: str = "cpu", box_threshold: float = 0.35, text_threshold: float = 0.25,
+                 revision: str = "", allow_pickle: bool = False) -> None:
         from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
+
+        from .model_loading import load_pretrained, resolved_revision
 
         self.model_id = model_id
         self.fine_tuned = False  # stock checkpoint; see module docstring
         self.device = device
         self.box_threshold = box_threshold
         self.text_threshold = text_threshold
-        self.processor = AutoProcessor.from_pretrained(model_id)
-        self.model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id).to(device).eval()
+        # The processor is configuration and tokenizer files only (no weights), so it is pinned but not safetensors-gated.
+        self.processor = AutoProcessor.from_pretrained(model_id, **({"revision": revision} if revision else {}))
+        self.model = load_pretrained(AutoModelForZeroShotObjectDetection.from_pretrained, model_id, revision=revision,
+                                     allow_pickle=allow_pickle, what="Grounding DINO model").to(device).eval()
+        self.revision = resolved_revision(self.model) or revision or None
 
     def detect(self, image_rgb: np.ndarray, text_prompt: str) -> list[Detection]:
         import torch

@@ -340,8 +340,10 @@ public class PipelineService {
         if (r.stdout() != null) all.add(r.stdout());
         if (r.stderr() != null) all.add(r.stderr());
         boolean afterPrivacy = run.privacy() && run.stages().indexOf(JobStage.PRIVACY_PREPROCESS) < run.stages().indexOf(job.stage());
+        boolean beforePrivacy = run.privacy() && run.stages().contains(JobStage.PRIVACY_PREPROCESS)
+            && run.stages().indexOf(job.stage()) < run.stages().indexOf(JobStage.PRIVACY_PREPROCESS);
         for (ArtifactReport a : all) {
-            validateArtifact(a, prefix, afterPrivacy);
+            validateArtifact(a, prefix, afterPrivacy, beforePrivacy);
             if (verifyArtifacts) {
                 verifyStored(a);
             }
@@ -536,7 +538,10 @@ public class PipelineService {
     // Validation of what a worker claims to have produced
     // =========================================================================================
 
-    private void validateArtifact(ArtifactReport a, String prefix, boolean afterPrivacy) {
+    /** Content types a stage before privacy preprocessing may publish WITHOUT the PII flag: reports and logs. */
+    static final Set<String> NON_PII_BEFORE_PRIVACY_TYPES = Set.of("application/json", "text/plain");
+
+    private void validateArtifact(ArtifactReport a, String prefix, boolean afterPrivacy, boolean beforePrivacy) {
         if (a.key() == null || !a.key().startsWith(prefix) || a.key().length() == prefix.length()
             || a.key().contains("..") || a.key().contains("//")) {
             throw new ApiException(HttpStatus.CONFLICT, "ARTIFACT_INVALID", "artifact key must be a path under " + prefix);
@@ -548,6 +553,13 @@ public class PipelineService {
         boolean underPii = a.key().startsWith(prefix + "pii/");
         if (a.containsPii() != underPii) {
             throw new ApiException(HttpStatus.CONFLICT, "ARTIFACT_INVALID", "artifacts that may contain PII must live under " + prefix + "pii/ and only those");
+        }
+        // Defence in depth: the worker's own flag is not trusted for image-bearing output produced before faces,
+        // screens and documents were anonymised. Anything but a report or log must be flagged (and so withheld from
+        // later stages and purged), whatever the worker says.
+        if (beforePrivacy && !a.containsPii() && !NON_PII_BEFORE_PRIVACY_TYPES.contains(normalizedType(a.contentType()))) {
+            throw new ApiException(HttpStatus.CONFLICT, "PII_FLAG_REQUIRED",
+                "stages before privacy preprocessing must flag " + a.contentType() + " output as possibly containing PII");
         }
         if (a.containsPii() && afterPrivacy) {
             throw new ApiException(HttpStatus.CONFLICT, "PII_AFTER_PRIVACY", "stages after privacy preprocessing must not produce artifacts that contain PII");
@@ -986,6 +998,11 @@ public class PipelineService {
     private Optional<JobRow> latestJob(UUID runId, JobStage stage) {
         return jdbc.sql("SELECT id FROM processing_job WHERE run_id = :r AND stage = :s ORDER BY created_at DESC LIMIT 1")
             .param("r", runId).param("s", stage.name()).query(UUID.class).optional().map(this::lockJob);
+    }
+
+    static String normalizedType(String contentType) {
+        int semicolon = contentType.indexOf(';');
+        return (semicolon >= 0 ? contentType.substring(0, semicolon) : contentType).trim().toLowerCase(java.util.Locale.ROOT);
     }
 
     private static boolean blank(String s) {

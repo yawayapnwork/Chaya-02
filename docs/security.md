@@ -51,6 +51,7 @@ A refused venue access is audited (`venue.access`, outcome `DENIED`, in the *cal
 | Endpoint | admin | venue-manager | operator | viewer | public viewer | service |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|
 | `GET /api/v1/health`, `/version` | public | public | public | public | public | public |
+| `GET /actuator/prometheus` | HTTP Basic `prometheus` + `METRICS_SCRAPE_PASSWORD` only; closed when unset | | | | | |
 | `GET /api/v1/venues` | ✔ | ✔ (own) | ✔ (own) | ✔ (own) | ✘ | ✘ |
 | `POST /api/v1/venues` | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ |
 | `GET /venues/{id}` | ✔ | ✔ | ✔ | ✔ | ✔ (its venue) | ✘ |
@@ -87,6 +88,19 @@ The dashboard (`/ops` in the web app, `GET /api/v1/venues/{id}/ops/*`) is read-o
 - Venue managers additionally see search analytics and **their own venue's** audit trail. This is narrower than `GET /audit-log` (organization-wide, admin only), which is unchanged. Audit metadata is never returned.
 - Admins additionally see refused `venue.access` attempts that targeted this venue (those rows have no `venue_id`; they are matched on `metadata.attemptedResourceId`).
 
+## Rate limits
+`RateLimitFilter` runs after authentication, using fixed one-minute windows (`chaya.rate-limit.*`). Each window
+allows 10 `POST /public/viewer-token` per client address, 120 other anonymous requests per address, 1200 requests per
+authenticated user or viewer session, and 60 searches per caller. Worker service accounts are exempt. A spent budget
+returns `429` with `Retry-After` and code `RATE_LIMITED`. The counters are in-process, which is correct for one API
+instance. Behind a reverse proxy, configure `server.forward-headers-strategy` so the key is the client, not the proxy.
+
+## Dependency outages
+If a dependency is down, the API answers `503` with a code: `DATABASE_UNAVAILABLE`, `STORAGE_UNAVAILABLE`, or
+`AUTHENTICATION_UNAVAILABLE` (Keycloak's signing keys cannot be fetched, so no token can be verified). It never
+answers `401`, which would wrongly tell a user their valid token is bad. `GET /api/v1/health` names the failing
+component. See docs/security-hardening.md, "Failure testing".
+
 ## Public viewer links
 Purpose: let anyone with a link view one venue without an account, with a credential that is narrow, short-lived, and revocable.
 
@@ -97,7 +111,7 @@ Purpose: let anyone with a link view one venue without an account, with a creden
 
 What it can do: `GET` the venue and its POIs. What it cannot do: reach other venues (404), list venues, write anything, create links, read the audit log, or call worker endpoints — those endpoints do not list `PUBLIC_VIEWER`, and the tests assert each of them.
 
-No JWT is signed by the backend: the viewer token is an opaque, server-side-checked credential, so there is no signing key to protect. Not yet built (noted for later): rate limiting on `viewer-token`, and access counters per link.
+No JWT is signed by the backend: the viewer token is an opaque, server-side-checked credential, so there is no signing key to protect. Link exchange is rate limited per client address (see Rate limits). Not yet built: access counters per link. The viewer page sends `Referrer-Policy: no-referrer`, so the `?link=` secret never leaves the origin in a Referer header. It does remain in browser history.
 
 ## Service-to-service authentication
 Workers authenticate to Keycloak with the OAuth2 client-credentials grant as client `chaya-worker` (secret from `CHAYA_WORKER_CLIENT_SECRET`, never committed). Its service account has the `service` realm role and gets the `chaya-api` audience. Workers call `/api/v1/internal/**` with `Authorization: Bearer <token>`.

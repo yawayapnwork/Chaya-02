@@ -23,6 +23,7 @@ public class ClamAvScanner implements MalwareScanner {
     private static final int CHUNK = 64 * 1024;
     private static final int CONNECT_TIMEOUT_MS = 3_000;
     private static final int READ_TIMEOUT_MS = 120_000;
+    private static final int MAX_REPLY_BYTES = 4096;
 
     private final ClamAvProperties props;
 
@@ -55,6 +56,23 @@ public class ClamAvScanner implements MalwareScanner {
         }
     }
 
+    /** clamd's PING command; PONG means the daemon is up and has loaded its signatures. */
+    @Override
+    public String health() {
+        if (!props.enabled()) {
+            return DISABLED;
+        }
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress(props.host(), props.port()), CONNECT_TIMEOUT_MS);
+            socket.setSoTimeout(CONNECT_TIMEOUT_MS);
+            socket.getOutputStream().write("zPING\0".getBytes(StandardCharsets.US_ASCII));
+            socket.getOutputStream().flush();
+            return "PONG".equals(readResponse(socket.getInputStream()).trim()) ? "UP" : "DOWN";
+        } catch (IOException e) {
+            return "DOWN";
+        }
+    }
+
     static ScanResult parse(String response) {
         String r = response.trim();
         if (r.endsWith("OK")) {
@@ -71,6 +89,9 @@ public class ClamAvScanner implements MalwareScanner {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         int b;
         while ((b = in.read()) > 0) { // clamd terminates the reply with NUL (zINSTREAM) or EOF
+            if (bytes.size() >= MAX_REPLY_BYTES) {
+                throw new IOException("clamd reply exceeds " + MAX_REPLY_BYTES + " bytes");
+            }
             bytes.write(b);
         }
         return bytes.toString(StandardCharsets.UTF_8);

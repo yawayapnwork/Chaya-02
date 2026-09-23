@@ -17,6 +17,12 @@ public class CorsConfig {
 
     @Bean
     CorsConfigurationSource corsConfigurationSource(CorsProperties props) {
+        for (String origin : props.allowedOrigins()) {
+            // Explicit origins only: a wildcard would let any site drive a signed-in user's browser against the API.
+            if (origin.contains("*")) {
+                throw new IllegalStateException("CHAYA_ALLOWED_ORIGINS must list explicit origins; '" + origin + "' is a wildcard");
+            }
+        }
         CorsConfiguration c = new CorsConfiguration();
         c.setAllowedOrigins(props.allowedOrigins());
         c.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));

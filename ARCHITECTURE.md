@@ -30,7 +30,7 @@ Boundaries are hard: clients never talk to Postgres, Redis, or MinIO directly ex
 Next.js + TypeScript + Tailwind. Three.js with GaussianSplats3D renders `.ksplat` assets; CSS2DRenderer for object labels/annotations. Navigation queries run against a Recast navmesh (WASM) loaded in-browser, with the backend as the authority on which navmesh version is current. Auth via OIDC authorization code + PKCE against Keycloak; access tokens are held in memory, refresh handled by the OIDC client (see §7). The frontend is a separately deployable container and talks only to `/api/v1`.
 
 ## 3. Backend (`services/api`)
-Spring Boot (Java), single deployable monolith organised by module packages: `venue`, `capture`, `job`, `asset`, `semantic`, `navigation`, `ar`, `dashboard`, `audit`, `identity`. Spring Security as OAuth2 Resource Server validating Keycloak JWTs. Responsibilities: authorization (role + venue scope), metadata persistence, job lifecycle, presigned URL issuance, semantic search, path-data API, audit logging. It never runs reconstruction. Schema migrations via Flyway. Health via Spring Actuator with real dependency indicators (DB, Redis, MinIO).
+Spring Boot (Java), single deployable monolith organised by module packages: `venue`, `capture`, `job`, `asset`, `semantic`, `navigation`, `ar`, `dashboard`, `audit`, `identity`. Spring Security as OAuth2 Resource Server validating Keycloak JWTs. Responsibilities: authorization (role + venue scope), metadata persistence, job lifecycle, presigned URL issuance, semantic search, path-data API, audit logging. It never runs reconstruction. Schema migrations via Flyway. Health (`/api/v1/health`) checks the real dependencies: database, MinIO, Keycloak JWKS, ClamAV, and processing-queue progress (docs/security-hardening.md). Metrics, logs and error tracking: docs/monitoring.md (ADR 0003).
 
 > The pipeline as built (control plane, stage contract, privacy boundary, time box) is documented in [docs/pipeline.md](docs/pipeline.md); it supersedes the stage table below.
 
@@ -89,7 +89,7 @@ Android: WebXR in the Next.js app. iOS: native Swift/ARKit app (WebXR unsupporte
 Job states: `QUEUED → CLAIMED → RUNNING → SUCCEEDED | FAILED | CANCELLED`, plus `RETRY_WAIT` (failed with attempts remaining). Only `SUCCEEDED` of the final stage sets `reconstruction.is_complete = true`; a reconstruction with any failed/absent stage stays `PARTIAL` or `FAILED` and is labelled so in API and UI.
 
 1. Client requests a reconstruction → backend validates capture completeness, creates `reconstruction` + first `processing_job` (`QUEUED`), returns `202` with a job URL.
-2. Worker polls `POST /api/v1/worker/jobs:claim` (lease with expiry, stored in DB; Redis is used for wake-up signalling/rate limiting only, DB is the source of truth).
+2. Worker polls `POST /api/v1/worker/jobs:claim` (lease with expiry, stored in DB; the DB is the source of truth. Redis is provisioned but **not used yet**: rate limiting is in-process (single API instance). Redis becomes the shared store if the API is scaled out.)
 3. Worker heartbeats extend the lease; expired leases return the job to `QUEUED` (attempt count incremented, capped).
 4. Worker writes outputs to MinIO, then reports completion with output keys + checksums; backend verifies objects exist, records `scene_asset`s, enqueues the next stage.
 5. Every transition inserts a `job_event` and, for user-visible ones, an `audit_event`.

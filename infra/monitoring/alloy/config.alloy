@@ -1,0 +1,49 @@
+// Grafana Alloy: ships logs to Loki (docs/monitoring.md).
+//  * containers of this Docker host (worker, Keycloak, MinIO, Postgres, ClamAV) through the Docker API;
+//  * the API's log file when it runs on the host with LOGGING_FILE_NAME=<CHAYA_LOG_DIR>/chaya-api.log
+//    (and LOGGING_STRUCTURED_FORMAT_CONSOLE / LOGGING_STRUCTURED_FORMAT_FILE=ecs for JSON lines).
+
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "compose_project"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+}
+
+loki.source.docker "containers" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.containers.output
+  forward_to = [loki.write.default.receiver]
+}
+
+local.file_match "api" {
+  path_targets = [{"__path__" = "/var/log/chaya/*.log", "service" = "chaya-api"}]
+}
+
+loki.source.file "api" {
+  targets    = local.file_match.api.targets
+  forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

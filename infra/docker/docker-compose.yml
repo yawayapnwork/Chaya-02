@@ -1,30 +1,49 @@
 # Local development infrastructure. Run from the repo root:
 #   docker compose --env-file .env -f infra/docker/docker-compose.yml up -d
 # All credentials come from .env (see .env.example); startup fails if one is missing.
+#
+# Hardening (docs/security-hardening.md):
+#   * every published port is bound to 127.0.0.1 -- nothing is reachable from the network by default;
+#   * no-new-privileges on every container; the worker additionally drops all Linux capabilities;
+#   * MinIO root credentials are used only by the one-shot minio-init; the API, worker and backups each have their own
+#     least-privilege account; buckets are private;
+#   * Postgres: the API connects as a non-superuser app role (infra/docker/postgres/initdb).
+# Image tags that float (minio, mc) should be pinned by digest for production; see the hardening doc.
 name: chaya
+
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
 
 services:
   postgres:
+    <<: *hardening
     image: pgvector/pgvector:pg17
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}           # bootstrap superuser: init and backups only
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_APP_USER: ${POSTGRES_APP_USER:?set POSTGRES_APP_USER}  # what the API uses
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?set POSTGRES_APP_PASSWORD}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./postgres/initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 3s
       retries: 10
 
+  # Not used by any service today (ARCHITECTURE.md reserves it for shared rate limiting / wake-up signalling if the
+  # API is ever scaled out). Kept password-protected and bound to localhost; nothing connects to it.
   redis:
+    <<: *hardening
     image: redis:7-alpine
-    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD}"]
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD}", "--protected-mode", "yes"]
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -36,14 +55,15 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
 
   minio:
+    <<: *hardening
     image: quay.io/minio/minio:latest
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
-      MINIO_ROOT_USER: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY}
-      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:?set S3_SECRET_KEY}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
     ports:
-      - "${MINIO_API_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+      - "127.0.0.1:${MINIO_API_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - minio-data:/data
     healthcheck:
@@ -52,14 +72,39 @@ services:
       timeout: 3s
       retries: 10
 
+  # Creates the private buckets and the per-client MinIO accounts, then exits (infra/docker/minio/init.sh).
+  minio-init:
+    <<: *hardening
+    image: quay.io/minio/mc:latest
+    entrypoint: ["/bin/sh", "/init/init.sh"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+      S3_BUCKET_RAW: ${S3_BUCKET_RAW:-chaya-raw}
+      S3_BUCKET_DERIVED: ${S3_BUCKET_DERIVED:-chaya-derived}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY}
+      S3_WORKER_ACCESS_KEY: ${S3_WORKER_ACCESS_KEY:?set S3_WORKER_ACCESS_KEY}
+      S3_WORKER_SECRET_KEY: ${S3_WORKER_SECRET_KEY:?set S3_WORKER_SECRET_KEY}
+      S3_BACKUP_ACCESS_KEY: ${S3_BACKUP_ACCESS_KEY:?set S3_BACKUP_ACCESS_KEY}
+      S3_BACKUP_SECRET_KEY: ${S3_BACKUP_SECRET_KEY:?set S3_BACKUP_SECRET_KEY}
+    volumes:
+      - ./minio/init.sh:/init/init.sh:ro
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
+
   clamav:
+    <<: *hardening
     image: clamav/clamav:1.4
     environment:
-      # Videos are large: raise clamd's stream limits (defaults are 25 MB). 4000M is clamd's maximum.
+      # Videos are large: raise clamd's stream limits (defaults are 25 MB). 4000M is clamd's maximum, and the API's
+      # max-video-bytes is set to the same 4000 MiB so every accepted size can actually be scanned.
       CLAMD_CONF_StreamMaxLength: 4000M
       CLAMD_CONF_MaxFileSize: 4000M
     ports:
-      - "${CLAMAV_PORT:-3310}:3310"
+      - "127.0.0.1:${CLAMAV_PORT:-3310}:3310"
     volumes:
       - clamav-data:/var/lib/clamav
     healthcheck:
@@ -72,30 +117,37 @@ services:
   # The reconstruction worker. Not started by default: `docker compose --profile pipeline up`.
   # It needs the API running (on the host, port ${API_PORT}) and reaches MinIO and Keycloak over the compose network.
   reconstruction-worker:
+    <<: *hardening
     profiles: ["pipeline"]
     build:
       context: ../../services/reconstruction
+    cap_drop: ["ALL"]
     environment:
       CHAYA_API_URL: http://host.docker.internal:${API_PORT:-8080}
       CHAYA_TOKEN_URL: http://keycloak:8080/realms/chaya/protocol/openid-connect/token
       CHAYA_CLIENT_ID: chaya-worker
       CHAYA_CLIENT_SECRET: ${CHAYA_WORKER_CLIENT_SECRET:?set CHAYA_WORKER_CLIENT_SECRET}
       S3_ENDPOINT: http://minio:9000
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY}
+      # The worker's own account: raw read-only, derived read/write, no delete (minio-init).
+      S3_ACCESS_KEY: ${S3_WORKER_ACCESS_KEY:?set S3_WORKER_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_WORKER_SECRET_KEY:?set S3_WORKER_SECRET_KEY}
       WORKER_ID: compose-worker
+      GROUNDING_DINO_REVISION: ${GROUNDING_DINO_REVISION:-}
+      SEMANTIC_SEGMENTATION_REVISION: ${SEMANTIC_SEGMENTATION_REVISION:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
-      minio:
-        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
       keycloak:
         condition: service_healthy
     restart: unless-stopped
 
   keycloak:
+    <<: *hardening
     image: quay.io/keycloak/keycloak:26.0
-    # Development mode with embedded storage. Production needs `start` and an external database.
+    # Development mode with embedded storage. Production needs `start`, HTTPS, strict hostname and an external
+    # database: see docs/security-hardening.md, "Keycloak".
     command: ["start-dev", "--import-realm"]
     environment:
       # Makes the token issuer stable (http://localhost:<port>/realms/chaya) whatever host name is used.
@@ -106,7 +158,7 @@ services:
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD}
       KC_HEALTH_ENABLED: "true"
     ports:
-      - "${KEYCLOAK_PORT:-8081}:8080"
+      - "127.0.0.1:${KEYCLOAK_PORT:-8081}:8080"
     volumes:
       - keycloak-data:/opt/keycloak/data
       - ../keycloak/chaya-realm.json:/opt/keycloak/data/import/chaya-realm.json:ro

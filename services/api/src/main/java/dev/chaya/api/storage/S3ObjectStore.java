@@ -116,7 +116,9 @@ public class S3ObjectStore implements ObjectStore {
     @Override
     public boolean ping() {
         try {
-            s3.headBucket(HeadBucketRequest.builder().bucket(bucket).build());
+            // Bounded: an unreachable endpoint must read as DOWN quickly, not after the SDK's default retries.
+            s3.headBucket(HeadBucketRequest.builder().bucket(bucket)
+                .overrideConfiguration(o -> o.apiCallTimeout(java.time.Duration.ofSeconds(3))).build());
             return true;
         } catch (NoSuchBucketException e) {
             return true; // the service answered; the bucket is created on first upload

@@ -1,0 +1,63 @@
+# Alert rules. Metric names are Micrometer's Prometheus names for dev.chaya.api.metrics.PlatformMetrics and Spring's
+# http.server.requests. Thresholds are starting points, not tuned against production traffic.
+groups:
+  - name: chaya-api
+    rules:
+      - alert: ChayaApiDown
+        expr: up{job="chaya-api"} == 0
+        for: 2m
+        annotations:
+          summary: "Chaya API is not being scraped (down, or the scrape credential is wrong)"
+
+      - alert: ChayaApiHighErrorRate
+        expr: |
+          sum(rate(http_server_requests_seconds_count{application="chaya-api", status=~"5.."}[5m]))
+            / clamp_min(sum(rate(http_server_requests_seconds_count{application="chaya-api"}[5m])), 1e-9) > 0.05
+        for: 10m
+        annotations:
+          summary: "More than 5% of API requests fail with 5xx (503 = a dependency is down; see /api/v1/health)"
+
+      - alert: ChayaApiSlow
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{application="chaya-api", uri!~".*/stream"}[5m]))) > 2
+        for: 15m
+        annotations:
+          summary: "API p95 latency above 2 s (SSE streams excluded)"
+
+      - alert: ChayaRateLimiting
+        expr: sum(rate(http_server_requests_seconds_count{application="chaya-api", status="429"}[5m])) > 1
+        for: 10m
+        annotations:
+          summary: "Clients are being rate limited steadily (abuse, or budgets too low)"
+
+  - name: chaya-pipeline
+    rules:
+      - alert: ChayaMetricsRefreshFailing
+        expr: chaya_metrics_refresh_ok == 0
+        for: 5m
+        annotations:
+          summary: "Pipeline/storage gauges cannot be refreshed (database unreachable?); those panels are empty, not stale"
+
+      - alert: ChayaQueueStalled
+        expr: chaya_jobs_queued_oldest_age_seconds > 900 and on() (sum(chaya_jobs{status="RUNNING"}) or vector(0)) == 0
+        for: 5m
+        annotations:
+          summary: "Jobs have waited over 15 min and nothing is running: no reconstruction worker is claiming work"
+
+      - alert: ChayaStageFailureRateHigh
+        expr: |
+          sum by (stage) (chaya_stage_runs_24h{outcome="FAILED"})
+            / sum by (stage) (chaya_stage_runs_24h) > 0.5
+          and sum by (stage) (chaya_stage_runs_24h) >= 4
+        for: 30m
+        annotations:
+          summary: "Over half of {{ $labels.stage }} attempts failed in the last 24 h"
+
+      - alert: ChayaReconstructionSuccessLow
+        expr: |
+          (sum(chaya_pipeline_runs_finished_24h{status="SUCCEEDED"}) or vector(0))
+            / sum(chaya_pipeline_runs_finished_24h) < 0.5
+          and sum(chaya_pipeline_runs_finished_24h) >= 4
+        for: 1h
+        annotations:
+          summary: "Fewer than half of the reconstruction runs finished in the last 24 h succeeded"

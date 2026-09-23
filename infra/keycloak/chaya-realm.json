@@ -5,6 +5,19 @@
   "registrationAllowed": false,
   "loginWithEmailAllowed": true,
   "bruteForceProtected": true,
+  "failureFactor": 10,
+  "waitIncrementSeconds": 60,
+  "maxFailureWaitSeconds": 900,
+  "maxDeltaTimeSeconds": 43200,
+  "minimumQuickLoginWaitSeconds": 60,
+  "quickLoginCheckMilliSeconds": 1000,
+  "permanentLockout": false,
+  "passwordPolicy": "length(12) and notUsername and notEmail and passwordHistory(3)",
+  "eventsEnabled": true,
+  "eventsExpiration": 2592000,
+  "enabledEventTypes": ["LOGIN", "LOGIN_ERROR", "LOGOUT", "LOGOUT_ERROR", "CODE_TO_TOKEN_ERROR", "REFRESH_TOKEN_ERROR", "CLIENT_LOGIN", "CLIENT_LOGIN_ERROR", "UPDATE_PASSWORD", "RESET_PASSWORD"],
+  "adminEventsEnabled": true,
+  "adminEventsDetailsEnabled": false,
   "accessTokenLifespan": 300,
   "ssoSessionIdleTimeout": 1800,
   "ssoSessionMaxLifespan": 36000,
@@ -153,13 +166,14 @@
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,
       "redirectUris": [
-        "http://localhost:3000/*"
+        "http://localhost:3000/auth/callback"
       ],
       "webOrigins": [
         "http://localhost:3000"
       ],
       "attributes": {
-        "pkce.code.challenge.method": "S256"
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:3000"
       },
       "defaultClientScopes": [
         "basic",
