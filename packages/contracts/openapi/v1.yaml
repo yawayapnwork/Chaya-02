@@ -76,6 +76,24 @@ paths:
     get: { summary: "Durable, poll-friendly HUD status: tracking, coverage, uncovered zones, planned path, quality summary, reshoot recommendations", responses: { "200": { description: HUD status } } }
   /api/v1/venues/{venueId}/captures/{captureId}/hud/stream:
     get: { summary: The same HUD status, pushed over Server-Sent Events as it changes, responses: { "200": { description: "text/event-stream of HUD status" } } }
+  /api/v1/venues/{venueId}/ops/access:
+    get: { summary: "Operations dashboard: which sections the caller may read and whether they may retry/cancel processing. See docs/operations-dashboard.md", responses: { "200": { description: Access } } }
+  /api/v1/venues/{venueId}/ops/overview:
+    get: { summary: "Venue overview, per-floor current finalized version, latest reconstruction (quality FINAL|PARTIAL|null) and freshness timestamps/ages (all roles)", responses: { "200": { description: Overview } } }
+  /api/v1/venues/{venueId}/ops/coverage:
+    get: { summary: "Per-floor coverage gaps; measured coverage recomputed from the latest capture with a HUD outline (admin, venue-manager, operator)", responses: { "200": { description: Coverage }, "403": { description: OPS_SECTION_FORBIDDEN } } }
+  /api/v1/venues/{venueId}/ops/jobs:
+    get: { summary: "Job counts per status and recent jobs with retry/cancel availability (query: status, limit<=200)", responses: { "200": { description: Jobs }, "400": { description: INVALID_JOB_STATUS }, "403": { description: OPS_SECTION_FORBIDDEN } } }
+  /api/v1/venues/{venueId}/ops/failures:
+    get: { summary: "Currently failed runs, stage failure history and counts by code (query: days<=365)", responses: { "200": { description: Failures }, "403": { description: OPS_SECTION_FORBIDDEN } } }
+  /api/v1/venues/{venueId}/ops/storage:
+    get: { summary: "Recorded raw media and artifact sizes, measured worker time per stage, cost (available=false when untracked)", responses: { "200": { description: Storage }, "403": { description: OPS_SECTION_FORBIDDEN } } }
+  /api/v1/venues/{venueId}/ops/search-analytics:
+    get: { summary: "Logged search queries: count, zero-result count, latency avg/p95, top and zero-result terms; POI counts (admin, venue-manager; query: days)", responses: { "200": { description: Search analytics }, "403": { description: OPS_SECTION_FORBIDDEN } } }
+  /api/v1/venues/{venueId}/ops/rescans:
+    get: { summary: "Region re-scan history with run outcome and resulting version (admin, venue-manager, operator)", responses: { "200": { description: Re-scans }, "403": { description: OPS_SECTION_FORBIDDEN } } }
+  /api/v1/venues/{venueId}/ops/audit:
+    get: { summary: "This venue's audit trail, newest first (admin, venue-manager; query: limit<=500)", responses: { "200": { description: Audit entries }, "403": { description: OPS_SECTION_FORBIDDEN } } }
   /api/v1/internal/jobs/claim:
     post: { summary: "Worker: claim the oldest queued job of the given stage(s); returns a work order (inputs, output prefix, deadline). Service role only.", responses: { "200": { description: Work order }, "204": { description: Nothing queued } } }
   /api/v1/internal/jobs/{jobId}/heartbeat:

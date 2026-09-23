@@ -8,6 +8,7 @@ export default function Home() {
       <nav className="mt-6 flex gap-6">
         <Link className="underline" href="/capture">Capture</Link>
         <Link className="underline" href="/viewer">Viewer</Link>
+        <Link className="underline" href="/ops">Operations</Link>
         <Link className="underline" href="/status">System status</Link>
       </nav>
     </main>

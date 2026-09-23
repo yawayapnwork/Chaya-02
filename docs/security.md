@@ -73,8 +73,19 @@ A refused venue access is audited (`venue.access`, outcome `DENIED`, in the *cal
 | `POST /api/v1/internal/jobs/claim`, `/{id}/heartbeat`, `/{id}/report`, `/{id}/complete`, `/{id}/fail` | ✘ | ✘ | ✘ | ✘ | ✘ | ✔ |
 | `POST .../captures/{c}/processing[/retry\|/cancel]`, `GET .../processing` | ✔ | ✔ | ✔ | ✘ | ✘ | ✘ |
 | `POST .../processing` with `privacyEnabled:false` | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ |
+| `GET /venues/{id}/ops/access`, `/ops/overview` (venue overview, current version, freshness) | ✔ | ✔ | ✔ | ✔ | ✘ | ✘ |
+| `GET /venues/{id}/ops/coverage`, `/ops/jobs`, `/ops/failures`, `/ops/storage`, `/ops/rescans` | ✔ | ✔ | ✔ | ✘ | ✘ | ✘ |
+| `GET /venues/{id}/ops/search-analytics`, `/ops/audit` | ✔ | ✔ | ✘ | ✘ | ✘ | ✘ |
 
 "(own)" = restricted to venues in the `venue_id` claim. Everything not listed is denied.
+
+## Operations dashboard
+The dashboard (`/ops` in the web app, `GET /api/v1/venues/{id}/ops/*`) is read-only; its retry/cancel buttons call the existing processing endpoints, which enforce their own rules. Section access is one table, `dev.chaya.api.ops.OpsSection`, used both to enforce (403 `OPS_SECTION_FORBIDDEN`, checked before the venue) and to answer `GET .../ops/access`, so the UI never renders a section the server would refuse. Venue scope is `TenantGuard.requireVenue` as everywhere else.
+
+- Viewers see venue state only (overview, current version, freshness) -- no capture, processing or audit data.
+- Operators additionally see capture/processing data (coverage, jobs, failures, storage, re-scans), matching the capture and job endpoints they may call.
+- Venue managers additionally see search analytics and **their own venue's** audit trail. This is narrower than `GET /audit-log` (organization-wide, admin only), which is unchanged. Audit metadata is never returned.
+- Admins additionally see refused `venue.access` attempts that targeted this venue (those rows have no `venue_id`; they are matched on `metadata.attemptedResourceId`).
 
 ## Public viewer links
 Purpose: let anyone with a link view one venue without an account, with a credential that is narrow, short-lived, and revocable.
