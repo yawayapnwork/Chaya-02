@@ -63,6 +63,8 @@ A refused venue access is audited (`venue.access`, outcome `DENIED`, in the *cal
 | `POST .../captures/{c}/route-plan` (stateless planner; capture must be CREATED or UPLOADING) | ✔ | ✔ | ✔ | ✘ | ✘ | ✘ |
 | `GET /venues/{id}/floors` | ✔ | ✔ | ✔ | ✔ | ✔ | ✘ |
 | `POST /venues/{id}/floors` | ✔ | ✔ | ✘ | ✘ | ✘ | ✘ |
+| `GET .../floors/{f}/anchors[/{a}]`, `POST .../anchors/relocalize` | ✔ | ✔ | ✔ | ✔ | ✔ | ✘ |
+| `POST/PUT/DELETE .../floors/{f}/anchors`, `POST .../anchors/{a}/calibrate` | ✔ | ✔ | ✔ | ✘ | ✘ | ✘ |
 | `POST/GET/DELETE /venues/{id}/public-links` | ✔ | ✔ | ✘ | ✘ | ✘ | ✘ |
 | `POST /api/v1/public/viewer-token` | public (link secret is the credential) | | | | | |
 | `GET /api/v1/audit-log` (own org) | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ |
