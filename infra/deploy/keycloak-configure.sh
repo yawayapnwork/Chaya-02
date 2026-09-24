@@ -7,7 +7,11 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 ENV_FILE=${ENV_FILE:-./.env}
-set -a; . "$ENV_FILE"; set +a
+set -a
+# The host's own .env, chosen at run time.
+# shellcheck disable=SC1090
+. "$ENV_FILE"
+set +a
 COMPOSE="docker compose --env-file $ENV_FILE -f docker-compose.yml"
 APP="https://${CHAYA_APP_DOMAIN:?}"
 

@@ -24,10 +24,15 @@ on:
       version:
         description: "Image tag to deploy (sha-<short> or a release version like 1.4.2)"
         required: true
+      allow_unverified:
+        description: "Emergency only: deploy even if CI failed or is missing for this commit (logged as a warning)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
   packages: read
+  actions: read        # the CI gate reads workflow runs for the commit being deployed
 
 concurrency:
   # Never two deploys to the same environment at once; a queued deploy waits instead of cancelling a running one.
@@ -54,10 +59,38 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "image_owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
 
+      - name: Resolve the commit the images were built from
+        id: commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          if [ -n "$HEAD_SHA" ]; then sha="$HEAD_SHA"
+          else
+            case "$VERSION" in sha-*) ref="${VERSION#sha-}" ;; *) ref="v$VERSION" ;; esac
+            sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$ref" --jq .sha) || { echo "::error::no commit or tag for $VERSION"; exit 1; }
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "deploying images and configuration of commit $sha"
+
+      # Deploy configuration (compose file, Caddyfile, scripts) from the SAME commit as the images, also for a manual
+      # deploy or rollback: an old image with a newer compose file (new variables, new services) is not a tested pair.
       - uses: actions/checkout@v4
         with:
-          # Deploy configuration from the same commit as the images when deploying a sha; else from the default branch.
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ steps.commit.outputs.sha }}
+
+      - name: CI passed for this commit (tests, smoke, security, images)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ALLOW_UNVERIFIED: ${{ github.event.inputs.allow_unverified }}
+        run: |
+          if bash scripts/ci/require-green.sh "${{ steps.commit.outputs.sha }}"; then exit 0; fi
+          if [ "$ALLOW_UNVERIFIED" = true ]; then
+            echo "::warning::deploying ${{ steps.v.outputs.version }} WITHOUT passing CI (allow_unverified, by ${{ github.actor }})"
+            exit 0
+          fi
+          exit 1
 
       - name: All four images exist for this version
         env:

@@ -58,13 +58,20 @@ REDIS_PORT=56379
 CLAMAV_PORT=53310
 MINIO_CONSOLE_PORT=59001
 EOF
-set -a; . "$ENV_FILE"; set +a
+set -a
+# The host's own .env, chosen at run time.
+# shellcheck disable=SC1090
+. "$ENV_FILE"
+set +a
 
 # Git Bash on Windows: the docker CLI needs a native path for the env file.
 ENV_FILE_DOCKER=$(command -v cygpath > /dev/null && cygpath -w "$ENV_FILE" || echo "$ENV_FILE")
 COMPOSE="docker compose -p chaya-smoke --env-file $ENV_FILE_DOCKER -f infra/docker/docker-compose.yml -f infra/ci/docker-compose.smoke.yml"
 cleanup() {
   status=$?
+  # The compose file paths are relative to the repository root, and the test step below changes directory: without
+  # this, a failure there would print no API log and a successful run would leave the whole stack running.
+  cd "$ROOT"
   if [ $status -ne 0 ]; then
     echo "---- API log (last 200 lines) ----"; $COMPOSE logs --no-color --tail 200 api || true
   fi

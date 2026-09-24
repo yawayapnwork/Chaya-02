@@ -36,11 +36,29 @@ How Chaya 02 is built, shipped, started, checked, rolled back, backed up and rec
 | `security` | PRs, main, weekly | npm audit, pip-audit, OWASP Dependency-Check (CVSS ≥ 7 fails), and license reports (THIRD_PARTY_LICENSES.md) |
 | `docker` | PRs (build and scan only), main, and `v*.*.*` tags (build, scan, push) | builds all four images; checks they run as non-root and declare a HEALTHCHECK; Trivy fails on fixable HIGH/CRITICAL findings; pushes to GHCR with an SBOM and provenance attestation |
 | `reconstruction-smoke` | PRs touching the pipeline, main, nightly | see [Smoke tests](#smoke-tests) |
-| `deploy` | after `docker` succeeds on main (staging), or manually (production, rollback) | the images exist; the deploy with automatic rollback; public health checks from outside |
+| `deploy` | after `docker` succeeds on main (staging), or manually (production, rollback) | CI passed for the images' commit ([deploy gate](#deploy-gate)); the images exist; the deploy with automatic rollback; public health checks from outside |
 
 **Branch protection (GitHub settings, not in the repository).** Require `frontend`, `backend`, `python`,
 `docker`, `reconstruction-smoke` and `security` on `main`. Because these workflows are path-filtered, mark them as
 required only together with a branch ruleset that treats skipped workflows as passing, or drop the path filters.
+
+### Deploy gate
+
+`docker` does not wait for the test workflows. Without a gate, an image whose tests failed, or were still running,
+would reach staging on every push to `main`. So before anything is pulled, `deploy` resolves the commit the images
+were built from, and runs `scripts/ci/require-green.sh` against it:
+
+- For each of `frontend`, `backend`, `python`, `security`, `reconstruction-smoke` and `docker`, the latest run for
+  **that exact commit** must have succeeded.
+- Runs still in progress are waited for, up to 45 minutes. The backend suite often finishes after the images.
+- A workflow with **no** run for the commit is reported and allowed. The test workflows are path-filtered, so a
+  commit that touched only `apps/web` has no `backend` run.
+- Emergency override: the manual run's `allow_unverified` input. It deploys anyway, and a warning naming the actor is
+  left in the run log. Production deploys still need the Environment reviewer.
+
+The gate also fixes which configuration is deployed. `deploy` checks out the **images' commit**, not the branch
+head, and bundles that commit's compose file, Caddyfile and scripts. So a rollback to `sha-abc1234` runs that
+release's own configuration, not a newer compose file it was never tested with.
 
 **Images.** `ghcr.io/<owner>/chaya-{api,web,worker,vision}`. Tags:
 
@@ -230,12 +248,14 @@ CHAYA_COMPOSE_FILE=/srv/chaya/docker-compose.yml COMPOSE_NETWORK=chaya_internal 
 Schedule it daily with cron or a systemd timer, and alert if it fails.
 
 - **PostgreSQL:** dated `pg_dump -Fc` dumps with SHA-256 files. Every deploy also takes one.
-- **MinIO:** a mirror through the read-only account. PII staging objects are excluded, and deletions propagate.
+- **MinIO:** an additive mirror through the read-only account. Deletions in the live buckets do **not** propagate,
+  so an accidental or malicious delete cannot also destroy the backup. PII staging objects are never copied, and
+  rejected uploads are pruned from the mirror using the database (docs/backup-recovery.md).
 - **Verification:** `verify.sh` restores into a scratch database and checks a sample of objects against the
   checksums the database recorded.
 - **Not covered by these scripts:**
-  - Keycloak's database. It is in the same Postgres server, so dump it too:
-    `pg_dump -U postgres -d keycloak -Fc > keycloak-<ts>.dump`.
+  - Keycloak's database (users, credentials, sessions). It is in the same Postgres server, so dump it too:
+    `docker compose --env-file .env -f docker-compose.yml exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" -d keycloak -Fc' > /srv/chaya-backups/keycloak-$(date -u +%Y%m%dT%H%M%SZ).dump`.
   - Caddy's certificate volume. It is re-issued automatically.
   - Off-site copies. `BACKUP_DIR` is local: replicate it to separate storage with its own retention.
 
@@ -278,5 +298,30 @@ Its health signal is the same liveness file (`python -m chaya_worker.liveness`).
 
 ## 11. What has and has not been verified
 
-See the summary at the end of the change that introduced this document. Anything listed there as unverified
-(for example a real deploy to a host with public DNS) must be exercised on staging before production relies on it.
+Checked on 2026-09-24, on a Windows workstation with Docker Desktop. The same commands run on Linux in CI.
+
+**Verified by running it:**
+
+| What | Result |
+|---|---|
+| `backend` steps | `mvn verify`: 271 tests, 0 failures, against real PostgreSQL and MinIO. The 4 skipped are the opt-in live ClamAV and Keycloak suites. |
+| `frontend` steps | lint, 61 unit tests, typecheck, and a production build with **no** `CHAYA_PUBLIC_*` / `NEXT_PUBLIC_*` values set. The Playwright e2e job was not run locally. |
+| `python` steps | ruff clean on both services. Worker: 116 passed, 12 skipped (GPU and live-stack suites). Vision: 7 passed. |
+| Worker smoke | 11 passed. The capture → claim loop → CPU stages → ARTIFACT_GENERATION chain runs, and each of the 9 excluded stages keeps its contract (structured failure, no artifacts). |
+| Stack smoke (`scripts/ci/stack-smoke.sh`) | Passed against the real API image, Postgres, MinIO, ClamAV (real signatures) and Keycloak. The upload was scanned and accepted, the CPU stages ran, and the run stopped with `DEPENDENCY_UNAVAILABLE` at `POSE_ESTIMATION`. The run found a bug, since fixed: after the test step the cleanup trap ran in the wrong directory. That left the stack running on success, and meant a failure printed no API log. |
+| Images | All four build, and all four run as non-root (`api`, `worker` and `vision` as UID 10001, `web` as `node`). Every image declares a HEALTHCHECK. One worker build failed on a stalled package download: the Python images now use a 60 s pip timeout and 10 retries. |
+| "Healthy" means ready | Worker: its liveness check exits 1 before its first control-plane call. Web without configuration or API: `/api/health/live` 200, `/api/health` 503. API with no database: startup fails with an explicit Flyway connection error, then exits 1 and is marked unhealthy. It never reports ready. Keycloak 26.0: the compose health command fails during startup and passes once `/health/ready` is UP (about 50 s). |
+| Configuration | `actionlint` (with shellcheck) passes on every workflow. `shellcheck` passes on the deploy, CI and backup scripts. `docker compose config` passes for `infra/deploy` with the example environment, and `caddy validate` passes for the Caddyfile. |
+| Deploy gate | `scripts/ci/require-green.sh` was tested against recorded run lists. A pass with a path-filtered workflow absent exits 0. A failed run exits 1 and names it. A run still in progress is waited for, then fails at the timeout. |
+| Backups | backup → verify → restore, end to end (docs/backup-recovery.md, "What has been verified"). |
+
+**Not verified:**
+
+- A real deploy: `deploy.yml` and `deploy.sh` have never run against a host with public DNS, ACME certificates
+  and GHCR images, and nor has the automatic rollback path. Do it on staging first, including one deliberate failed
+  deploy to watch the rollback.
+- The GHCR push, SBOM and provenance attestation, and the Trivy scan. These only run in GitHub Actions.
+- The `security` workflow's OWASP Dependency-Check. It needs the NVD database (`NVD_API_KEY`).
+- `require-green.sh` against the live GitHub API. Only its decision logic was tested.
+- GPU workers: no GPU image exists, and the full reconstruction (`pytest -m gpu`) needs a GPU host.
+- The Playwright e2e job.

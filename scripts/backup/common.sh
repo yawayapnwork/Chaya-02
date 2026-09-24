@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Shared by scripts/backup/*.sh. Sourced, not executed.
 # Loads .env from the repo root, sets up the compose command and a private temp dir for credential files.
 
