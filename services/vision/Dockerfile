@@ -8,7 +8,7 @@
 
 ARG INSTALL_MODEL=true
 
-FROM python:3.12-slim-bookworm AS build
+FROM python:3.14-slim-bookworm AS build
 ARG INSTALL_MODEL
 # Longer timeout and more retries than pip's defaults (15 s, 5): a stalled download should not fail a release build.
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_TIMEOUT=60 PIP_RETRIES=10
@@ -23,7 +23,7 @@ RUN if [ "$INSTALL_MODEL" = "true" ]; then \
       pip install .; \
     fi
 
-FROM python:3.12-slim-bookworm
+FROM python:3.14-slim-bookworm
 # The weight cache is a named volume in compose (vision-cache:/home/vision/.cache). Docker seeds a new named volume from
 # the image's directory, ownership included; without the mkdir/chown it is created root-owned and the download fails.
 RUN groupadd -g 10001 vision \
