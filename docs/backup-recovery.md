@@ -5,24 +5,37 @@
 | Data | How | Where | Notes |
 |---|---|---|---|
 | PostgreSQL (all application state: tenancy, captures, jobs, versions, POIs, audit log) | `pg_dump --format=custom`, dated, with `.sha256` | `$BACKUP_DIR/postgres/chaya-<UTC>.dump` | Kept for `BACKUP_KEEP_DAYS` (14). Every dump is checked with `pg_restore --list` when taken. |
-| MinIO raw bucket (original captures) | `mc mirror --remove` through the read-only `chaya-backup` account | `$BACKUP_DIR/minio/chaya-raw/` | Rolling mirror: deletions propagate. |
-| MinIO derived bucket (pipeline outputs) | same, **excluding `*/pii/*`** | `$BACKUP_DIR/minio/chaya-derived/` | PII staging objects are never copied. Purged ones disappear from the mirror too. |
+| MinIO raw bucket (original captures) | `mc mirror` (additive) through the read-only `chaya-backup` account | `$BACKUP_DIR/minio/chaya-raw/` | Deletions in the live bucket do **not** propagate. Rejected uploads are pruned from the copy using the database. |
+| MinIO derived bucket (pipeline outputs) | same, **excluding `*/pii/*`** | `$BACKUP_DIR/minio/chaya-derived/` | PII staging objects are never copied. |
 | Keycloak realm configuration | in git (`infra/keycloak/chaya-realm.json`) | — | **Users are not backed up by these scripts.** Export them with `kc.sh export` while Keycloak is stopped, or use an external Keycloak database with its own backups. |
 
 Backups hold raw captures (faces, screens, documents, before any blurring) and the audit log. Treat `$BACKUP_DIR` like
 production data: encrypted storage, restricted access, and never inside the repository (`/backups/` is git-ignored).
 
-### Why a rolling mirror with `--remove`
+### Why an additive mirror
 
 Objects are write-once, and the database only ever points at objects that exist. So the database is dumped
-**first**, and the mirror runs **after**: every object the dump references already exists when it is copied. Deletions
-propagate on purpose. The pipeline deletes unblurred frames after privacy preprocessing, and validation deletes
-rejected (for example infected) uploads. A backup must not keep them alive.
+**first**, and the mirror runs **after**: every object the dump references already exists when it is copied.
 
-The trade-off: an accidental or malicious deletion also propagates at the next run. For production, add either MinIO
-bucket versioning with object locking or an off-site copy of `$BACKUP_DIR` with its own retention (for example
-restic or borg to separate storage). Both protect against that. This is a residual risk until one of them is in
-place.
+The mirror does **not** propagate deletions. An earlier version used `mc mirror --remove`. Then an accidental or
+malicious deletion in the live buckets (the API account can delete) would also have deleted the backup copy at the
+next scheduled run, leaving the 14 days of database dumps pointing at objects that no longer existed anywhere. The
+application deletes objects in exactly two cases, and both are still honoured:
+
+- **Unblurred frames** (`pii/` staging), purged after privacy preprocessing: excluded from the mirror, so never copied.
+- **Rejected uploads** (for example infected files), deleted by validation: `backup.sh` removes their copies from the
+  mirror using the `REJECTED` rows in the database, in case a mirror ran while validation was in progress.
+
+What the mirror still does not give you: history. A live object that is **overwritten** with bad content (objects are
+write-once, so only a bug or an attacker does this) replaces the good copy at the next run, and the mirror lives on
+the same host. For production, add an off-host copy of `$BACKUP_DIR` with its own retention (for example restic or
+borg to separate storage), or MinIO bucket versioning with object locking. This is a residual risk until one of them
+is in place.
+
+**Erasure requests:** because deletions no longer propagate, deleting a person's captures from the live buckets does
+not remove them from `$BACKUP_DIR`. The application has no erasure feature today (docs/security-hardening.md, finding
+15). When one is added, it must also delete the matching keys under `$BACKUP_DIR/minio/` and state how long dated
+dumps keep the database rows (`BACKUP_KEEP_DAYS`).
 
 ## Running backups
 
@@ -64,7 +77,9 @@ It exits non-zero if any check fails.
 4. **Restore the objects**, if they were lost:
    `scripts/backup/restore.sh minio --yes-replace-live-data`
    Mirror back with the MinIO root account. Objects that are not in the backup are removed from the bucket. If the
-   buckets are intact, skip this step: extra objects are harmless, and missing ones are what step 2 checks.
+   buckets are intact, skip this step: extra objects are harmless, and missing ones are what step 2 checks. Because
+   the mirror is additive, it can also hold objects that are newer than an older dump you restored. They are
+   unreferenced and harmless.
 5. **Start the API.** Flyway validates the schema version on start-up. Then check `/api/v1/health`: it must be `UP`,
    or `DEGRADED` only for a known reason.
 6. **Reconcile:** runs that were `RUNNING` in the dump have lost their workers. The lease enforcer fails them as
@@ -96,7 +111,24 @@ If the old owner is the bootstrap superuser, `REASSIGN OWNED` is refused for sys
 owner of each table and sequence in `public` instead (`ALTER TABLE ... OWNER TO chaya_app`), including
 `flyway_schema_history`.
 
-## Not verified
+## What has been verified
 
-The scripts pass `bash -n`. They have **not** been run end to end, because Docker was not running on the audit
-machine. Run `backup.sh` and `verify.sh` once against a real stack before relying on them.
+On 2026-09-24 the scripts were run end to end on Windows (Git Bash, Docker Desktop). The target was a throwaway copy
+of the development stack: its own compose project, with the schema created by the API's Flyway migrations (v16) and
+seeded rows and objects. The following passed:
+
+- `backup.sh` produced a dump and its checksum, and mirrored both buckets. The accepted upload was copied. The
+  rejected upload was copied mid-flight, then pruned by the database step. The `pii/` object was never copied.
+- After the live object was deleted, the next `backup.sh` **kept** the backup copy.
+- `verify.sh` restored the dump into the scratch database, reported schema version 16 and the row counts, and matched
+  the sampled object's SHA-256 in the mirror.
+- `restore.sh postgres` recreated the live database, with the tables still owned by the app role.
+  `restore.sh minio` put the deleted object back.
+
+That run found and fixed four script bugs. Paths containing spaces broke every `docker compose` call. On Git Bash,
+`docker` was handed untranslated `/tmp/...` paths. `verify.sh` printed schema version 9 instead of 16 (`max()` over
+a text column). A bucket with nothing to back up had no mirror directory, so `restore.sh minio` failed after it had
+already overwritten the raw bucket; it now checks every bucket first.
+
+Not verified: the production compose file (`infra/deploy`, `CHAYA_COMPOSE_FILE`), realistic data sizes, and the
+recovery time. Measure those in a restore drill on the real host.

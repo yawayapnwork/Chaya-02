@@ -10,8 +10,8 @@ import importlib.util
 import os
 import shutil
 import subprocess
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass
-from typing import Callable, Iterable, Mapping
 
 from .errors import DependencyError
 

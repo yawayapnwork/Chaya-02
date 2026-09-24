@@ -44,7 +44,7 @@ done
 
 if command -v mvn > /dev/null; then
   run maven-dependency-check bash -c "cd '$ROOT/services/api' && mvn -B -q -ntp org.owasp:dependency-check-maven:12.1.0:check -DfailBuildOnCVSS=7"
-  run maven-licenses bash -c "cd '$ROOT/services/api' && mvn -B -q -ntp org.codehaus.mojo:license-maven-plugin:2.4.0:add-third-party -Dlicense.failOnMissing=true && cat target/generated-sources/license/THIRD-PARTY.txt"
+  run maven-licenses bash -c "cd '$ROOT/services/api' && mvn -B -q -ntp org.codehaus.mojo:license-maven-plugin:2.4.0:add-third-party -Dlicense.failOnMissing=true -Dlicense.includedScopes=compile,runtime && python '$ROOT/scripts/licenses/maven-licenses.py' target/generated-sources/license/THIRD-PARTY.txt"
 else
   skipped+=("maven (no mvn on PATH; the CI workflow runs it)")
 fi

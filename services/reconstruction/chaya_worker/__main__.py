@@ -9,6 +9,7 @@ import time
 
 from . import __version__
 from .api_client import ApiError, HttpControlPlane
+from .liveness import liveness_file, mark_alive
 from .logging_json import configure
 from .orchestrator import Orchestrator
 from .settings import Settings
@@ -31,7 +32,9 @@ def main(argv: list[str] | None = None) -> None:
     log.info("worker starting", extra={"version": __version__, "worker_id": settings.worker_id,
                                        "ffmpeg": toolchain.ffmpeg().as_dict(), "colmap": toolchain.colmap().as_dict(),
                                        "glomap": toolchain.glomap().as_dict(), "cuda": toolchain.cuda().as_dict()})
-    orchestrator = Orchestrator(HttpControlPlane(settings), S3Storage(settings), settings, toolchain=toolchain)
+    alive = liveness_file(settings)
+    orchestrator = Orchestrator(HttpControlPlane(settings), S3Storage(settings), settings, toolchain=toolchain,
+                                on_alive=lambda: mark_alive(alive))
 
     stopping = False
 

@@ -16,7 +16,6 @@ from ..errors import DependencyError
 from ..privacy import FaceDetector, RegionDetector, ScreenDocumentDetector, anonymize, merge
 from .base import command_record, write_json
 
-
 MAX_ROUNDS = 5
 
 

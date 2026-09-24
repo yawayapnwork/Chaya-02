@@ -5,12 +5,12 @@ configuration/creation timestamp the task requires. Pure function, no I/O beyond
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 
 def _iso_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    return datetime.now(UTC).isoformat(timespec="milliseconds")
 
 
 def manifest_entry(*, name: str, kind: str, sha256: str, size_bytes: int, artifact_version: str,

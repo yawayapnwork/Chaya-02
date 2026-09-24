@@ -17,6 +17,17 @@ scrape_configs:
     static_configs:
       - targets: ["host.docker.internal:8080"]
 
+  # Physical storage (the API's chaya_storage_recorded_bytes only sums what the database recorded; it cannot see a filling
+  # disk, pii/ staging, logs or abandoned multipart uploads). MinIO's cluster metrics need a bearer token generated with
+  # `mc admin prometheus generate <alias>` (docs/monitoring.md); without it this target is down and ChayaStorageMetricsMissing fires.
+  - job_name: minio
+    metrics_path: /minio/v2/metrics/cluster
+    authorization:
+      type: Bearer
+      credentials_file: /run/secrets/minio_metrics_token
+    static_configs:
+      - targets: ["host.docker.internal:9000"]
+
   - job_name: prometheus
     static_configs:
       - targets: ["localhost:9090"]

@@ -13,11 +13,49 @@ machine.
 - **Web** (`apps/web`): lint, typecheck, the 58 unit tests and the production build pass.
 - **Worker** (`services/reconstruction`): 101 passed, 12 skipped (GPU and integration tests). Includes the new
   model-loading tests.
-- **API** (`services/api`): **not compiled or run.** The audit machine had no JDK 21 or Maven, and Docker was not
-  running. The new and changed Java code and tests are listed below. Run `mvn verify` with Docker up before relying on
-  them.
+- **API** (`services/api`): not compiled during this pass (no JDK or Docker at the time). **Verified afterwards,
+  in the CI/CD pass:** `mvn verify` against real PostgreSQL and MinIO gives 270 tests, 0 failures. All tests added
+  here pass. That run also found and fixed a test-only compile error from the dashboard pass, and ten pre-existing
+  failures unrelated to this hardening. Those were a production bug in anchor reads (`Instant` from `timestamptz`), a
+  production bug that made every incremental re-scan fail to start (migration V16), and test-fixture bugs in
+  routing and re-scan tests.
 - **Compose files**: `docker compose config` passes. The containers were **not started**. Floating image tags were not
   pulled and are not verified.
+
+## Second pass (2026-09-24): re-audit of the first pass
+
+This pass checked the first pass's claims against the code and a running system instead of repeating them. Where it
+agreed, nothing changed. What it found, and what now proves each fix:
+
+| # | Area | Finding | Fix | Proven by |
+|---|---|---|---|---|
+| A | Uploads / viewer (XSS) | Viewer artifacts are streamed from the API's origin with the **content type the worker reported**. A buggy or compromised worker could publish a `KSPLAT` as `text/html` or `image/svg+xml`. Anyone who can view it, public-link visitors included, would then run script on the API origin. | `ReconstructionService.SERVED_CONTENT_TYPES` fixes the served type per kind (octet-stream or JSON). Spring Security's `nosniff` stays on. | `ReconstructionArtifactServingTest` (integration) |
+| B | Logs / errors | Upload quarantine messages embedded `e.getMessage()` from the S3 SDK and the clamd socket. These are returned to clients as `rejectionMessage`, and they name internal hosts and ports. This contradicted finding 14. | Fixed text in the response. The cause is logged server-side. | code review; full suite green |
+| C | MinIO / privacy | `chaya-worker` can read the **whole raw bucket** (every tenant's unblurred video). DEPLOYMENT.md gave that account to **GPU hosts**, which only run stages *after* privacy and are separate, more exposed machines. The control plane never hands them raw inputs, but the credential allowed it anyway. | Optional `chaya-recon` account (`S3_RECON_*`): derived bucket only, with an explicit Deny on `*/pii/*`, and no delete. DEPLOYMENT.md now tells GPU hosts to use it. | Real MinIO with the real `init.sh`: raw read/list DENIED, `pii/` read/write DENIED, delete DENIED, anonymised read and output write ALLOWED |
+| D | Model files | Finding 16 made the Hugging Face loaders safetensors-only, but the two **open_clip** loaders (worker CLIP indexing, vision service) go through `torch.load`. `torch>=2.2` allowed 2.2–2.5, where `torch.load` unpickles by default. CVE-2025-32434 gives code execution up to 2.5.1 even with `weights_only=True`. | `torch>=2.6` in both `pyproject.toml`. | Constraint only. The GPU/model extras were not installed here. |
+| E | Backups | `mc mirror --remove` made the object backup a mirror: any deletion in the live buckets (the API account can delete) also deleted the only other copy at the next run. | Additive mirror. Rejected uploads are pruned from the copy using the database. `pii/` is still never copied. See docs/backup-recovery.md. | End-to-end run on a throwaway stack: see docs/backup-recovery.md, "What has been verified" |
+| F | Backups | The scripts had **never run**. Running them found four bugs: paths with spaces broke every compose call; Git Bash handed `docker` untranslated paths; `verify.sh` printed schema version 9 instead of 16; an empty bucket made `restore.sh minio` fail after it had already overwritten the raw bucket. | All four fixed. | Same end-to-end run: backup, verify, then restore of both stores |
+| G | Licenses | The license steps were `continue-on-error`, so they could never fail CI: a GPL or unknown-license dependency would pass. Maven checked only for *missing* metadata, never against the policy. | Known open items are listed in `policy.json` `pending_review` (reported, not approved). Anything denied, unknown or new now fails. `maven-licenses.py` applies the same policy to `THIRD-PARTY.txt`. The scanners no longer scan pip-audit's own dependencies. | Maven: 141 artifacts scanned locally for the first time (135 allowed, 6 pending). A self-test that GPL and unknown fail even when listed as pending. npm and both Python service environments pass. |
+| H | Monitoring | "Storage usage" was only the bytes the **database recorded**. A filling MinIO disk, `pii/` staging and abandoned multipart uploads were invisible. | Prometheus scrapes MinIO's cluster metrics (bearer token). New alerts: `ChayaStorageLow`, and `ChayaStorageMetricsMissing`, so unknown storage state is not shown as healthy. | `promtool check rules/config`; metric names and token auth checked against a real MinIO |
+
+Checked and found sound (no change): the tenant attributes `org_id` and `venue_id` are admin-only in Keycloak's user
+profile, and unmanaged attributes are disabled, so users cannot move themselves to another tenant. Every controller
+endpoint except health, version and link exchange has a role rule. Public viewers cannot reach PII (`contains_pii`
+filter, venue and organization scoping) or partial reconstructions (the partial flag is allowed only on SPLAT kinds,
+which are not viewer kinds). In production the rate limiter keys on the real client address: Caddy overwrites
+`X-Forwarded-For`, and the API sets `SERVER_FORWARD_HEADERS_STRATEGY`. All four images run as non-root. There is no
+Redis in production. No committed secrets were found in the uncommitted deployment files. `tika-core` 3.2.2 (finding
+18, previously unverified) resolves and builds.
+
+Verification: `mvn verify` gives **271 tests, 0 failures**, against real PostgreSQL and MinIO (Testcontainers). The 4
+skipped are the live ClamAV and Keycloak suites. `npm audit --omit=dev` finds 0. pip-audit finds 0 on the frozen base
+environments of both Python services.
+
+Still open (added to the residuals above): finding 6, where the owning role can disable its own tables' triggers; a
+split migration/runtime role is still the fix. GlitchTip receives nothing until the SDKs are integrated
+(docs/monitoring.md). Python dependencies have no lock file. The GPU/model extras were not audited or license-scanned
+here. Every license item under "Needs a decision" in THIRD_PARTY_LICENSES.md (npm, Python and Maven) still needs a
+human decision.
 
 ## Findings by area
 
@@ -120,3 +158,8 @@ public. The web status page (`/status`) now shows each component, where it previ
    values (the existing root). Choose new values for `S3_ACCESS_KEY`/`S3_SECRET_KEY` (API), `S3_WORKER_*` and
    `S3_BACKUP_*`. Then `docker compose up minio-init`.
 3. **Metrics:** set `METRICS_SCRAPE_PASSWORD` if Prometheus should scrape. It is closed by default.
+4. **Monitoring (second pass):** add `MINIO_METRICS_TOKEN=` to `.env`. It may stay empty, but the monitoring stack
+   refuses to start while the line is missing. Fill it with `mc admin prometheus generate <alias>`.
+5. **GPU workers (second pass):** set `S3_RECON_ACCESS_KEY` and `S3_RECON_SECRET_KEY`, re-run `minio-init`, and move
+   each GPU host from the `S3_WORKER_*` account to the new one. Then rotate the `S3_WORKER_SECRET_KEY` those hosts
+   held.

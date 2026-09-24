@@ -14,15 +14,15 @@ Guarantees:
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import shutil
 import threading
 import time
 import traceback
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from . import __version__
 from .api_client import ApiError, ControlPlane
@@ -40,22 +40,26 @@ log = logging.getLogger("chaya_worker.orchestrator")
 
 
 def _iso(epoch: float) -> str:
-    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat(timespec="milliseconds")
+    return datetime.fromtimestamp(epoch, tz=UTC).isoformat(timespec="milliseconds")
 
 
 class _Heartbeat(threading.Thread):
     """Keeps the job lease alive; raises the cancel flag if the control plane says the job is no longer ours."""
 
-    def __init__(self, api: ControlPlane, job_id: str, worker_id: str, interval: float, cancelled: threading.Event) -> None:
+    def __init__(self, api: ControlPlane, job_id: str, worker_id: str, interval: float, cancelled: threading.Event,
+                 on_alive: Callable[[], None] = lambda: None) -> None:
         super().__init__(daemon=True, name=f"heartbeat-{job_id[:8]}")
         self._api, self._job_id, self._worker_id, self._interval = api, job_id, worker_id, interval
         self._cancelled = cancelled
+        self._on_alive = on_alive
         self._halt = threading.Event()
 
     def run(self) -> None:
         while not self._halt.wait(self._interval):
             try:
-                if not self._api.heartbeat(self._job_id, self._worker_id).get("keepGoing", False):
+                keep_going = self._api.heartbeat(self._job_id, self._worker_id).get("keepGoing", False)
+                self._on_alive()  # the control plane answered
+                if not keep_going:
                     log.warning("control plane says stop", extra={"job_id": self._job_id})
                     self._cancelled.set()
                     return
@@ -68,8 +72,10 @@ class _Heartbeat(threading.Thread):
 
 class Orchestrator:
     def __init__(self, api: ControlPlane, storage: ObjectStorage, settings: Settings, *, toolchain: Toolchain | None = None,
-                 registry: dict[str, Stage] | None = None, clock: Callable[[], float] = time.time) -> None:
+                 registry: dict[str, Stage] | None = None, clock: Callable[[], float] = time.time,
+                 on_alive: Callable[[], None] = lambda: None) -> None:
         self.api = api
+        self.on_alive = on_alive  # called after each successful control-plane round trip (chaya_worker.liveness)
         self.storage = storage
         self.settings = settings
         self.toolchain = toolchain or Toolchain()
@@ -82,6 +88,7 @@ class Orchestrator:
         """Claim and process at most one job. True if a job was processed."""
         stages = list(self.settings.stages) or STAGE_ORDER
         order = self.api.claim(stages, self.settings.worker_id)
+        self.on_alive()
         if order is None:
             return False
         log.info("job claimed", extra={"job_id": order["id"], "stage": order["stage"], "run_id": order.get("runId"),
@@ -104,7 +111,8 @@ class Orchestrator:
         started = self.clock()
         deadline = datetime.fromisoformat(order["deadlineAt"].replace("Z", "+00:00")).timestamp() if order.get("deadlineAt") else None
         cancelled = threading.Event()
-        heartbeat = _Heartbeat(self.api, job_id, self.settings.worker_id, self.settings.heartbeat_interval, cancelled)
+        heartbeat = _Heartbeat(self.api, job_id, self.settings.worker_id, self.settings.heartbeat_interval, cancelled,
+                               self.on_alive)
         heartbeat.start()
         report: dict[str, Any] | None = None
         try:

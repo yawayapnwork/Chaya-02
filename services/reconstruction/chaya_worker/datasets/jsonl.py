@@ -5,8 +5,8 @@ does not append well; JSONL does)."""
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import Iterable, Iterator
 
 from .schema import Annotation, ImageRecord, annotation_from_dict, image_from_dict, to_dict
 
@@ -32,7 +32,7 @@ def append_images(path: Path, images: Iterable[ImageRecord]) -> int:
 def read_images(path: Path) -> Iterator[ImageRecord]:
     if not path.exists():
         return
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:
@@ -60,7 +60,7 @@ def append_annotations(path: Path, annotations: Iterable[Annotation]) -> int:
 def read_annotations(path: Path) -> Iterator[Annotation]:
     if not path.exists():
         return
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:

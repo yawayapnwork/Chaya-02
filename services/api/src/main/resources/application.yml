@@ -112,3 +112,15 @@ management:
   endpoint:
     health:
       show-details: never
+      probes:
+        enabled: true          # /actuator/health/liveness and /actuator/health/readiness
+      group:
+        # Liveness: the JVM and application context are alive. Never includes dependencies, so an outage makes the
+        # API unready rather than restarted in a loop.
+        liveness:
+          include: livenessState
+        # Readiness: startup finished (Flyway migrations included) AND the real dependencies answer
+        # (dev.chaya.api.health.DependenciesHealthIndicator). This is what container health checks and load
+        # balancers use.
+        readiness:
+          include: readinessState,db,dependencies

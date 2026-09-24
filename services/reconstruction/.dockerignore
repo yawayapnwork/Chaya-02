@@ -2,6 +2,9 @@
 __pycache__
 *.pyc
 .pytest_cache
+.ruff_cache
 tests
 work
 *.egg-info
+.env
+.env.*

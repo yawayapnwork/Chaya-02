@@ -80,7 +80,7 @@ class GeometricCleanup:
         cleaned_labels_artifact = None
         if labels is not None:
             cleaned_labels_path = write_json(ctx.workdir / "semantic-labels-clean.json",
-                                             {"labels": [str(l) for l in labels[keep]]})
+                                             {"labels": [str(lbl) for lbl in labels[keep]]})
             cleaned_labels_artifact = ArtifactSpec("SEMANTIC_LABELS_CLEAN", cleaned_labels_path, "semantic-labels-clean.json",
                                                    "application/json")
 

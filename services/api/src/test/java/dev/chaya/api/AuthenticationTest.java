@@ -75,6 +75,16 @@ class AuthenticationTest extends ApiTest {
     }
 
     @Test
+    void containerProbesArePublicAndReadinessReflectsRealDependencies() throws Exception {
+        get("/actuator/health/liveness", null).andExpect(status().isOk());
+        // Postgres and MinIO are real containers here (the identity provider probe is the test stub): ready.
+        get("/actuator/health/readiness", null).andExpect(status().isOk());
+        // Details are never public.
+        get("/actuator/health/readiness", null).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+            .jsonPath("$.components").doesNotExist());
+    }
+
+    @Test
     void unknownPathsRequireAuthenticationToo() throws Exception {
         get("/api/v1/does-not-exist", null).andExpect(status().isUnauthorized());
     }

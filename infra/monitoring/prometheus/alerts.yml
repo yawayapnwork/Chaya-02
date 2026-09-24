@@ -53,6 +53,18 @@ groups:
         annotations:
           summary: "Over half of {{ $labels.stage }} attempts failed in the last 24 h"
 
+      - alert: ChayaStorageLow
+        expr: minio_cluster_capacity_usable_free_bytes / minio_cluster_capacity_usable_total_bytes < 0.15
+        for: 15m
+        annotations:
+          summary: "Object storage has less than 15% usable capacity left; uploads and pipeline outputs will start failing"
+
+      - alert: ChayaStorageMetricsMissing
+        expr: up{job="minio"} == 0 or absent(up{job="minio"})
+        for: 10m
+        annotations:
+          summary: "MinIO capacity metrics are not being scraped, so storage usage is unknown (token missing or MinIO down)"
+
       - alert: ChayaReconstructionSuccessLow
         expr: |
           (sum(chaya_pipeline_runs_finished_24h{status="SUCCEEDED"}) or vector(0))

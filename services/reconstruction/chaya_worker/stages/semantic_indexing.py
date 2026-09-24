@@ -165,7 +165,7 @@ class SemanticIndexing:
             raise StageError("no frame could be matched to a registered pose", code="SEMANTIC_INDEXING_NO_FRAMES")
 
         embeddings = embedder.embed_images(crops)
-        for obj, emb in zip(raw_objects, embeddings):
+        for obj, emb in zip(raw_objects, embeddings, strict=True):
             obj["embedding"] = emb.tolist()
 
         objects = cluster_by_distance(raw_objects, s.object_cluster_distance)

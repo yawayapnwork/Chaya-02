@@ -20,14 +20,15 @@ echo "1/4 checksum"
 [ "$(sha256_of "$dump")" = "$(cat "$dump.sha256")" ] || { echo "FAIL: checksum mismatch for $dump" >&2; exit 1; }
 
 echo "2/4 restore into scratch database chaya_restore_check"
-$COMPOSE exec -T postgres psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -q \
+compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -q \
   -c "DROP DATABASE IF EXISTS chaya_restore_check" -c "CREATE DATABASE chaya_restore_check"
-$COMPOSE exec -T postgres pg_restore -U "$POSTGRES_USER" -d chaya_restore_check --exit-on-error --no-owner < "$dump"
+compose exec -T postgres pg_restore -U "$POSTGRES_USER" -d chaya_restore_check --exit-on-error --no-owner < "$dump"
 
-q() { $COMPOSE exec -T postgres psql -U "$POSTGRES_USER" -d chaya_restore_check -At -F ' ' -c "$1"; }
+q() { compose exec -T postgres psql -U "$POSTGRES_USER" -d chaya_restore_check -At -F ' ' -c "$1"; }
 
 echo "3/4 schema and rows"
-echo "  flyway version: $(q "SELECT max(version) FROM flyway_schema_history WHERE success")"
+# version is text ('9' > '16'), so the latest is the last one installed, not max(version).
+echo "  flyway version: $(q "SELECT version FROM flyway_schema_history WHERE success AND version IS NOT NULL ORDER BY installed_rank DESC LIMIT 1")"
 for t in organization venue capture_session capture_media processing_job pipeline_run processing_artifact audit_log; do
   echo "  $t: $(q "SELECT count(*) FROM $t")"
 done
@@ -45,7 +46,7 @@ check_objects "SELECT bucket, object_key, verified_sha256 FROM capture_media WHE
 check_objects "SELECT bucket, object_key, checksum_sha256 FROM processing_artifact WHERE NOT contains_pii ORDER BY random() LIMIT $sample"
 [ -f "$PRIVATE_TMP/fail" ] && fail=1
 
-$COMPOSE exec -T postgres psql -U "$POSTGRES_USER" -d postgres -q -c "DROP DATABASE chaya_restore_check"
+compose exec -T postgres psql -U "$POSTGRES_USER" -d postgres -q -c "DROP DATABASE chaya_restore_check"
 if [ "$fail" -ne 0 ]; then
   echo "FAIL: some referenced objects are missing or corrupt in the mirror (see above)" >&2
   exit 1

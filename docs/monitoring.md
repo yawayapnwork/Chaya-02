@@ -18,7 +18,10 @@ docs/adr/0003-monitoring-stack.md.
 ## Running it
 
 1. In `.env`, set `METRICS_SCRAPE_PASSWORD`, `GRAFANA_ADMIN_PASSWORD`, `GLITCHTIP_SECRET_KEY` and
-   `GLITCHTIP_DB_PASSWORD`.
+   `GLITCHTIP_DB_PASSWORD`. Also set `MINIO_METRICS_TOKEN` to the token printed by
+   `mc admin prometheus generate <alias>` (run it with an alias for the MinIO root account, for example inside the
+   `minio-init` image). The line must exist even while it is empty: Compose refuses to start with the variable
+   unset. Until it holds a token, the `minio` target is down and `ChayaStorageMetricsMissing` fires.
 2. Start the API with the same `METRICS_SCRAPE_PASSWORD`. For logs in Loki, also set
    `LOGGING_FILE_NAME=<repo>/logs/chaya-api.log` and `LOGGING_STRUCTURED_FORMAT_FILE=ecs`.
 3. `docker compose --env-file .env -f infra/monitoring/docker-compose.yml up -d`
@@ -34,7 +37,8 @@ Every port is bound to 127.0.0.1. Loki and Alloy have no published port.
 | Processing job duration | `chaya_stage_duration_24h_seconds{stage, quantile="0.5\|0.95\|max"}` | `pipeline_stage_run` durations from the last 24 h |
 | Processing failure rate | `chaya_stage_runs_24h{stage, outcome}`. Rate = FAILED / all | `pipeline_stage_run`, last 24 h |
 | Queue depth | `chaya_jobs{status}`, `chaya_jobs_queued_oldest_age_seconds` | `processing_job` now |
-| Storage usage | `chaya_storage_recorded_bytes{store="raw_media\|derived_artifacts"}` | sizes recorded at verification. **Not** a bucket listing. For physical usage, scrape MinIO's own metrics (`mc admin prometheus generate`). |
+| Storage usage (recorded) | `chaya_storage_recorded_bytes{store="raw_media\|derived_artifacts"}` | sizes the database recorded at verification. **Not** a bucket listing: it cannot see `pii/` staging, logs or abandoned multipart uploads. |
+| Storage usage (physical) | `minio_cluster_capacity_usable_free_bytes`, `minio_cluster_capacity_usable_total_bytes`, `minio_bucket_usage_total_bytes{bucket}` | MinIO's own cluster metrics (`/minio/v2/metrics/cluster`, bearer token). Alerts: `ChayaStorageLow` (< 15% free), `ChayaStorageMetricsMissing`. Checked on 2026-09-24 against `quay.io/minio/minio:latest`: the two capacity series are exported and the endpoint answers 403 without the token. `minio_bucket_usage_total_bytes` did not appear on that empty instance (it follows MinIO's usage scan) and is **unconfirmed**. The alert uses only the capacity series. |
 | Reconstruction success rate | `chaya_pipeline_runs_finished_24h{status}`. Rate = SUCCEEDED / all finished | `pipeline_run`, last 24 h. PARTIAL is not counted as a success. |
 | Freshness of the above | `chaya_metrics_refresh_ok`, `chaya_metrics_refreshed_seconds` | `PlatformMetrics` |
 
@@ -51,7 +55,8 @@ ids) and no user data.
 
 `ChayaApiDown`, `ChayaApiHighErrorRate` (more than 5% 5xx), `ChayaApiSlow` (p95 above 2 s), `ChayaRateLimiting`,
 `ChayaMetricsRefreshFailing`, `ChayaQueueStalled` (oldest job waiting over 15 min with nothing running),
-`ChayaStageFailureRateHigh`, `ChayaReconstructionSuccessLow`. The thresholds are starting points and have not been
+`ChayaStageFailureRateHigh`, `ChayaReconstructionSuccessLow`, `ChayaStorageLow` (MinIO under 15% usable capacity),
+`ChayaStorageMetricsMissing` (MinIO not scraped, so storage usage is unknown rather than assumed fine). The thresholds are starting points and have not been
 tuned against real traffic. No Alertmanager is configured: alerts show in Prometheus and Grafana only. Add
 Alertmanager with a receiver to get paged.
 
@@ -78,6 +83,7 @@ is set. Before enabling it:
 
 ## Not verified
 
-The stack has not been started on the audit machine: Docker was not running. The compose file and all configuration
-files parse (`docker compose config`, a YAML load). The image tags have not been pulled. Nothing has checked the
-alert expressions (`promtool check rules`) or the dashboard queries against a live Prometheus.
+The whole stack has not been started. What has been checked (2026-09-24): `promtool check rules` (10 rules) and
+`promtool check config` with `prom/prometheus:v3.5.0`; `docker compose config` for this file; the MinIO metric names
+and token authentication against a real MinIO (see the storage row above). The dashboard queries have not been run
+against a live Prometheus, and the alerts have not fired against real data.

@@ -1,0 +1,246 @@
+# Chaya 02 production deployment: one Docker host, images from GHCR, TLS at the edge (Caddy).
+# Deployed by infra/deploy/deploy.sh (normally from .github/workflows/deploy.yml). See DEPLOYMENT.md.
+#
+#   CHAYA_VERSION=sha-abc1234 docker compose --env-file /srv/chaya/.env -f docker-compose.yml up -d
+#
+# Networks:
+#   edge      caddy <-> web, api, keycloak         (the only published ports: 80/443 on caddy)
+#   internal  api, worker, keycloak, postgres, minio, clamav, vision   (internal: true, no route to the internet)
+#   egress    vision (model weights on first start) and clamav (signature updates) only
+# Startup order is enforced with depends_on + health conditions (DEPLOYMENT.md "Startup order").
+name: chaya
+
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: { max-size: "20m", max-file: "5" }
+
+services:
+  # ---------------------------------------------------------------- edge
+  caddy:
+    <<: *hardening
+    image: caddy:2.10-alpine
+    cap_drop: ["ALL"]
+    cap_add: ["NET_BIND_SERVICE"]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      CHAYA_APP_DOMAIN: ${CHAYA_APP_DOMAIN:?set CHAYA_APP_DOMAIN}
+      CHAYA_API_DOMAIN: ${CHAYA_API_DOMAIN:?set CHAYA_API_DOMAIN}
+      CHAYA_AUTH_DOMAIN: ${CHAYA_AUTH_DOMAIN:?set CHAYA_AUTH_DOMAIN}
+      CHAYA_ACME_EMAIL: ${CHAYA_ACME_EMAIL:?set CHAYA_ACME_EMAIL}
+      KEYCLOAK_ADMIN_ALLOW: ${KEYCLOAK_ADMIN_ALLOW:-127.0.0.1/32}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [edge]
+    depends_on:
+      web: { condition: service_healthy }
+      api: { condition: service_healthy }
+      keycloak: { condition: service_healthy }
+
+  # ---------------------------------------------------------------- application
+  web:
+    <<: *hardening
+    image: ${CHAYA_REGISTRY:?set CHAYA_REGISTRY, e.g. ghcr.io/<owner>}/chaya-web:${CHAYA_VERSION:?set CHAYA_VERSION}
+    read_only: true
+    tmpfs: ["/tmp", "/app/.next/cache"]
+    environment:
+      CHAYA_API_BASE_URL: http://api:8080                              # server-side calls, inside the host
+      CHAYA_PUBLIC_API_BASE_URL: https://${CHAYA_API_DOMAIN}           # what the browser calls
+      CHAYA_PUBLIC_OIDC_ISSUER: https://${CHAYA_AUTH_DOMAIN}/realms/chaya
+      CHAYA_PUBLIC_OIDC_CLIENT_ID: chaya-web
+    networks: [edge]
+    depends_on:
+      api: { condition: service_healthy }
+
+  api:
+    <<: *hardening
+    image: ${CHAYA_REGISTRY:?set CHAYA_REGISTRY, e.g. ghcr.io/<owner>}/chaya-api:${CHAYA_VERSION:?set CHAYA_VERSION}
+    read_only: true
+    tmpfs: ["/tmp"]
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+      POSTGRES_APP_USER: ${POSTGRES_APP_USER:?set POSTGRES_APP_USER}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?set POSTGRES_APP_PASSWORD}
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY}
+      S3_BUCKET_RAW: ${S3_BUCKET_RAW:-chaya-raw}
+      S3_BUCKET_DERIVED: ${S3_BUCKET_DERIVED:-chaya-derived}
+      CLAMAV_ENABLED: "true"
+      CLAMAV_HOST: clamav
+      KEYCLOAK_ISSUER_URI: https://${CHAYA_AUTH_DOMAIN}/realms/chaya
+      KEYCLOAK_JWKS_URI: http://keycloak:8080/realms/chaya/protocol/openid-connect/certs
+      KEYCLOAK_AUDIENCE: chaya-api
+      CHAYA_ALLOWED_ORIGINS: https://${CHAYA_APP_DOMAIN}
+      VISION_SERVICE_URL: http://vision:8090
+      METRICS_SCRAPE_PASSWORD: ${METRICS_SCRAPE_PASSWORD:-}
+      SERVER_FORWARD_HEADERS_STRATEGY: native   # rate limits key on the client address Caddy forwards
+      LOGGING_STRUCTURED_FORMAT_CONSOLE: ecs
+    networks: [edge, internal]
+    depends_on:
+      postgres: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully }
+      clamav: { condition: service_healthy }
+      keycloak: { condition: service_healthy }
+
+  worker:
+    <<: *hardening
+    image: ${CHAYA_REGISTRY:?set CHAYA_REGISTRY, e.g. ghcr.io/<owner>}/chaya-worker:${CHAYA_VERSION:?set CHAYA_VERSION}
+    cap_drop: ["ALL"]
+    environment:
+      CHAYA_API_URL: http://api:8080
+      CHAYA_TOKEN_URL: http://keycloak:8080/realms/chaya/protocol/openid-connect/token
+      CHAYA_CLIENT_ID: chaya-worker
+      CHAYA_CLIENT_SECRET: ${CHAYA_WORKER_CLIENT_SECRET:?set CHAYA_WORKER_CLIENT_SECRET}
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${S3_WORKER_ACCESS_KEY:?set S3_WORKER_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_WORKER_SECRET_KEY:?set S3_WORKER_SECRET_KEY}
+      WORKER_ID: cpu-worker
+      # The CPU image can run only these; GPU stages are claimed by GPU workers on a GPU host (DEPLOYMENT.md).
+      WORKER_STAGES: INPUT_VALIDATION,FFMPEG_PREPROCESS,FRAME_QUALITY_FILTER,PRIVACY_PREPROCESS,REGION_SPLICE,ARTIFACT_GENERATION
+    volumes:
+      - worker-work:/work
+    networks: [internal]
+    depends_on:
+      api: { condition: service_healthy }
+
+  vision:
+    <<: *hardening
+    image: ${CHAYA_REGISTRY:?set CHAYA_REGISTRY, e.g. ghcr.io/<owner>}/chaya-vision:${CHAYA_VERSION:?set CHAYA_VERSION}
+    cap_drop: ["ALL"]
+    volumes:
+      - vision-cache:/home/vision/.cache
+    networks: [internal, egress]
+
+  # ---------------------------------------------------------------- infrastructure
+  postgres:
+    <<: *hardening
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_APP_USER: ${POSTGRES_APP_USER:?set POSTGRES_APP_USER}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?set POSTGRES_APP_PASSWORD}
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?set KEYCLOAK_DB_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./initdb/10-app-role.sh:/docker-entrypoint-initdb.d/10-app-role.sh:ro
+      - ./initdb/20-keycloak-db.sh:/docker-entrypoint-initdb.d/20-keycloak-db.sh:ro
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    <<: *hardening
+    image: ${MINIO_IMAGE:-quay.io/minio/minio:latest}
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio-data:/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio-init:
+    security_opt: ["no-new-privileges:true"]
+    image: ${MC_IMAGE:-quay.io/minio/mc:latest}
+    entrypoint: ["/bin/sh", "/init/init.sh"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      S3_BUCKET_RAW: ${S3_BUCKET_RAW:-chaya-raw}
+      S3_BUCKET_DERIVED: ${S3_BUCKET_DERIVED:-chaya-derived}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_WORKER_ACCESS_KEY: ${S3_WORKER_ACCESS_KEY}
+      S3_WORKER_SECRET_KEY: ${S3_WORKER_SECRET_KEY}
+      S3_BACKUP_ACCESS_KEY: ${S3_BACKUP_ACCESS_KEY:?set S3_BACKUP_ACCESS_KEY}
+      S3_BACKUP_SECRET_KEY: ${S3_BACKUP_SECRET_KEY:?set S3_BACKUP_SECRET_KEY}
+      S3_RECON_ACCESS_KEY: ${S3_RECON_ACCESS_KEY:-}       # GPU workers' account (DEPLOYMENT.md, "GPU workers")
+      S3_RECON_SECRET_KEY: ${S3_RECON_SECRET_KEY:-}
+    volumes:
+      - ./minio-init.sh:/init/init.sh:ro
+    networks: [internal]
+    depends_on:
+      minio: { condition: service_healthy }
+    restart: "no"
+
+  clamav:
+    <<: *hardening
+    image: clamav/clamav:1.4
+    environment:
+      CLAMD_CONF_StreamMaxLength: 4000M
+      CLAMD_CONF_MaxFileSize: 4000M
+    volumes:
+      - clamav-data:/var/lib/clamav
+    # freshclam needs the internet for signature updates.
+    networks: [internal, egress]
+    healthcheck:
+      test: ["CMD", "clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 300s
+
+  keycloak:
+    <<: *hardening
+    image: quay.io/keycloak/keycloak:26.0
+    # Production mode: HTTPS terminates at Caddy; Keycloak trusts its X-Forwarded-* headers; strict hostname.
+    command: ["start", "--import-realm"]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
+      KC_HOSTNAME: https://${CHAYA_AUTH_DOMAIN}
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"   # the API and worker reach it as http://keycloak:8080 internally
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      KC_HEALTH_ENABLED: "true"
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:?set KEYCLOAK_ADMIN}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD}
+      CHAYA_WORKER_CLIENT_SECRET: ${CHAYA_WORKER_CLIENT_SECRET}
+    volumes:
+      - ./keycloak/chaya-realm.json:/opt/keycloak/data/import/chaya-realm.json:ro
+    networks: [edge, internal]
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q '\"status\": \"UP\"' <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+networks:
+  edge: {}
+  internal:
+    internal: true
+  egress: {}
+
+volumes:
+  caddy-data:
+  caddy-config:
+  postgres-data:
+  minio-data:
+  clamav-data:
+  worker-work:
+  vision-cache:

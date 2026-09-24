@@ -13,7 +13,6 @@ COLMAP flag names follow the 3.9/3.10 CLI (--SiftExtraction.*); newer releases r
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any
 

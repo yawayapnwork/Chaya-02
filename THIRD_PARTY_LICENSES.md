@@ -4,10 +4,14 @@
 cover. Some items below need a human decision. No legal review has been done.
 
 - Scanners: `scripts/licenses/npm-licenses.mjs`, `scripts/licenses/python-licenses.py` and, for Maven,
-  `license-maven-plugin` in CI (`.github/workflows/security.yml`). `scripts/security-scan.sh` runs whichever of them
-  are available locally.
+  `license-maven-plugin` (which writes `THIRD-PARTY.txt`) checked by `scripts/licenses/maven-licenses.py`. CI runs all
+  three (`.github/workflows/security.yml`). `scripts/security-scan.sh` runs whichever of them are available locally.
 - Policy: `scripts/licenses/policy.json`. **allow** means permissive. **review** means weak copyleft or attribution
   terms, and needs a recorded decision below. Anything else fails, including UNKNOWN.
+- **What fails CI:** a denied or unknown license, or a review license on a package that is not listed in
+  `policy.json` `pending_review`. The packages in the "Needs a decision" tables below are listed there. They are
+  reported as PENDING REVIEW on every run, but do not fail it. That listing is **not approval**: it only stops known,
+  open items from hiding new ones. Remove a package from `pending_review` when its decision is recorded here.
 - Source of the license data: the metadata each package declares about itself (`package.json` `license`; Python
   `License-Expression`, `License` or trove classifiers). The scanners do not read license files or scan binaries.
   They cannot see licenses of native code bundled inside wheels or npm binaries unless the package declares them.
@@ -23,6 +27,10 @@ Last scan: 2026-09-23, on a developer workstation (Windows x64). Platform-specif
 | `caniuse-lite` | 1.0.30001810 | CC-BY-4.0 | `next` (browser targets at build time) | Requires attribution when redistributed. It is used at build time; it is not clear whether it ships in the runtime image. |
 | `certifi` | 2026.7.22 | MPL-2.0 | `requests`, `botocore` (worker) | File-level copyleft: fine if unmodified; modifications to its files must be published. |
 | `axe-core`, `lightningcss` (dev only) | 4.13.0, 1.32.0 | MPL-2.0 | lint/build tooling | Not shipped at runtime (development tree only). Listed for completeness. |
+| `ch.qos.logback:logback-classic`, `logback-core` | 1.5.18 | EPL-1.0 or LGPL-2.1 | Spring Boot logging | Dual-licensed: either may be chosen. Both are weak copyleft. Unmodified use as a library is the usual reading. |
+| `org.hibernate.orm:hibernate-core` | 6.6.29.Final | LGPL-2.1-or-later | Spring Data JPA | Ships inside the API image (a Spring Boot fat jar). LGPL obligations apply to redistribution: license text, and the ability to replace the library. |
+| `org.aspectj:aspectjweaver` | 1.9.24 | EPL-2.0 | Spring AOP (method security) | File-level weak copyleft. Unmodified use. |
+| `jakarta.annotation:jakarta.annotation-api`, `jakarta.transaction:jakarta.transaction-api` | 2.1.1, 2.0.1 | EPL-2.0 or GPL-2.0 with Classpath Exception | Jakarta EE APIs | Dual-licensed. The policy judges them on EPL-2.0. |
 
 ## Scanned: web (`apps/web`), production dependency tree
 
@@ -61,13 +69,15 @@ Debian's build options. None of these are in the tables above.
 `uvicorn`, `websockets` (BSD-3-Clause); `typing_extensions` (PSF-2.0).
 **Not scanned:** the `model` extra (`torch`, `open_clip_torch`).
 
-## Not scanned locally: API (`services/api`, Maven)
+## Scanned: API (`services/api`, Maven), compile and runtime scopes
 
-Maven was not available on the scanning machine, so no Maven license data was collected. The CI job `maven` produces
-`THIRD-PARTY.txt` and fails on any dependency without declared license metadata. The direct dependencies are Spring
-Boot starters, Flyway, the PostgreSQL JDBC driver, the AWS SDK for Java v2, Apache Tika core, and Micrometer's
-Prometheus registry. Their licenses are expected to be permissive, but that is **unverified here**. Fill in this
-section from the CI report.
+Scanned 2026-09-24 with `license-maven-plugin` 2.4.0 (`add-third-party`) and `maven-licenses.py`. There are 141
+artifacts: 135 allowed, and the 6 in "Needs a decision" above. Licenses of the 135, as declared in their POMs:
+Apache-2.0 (119, under five spellings), EDL-1.0, the Eclipse Distribution License, which is BSD-3-Clause (8, including
+`jakarta.persistence-api`, which also offers EPL-2.0), MIT (3), BSD-2-Clause (2), BSD-3-Clause (1), MIT-0 (1) and CC0
+(1; one of the BSD-2-Clause artifacts also offers CC0). The full list is the CI artifact `maven-reports` (`THIRD-PARTY.txt`).
+
+Test-scope dependencies (JUnit, Testcontainers, and so on) are not shipped, and were not scanned.
 
 ## Model weights and runtime downloads (not packages)
 

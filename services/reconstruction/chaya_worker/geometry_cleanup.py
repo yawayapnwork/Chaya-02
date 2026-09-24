@@ -102,7 +102,6 @@ def fit_planes(positions: np.ndarray, *, distance_threshold: float, ransac_n: in
     to it, else "other". When `labels` are supplied, `confidence` reports how well that geometric call
     agrees with the semantic segmentation of the plane's own inlier points (also honest, not fabricated).
     """
-    import open3d as o3d  # noqa: PLC0415
 
     remaining_positions = positions.copy()
     remaining_indices = np.arange(len(positions))

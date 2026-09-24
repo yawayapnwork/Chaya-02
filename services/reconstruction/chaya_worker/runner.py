@@ -7,9 +7,9 @@ import os
 import signal
 import subprocess
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Sequence
 
 from .errors import StageError, TimeLimitExceeded
 

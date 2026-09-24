@@ -28,13 +28,17 @@ class RouteServiceTest extends AbstractIntegrationTest {
     @Autowired
     private RouteService routeService;
 
+    /** The caller of a route request. Publishes the venue's draft graphs first: graphs are built as DRAFT and only then
+     * activated, exactly as PipelineService#ingestNavigationGraph does -- the database refuses to add nodes or edges to
+     * an ACTIVE graph (navigation_graph_content_guard, V6). */
     private Actor actorFor(UUID org, UUID venue) {
+        jdbc.sql("UPDATE navigation_graph SET status = 'ACTIVE' WHERE venue_id = :v AND status = 'DRAFT'").param("v", venue).update();
         return new Actor(Actor.Kind.USER, "test-user", org, Set.of(venue), Set.of(Role.ADMIN));
     }
 
     private UUID insertGraph(UUID org, UUID venue, UUID floor, String profile) {
         return jdbc.sql("INSERT INTO navigation_graph (organization_id, venue_id, floor_id, profile, status) "
-                + "VALUES (:o, :v, :f, :p, 'ACTIVE') RETURNING id")
+                + "VALUES (:o, :v, :f, :p, 'DRAFT') RETURNING id")
             .param("o", org).param("v", venue).param("f", floor).param("p", profile).query(UUID.class).single();
     }
 

@@ -1,0 +1,92 @@
+# Reconstruction smoke tests. No GPU and no full reconstruction: GPU/toolchain stages are EXCLUDED explicitly
+# (services/reconstruction/tests/smoke/test_pipeline_smoke.py: EXCLUDED_IN_CI) and only their orchestration contract
+# is tested. The full reconstruction runs only on a GPU host (`pytest -m gpu`), never in normal CI.
+#
+#   worker-smoke  capture -> worker claim loop -> real CPU stages -> ARTIFACT_GENERATION (.ksplat, manifest, bundle)
+#   image-smoke   the same test, run inside the production worker image (proves its FFmpeg/OpenCV actually work)
+#   stack-smoke   capture upload -> ClamAV -> API -> processing -> real worker code, through the real API, MinIO and
+#                 Keycloak; the run must stop with a structured DEPENDENCY_UNAVAILABLE at the first GPU stage
+name: reconstruction-smoke
+
+on:
+  pull_request:
+    paths:
+      - "services/reconstruction/**"
+      - "services/api/**"
+      - "infra/docker/**"
+      - "infra/ci/**"
+      - "infra/keycloak/**"
+      - "scripts/ci/**"
+      - ".github/workflows/reconstruction-smoke.yml"
+  push:
+    branches: [main]
+  schedule:
+    - cron: "40 3 * * *"   # nightly: catches drift in base images, ClamAV, Keycloak
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  worker-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: services/reconstruction
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: services/reconstruction/pyproject.toml
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: pip install -e ".[dev]"
+      - name: Smoke (real CPU stages; GPU stages excluded, contract-tested)
+        run: python -m pytest -m smoke tests/smoke -v -rA
+
+  image-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: services/reconstruction
+          load: true
+          tags: chaya-worker:smoke
+          cache-from: type=gha,scope=worker
+      - name: Health check fails before any control-plane call (not healthy just because it started)
+        run: |
+          if docker run --rm chaya-worker:smoke python -m chaya_worker.liveness; then
+            echo "::error::a worker that never reached the control plane reported healthy"; exit 1
+          fi
+      - name: Smoke inside the production image
+        # Test-only tools are installed into a throwaway container as root; the image itself stays non-root and lean.
+        run: |
+          docker run --rm --user 0 -e PYTHONDONTWRITEBYTECODE=1 \
+            -v "$PWD/services/reconstruction:/src:ro" -w /src chaya-worker:smoke \
+            sh -c "pip install -q pytest scikit-image && python -m pytest -p no:cacheprovider -m smoke tests/smoke -v -rA"
+
+  stack-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: services/reconstruction/pyproject.toml
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: pip install -e "services/reconstruction[dev]"
+      - name: Stack smoke (API, Postgres, MinIO, ClamAV, Keycloak)
+        run: bash scripts/ci/stack-smoke.sh
+        env:
+          PYTHON: python

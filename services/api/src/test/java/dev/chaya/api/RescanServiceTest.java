@@ -72,12 +72,12 @@ class RescanServiceTest extends AbstractIntegrationTest {
         RegionGeometry tiny = new RegionGeometry(List.of(
             List.of(0.0, 0.0), List.of(0.0, 0.01), List.of(0.01, 0.01), List.of(0.01, 0.0))); // 0.0001 m^2
         assertThatThrownBy(() -> rescan.initiate(actor, t.venue(), t.floor(), new RescanRequest(parent, tiny, null)))
-            .isInstanceOf(ApiException.class).hasMessageContaining("REGION_TOO_SMALL");
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.code()).isEqualTo("REGION_TOO_SMALL"));
 
         RegionGeometry huge = new RegionGeometry(List.of(
             List.of(0.0, 0.0), List.of(0.0, 1000.0), List.of(1000.0, 1000.0), List.of(1000.0, 0.0))); // 1,000,000 m^2
         assertThatThrownBy(() -> rescan.initiate(actor, t.venue(), t.floor(), new RescanRequest(parent, huge, null)))
-            .isInstanceOf(ApiException.class).hasMessageContaining("REGION_TOO_LARGE");
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.code()).isEqualTo("REGION_TOO_LARGE"));
     }
 
     @Test
@@ -103,7 +103,9 @@ class RescanServiceTest extends AbstractIntegrationTest {
 
     @Test
     void listVersionsAndBootstrapFinalizeCurrent() {
-        var t = fx.tree();
+        var tree = fx.tree();
+        // A floor with no versions at all (fx.tree()'s own floor already carries a DRAFT version).
+        var t = new Fixtures.Tree(tree.org(), tree.venue(), fx.floor(tree.org(), tree.venue(), 1), tree.session(), tree.scan(), null);
         Actor actor = actorFor(t.org(), t.venue());
         assertThat(rescan.listVersions(actor, t.venue(), t.floor())).isEmpty();
 

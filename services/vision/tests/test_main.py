@@ -18,12 +18,39 @@ from app.main import app, encoder  # noqa: E402
 client = TestClient(app)
 
 
-def test_health_reports_the_configured_model_and_its_real_availability():
-    res = client.get("/health")
-    assert res.status_code == 200
-    body = res.json()
-    assert body["model"] == encoder.model_id
-    assert body["modelAvailable"] == encoder.available()
+def test_liveness_is_only_the_process():
+    assert client.get("/health/live").json() == {"status": "UP"}
+
+
+def test_readiness_is_503_when_the_model_cannot_load(monkeypatch):
+    monkeypatch.setattr(ClipTextEncoder, "ready", lambda self: (False, "torch and open_clip are not installed"))
+    for path in ("/health", "/health/ready"):
+        res = client.get(path)
+        assert res.status_code == 503
+        body = res.json()
+        assert body["status"] == "DOWN" and body["modelAvailable"] is False
+        assert body["model"] == encoder.model_id
+        assert "not installed" in body["reason"]
+
+
+def test_readiness_is_200_only_when_the_model_is_loaded(monkeypatch):
+    monkeypatch.setattr(ClipTextEncoder, "ready", lambda self: (True, None))
+    res = client.get("/health/ready")
+    assert res.status_code == 200 and res.json()["status"] == "UP"
+
+
+def test_ready_really_attempts_the_load_and_backs_off_after_a_failure(monkeypatch):
+    enc = ClipTextEncoder(model_name="no-such-model")
+    calls = []
+
+    def failing_load(self):
+        calls.append(1)
+        raise ModelUnavailable("cannot load")
+
+    monkeypatch.setattr(ClipTextEncoder, "_ensure_loaded", failing_load)
+    assert enc.ready() == (False, "cannot load")
+    assert enc.ready() == (False, "cannot load")
+    assert len(calls) == 1, "a failed load is not retried within the back-off window"
 
 
 def test_embed_text_rejects_an_empty_query():

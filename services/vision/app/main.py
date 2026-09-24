@@ -7,6 +7,7 @@ and SemanticSearchService falls back to lexical search rather than treating a fa
 from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from .clip_text_encoder import ClipTextEncoder, ModelUnavailable
@@ -24,9 +25,20 @@ class EmbedTextResponse(BaseModel):
     model: str
 
 
+@app.get("/health/live")
+def live() -> dict:
+    """Liveness only: the process answers HTTP. Never used to decide whether to send traffic."""
+    return {"status": "UP"}
+
+
 @app.get("/health")
-def health() -> dict:
-    return {"status": "ok", "model": encoder.model_id, "modelAvailable": encoder.available()}
+@app.get("/health/ready")
+def ready() -> JSONResponse:
+    """Readiness: the embedding model is actually loaded and usable. 503 otherwise -- the service is not healthy just
+    because the process started (without the model every embed request would fail)."""
+    ok, reason = encoder.ready()
+    body = {"status": "UP" if ok else "DOWN", "model": encoder.model_id, "modelAvailable": ok, "reason": reason}
+    return JSONResponse(body, status_code=200 if ok else 503)
 
 
 @app.post("/v1/embed-text", response_model=EmbedTextResponse)

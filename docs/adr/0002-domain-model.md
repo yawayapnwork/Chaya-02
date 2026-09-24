@@ -7,6 +7,10 @@ and POIs are versioned (`poi` + `poi_version`).
 
 - **Tenant isolation in the schema:** child rows carry `organization_id` and reference their parent with composite foreign keys, e.g. `(venue_id, organization_id) -> venue(id, organization_id)`. Cross-organization references are impossible at the database level.
 - **Deletion:** organization, venue, floor, space and poi are soft-deleted (`deleted_at`). All foreign keys are `ON DELETE RESTRICT`. Jobs, artifacts, finalized scan versions, poi versions and audit rows are never deleted.
+- **Version lineage:** `scan_version.parent_version_id` references a version of the same **venue** (key
+  `(parent_version_id, venue_id)`), not of the same scan. An incremental re-scan creates its version under its own
+  scan and chains it to the finalized version of an earlier scan. The original same-scan key made that impossible and
+  was replaced in V16. The floor match is enforced by RescanService (`VERSION_WRONG_FLOOR`).
 - **Immutability via triggers:** finalized `scan_version`, `processing_artifact` (write-once), `poi_version` (only a missing embedding may be filled, once), `audit_log` (append-only), and nodes/edges of non-DRAFT navigation graphs.
 - **Job state machine:** QUEUED -> RUNNING | CANCELLED; RUNNING -> SUCCEEDED | FAILED | CANCELLED; FAILED -> QUEUED (counted retry, bounded by `max_retries`); SUCCEEDED and CANCELLED are terminal. Enforced by a trigger and mirrored in `JobStatus` for early failure.
 - **Embeddings:** `poi_version.embedding vector(512)` (CLIP ViT-B/32, "openai" pretrained weights via open_clip -- decision D3 resolved; see chaya_worker.clip_embeddings and services/vision). An HNSW ANN index (`poi_version_embedding_hnsw_idx`) was added with the search feature in V12__semantic_search.sql, as planned. A Grounding-DINO-detected object is not a separate `detected_object` row: it becomes a `poi`/`poi_version` with `source = 'AUTO_DETECTED'`, `pipeline_run_id` set, and its own `detection_confidence`/`bounding_box` -- see dev.chaya.api.pipeline.PipelineService#ingestDetectedObjects.

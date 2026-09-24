@@ -44,6 +44,10 @@ public class MediaValidationService {
     private static final Logger log = LoggerFactory.getLogger(MediaValidationService.class);
     private static final int HEAD_BYTES = 64 * 1024;
     private static final String SYSTEM_ACTOR = "system:media-validator";
+    // Rejection/quarantine messages are returned to API clients, so they are fixed text: exception messages (storage
+    // endpoints, hostnames, SDK internals) are logged here and never stored with the media.
+    static final String STORAGE_UNAVAILABLE_MESSAGE =
+        "object storage was unavailable during validation; the file is quarantined and can be re-validated";
 
     private record Job(UUID id, UUID orgId, UUID venueId, MediaKind kind, String status, String claimed, long size,
                        String sha, String key, String uploadId, boolean assembled) {}
@@ -120,7 +124,8 @@ public class MediaValidationService {
                 store.completeMultipart(j.key(), j.uploadId(), parts);
                 jdbc.sql("UPDATE capture_media SET assembled = true WHERE id = :m").param("m", mediaId).update();
             } catch (RuntimeException e) {
-                finish(mediaId, new Outcome_(false, true, "STORAGE_UNAVAILABLE", "could not assemble the upload: " + e.getMessage()), j, null, null);
+                log.warn("media {}: could not assemble the upload", mediaId, e);
+                finish(mediaId, new Outcome_(false, true, "STORAGE_UNAVAILABLE", STORAGE_UNAVAILABLE_MESSAGE), j, null, null);
                 return;
             }
         }
@@ -141,7 +146,8 @@ public class MediaValidationService {
             }
             actualSha = HexFormat.of().formatHex(digest.digest());
         } catch (IOException | NoSuchAlgorithmException | RuntimeException e) {
-            finish(mediaId, new Outcome_(false, true, "STORAGE_UNAVAILABLE", "could not read the stored object: " + e.getMessage()), j, null, null);
+            log.warn("media {}: could not read the stored object", mediaId, e);
+            finish(mediaId, new Outcome_(false, true, "STORAGE_UNAVAILABLE", STORAGE_UNAVAILABLE_MESSAGE), j, null, null);
             return;
         }
         if (!actualSha.equals(j.sha())) {
@@ -155,7 +161,8 @@ public class MediaValidationService {
         try (InputStream in = store.open(j.key())) {
             scan = scanner.scan(in);
         } catch (IOException | RuntimeException e) {
-            scan = new ScanResult(Verdict.UNAVAILABLE, "could not read the object for scanning: " + e.getMessage());
+            log.warn("media {}: could not read the object for scanning", mediaId, e);
+            scan = new ScanResult(Verdict.UNAVAILABLE, STORAGE_UNAVAILABLE_MESSAGE);
         }
         if (scan.verdict() == Verdict.INFECTED) {
             finish(mediaId, reject("MALWARE_DETECTED", "malware signature found: " + scan.detail()), j, actualSha, null);

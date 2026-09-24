@@ -5,7 +5,9 @@ against scripts/licenses/policy.json.
     <venv>/bin/python scripts/licenses/python-licenses.py [--json] [--exclude NAME ...]
 
 Run it with the interpreter of the environment to scan (the worker's or the vision service's venv, or the image).
-Exit status: 0 = every license allowed, 1 = at least one needs a decision (review/deny/unknown).
+Exit status: 0 = every license is allowed, or is a "review" license on a distribution listed in policy.json
+pending_review.python (known, awaiting the human decision recorded in THIRD_PARTY_LICENSES.md); 1 = anything else: a
+denied or unknown license, or a review license on a distribution nobody has looked at yet.
 Declared metadata is what package authors wrote; it is not a verified legal analysis.
 """
 
@@ -54,6 +56,13 @@ def classify(expr: str) -> str:
     return "deny"
 
 
+def is_pending(name: str, ecosystem: str = "python") -> bool:
+    """Exact (case-insensitive) names, or a prefix ending in "*". Only ever softens a "review" verdict."""
+    name = name.lower()
+    return any(name.startswith(p[:-1].lower()) if p.endswith("*") else name == p.lower()
+               for p in POLICY.get("pending_review", {}).get(ecosystem, []))
+
+
 def main(argv: list[str]) -> int:
     exclude = {a.lower() for a in argv[argv.index("--exclude") + 1:]} if "--exclude" in argv else set()
     rows = []
@@ -62,15 +71,18 @@ def main(argv: list[str]) -> int:
         if not name or name.lower() in SKIP or name.lower() in exclude:
             continue
         lic = declared(dist)
-        rows.append({"name": name, "version": dist.version, "license": lic, "verdict": classify(lic)})
+        verdict = classify(lic)
+        if verdict == "review" and is_pending(name):
+            verdict = "pending"
+        rows.append({"name": name, "version": dist.version, "license": lic, "verdict": verdict})
     rows.sort(key=lambda r: r["name"].lower())
     if "--json" in argv:
         print(json.dumps(rows, indent=2))
     else:
         print(f"python distributions in {sys.prefix}: {len(rows)}")
         for r in rows:
-            print(f"{r['verdict']:6}  {r['name']}=={r['version']}  {r['license']}")
-    return 1 if any(r["verdict"] != "allow" for r in rows) else 0
+            print(f"{r['verdict']:7}  {r['name']}=={r['version']}  {r['license']}")
+    return 1 if any(r["verdict"] in ("review", "deny") for r in rows) else 0
 
 
 if __name__ == "__main__":

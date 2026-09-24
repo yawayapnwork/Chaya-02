@@ -52,7 +52,8 @@ public class ClamAvScanner implements MalwareScanner {
             return parse(readResponse(socket.getInputStream()));
         } catch (IOException e) {
             log.warn("clamd scan failed: {}", e.getMessage());
-            return new ScanResult(Verdict.UNAVAILABLE, "scanner unreachable or failed: " + e.getMessage());
+            // The detail reaches API clients (rejection message): no exception text, which names hosts and ports.
+            return new ScanResult(Verdict.UNAVAILABLE, "malware scanner unreachable or failed; the file is quarantined");
         }
     }
 

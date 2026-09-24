@@ -21,11 +21,13 @@ ffmpeg-bundled = ["imageio-ffmpeg>=0.5"]
 # The reconstruction toolchain: SPLAT_RECONSTRUCTION/SEMANTIC_SEGMENTATION/GEOMETRIC_CLEANUP/PLANE_FITTING/
 # SEMANTIC_INDEXING detect these at runtime (chaya_worker.toolchain) and fail with a structured
 # DependencyError when absent; they are never required just to import chaya_worker.
+# torch>=2.6: torch.load defaults to weights_only=True from 2.6, and <=2.5.1 is exploitable even with it
+# (CVE-2025-32434). open_clip loads its CLIP checkpoint through torch.load (docs/security-hardening.md, "Model files").
 reconstruction = [
-  "torch>=2.2", "gsplat>=1.0", "open3d>=0.18", "transformers>=4.40", "huggingface-hub>=0.23",
+  "torch>=2.6", "gsplat>=1.0", "open3d>=0.18", "transformers>=4.40", "huggingface-hub>=0.23",
   "open_clip_torch>=2.24", "pillow>=10.0",
 ]
-dev = ["pytest>=8", "scikit-image>=0.22", "imageio-ffmpeg>=0.5"]
+dev = ["pytest>=8", "scikit-image>=0.22", "imageio-ffmpeg>=0.5", "ruff>=0.6"]
 
 [project.scripts]
 chaya-worker = "chaya_worker.__main__:main"
@@ -37,6 +39,23 @@ include = ["chaya_worker*"]
 testpaths = ["tests"]
 markers = [
   "orchestration: pipeline orchestration with tiny real fixture files (no GPU, no external services)",
+  "smoke: CI smoke test -- capture -> worker claim loop -> artifact generation with real CPU executables (no GPU)",
   "integration: needs real external services (MinIO, the Spring Boot API); skipped when they are not configured",
   "gpu: needs a GPU and the reconstruction toolchain (COLMAP/GLOMAP/gsplat); skipped, never passed, when unavailable",
 ]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 140
+
+[tool.ruff.lint]
+# pyflakes, pycodestyle, bugbear, isort, pyupgrade, bandit (security)
+select = ["E", "F", "W", "B", "I", "UP", "S"]
+ignore = [
+  "E501",  # long lines are allowed up to the formatter's judgement; line-length above is advisory
+  "S603",  # subprocess with an argv list and no shell is how stages run FFmpeg/COLMAP on purpose
+  "S607",  # tools are resolved by chaya_worker.toolchain, which records the resolved path and version
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S108"]  # assert is how pytest checks; temp paths in fixtures

@@ -6,6 +6,7 @@ import dev.chaya.api.web.BadRequestException;
 import dev.chaya.api.web.NotFoundException;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -32,6 +33,15 @@ public class ReconstructionService {
      * that stage does not exist yet, so no run today can ever produce one, but nothing else needs to change
      * once it does. */
     private static final Set<String> VIEWER_ARTIFACT_KINDS = Set.of("KSPLAT", "ARTIFACT_MANIFEST", "PLANE_MODEL", "NAVMESH");
+
+    /** The content type each viewer kind is SERVED as. Fixed here rather than taken from the worker's report: the
+     * bytes are streamed from the API's own origin to any viewer (public links included), so a worker-chosen type
+     * such as text/html or image/svg+xml would turn a published artifact into script running on that origin. */
+    static final Map<String, String> SERVED_CONTENT_TYPES = Map.of(
+        "KSPLAT", "application/octet-stream",
+        "ARTIFACT_MANIFEST", "application/json",
+        "PLANE_MODEL", "application/json",
+        "NAVMESH", "application/octet-stream");
 
     public record ReconstructionVersion(UUID runId, UUID floorId, Instant generatedAt, String runStatus, String runQuality) {}
 
@@ -97,14 +107,14 @@ public class ReconstructionService {
             .optional().orElseThrow(() -> new NotFoundException("reconstruction not found"));
 
         List<ArtifactRef> artifacts = jdbc.sql("""
-                SELECT a.kind, a.content_type, a.size_bytes, a.checksum_sha256
+                SELECT a.kind, a.size_bytes, a.checksum_sha256
                   FROM processing_artifact a
                   JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id
                  WHERE sr.run_id = :run AND sr.status = 'SUCCEEDED' AND a.kind IN (:kinds) AND a.contains_pii = false
                  ORDER BY a.kind
                 """)
             .param("run", runId).param("kinds", VIEWER_ARTIFACT_KINDS)
-            .query((rs, i) -> new ArtifactRef(rs.getString("kind"), rs.getString("content_type"), rs.getLong("size_bytes"),
+            .query((rs, i) -> new ArtifactRef(rs.getString("kind"), SERVED_CONTENT_TYPES.get(rs.getString("kind")), rs.getLong("size_bytes"),
                 rs.getString("checksum_sha256"),
                 "/api/v1/venues/" + venueId + "/reconstructions/" + runId + "/artifacts/" + rs.getString("kind")))
             .list();
@@ -122,7 +132,7 @@ public class ReconstructionService {
             throw new BadRequestException("unknown viewer artifact kind: " + kind);
         }
         return jdbc.sql("""
-                SELECT a.bucket, a.object_key, a.content_type, a.size_bytes
+                SELECT a.bucket, a.object_key, a.size_bytes
                   FROM processing_artifact a
                   JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id
                   JOIN pipeline_run r ON r.id = sr.run_id
@@ -131,7 +141,7 @@ public class ReconstructionService {
                 """)
             .param("run", runId).param("kind", kind).param("venue", venueId).param("org", actor.organizationId())
             .query((rs, i) -> new StoredArtifact(rs.getString("bucket"), rs.getString("object_key"),
-                rs.getString("content_type"), rs.getLong("size_bytes")))
+                SERVED_CONTENT_TYPES.get(kind), rs.getLong("size_bytes")))
             .optional().orElseThrow(() -> new NotFoundException("artifact not found"));
     }
 

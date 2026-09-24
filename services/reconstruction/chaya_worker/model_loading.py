@@ -11,7 +11,8 @@ A load that fails for either reason becomes a DependencyError that says how to f
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from .errors import DependencyError
 

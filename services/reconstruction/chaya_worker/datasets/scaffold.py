@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .schema import DatasetManifest, to_dict
@@ -52,7 +52,7 @@ def scaffold_dataset(root: Path, name: str, object_classes: list[str], descripti
     (dataset_dir / "images.jsonl").touch()
     (dataset_dir / "annotations.jsonl").touch()
 
-    manifest = DatasetManifest(name=name, version="0.1.0", created_at=datetime.now(timezone.utc).isoformat(),
+    manifest = DatasetManifest(name=name, version="0.1.0", created_at=datetime.now(UTC).isoformat(),
                                object_classes=tuple(object_classes), description=description)
     (dataset_dir / "manifest.json").write_text(json.dumps(to_dict(manifest), indent=2, sort_keys=True), encoding="utf-8")
     (dataset_dir / "README.md").write_text(README_TEMPLATE.format(name=name), encoding="utf-8")

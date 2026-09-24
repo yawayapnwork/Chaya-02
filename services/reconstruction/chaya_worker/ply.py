@@ -47,7 +47,7 @@ class GaussianCloud:
     def __len__(self) -> int:
         return len(self.positions)
 
-    def subset(self, mask: np.ndarray) -> "GaussianCloud":
+    def subset(self, mask: np.ndarray) -> GaussianCloud:
         return GaussianCloud(self.positions[mask], self.scales_log[mask], self.rotations_wxyz[mask],
                              self.opacity_logit[mask], self.colors_dc[mask])
 

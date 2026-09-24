@@ -16,11 +16,28 @@ dependencies = [
 [project.optional-dependencies]
 # The actual embedding model. Detected at runtime (app.clip_text_encoder); without it /v1/embed-text
 # answers 503, never a fake vector -- see app/main.py.
-model = ["torch>=2.2", "open_clip_torch>=2.24"]
-dev = ["pytest>=8", "httpx>=0.27"]
+# torch>=2.6: open_clip loads the checkpoint with torch.load, which is only safe by default from 2.6 (CVE-2025-32434).
+model = ["torch>=2.6", "open_clip_torch>=2.24"]
+dev = ["pytest>=8", "httpx>=0.27", "ruff>=0.6"]
 
 [tool.setuptools.packages.find]
 include = ["app*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 140
+
+[tool.ruff.lint]
+# pyflakes, pycodestyle, bugbear, isort, pyupgrade, bandit (security)
+select = ["E", "F", "W", "B", "I", "UP", "S"]
+ignore = [
+  "E501",  # long lines are allowed up to the formatter's judgement; line-length above is advisory
+  "S603",  # subprocess with an argv list and no shell is how stages run FFmpeg/COLMAP on purpose
+  "S607",  # tools are resolved by chaya_worker.toolchain, which records the resolved path and version
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S108"]  # assert is how pytest checks; temp paths in fixtures

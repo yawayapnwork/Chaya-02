@@ -1,0 +1,126 @@
+# Deployment to a Docker host over SSH (DEPLOYMENT.md).
+#
+#   staging     automatically after the docker workflow publishes images from main
+#   production  manually (Run workflow -> environment: production, version: sha-xxxxxxx or vX.Y.Z); the GitHub
+#               Environment "production" must require reviewers, so a person approves every production deploy
+#   rollback    the same workflow with an earlier version
+#
+# GitHub holds only what is needed to reach the host (per Environment): DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY,
+# DEPLOY_KNOWN_HOSTS, and variables DEPLOY_PATH, APP_URL, API_URL. Application secrets live in the host's own .env.
+name: deploy
+
+on:
+  workflow_run:
+    workflows: [docker]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [staging, production]
+        required: true
+      version:
+        description: "Image tag to deploy (sha-<short> or a release version like 1.4.2)"
+        required: true
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  # Never two deploys to the same environment at once; a queued deploy waits instead of cancelling a running one.
+  group: deploy-${{ github.event.inputs.environment || 'staging' }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: ${{ github.event.inputs.environment || 'staging' }}
+      url: ${{ vars.APP_URL }}
+    steps:
+      - name: Resolve version
+        id: v
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then v="$INPUT_VERSION"; else v="sha-${HEAD_SHA::7}"; fi
+          case "$v" in *[!A-Za-z0-9._-]*|"") echo "::error::invalid version '$v'"; exit 1;; esac
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "image_owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          # Deploy configuration from the same commit as the images when deploying a sha; else from the default branch.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: All four images exist for this version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          for svc in api web worker vision; do
+            img="ghcr.io/${{ steps.v.outputs.image_owner }}/chaya-$svc:${{ steps.v.outputs.version }}"
+            docker buildx imagetools inspect "$img" > /dev/null || { echo "::error::$img not found"; exit 1; }
+            echo "found $img"
+          done
+          docker logout ghcr.io
+
+      - name: Build the deploy bundle
+        run: bash scripts/deploy/bundle.sh "$RUNNER_TEMP/bundle"
+
+      - name: SSH setup (pinned host key)
+        env:
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/deploy_key && chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts && chmod 644 ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<EOF
+          Host deploy
+            HostName ${{ secrets.DEPLOY_HOST }}
+            User ${{ secrets.DEPLOY_USER }}
+            IdentityFile ~/.ssh/deploy_key
+            StrictHostKeyChecking yes
+            IdentitiesOnly yes
+          EOF
+
+      - name: Upload bundle (keeps the host's .env, backups and deploy history)
+        env:
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+        run: |
+          rsync -az --delete --exclude .env --exclude backups --exclude .deployed-version --exclude .deploy-history \
+            "$RUNNER_TEMP/bundle/" "deploy:${DEPLOY_PATH:?set the DEPLOY_PATH variable}/"
+
+      - name: Deploy (automatic rollback on failure)
+        env:
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          # The job token (packages:read) lets the host pull; it expires with the job and is removed from the host.
+          ssh deploy "docker login ghcr.io -u ${{ github.actor }} --password-stdin" <<< "$GH_TOKEN"
+          set +e
+          # DEPLOY_PATH and VERSION expand client-side on purpose; VERSION was restricted to [A-Za-z0-9._-] above.
+          # shellcheck disable=SC2029
+          ssh deploy "cd '$DEPLOY_PATH' && ./deploy.sh '$VERSION'"
+          status=$?
+          ssh deploy "docker logout ghcr.io" || true
+          exit $status
+
+      - name: Post-deploy check from outside
+        env:
+          API_URL: ${{ vars.API_URL }}
+          APP_URL: ${{ vars.APP_URL }}
+        run: |
+          body=$(curl -fsS "$API_URL/api/v1/health")
+          echo "$body"
+          echo "$body" | grep -q '"status":"DOWN"' && { echo "::error::API reports DOWN"; exit 1; }
+          curl -fsS "$APP_URL/api/health"
+          echo "::notice::deployed ${{ steps.v.outputs.version }} to ${{ github.event.inputs.environment || 'staging' }}"

@@ -14,7 +14,6 @@ from chaya_worker.datasets.scaffold import scaffold_dataset
 from chaya_worker.grounding_dino import Detection
 from chaya_worker.stages.semantic_indexing import associate_detection_with_geometry, cluster_by_distance
 
-
 # ---- semantic_indexing.py geometry/clustering -----------------------------------------------------
 
 def test_associate_detection_with_geometry_needs_a_reprojected_point_inside_the_box():

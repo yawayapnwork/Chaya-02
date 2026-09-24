@@ -52,6 +52,24 @@ class ClipTextEncoder:
         except Exception as exc:  # noqa: BLE001 - any load failure means "unavailable", not a crash
             raise ModelUnavailable(f"failed to load {self.model_id}: {exc}") from exc
 
+    def ready(self) -> tuple[bool, str | None]:
+        """Whether the model is actually loaded (loading it if needed), not merely installed. A failed load is
+        retried at most once a minute so a readiness probe cannot hammer a broken model download."""
+        import time
+
+        if self._model is not None:
+            return True, None
+        now = time.monotonic()
+        last = getattr(self, "_last_failure", None)
+        if last is not None and now - last[0] < 60:
+            return False, last[1]
+        try:
+            self._ensure_loaded()
+            return True, None
+        except ModelUnavailable as exc:
+            self._last_failure = (now, str(exc))
+            return False, str(exc)
+
     def embed(self, text: str) -> list[float]:
         self._ensure_loaded()
         with self._torch.no_grad():

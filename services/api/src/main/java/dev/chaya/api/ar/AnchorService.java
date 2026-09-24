@@ -56,7 +56,9 @@ public class AnchorService {
             rs.getDouble("physical_qx"), rs.getDouble("physical_qy"), rs.getDouble("physical_qz"), rs.getDouble("physical_qw"));
         Pose digital = new Pose(rs.getDouble("digital_x"), rs.getDouble("digital_y"), rs.getDouble("digital_z"),
             rs.getDouble("digital_qx"), rs.getDouble("digital_qy"), rs.getDouble("digital_qz"), rs.getDouble("digital_qw"));
-        Instant lastCalibratedAt = rs.getObject("last_calibrated_at", Instant.class);
+        // PgJDBC cannot convert timestamptz to Instant directly (only to Timestamp/OffsetDateTime).
+        java.sql.Timestamp calibrated = rs.getTimestamp("last_calibrated_at");
+        Instant lastCalibratedAt = calibrated == null ? null : calibrated.toInstant();
         return new Anchor(rs.getObject("id", UUID.class), rs.getObject("venue_id", UUID.class),
             rs.getObject("floor_id", UUID.class), rs.getString("marker_type"), rs.getString("marker_identifier"),
             physical, digital, rs.getString("calibration_status"), lastCalibratedAt);

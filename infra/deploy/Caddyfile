@@ -1,0 +1,55 @@
+# Edge proxy for Chaya 02: automatic HTTPS (ACME), security headers, and nothing internal exposed.
+# Domains and the ACME contact come from the environment (infra/deploy/docker-compose.yml, DEPLOYMENT.md).
+{
+	email {$CHAYA_ACME_EMAIL}
+	servers {
+		# The only proxy in front of the upstreams: they may trust X-Forwarded-* from this hop only.
+		trusted_proxies static private_ranges
+	}
+}
+
+(common) {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+}
+
+# Web app
+{$CHAYA_APP_DOMAIN} {
+	import common
+	reverse_proxy web:3000 {
+		health_uri /api/health/live
+		health_interval 15s
+	}
+}
+
+# API. Actuator endpoints (metrics, probes) are for inside the host only: Prometheus and health checks reach
+# api:8080 directly. Upload parts are 8 MiB, so the body limit leaves headroom above that.
+{$CHAYA_API_DOMAIN} {
+	import common
+	@actuator path /actuator /actuator/*
+	respond @actuator 404
+	request_body {
+		max_size 16MB
+	}
+	reverse_proxy api:8080 {
+		health_uri /actuator/health/readiness
+		health_interval 15s
+		# SSE (capture HUD) must not be buffered.
+		flush_interval -1
+	}
+}
+
+# Identity provider. The admin console is reachable only from KEYCLOAK_ADMIN_ALLOW (a CIDR list).
+{$CHAYA_AUTH_DOMAIN} {
+	import common
+	@admin {
+		path /admin /admin/*
+		not remote_ip {$KEYCLOAK_ADMIN_ALLOW}
+	}
+	respond @admin 403
+	# Keycloak's management port (health, metrics) is never proxied.
+	reverse_proxy keycloak:8080
+}

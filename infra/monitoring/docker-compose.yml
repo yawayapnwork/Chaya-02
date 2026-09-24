@@ -2,7 +2,8 @@
 # can run next to (or on a different host than) the application infrastructure:
 #   docker compose --env-file .env -f infra/monitoring/docker-compose.yml up -d
 #
-# Prometheus  127.0.0.1:9090   scrapes the API's /actuator/prometheus (HTTP Basic, METRICS_SCRAPE_PASSWORD)
+# Prometheus  127.0.0.1:9090   scrapes the API's /actuator/prometheus (HTTP Basic, METRICS_SCRAPE_PASSWORD) and MinIO's
+#                              cluster metrics (bearer token, MINIO_METRICS_TOKEN)
 # Grafana     127.0.0.1:3001   dashboards (provisioned) over Prometheus + Loki; admin password from .env
 # Loki        (internal only)  log store, 14-day retention
 # Alloy       (internal only)  ships container logs and the API log file to Loki
@@ -38,6 +39,7 @@ services:
       - prometheus-data:/prometheus
     secrets:
       - metrics_scrape_password
+      - minio_metrics_token
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -124,6 +126,8 @@ services:
 secrets:
   metrics_scrape_password:
     environment: METRICS_SCRAPE_PASSWORD
+  minio_metrics_token:
+    environment: MINIO_METRICS_TOKEN
 
 volumes:
   prometheus-data:

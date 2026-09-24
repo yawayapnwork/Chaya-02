@@ -1,7 +1,9 @@
 // Lists the licenses of the installed npm dependency tree of apps/web, as declared in each installed package's own
 // package.json, and checks them against scripts/licenses/policy.json.
 //   node scripts/licenses/npm-licenses.mjs [--prod] [--json]     (run from the repo root, after `npm ci` in apps/web)
-// Exit status: 0 = every license allowed or reviewed-allowed, 1 = at least one needs a decision (review/deny/unknown).
+// Exit status: 0 = every license is allowed, or is a "review" license on a package listed in policy.json
+// pending_review.npm (known, awaiting the human decision recorded in THIRD_PARTY_LICENSES.md); 1 = anything else: a
+// denied or unknown license, or a review license on a package nobody has looked at yet.
 // Declared metadata is what package authors wrote; it is not a verified legal analysis.
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -73,7 +75,15 @@ function classify(expr) {
   return "deny";
 }
 
-const rows = [...found.values()].sort((a, b) => a.name.localeCompare(b.name)).map((r) => ({ ...r, verdict: classify(r.license) }));
+// A pending entry only ever softens "review" to "pending": a denied or unknown license fails whatever the list says.
+// Entries are exact package names, or a prefix ending in "*" for platform-specific builds (@img/sharp-*).
+const pending = policy.pending_review?.npm ?? [];
+const isPending = (name) => pending.some((p) => (p.endsWith("*") ? name.startsWith(p.slice(0, -1)) : name === p));
+const verdictOf = (r) => {
+  const v = classify(r.license);
+  return v === "review" && isPending(r.name) ? "pending" : v;
+};
+const rows = [...found.values()].sort((a, b) => a.name.localeCompare(b.name)).map((r) => ({ ...r, verdict: verdictOf(r) }));
 if (asJson) {
   console.log(JSON.stringify(rows, null, 2));
 } else {
@@ -83,6 +93,7 @@ if (asJson) {
   for (const [lic, list] of Object.entries(byLicense).sort((a, b) => b[1].length - a[1].length)) {
     console.log(`${String(list.length).padStart(4)}  ${lic}  [${list[0].verdict}]`);
   }
-  for (const r of rows.filter((x) => x.verdict !== "allow")) console.log(`NEEDS DECISION (${r.verdict}): ${r.name}@${r.version} ${r.license}`);
+  for (const r of rows.filter((x) => x.verdict === "pending")) console.log(`PENDING REVIEW (see THIRD_PARTY_LICENSES.md): ${r.name}@${r.version} ${r.license}`);
+  for (const r of rows.filter((x) => x.verdict === "review" || x.verdict === "deny")) console.log(`NEEDS DECISION (${r.verdict}): ${r.name}@${r.version} ${r.license}`);
 }
-process.exit(rows.some((r) => r.verdict !== "allow") ? 1 : 0);
+process.exit(rows.some((r) => r.verdict === "review" || r.verdict === "deny") ? 1 : 0);

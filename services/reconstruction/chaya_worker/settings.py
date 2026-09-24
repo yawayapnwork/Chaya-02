@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import os
 import socket
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Mapping
 
 
 def _int(env: Mapping[str, str], name: str, default: int) -> int:
@@ -114,7 +114,7 @@ class Settings:
     min_alignment_confidence: float = 0.6
 
     @staticmethod
-    def from_env(env: Mapping[str, str] | None = None) -> "Settings":
+    def from_env(env: Mapping[str, str] | None = None) -> Settings:
         e = os.environ if env is None else env
         d = Settings()
         return Settings(

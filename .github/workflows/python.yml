@@ -1,0 +1,45 @@
+# Python services: lint (ruff: pyflakes, pycodestyle, bugbear, isort, pyupgrade, bandit) and tests.
+# The worker's GPU and live-stack suites skip themselves here (no GPU, no stack); the CPU stages run for real.
+name: python
+
+on:
+  pull_request:
+    paths: ["services/reconstruction/**", "services/vision/**", ".github/workflows/python.yml"]
+  push:
+    branches: [main]
+    paths: ["services/reconstruction/**", "services/vision/**", ".github/workflows/python.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [reconstruction, vision]
+    defaults:
+      run:
+        working-directory: services/${{ matrix.service }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: services/${{ matrix.service }}/pyproject.toml
+      - name: System tools the worker's CPU stages execute
+        if: matrix.service == 'reconstruction'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: pip install -e ".[dev]"
+      - name: Lint
+        run: ruff check .
+      - name: Tests
+        run: python -m pytest -q -ra

@@ -18,8 +18,11 @@ function origin(url: string | undefined): string {
 }
 
 const isDev = process.env.NODE_ENV === "development";
-const api = origin(process.env.NEXT_PUBLIC_API_BASE_URL);
-const idp = origin(process.env.NEXT_PUBLIC_OIDC_ISSUER);
+// next.config is evaluated at BUILD time (and serialized into the standalone server), so these origins come from the
+// build environment, not the running container. The resource policy is report-only; if the image is built without
+// them, connect-src/frame-src just report more. Promoting the CSP to enforcing needs per-request headers (a proxy).
+const api = origin(process.env.CHAYA_PUBLIC_API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL);
+const idp = origin(process.env.CHAYA_PUBLIC_OIDC_ISSUER ?? process.env.NEXT_PUBLIC_OIDC_ISSUER);
 
 const enforced = ["frame-ancestors 'none'", "object-src 'none'", "base-uri 'self'", "form-action 'self'"].join("; ");
 
@@ -40,6 +43,8 @@ const reportOnly = [
 ].join("; ");
 
 const nextConfig: NextConfig = {
+  // Self-contained server bundle (.next/standalone) for the container image: no node_modules install at runtime.
+  output: "standalone",
   async headers() {
     return [
       {

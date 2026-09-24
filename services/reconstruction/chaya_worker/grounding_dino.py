@@ -62,7 +62,7 @@ class GroundingDinoDetector:
             outputs, inputs["input_ids"], box_threshold=self.box_threshold, text_threshold=self.text_threshold,
             target_sizes=[(h, w)])[0]
         detections = []
-        for box, score, label in zip(results["boxes"], results["scores"], results["labels"]):
+        for box, score, label in zip(results["boxes"], results["scores"], results["labels"], strict=True):
             x0, y0, x1, y1 = (float(v) for v in box.tolist())
             detections.append(Detection(label=str(label).strip(), confidence=float(score), box_xyxy=(x0, y0, x1, y1)))
         return detections

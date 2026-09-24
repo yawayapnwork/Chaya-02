@@ -16,7 +16,6 @@ fails with DEPENDENCY_UNAVAILABLE and nothing is produced; there is no CPU or "f
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -82,7 +81,6 @@ def _gaussian_window(size: int, sigma: float, device, dtype):
 def ssim(pred_chw, gt_chw, window_size: int = 11):
     """A compact, differentiable single-scale SSIM (Gaussian-windowed, per-channel depthwise conv), the same
     formulation used to regularise 3D Gaussian Splatting training. pred/gt are (C,H,W) in [0, 1]."""
-    import torch  # noqa: PLC0415
     import torch.nn.functional as F  # noqa: PLC0415
 
     c = pred_chw.shape[0]

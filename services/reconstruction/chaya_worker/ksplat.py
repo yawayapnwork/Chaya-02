@@ -71,7 +71,8 @@ def encode(cloud: GaussianCloud, *, compression_level: int = 0) -> bytes:
     body["scale"] = cloud.scales().astype(np.float32)
     body["rot"] = quat_u8
     body["color"] = color_u8
-    assert body.itemsize == BYTES_PER_SPLAT, body.itemsize
+    if body.itemsize != BYTES_PER_SPLAT:  # a format invariant; not an assert, which python -O would strip
+        raise ValueError(f"ksplat record layout is {body.itemsize} bytes, expected {BYTES_PER_SPLAT}")
 
     return file_header + section_header + body.tobytes()
 

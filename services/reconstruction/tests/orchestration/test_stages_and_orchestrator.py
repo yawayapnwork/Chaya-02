@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import cv2
@@ -19,11 +19,10 @@ from chaya_worker.api_client import ApiError
 from chaya_worker.contract import ArtifactSpec, StageResult
 from chaya_worker.errors import DependencyError
 from chaya_worker.privacy import FaceDetector, ScreenDocumentDetector, anonymize
-from chaya_worker.stages.pose_estimation import PoseEstimation
-from chaya_worker.stages.unimplemented import PLANNED, PlannedStage
+from chaya_worker.stages.unimplemented import PLANNED
 from chaya_worker.storage import LocalStorage, StorageError
 from chaya_worker.toolchain import Toolchain, ToolStatus
-from tests.conftest import DERIVED_BUCKET, Harness, astronaut_bgr, shaken_face_frames
+from tests.conftest import DERIVED_BUCKET, Harness, shaken_face_frames
 
 pytestmark = pytest.mark.orchestration
 
@@ -172,7 +171,7 @@ def test_privacy_stage_really_blurs_a_real_face_and_verifies_the_result(harness,
     assert anon["containsPii"] is False and "/pii/" not in anon["key"]
     out_frames = archive.unpack(download(harness, anon["key"], tmp_path), tmp_path / "anon")
     assert len(out_frames) == 5
-    for original, path in zip(frames, out_frames):
+    for original, path in zip(frames, out_frames, strict=True):
         out = cv2.imread(str(path))
         assert detector.detect(out) == [], "no face may remain detectable in published frames"
         assert np.abs(out.astype(int) - original.astype(int)).mean() > 0.5, "the frame must actually have changed"
@@ -283,7 +282,7 @@ class _Stage:
 
 
 def iso_in(seconds: float) -> str:
-    return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat()
+    return (datetime.now(UTC) + timedelta(seconds=seconds)).isoformat()
 
 
 def test_a_stage_that_outlives_the_time_budget_is_stopped_and_reported_as_time_limit_exceeded(harness):

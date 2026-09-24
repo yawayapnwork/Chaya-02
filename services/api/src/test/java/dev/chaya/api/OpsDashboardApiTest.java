@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpMethod;
 
 /**
  * The operations dashboard read model against real PostgreSQL: the section/role matrix (docs/security.md), tenant
@@ -78,7 +79,16 @@ class OpsDashboardApiTest extends ApiTest {
         UUID retryable = insertJob(t, "SPLAT_RECONSTRUCTION", "FAILED", 0, "DEPENDENCY_UNAVAILABLE");
         UUID exhausted = insertJob(t, "GEOMETRIC_CLEANUP", "FAILED", 3, "WORKER_LOST");
         String manager = token(t.org(), t.venue(), "venue-manager");
+        try {
+            assertJobsView(t, manager, retryable, exhausted);
+        } finally {
+            // The database is shared by every test class: leave nothing a worker-protocol test could claim.
+            jdbc.sql("UPDATE processing_job SET status = 'CANCELLED', finished_at = now() WHERE scan_id = :s AND status IN ('QUEUED', 'RUNNING')")
+                .param("s", t.scan()).update();
+        }
+    }
 
+    private void assertJobsView(Fixtures.Tree t, String manager, UUID retryable, UUID exhausted) throws Exception {
         get(url(t.venue(), "jobs"), manager).andExpect(status().isOk())
             .andExpect(jsonPath("$.counts.QUEUED").value(1))
             .andExpect(jsonPath("$.counts.RUNNING").value(1))
@@ -197,7 +207,7 @@ class OpsDashboardApiTest extends ApiTest {
         UUID venue = fx.venue(org);
         UUID other = fx.venue(org);
         String manager = token(org, venue, "venue-manager");
-        call(org.springframework.http.HttpMethod.PATCH, "/api/v1/venues/" + venue, manager, "{\"name\":\"Renamed\"}")
+        call(HttpMethod.PATCH, "/api/v1/venues/" + venue, manager, "{\"name\":\"Renamed\"}")
             .andExpect(status().isOk());
         // An operator of another venue probing this one: refused, audited without venue_id.
         get("/api/v1/venues/" + venue, token(org, other, "operator")).andExpect(status().isNotFound());
