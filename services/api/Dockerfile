@@ -14,7 +14,7 @@ COPY src ./src
 RUN --mount=type=cache,target=/root/.m2 mvn -B -ntp -q -Dmaven.test.skip=true package \
  && java -Djarmode=tools -jar "$(ls target/chaya-api-*.jar | head -1)" extract --layers --launcher --destination /extracted
 
-FROM eclipse-temurin:21-jre-alpine
+FROM eclipse-temurin:25-jre-alpine
 # apk upgrade: take Alpine security fixes published since the base image was last rebuilt (the image scan fails on
 # fixable HIGH/CRITICAL findings, and the base tag can lag by weeks). Upgrades only; nothing new is installed.
 RUN apk upgrade --no-cache \
