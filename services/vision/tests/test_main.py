@@ -78,3 +78,37 @@ def test_embed_text_returns_a_real_looking_vector_when_the_encoder_succeeds(monk
     body = res.json()
     assert len(body["embedding"]) == 512
     assert body["model"] == encoder.model_id
+
+
+def test_concurrent_requests_during_the_first_load_load_the_model_exactly_once(monkeypatch):
+    """Sync FastAPI handlers run on a thread pool: health checks and searches that arrive while the model is loading
+    must wait for (or report) that one load, not each start their own (~1 GiB each, until the container is OOM-killed)."""
+    import threading
+    import types
+
+    loads, started, release = [], threading.Event(), threading.Event()
+
+    def slow_create(name, pretrained):
+        loads.append(name)
+        started.set()
+        release.wait(5)
+        return types.SimpleNamespace(eval=lambda: "model"), None, None
+
+    fake = types.SimpleNamespace(create_model_and_transforms=slow_create, get_tokenizer=lambda name: "tok")
+    monkeypatch.setitem(sys.modules, "open_clip", fake)
+    monkeypatch.setitem(sys.modules, "torch", types.SimpleNamespace())
+    monkeypatch.setattr(ClipTextEncoder, "available", lambda self: True)
+    enc = ClipTextEncoder()
+
+    threads = [threading.Thread(target=enc._ensure_loaded) for _ in range(8)]
+    threads[0].start()
+    assert started.wait(5)
+    for t in threads[1:]:
+        t.start()
+    ok, reason = enc.ready()
+    assert (ok, "loading" in (reason or "")) == (False, True), "a probe during the load is answered, not queued"
+    release.set()
+    for t in threads:
+        t.join(5)
+    assert len(loads) == 1
+    assert enc.ready() == (True, None)

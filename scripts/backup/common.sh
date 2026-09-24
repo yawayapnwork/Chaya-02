@@ -17,7 +17,7 @@ COMPOSE_FILE_PATH=${CHAYA_COMPOSE_FILE:-$REPO_ROOT/infra/docker/docker-compose.y
 # A function, not a command string: paths with spaces (a Windows home directory, for example) must stay one argument.
 compose() { docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE_PATH" "$@"; }
 NETWORK=${COMPOSE_NETWORK:-chaya_default}
-MC_IMAGE=${MC_IMAGE:-quay.io/minio/mc:latest}
+MC_IMAGE=${MC_IMAGE:-quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727}
 
 BACKUP_DIR=${BACKUP_DIR:-$REPO_ROOT/backups}
 case "$BACKUP_DIR" in /*|[A-Za-z]:*) ;; *) BACKUP_DIR="$REPO_ROOT/${BACKUP_DIR#./}" ;; esac

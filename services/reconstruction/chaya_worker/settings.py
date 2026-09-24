@@ -46,6 +46,10 @@ class Settings:
     duplicate_distance: float = 2.0
     min_frames: int = 10
     min_registered_ratio: float = 0.6
+    # POSE_ESTIMATION: COLMAP SIFT extraction/matching threads. -1 = COLMAP's default (one per host core). On a CPU-only
+    # worker each extraction thread holds ~450 MiB for a 1600x1200 frame, so an 18-core host wants ~8.5 GiB; bound it
+    # to fit the worker's memory limit. GPU hosts extract on the GPU and do not need this.
+    colmap_num_threads: int = -1
     privacy_screen_detector: str = "heuristic-quad"
     # SPLAT_RECONSTRUCTION (gsplat)
     gsplat_iterations: int = 7000
@@ -141,6 +145,7 @@ class Settings:
             duplicate_distance=_float(e, "DUPLICATE_DISTANCE", d.duplicate_distance),
             min_frames=_int(e, "MIN_FRAMES", d.min_frames),
             min_registered_ratio=_float(e, "MIN_REGISTERED_RATIO", d.min_registered_ratio),
+            colmap_num_threads=_int(e, "COLMAP_NUM_THREADS", d.colmap_num_threads),
             privacy_screen_detector=e.get("PRIVACY_SCREEN_DETECTOR", d.privacy_screen_detector),
             gsplat_iterations=_int(e, "GSPLAT_ITERATIONS", d.gsplat_iterations),
             gsplat_lr_position=_float(e, "GSPLAT_LR_POSITION", d.gsplat_lr_position),
@@ -207,7 +212,8 @@ class Settings:
             "max_frames_per_video": self.max_frames_per_video, "blur_threshold": self.blur_threshold,
             "dark_fraction_max": self.dark_fraction_max, "bright_fraction_max": self.bright_fraction_max,
             "duplicate_distance": self.duplicate_distance, "min_frames": self.min_frames,
-            "min_registered_ratio": self.min_registered_ratio, "privacy_screen_detector": self.privacy_screen_detector,
+            "min_registered_ratio": self.min_registered_ratio, "colmap_num_threads": self.colmap_num_threads,
+            "privacy_screen_detector": self.privacy_screen_detector,
             "gsplat_iterations": self.gsplat_iterations, "gsplat_lr_position": self.gsplat_lr_position,
             "gsplat_lr_other": self.gsplat_lr_other, "gsplat_ssim_weight": self.gsplat_ssim_weight,
             "gsplat_keyframe_every": self.gsplat_keyframe_every,

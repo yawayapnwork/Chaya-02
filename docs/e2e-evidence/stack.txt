@@ -1,0 +1,64 @@
+# Chaya 02 E2E stack, captured 2026-09-24 19:07:21 +0530 after the final run
+
+## docker compose ps (project chaya-e2e)
+SERVICE                 IMAGE                                                                                                                      STATUS
+api                     chaya-api:smoke                                                                                                            Up 12 minutes (healthy)
+clamav                  clamav/clamav:1.4                                                                                                          Up 14 minutes (healthy)
+keycloak                quay.io/keycloak/keycloak:26.0                                                                                             Up 14 minutes (healthy)
+minio                   quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e   Up 14 minutes (healthy)
+minio-init              quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727      Exited (0) 13 minutes ago
+postgres                pgvector/pgvector:pg17                                                                                                     Up 14 minutes (healthy)
+reconstruction-worker   chaya-e2e-reconstruction-worker                                                                                            Up 12 minutes (healthy)
+redis                   redis:7-alpine                                                                                                             Up 14 minutes (healthy)
+toolchain-worker        chaya-e2e-toolchain-worker                                                                                                 Up 12 minutes (healthy)
+vision                  chaya-e2e-vision                                                                                                           Up 6 minutes (healthy)
+web                     chaya-e2e-web                                                                                                              Up 12 minutes (healthy)
+
+## images
+api  chaya-api:smoke  sha256:5463dd8cdf2dbe981a9875e992c16489eab0f3b8bfe0db1de6fd6a5a9da1b595  user=10001:10001
+web  chaya-e2e-web  sha256:38a26dfee958cbb82a4b2a6fe77dec1cef8bf4859237b8edc7a3babd9d435b08  user=node
+reconstruction-worker  chaya-e2e-reconstruction-worker  sha256:48cda5cd7018b3b44d6a7d158e33afffeeb4adb5febf623a6906f25c4a87ebf0  user=10001:10001
+toolchain-worker  chaya-e2e-toolchain-worker  sha256:56b8043e0053a0bdeeffa8d574005998b6d647edaa71d09ed55177b89dc9cbf8  user=10001:10001
+vision  chaya-e2e-vision  sha256:66948d835a9194cfdd62057141f74ff57f9431856061259641bf2558058fdb6b  user=10001:10001
+
+## infrastructure image references
+pgvector/pgvector:pg17
+quay.io/keycloak/keycloak:26.0
+clamav/clamav:1.4
+redis:7-alpine
+quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+
+## worker toolchains (chaya_worker.toolchain, inside each container)
+### reconstruction-worker
+WORKER_STAGES INPUT_VALIDATION,FFMPEG_PREPROCESS,FRAME_QUALITY_FILTER,PRIVACY_PREPROCESS,REGION_SPLICE,ARTIFACT_GENERATION
+COLMAP_NUM_THREADS -1
+  ffmpeg           available=True  ffmpeg version 5.1.9-0+deb12u1 Copyright (c) 2000-2026 the FFmpeg developers
+  colmap           available=False  not found on PATH; set COLMAP_BIN to its location
+  glomap           available=False  not found on PATH; set GLOMAP_BIN to its location
+  cuda             available=False  torch is not installed, so no CUDA device can be used
+  py:torch         available=False  python module 'torch' is not installed
+  py:gsplat        available=False  python module 'gsplat' is not installed
+  py:open3d        available=False  python module 'open3d' is not installed
+  py:transformers  available=False  python module 'transformers' is not installed
+  exe:recast-cli   available=False  not found on PATH; set RECAST_CLI_BIN to its location
+### toolchain-worker
+WORKER_STAGES POSE_ESTIMATION,SPLAT_RECONSTRUCTION,SEMANTIC_SEGMENTATION,GEOMETRIC_CLEANUP,REGION_ALIGNMENT,PLANE_FITTING,SEMANTIC_INDEXING,NAVIGATION_BAKING
+COLMAP_NUM_THREADS 2
+  ffmpeg           available=True  ffmpeg version 5.1.9-0+deb12u1 Copyright (c) 2000-2026 the FFmpeg developers
+  colmap           available=True  COLMAP 3.8 -- Structure-from-Motion and Multi-View Stereo
+  glomap           available=False  not found on PATH; set GLOMAP_BIN to its location
+  cuda             available=False  torch is not installed, so no CUDA device can be used
+  py:torch         available=False  python module 'torch' is not installed
+  py:gsplat        available=False  python module 'gsplat' is not installed
+  py:open3d        available=False  python module 'open3d' is not installed
+  py:transformers  available=False  python module 'transformers' is not installed
+  exe:recast-cli   available=False  not found on PATH; set RECAST_CLI_BIN to its location
+
+## vision
+{"status":"UP","model":"open_clip:ViT-B-32:openai","modelAvailable":true,"reason":null}
+OOMKilled=false RestartCount=0 MemoryLimit=2147483648
+
+## host
+Windows 11 Home 10.0.26200; Intel Core Ultra 5 125H; 15.6 GB RAM; GPU: Intel(R) Graphics only (no NVIDIA, no nvidia-smi)
+Docker engine 29.6.2, compose 5.3.1, VM memory 7.5 GiB, CPUs 18

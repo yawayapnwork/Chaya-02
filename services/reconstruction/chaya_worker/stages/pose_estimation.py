@@ -24,8 +24,9 @@ EXHAUSTIVE_MAX_FRAMES = 300
 
 
 def build_pose_commands(*, colmap: str, glomap: str | None, database: Path, images: Path, sparse: Path, use_gpu: bool,
-                        frame_count: int, mapper: str) -> dict[str, list[str]]:
-    """Pure: the command lines of each step. mapper is 'glomap' or 'colmap'."""
+                        frame_count: int, mapper: str, num_threads: int = -1) -> dict[str, list[str]]:
+    """Pure: the command lines of each step. mapper is 'glomap' or 'colmap'. num_threads > 0 bounds COLMAP's SIFT
+    extraction and matching threads (Settings.colmap_num_threads); otherwise COLMAP's own default applies."""
     gpu = "1" if use_gpu else "0"
     matcher = "exhaustive_matcher" if frame_count <= EXHAUSTIVE_MAX_FRAMES else "sequential_matcher"
     commands = {
@@ -34,6 +35,9 @@ def build_pose_commands(*, colmap: str, glomap: str | None, database: Path, imag
                               "--SiftExtraction.use_gpu", gpu],
         "matcher": [colmap, matcher, "--database_path", str(database), "--SiftMatching.use_gpu", gpu],
     }
+    if num_threads > 0:
+        commands["feature_extractor"] += ["--SiftExtraction.num_threads", str(num_threads)]
+        commands["matcher"] += ["--SiftMatching.num_threads", str(num_threads)]
     if mapper == "glomap":
         if not glomap:
             raise ValueError("glomap mapper requested but no glomap binary given")
@@ -79,7 +83,8 @@ class PoseEstimation:
 
         first_mapper = "glomap" if glomap.available else "colmap"
         steps = build_pose_commands(colmap=colmap, glomap=glomap.path, database=database, images=images_dir, sparse=sparse,
-                                    use_gpu=use_gpu, frame_count=len(frames), mapper=first_mapper)
+                                    use_gpu=use_gpu, frame_count=len(frames), mapper=first_mapper,
+                                    num_threads=ctx.settings.colmap_num_threads)
         ctx.runner.run(steps["feature_extractor"], error_code="FEATURE_EXTRACTION_FAILED", timeout=7200)
         ctx.runner.run(steps["matcher"], error_code="FEATURE_MATCHING_FAILED", timeout=7200)
 
@@ -92,7 +97,8 @@ class PoseEstimation:
             if first_mapper == "glomap" and exc.code != "TIME_LIMIT_EXCEEDED":
                 ctx.logger.warning("GLOMAP failed; falling back to COLMAP mapper", extra={"reason": exc.message})
                 steps = build_pose_commands(colmap=colmap, glomap=None, database=database, images=images_dir, sparse=sparse,
-                                            use_gpu=use_gpu, frame_count=len(frames), mapper="colmap")
+                                            use_gpu=use_gpu, frame_count=len(frames), mapper="colmap",
+                                            num_threads=ctx.settings.colmap_num_threads)
                 ctx.runner.run(steps["mapper"], error_code="MAPPING_FAILED", timeout=14400)
                 used, fallback = "colmap", True
             else:

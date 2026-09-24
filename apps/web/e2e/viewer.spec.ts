@@ -34,9 +34,15 @@ test('a floor with no successful reconstruction states "No reconstruction availa
   await mockJson(page, `**/mock-api/api/v1/venues/${VENUE_ID}/floors/${FLOOR_ID}/reconstructions`, []);
   await mockJson(page, `**/mock-api/api/v1/venues/${VENUE_ID}/pois`, []);
 
+  const floorsRequest = page.waitForRequest(`**/mock-api/api/v1/venues/${VENUE_ID}/floors`);
   await page.goto(`/viewer?link=good-secret`);
   await expect(page.getByText("Public viewing link")).toBeVisible();
   await expect(page.getByTestId("no-reconstruction")).toContainText("No reconstruction available.");
+  // The backend accepts a public-viewer token only in X-Chaya-Viewer-Token (PublicViewerTokenFilter); sent
+  // as a bearer token it is parsed as a JWT and rejected with 401.
+  const headers = (await floorsRequest).headers();
+  expect(headers["x-chaya-viewer-token"]).toBe("cvt_test");
+  expect(headers["authorization"]).toBeUndefined();
 });
 
 test("once a reconstruction exists, its version appears in the picker and a download starts", async ({ page }) => {
@@ -65,5 +71,6 @@ test("once a reconstruction exists, its version appears in the picker and a down
   await expect(page.getByText("Points of interest (1)")).toBeVisible();
   await expect(page.getByRole("button", { name: "Main entrance" })).toBeVisible();
   const request = await artifactRequest;
-  expect(request.headers()["authorization"]).toBe("Bearer cvt_test");
+  expect(request.headers()["x-chaya-viewer-token"]).toBe("cvt_test");
+  expect(request.headers()["authorization"]).toBeUndefined();
 });

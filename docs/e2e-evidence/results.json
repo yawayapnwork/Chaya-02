@@ -1,0 +1,3554 @@
+{
+  "started": "2026-09-24T18:55:16+0530",
+  "finished": "2026-09-24T19:02:46+0530",
+  "results": [
+    {
+      "step": "0.1",
+      "name": "API health (/api/v1/health)",
+      "expected": "200, status UP (database, storage, identity provider, scanner, queue)",
+      "actual": "HTTP 200 status=UP",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": {
+        "status": "UP",
+        "database": "UP",
+        "storage": "UP",
+        "identityProvider": "UP",
+        "malwareScanner": "UP",
+        "processing": {
+          "status": "IDLE",
+          "queuedJobs": 0,
+          "runningJobs": 0,
+          "oldestQueuedAgeSeconds": null
+        },
+        "checkedAt": "2026-09-24T13:25:18.364186636Z"
+      }
+    },
+    {
+      "step": "0.2",
+      "name": "API readiness (Flyway migrations applied, deps answering)",
+      "expected": "200 UP",
+      "actual": "HTTP 200 {\"status\":\"UP\"}",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "0.3",
+      "name": "API version",
+      "expected": "200",
+      "actual": "HTTP 200 {\"name\":\"chaya-api\",\"version\":\"0.1.0-SNAPSHOT\",\"apiVersion\":\"v1\"}",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "0.4",
+      "name": "Database migrations and extensions",
+      "expected": "16 migrations applied; vector + pg_trgm installed",
+      "actual": "migrations(count|max)=16|16; extensions: pg_trgm 1.6, plpgsql 1.0, vector 0.8.6",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "0.5",
+      "name": "Web readiness (/api/health)",
+      "expected": "200 (public config complete, API reachable)",
+      "actual": "HTTP 200 {\"status\":\"UP\",\"backend\":{\"reachable\":true,\"status\":\"UP\",\"httpStatus\":200},\"problems\":[]}",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "0.6",
+      "name": "Vision service readiness (CLIP loaded)",
+      "expected": "200",
+      "actual": "HTTP 200 {\"status\":\"UP\",\"model\":\"open_clip:ViT-B-32:openai\",\"modelAvailable\":true,\"reason\":null}",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "0.7",
+      "name": "Redis reachable (password-protected)",
+      "expected": "PONG",
+      "actual": "PONG (note: no Chaya service uses Redis today; see compose comment)",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "2",
+      "name": "Create organization",
+      "expected": "Organization row created through a supported interface",
+      "actual": "created via SQL (no organization API exists): 3977dddd-5e6d-4876-b334-76a0a13c33b1; second org for isolation tests: 68eba9cd-0404-4f54-af04-20bbab3adde5",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": {
+        "org_id": "3977dddd-5e6d-4876-b334-76a0a13c33b1",
+        "db_row": "3977dddd-5e6d-4876-b334-76a0a13c33b1|e2e-org|E2E Validation Org",
+        "note": "Documented gap: organization creation has no API endpoint; SQL is the documented procedure."
+      }
+    },
+    {
+      "step": "3.0",
+      "name": "Venue manager may NOT create a venue",
+      "expected": "403 (venue creation is ADMIN-only)",
+      "actual": "HTTP 403 ",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "3",
+      "name": "Create venue (as admin)",
+      "expected": "200 with venue id",
+      "actual": "HTTP 200 {\"id\":\"f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44\",\"organizationId\":\"3977dddd-5e6d-4876-b334-76a0a13c33b1\",\"slug\":\"e2e-venue\",\"name\":\"E2E Venue\",\"timezone\":\"Asia/Kolkata\"}",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "3.1",
+      "name": "Venue persisted",
+      "expected": "venue rows scoped to the org",
+      "actual": "rows: f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44|3977dddd-5e6d-4876-b334-76a0a13c33b1|e2e-venue|E2E Venue|Asia/Kolkata\nc5f7f8c0-dde7-4716-b2d6-5370588801f4|3977dddd-5e6d-4876-b334-76a0a13c33b1|e2e-venue-b|E2E Venue B|UTC",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "1",
+      "name": "Authenticate as venue manager (Keycloak)",
+      "expected": "token with role venue-manager, org_id, venue_id, aud chaya-api",
+      "actual": "HTTP 200; roles=['venue-manager', 'offline_access', 'default-roles-chaya', 'uma_authorization']; org_id=3977dddd-5e6d-4876-b334-76a0a13c33b1; venue_id=['f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44']; aud=chaya-api; iss=http://localhost:8081/realms/chaya",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": {
+        "iss": "http://localhost:8081/realms/chaya",
+        "aud": "chaya-api",
+        "azp": "chaya-e2e",
+        "org_id": "3977dddd-5e6d-4876-b334-76a0a13c33b1",
+        "venue_id": [
+          "f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44"
+        ],
+        "preferred_username": null
+      }
+    },
+    {
+      "step": "1.1",
+      "name": "Manager's token accepted; sees only own venue",
+      "expected": "200, exactly [venue A]",
+      "actual": "HTTP 200 venues=['f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44']",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "1.2",
+      "name": "No token is rejected",
+      "expected": "401",
+      "actual": "HTTP 401 ",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "1.3",
+      "name": "Tampered token signature is rejected",
+      "expected": "401",
+      "actual": "HTTP 401 ",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "1.4",
+      "name": "Wrong password is rejected by Keycloak",
+      "expected": "401 invalid_grant",
+      "actual": "HTTP 401 {\"error\":\"invalid_grant\",\"error_description\":\"Invalid user credentials\"}",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "4",
+      "name": "Create floor (venue manager)",
+      "expected": "201 with floor id",
+      "actual": "HTTP 201 {\"id\":\"e3ae8afa-5a4a-40f3-9bbd-649c5484bcec\",\"level\":0,\"name\":\"Ground floor\"}",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "4.1",
+      "name": "Floor persisted",
+      "expected": "floor row in venue A",
+      "actual": "e3ae8afa-5a4a-40f3-9bbd-649c5484bcec|f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44|0|Ground floor",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "5",
+      "name": "Create capture session",
+      "expected": "200/201 with capture id, status CREATED",
+      "actual": "HTTP 201 {\"id\":\"136ab547-4547-40d6-b601-865f3b8a1058\",\"venueId\":\"f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44\",\"floorId\":\"e3ae8afa-5a4a-40f3-9bbd-649c5484bcec\",\"operatorId\":\"a6fafba3-27c7-4f82-bece-c0f33d1dae2b\",\"status\":\"CREATED\",\"device\":{\"app\":\"scripts/e2e\",\"model\":\"e2e-fixture\"},\"startedAt\":\"2026-09-24T13:27:03.822655Z\",\"endedAt\":null,\"durationSeconds\":null,\"qualityState\":\"NOT_ASSESSED\",\"failureCode\":null,\"fai",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "6.1",
+      "name": "Initiate media upload",
+      "expected": "201 with mediaId + partSizeBytes",
+      "actual": "HTTP 201 {\"mediaId\":\"969b78da-9632-4cf9-8b8a-b90f00fe8c6b\",\"partSizeBytes\":8388608,\"totalParts\":1}",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "6",
+      "name": "Upload real capture fixture (multipart)",
+      "expected": "each part 204, complete 202",
+      "actual": "4917797 bytes, sha256=f960743de6220499436815d55489bd052323d67160367c2e41301cc8cb6921fb, parts=[204], complete=HTTP 202",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "7",
+      "name": "Upload validated (checksum, content sniffing, ClamAV)",
+      "expected": "status ACCEPTED",
+      "actual": "status history ['ACCEPTED']; {\"status\": \"ACCEPTED\", \"detectedContentType\": \"video/quicktime\", \"rejectionCode\": null, \"rejectionMessage\": null, \"sha256\": \"f960743de6220499436815d55489bd052323d67160367c2e41301cc8cb6921fb\"}",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": {
+        "id": "969b78da-9632-4cf9-8b8a-b90f00fe8c6b",
+        "kind": "VIDEO",
+        "status": "ACCEPTED",
+        "filename": "sceaux-castle.mp4",
+        "claimedContentType": "video/mp4",
+        "detectedContentType": "video/quicktime",
+        "sizeBytes": 4917797,
+        "sha256": "f960743de6220499436815d55489bd052323d67160367c2e41301cc8cb6921fb",
+        "rejectionCode": null,
+        "rejectionMessage": null,
+        "totalParts": 1,
+        "partSizeBytes": 8388608,
+        "uploadedParts": [
+          1
+        ],
+        "createdAt": "2026-09-24T13:27:06.080603Z"
+      }
+    },
+    {
+      "step": "7.1",
+      "name": "Object stored in MinIO raw bucket, checksum matches",
+      "expected": "bytes in raw bucket == fixture; sha256 equal",
+      "actual": "s3://chaya-raw/org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/capture/136ab547-4547-40d6-b601-865f3b8a1058/raw/969b78da-9632-4cf9-8b8a-b90f00fe8c6b 4917797 bytes sha256 ok",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "7.2",
+      "name": "Least-privilege storage account cannot write",
+      "expected": "AccessDenied",
+      "actual": "An error occurred (AccessDenied) when calling the PutObject operation: Access Denied.",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "7.3",
+      "name": "Raw bucket is private (anonymous GET)",
+      "expected": "403",
+      "actual": "HTTP 403",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "7.4",
+      "name": "Checksum mismatch is rejected",
+      "expected": "status REJECTED (checksum)",
+      "actual": "{\"status\": \"REJECTED\", \"rejectionCode\": \"CHECKSUM_MISMATCH\", \"rejectionMessage\": \"content SHA-256 does not match the declared checksum\"}",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "7.5",
+      "name": "EICAR test file is not accepted",
+      "expected": "REJECTED or QUARANTINED, never ACCEPTED",
+      "actual": "{\"status\": \"REJECTED\", \"rejectionCode\": \"MALWARE_DETECTED\", \"rejectionMessage\": \"malware signature found: Eicar-Test-Signature\", \"detectedContentType\": null}",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "7.6",
+      "name": "Complete capture upload",
+      "expected": "200, capture UPLOADED",
+      "actual": "HTTP 200 {\"id\":\"136ab547-4547-40d6-b601-865f3b8a1058\",\"venueId\":\"f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44\",\"floorId\":\"e3ae8afa-5a4a-40f3-9bbd-649c5484bcec\",\"operatorId\":\"a6fafba3-27c7-4f82-bece-c0f33d1dae2b\",\"status\":\"READY_FOR_PROCESSING\",\"device\":{\"app\":\"script",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "8",
+      "name": "Create processing job",
+      "expected": "202; run RUNNING; first stage QUEUED",
+      "actual": "HTTP 202 {\"captureId\":\"136ab547-4547-40d6-b601-865f3b8a1058\",\"captureStatus\":\"PROCESSING\",\"scanId\":\"17877aba-e070-4974-a401-6be5e358ea47\",\"run\":{\"id\":\"74f4f90d-8285-4cdf-830d-19f7a9a8088d\",\"status\":\"RUNNING\",\"quality\":null,\"privacyEnabled\":true,\"timeBudgetSeconds\":1800,\"startedAt\":\"2026-09-24T13:27:39.616935",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "8.1",
+      "name": "Job queued in database",
+      "expected": "processing_job row QUEUED",
+      "actual": "processing_job: INPUT_VALIDATION|QUEUED",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "9.1",
+      "name": "Preprocessing stage INPUT_VALIDATION (real worker container)",
+      "expected": "SUCCEEDED",
+      "actual": "state=SUCCEEDED attempts=1 exit=0 outputs=1 err=None",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": {
+        "command": {
+          "argv": [
+            "/usr/bin/ffmpeg",
+            "-hide_banner",
+            "-nostdin",
+            "-i",
+            "/work/ba213c5b-1b4d-4540-8a7a-1ac34583fc3a/inputs/969b78da-9632-4cf9-8b8a-b90f00fe8c6b-969b78da-9632-4cf9-8b8a-b90f00fe8c6b"
+          ],
+          "stage": "INPUT_VALIDATION",
+          "tools": {
+            "ffmpeg": "ffmpeg version 5.1.9-0+deb12u1 Copyright (c) 2000-2026 the FFmpeg developers"
+          },
+          "config": {
+            "frame_fps": 2.0,
+            "min_frames": 10,
+            "blur_threshold": 40.0,
+            "cleanup_radius": 0.05,
+            "plane_ransac_n": 3,
+            "clip_model_name": "ViT-B-32",
+            "clip_pretrained": "openai",
+            "gsplat_lr_other": 0.005,
+            "max_frame_height": 1080,
+            "plane_max_planes": 6,
+            "dark_fraction_max": 0.6,
+            "gsplat_iterations": 7000,
+            "navmesh_cell_size": 0.3,
+            "plane_min_inliers": 200,
+            "colmap_num_threads": -1,
+            "duplicate_distance": 2.0,
+            "gsplat_lr_position": 0.00016,
+            "gsplat_ssim_weight": 0.2,
+            "bright_fraction_max": 0.6,
+            "navmesh_cell_height": 0.2,
+            "allow_pickle_weights": false,
+            "grounding_dino_model": "IDEA-Research/grounding-dino-tiny",
+            "max_frames_per_video": 900,
+            "min_registered_ratio": 0.6,
+            "navmesh_agent_height": 1.8,
+            "navmesh_agent_radius": 0.35,
+            "navmesh_edge_max_len": 12.0,
+            "gsplat_keyframe_every": 500,
+            "semantic_sample_every": 1,
+            "alignment_voxel_size_m": 0.05,
+            "cleanup_stat_std_ratio": 2.0,
+            "navmesh_edge_max_error": 1.3,
+            "navmesh_verts_per_poly": 6.0,
+            "grounding_dino_revision": null,
+            "navmesh_agent_max_climb": 0.4,
+            "navmesh_region_min_size": 8.0,
+            "object_cluster_distance": 0.75,
+            "object_detection_prompt": "chair. table. sofa. couch. desk. door. window. sign. elevator. stairs. plant. artwork. reception desk. bench. shelf. counter. restroom sign. exit sign. fire extinguisher.",
+            "plane_ransac_iterations": 1000,
+            "privacy_screen_detector": "heuristic-quad",
+            "semantic_confidence_min": 0.5,
+            "cleanup_radius_nb_points": 8,
+            "ksplat_compression_level": 0,
+            "min_alignment_confidence": 0.6,
+            "cleanup_opacity_threshold": 0.05,
+            "cleanup_stat_nb_neighbors": 20,
+            "navmesh_region_merge_size": 20.0,
+            "navmesh_detail_sample_dist": 6.0,
+            "navmesh_max_ramp_slope_deg": 5.0,
+            "navmesh_agent_max_slope_deg": 45.0,
+            "semantic_segmentation_model": "nvidia/segformer-b0-finetuned-ade-512-512",
+            "gsplat_min_compute_capability": 7.0,
+            "cleanup_semantic_min_neighbors": 3,
+            "object_detection_box_threshold": 0.35,
+            "semantic_indexing_sample_every": 3,
+            "semantic_segmentation_revision": null,
+            "navmesh_detail_sample_max_error": 1.0,
+            "object_detection_text_threshold": 0.25,
+            "plane_ransac_distance_threshold": 0.02
+          },
+          "worker": {
+            "id": "e2e-cpu-worker",
+            "version": "0.1.0"
+          },
+          "commands": [
+            [
+              "/usr/bin/ffmpeg",
+              "-hide_banner",
+              "-nostdin",
+              "-i",
+              "/work/ba213c5b-1b4d-4540-8a7a-1ac34583fc3a/inputs/969b78da-9632-4cf9-8b8a-b90f00fe8c6b-969b78da-9632-4cf9-8b8a-b90f00fe8c6b"
+            ],
+            [
+              "/usr/bin/ffmpeg",
+              "-v",
+              "error",
+              "-nostdin",
+              "-i",
+              "/work/ba213c5b-1b4d-4540-8a7a-1ac34583fc3a/inputs/969b78da-9632-4cf9-8b8a-b90f00fe8c6b-969b78da-9632-4cf9-8b8a-b90f00fe8c6b",
+              "-frames:v",
+              "1",
+              "-f",
+              "null",
+              "-"
+            ]
+          ]
+        },
+        "artifacts": [
+          {
+            "kind": "INPUT_REPORT",
+            "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/INPUT_VALIDATION/attempt-1/input-report.json",
+            "sizeBytes": 400,
+            "sha256": "0ac03cae2df7f17d4b93728cee220f9296a4e49d481f6e430324d92496a785af"
+          }
+        ]
+      }
+    },
+    {
+      "step": "9.2",
+      "name": "Preprocessing stage FFMPEG_PREPROCESS (real worker container)",
+      "expected": "SUCCEEDED",
+      "actual": "state=SUCCEEDED attempts=1 exit=0 outputs=2 err=None",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": {
+        "command": {
+          "argv": [
+            "/usr/bin/ffmpeg",
+            "-hide_banner",
+            "-nostdin",
+            "-y",
+            "-i",
+            "/work/0b492d6f-e113-4e29-9b82-7a727bfe201b/inputs/969b78da-9632-4cf9-8b8a-b90f00fe8c6b-969b78da-9632-4cf9-8b8a-b90f00fe8c6b",
+            "-vf",
+            "fps=2,scale=-2:'min(1080,ih)'",
+            "-frames:v",
+            "900",
+            "-q:v",
+            "2",
+            "/work/0b492d6f-e113-4e29-9b82-7a727bfe201b/frames/v00-%06d.jpg"
+          ],
+          "stage": "FFMPEG_PREPROCESS",
+          "tools": {
+            "ffmpeg": "ffmpeg version 5.1.9-0+deb12u1 Copyright (c) 2000-2026 the FFmpeg developers"
+          },
+          "config": {
+            "frame_fps": 2.0,
+            "min_frames": 10,
+            "blur_threshold": 40.0,
+            "cleanup_radius": 0.05,
+            "plane_ransac_n": 3,
+            "clip_model_name": "ViT-B-32",
+            "clip_pretrained": "openai",
+            "gsplat_lr_other": 0.005,
+            "max_frame_height": 1080,
+            "plane_max_planes": 6,
+            "dark_fraction_max": 0.6,
+            "gsplat_iterations": 7000,
+            "navmesh_cell_size": 0.3,
+            "plane_min_inliers": 200,
+            "colmap_num_threads": -1,
+            "duplicate_distance": 2.0,
+            "gsplat_lr_position": 0.00016,
+            "gsplat_ssim_weight": 0.2,
+            "bright_fraction_max": 0.6,
+            "navmesh_cell_height": 0.2,
+            "allow_pickle_weights": false,
+            "grounding_dino_model": "IDEA-Research/grounding-dino-tiny",
+            "max_frames_per_video": 900,
+            "min_registered_ratio": 0.6,
+            "navmesh_agent_height": 1.8,
+            "navmesh_agent_radius": 0.35,
+            "navmesh_edge_max_len": 12.0,
+            "gsplat_keyframe_every": 500,
+            "semantic_sample_every": 1,
+            "alignment_voxel_size_m": 0.05,
+            "cleanup_stat_std_ratio": 2.0,
+            "navmesh_edge_max_error": 1.3,
+            "navmesh_verts_per_poly": 6.0,
+            "grounding_dino_revision": null,
+            "navmesh_agent_max_climb": 0.4,
+            "navmesh_region_min_size": 8.0,
+            "object_cluster_distance": 0.75,
+            "object_detection_prompt": "chair. table. sofa. couch. desk. door. window. sign. elevator. stairs. plant. artwork. reception desk. bench. shelf. counter. restroom sign. exit sign. fire extinguisher.",
+            "plane_ransac_iterations": 1000,
+            "privacy_screen_detector": "heuristic-quad",
+            "semantic_confidence_min": 0.5,
+            "cleanup_radius_nb_points": 8,
+            "ksplat_compression_level": 0,
+            "min_alignment_confidence": 0.6,
+            "cleanup_opacity_threshold": 0.05,
+            "cleanup_stat_nb_neighbors": 20,
+            "navmesh_region_merge_size": 20.0,
+            "navmesh_detail_sample_dist": 6.0,
+            "navmesh_max_ramp_slope_deg": 5.0,
+            "navmesh_agent_max_slope_deg": 45.0,
+            "semantic_segmentation_model": "nvidia/segformer-b0-finetuned-ade-512-512",
+            "gsplat_min_compute_capability": 7.0,
+            "cleanup_semantic_min_neighbors": 3,
+            "object_detection_box_threshold": 0.35,
+            "semantic_indexing_sample_every": 3,
+            "semantic_segmentation_revision": null,
+            "navmesh_detail_sample_max_error": 1.0,
+            "object_detection_text_threshold": 0.25,
+            "plane_ransac_distance_threshold": 0.02
+          },
+          "worker": {
+            "id": "e2e-cpu-worker",
+            "version": "0.1.0"
+          },
+          "commands": [
+            [
+              "/usr/bin/ffmpeg",
+              "-hide_banner",
+              "-nostdin",
+              "-y",
+              "-i",
+              "/work/0b492d6f-e113-4e29-9b82-7a727bfe201b/inputs/969b78da-9632-4cf9-8b8a-b90f00fe8c6b-969b78da-9632-4cf9-8b8a-b90f00fe8c6b",
+              "-vf",
+              "fps=2,scale=-2:'min(1080,ih)'",
+              "-frames:v",
+              "900",
+              "-q:v",
+              "2",
+              "/work/0b492d6f-e113-4e29-9b82-7a727bfe201b/frames/v00-%06d.jpg"
+            ]
+          ]
+        },
+        "artifacts": [
+          {
+            "kind": "FRAME_ARCHIVE",
+            "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/FFMPEG_PREPROCESS/attempt-1/pii/frames.tar",
+            "sizeBytes": 3409920,
+            "sha256": "59ea653570cf96476f35d0a8a3bb9d5e9e20889945a8d8ad16c21ae9b83ed7ca"
+          },
+          {
+            "kind": "FRAME_MANIFEST",
+            "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/FFMPEG_PREPROCESS/attempt-1/frames-manifest.json",
+            "sizeBytes": 416,
+            "sha256": "4840d28a6468456498bf688c246933a0644577a7fa8049f98af7008ae1ab9d6b"
+          }
+        ]
+      }
+    },
+    {
+      "step": "9.3",
+      "name": "Preprocessing stage FRAME_QUALITY_FILTER (real worker container)",
+      "expected": "SUCCEEDED",
+      "actual": "state=SUCCEEDED attempts=1 exit=None outputs=2 err=None",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": {
+        "command": {
+          "argv": [
+            "python",
+            "-m",
+            "chaya_worker",
+            "FRAME_QUALITY_FILTER"
+          ],
+          "stage": "FRAME_QUALITY_FILTER",
+          "tools": {
+            "ffmpeg": "ffmpeg version 5.1.9-0+deb12u1 Copyright (c) 2000-2026 the FFmpeg developers"
+          },
+          "config": {
+            "frame_fps": 2.0,
+            "min_frames": 10,
+            "blur_threshold": 40.0,
+            "cleanup_radius": 0.05,
+            "plane_ransac_n": 3,
+            "clip_model_name": "ViT-B-32",
+            "clip_pretrained": "openai",
+            "gsplat_lr_other": 0.005,
+            "max_frame_height": 1080,
+            "plane_max_planes": 6,
+            "dark_fraction_max": 0.6,
+            "gsplat_iterations": 7000,
+            "navmesh_cell_size": 0.3,
+            "plane_min_inliers": 200,
+            "colmap_num_threads": -1,
+            "duplicate_distance": 2.0,
+            "gsplat_lr_position": 0.00016,
+            "gsplat_ssim_weight": 0.2,
+            "bright_fraction_max": 0.6,
+            "navmesh_cell_height": 0.2,
+            "allow_pickle_weights": false,
+            "grounding_dino_model": "IDEA-Research/grounding-dino-tiny",
+            "max_frames_per_video": 900,
+            "min_registered_ratio": 0.6,
+            "navmesh_agent_height": 1.8,
+            "navmesh_agent_radius": 0.35,
+            "navmesh_edge_max_len": 12.0,
+            "gsplat_keyframe_every": 500,
+            "semantic_sample_every": 1,
+            "alignment_voxel_size_m": 0.05,
+            "cleanup_stat_std_ratio": 2.0,
+            "navmesh_edge_max_error": 1.3,
+            "navmesh_verts_per_poly": 6.0,
+            "grounding_dino_revision": null,
+            "navmesh_agent_max_climb": 0.4,
+            "navmesh_region_min_size": 8.0,
+            "object_cluster_distance": 0.75,
+            "object_detection_prompt": "chair. table. sofa. couch. desk. door. window. sign. elevator. stairs. plant. artwork. reception desk. bench. shelf. counter. restroom sign. exit sign. fire extinguisher.",
+            "plane_ransac_iterations": 1000,
+            "privacy_screen_detector": "heuristic-quad",
+            "semantic_confidence_min": 0.5,
+            "cleanup_radius_nb_points": 8,
+            "ksplat_compression_level": 0,
+            "min_alignment_confidence": 0.6,
+            "cleanup_opacity_threshold": 0.05,
+            "cleanup_stat_nb_neighbors": 20,
+            "navmesh_region_merge_size": 20.0,
+            "navmesh_detail_sample_dist": 6.0,
+            "navmesh_max_ramp_slope_deg": 5.0,
+            "navmesh_agent_max_slope_deg": 45.0,
+            "semantic_segmentation_model": "nvidia/segformer-b0-finetuned-ade-512-512",
+            "gsplat_min_compute_capability": 7.0,
+            "cleanup_semantic_min_neighbors": 3,
+            "object_detection_box_threshold": 0.35,
+            "semantic_indexing_sample_every": 3,
+            "semantic_segmentation_revision": null,
+            "navmesh_detail_sample_max_error": 1.0,
+            "object_detection_text_threshold": 0.25,
+            "plane_ransac_distance_threshold": 0.02
+          },
+          "worker": {
+            "id": "e2e-cpu-worker",
+            "version": "0.1.0"
+          },
+          "commands": []
+        },
+        "artifacts": [
+          {
+            "kind": "FRAME_ARCHIVE_SELECTED",
+            "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/FRAME_QUALITY_FILTER/attempt-1/pii/frames-selected.tar",
+            "sizeBytes": 3409920,
+            "sha256": "11d7ddb53f42385cdfc0cddc0582f7f21c055d9517d9a268b3501002aa3d3506"
+          },
+          {
+            "kind": "FRAME_QUALITY_REPORT",
+            "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/FRAME_QUALITY_FILTER/attempt-1/quality-report.json",
+            "sizeBytes": 4738,
+            "sha256": "7bc9303a63a72d15817f850eeed9652439806f5b34810a1dba7822c8114e3b9c"
+          }
+        ]
+      }
+    },
+    {
+      "step": "9.4",
+      "name": "Preprocessing stage PRIVACY_PREPROCESS (real worker container)",
+      "expected": "SUCCEEDED",
+      "actual": "state=SUCCEEDED attempts=1 exit=None outputs=2 err=None",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": {
+        "command": {
+          "argv": [
+            "python",
+            "-m",
+            "chaya_worker",
+            "PRIVACY_PREPROCESS"
+          ],
+          "stage": "PRIVACY_PREPROCESS",
+          "tools": {
+            "ffmpeg": "ffmpeg version 5.1.9-0+deb12u1 Copyright (c) 2000-2026 the FFmpeg developers"
+          },
+          "config": {
+            "detectors": {
+              "faces": "opencv-haar-faces",
+              "screens_documents": "heuristic-quad"
+            },
+            "frame_fps": 2.0,
+            "min_frames": 10,
+            "blur_threshold": 40.0,
+            "cleanup_radius": 0.05,
+            "plane_ransac_n": 3,
+            "clip_model_name": "ViT-B-32",
+            "clip_pretrained": "openai",
+            "gsplat_lr_other": 0.005,
+            "max_frame_height": 1080,
+            "plane_max_planes": 6,
+            "dark_fraction_max": 0.6,
+            "gsplat_iterations": 7000,
+            "navmesh_cell_size": 0.3,
+            "plane_min_inliers": 200,
+            "colmap_num_threads": -1,
+            "duplicate_distance": 2.0,
+            "gsplat_lr_position": 0.00016,
+            "gsplat_ssim_weight": 0.2,
+            "bright_fraction_max": 0.6,
+            "navmesh_cell_height": 0.2,
+            "allow_pickle_weights": false,
+            "grounding_dino_model": "IDEA-Research/grounding-dino-tiny",
+            "max_frames_per_video": 900,
+            "min_registered_ratio": 0.6,
+            "navmesh_agent_height": 1.8,
+            "navmesh_agent_radius": 0.35,
+            "navmesh_edge_max_len": 12.0,
+            "gsplat_keyframe_every": 500,
+            "semantic_sample_every": 1,
+            "alignment_voxel_size_m": 0.05,
+            "cleanup_stat_std_ratio": 2.0,
+            "navmesh_edge_max_error": 1.3,
+            "navmesh_verts_per_poly": 6.0,
+            "grounding_dino_revision": null,
+            "navmesh_agent_max_climb": 0.4,
+            "navmesh_region_min_size": 8.0,
+            "object_cluster_distance": 0.75,
+            "object_detection_prompt": "chair. table. sofa. couch. desk. door. window. sign. elevator. stairs. plant. artwork. reception desk. bench. shelf. counter. restroom sign. exit sign. fire extinguisher.",
+            "plane_ransac_iterations": 1000,
+            "privacy_screen_detector": "heuristic-quad",
+            "semantic_confidence_min": 0.5,
+            "cleanup_radius_nb_points": 8,
+            "ksplat_compression_level": 0,
+            "min_alignment_confidence": 0.6,
+            "cleanup_opacity_threshold": 0.05,
+            "cleanup_stat_nb_neighbors": 20,
+            "navmesh_region_merge_size": 20.0,
+            "navmesh_detail_sample_dist": 6.0,
+            "navmesh_max_ramp_slope_deg": 5.0,
+            "navmesh_agent_max_slope_deg": 45.0,
+            "semantic_segmentation_model": "nvidia/segformer-b0-finetuned-ade-512-512",
+            "gsplat_min_compute_capability": 7.0,
+            "cleanup_semantic_min_neighbors": 3,
+            "object_detection_box_threshold": 0.35,
+            "semantic_indexing_sample_every": 3,
+            "semantic_segmentation_revision": null,
+            "navmesh_detail_sample_max_error": 1.0,
+            "object_detection_text_threshold": 0.25,
+            "plane_ransac_distance_threshold": 0.02
+          },
+          "worker": {
+            "id": "e2e-cpu-worker",
+            "version": "0.1.0"
+          },
+          "commands": []
+        },
+        "artifacts": [
+          {
+            "kind": "FRAME_ARCHIVE_ANON",
+            "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/PRIVACY_PREPROCESS/attempt-1/frames-anon.tar",
+            "sizeBytes": 3502080,
+            "sha256": "a47edafb24f2d3cbdd556972669183e2b0e37acaf6819b2307c0a24402ae88cc"
+          },
+          {
+            "kind": "PRIVACY_REPORT",
+            "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/PRIVACY_PREPROCESS/attempt-1/privacy-report.json",
+            "sizeBytes": 8898,
+            "sha256": "dbbc676c4cae30a1f07e78829956bb1351076e43dab5a04e604d6e144dcf2ca1"
+          }
+        ]
+      }
+    },
+    {
+      "step": "9.5",
+      "name": "POSE_ESTIMATION (real CPU COLMAP, toolchain worker)",
+      "expected": "SUCCEEDED; SPARSE_MODEL + POSES; >= 60% of frames registered",
+      "actual": "state=SUCCEEDED exit=0 outputs=['SPARSE_MODEL', 'POSES'] 11/11 frames registered, mapper=colmap err=None",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": {
+        "command": {
+          "argv": [
+            "/usr/bin/colmap",
+            "feature_extractor",
+            "--database_path",
+            "/work/40302bca-c426-43bc-9ab5-550499afefd8/database.db",
+            "--image_path",
+            "/work/40302bca-c426-43bc-9ab5-550499afefd8/images",
+            "--ImageReader.single_camera",
+            "1",
+            "--ImageReader.camera_model",
+            "SIMPLE_RADIAL",
+            "--SiftExtraction.use_gpu",
+            "0",
+            "--SiftExtraction.num_threads",
+            "2"
+          ],
+          "stage": "POSE_ESTIMATION",
+          "tools": {
+            "colmap": "COLMAP 3.8 -- Structure-from-Motion and Multi-View Stereo",
+            "ffmpeg": "ffmpeg version 5.1.9-0+deb12u1 Copyright (c) 2000-2026 the FFmpeg developers"
+          },
+          "config": {
+            "gpu": false,
+            "frame_fps": 2.0,
+            "min_frames": 10,
+            "mapper_used": "colmap",
+            "fallback_used": false,
+            "blur_threshold": 40.0,
+            "cleanup_radius": 0.05,
+            "plane_ransac_n": 3,
+            "clip_model_name": "ViT-B-32",
+            "clip_pretrained": "openai",
+            "gsplat_lr_other": 0.005,
+            "max_frame_height": 1080,
+            "plane_max_planes": 6,
+            "dark_fraction_max": 0.6,
+            "gsplat_iterations": 7000,
+            "navmesh_cell_size": 0.3,
+            "plane_min_inliers": 200,
+            "colmap_num_threads": 2,
+            "duplicate_distance": 2.0,
+            "gsplat_lr_position": 0.00016,
+            "gsplat_ssim_weight": 0.2,
+            "bright_fraction_max": 0.6,
+            "navmesh_cell_height": 0.2,
+            "allow_pickle_weights": false,
+            "grounding_dino_model": "IDEA-Research/grounding-dino-tiny",
+            "max_frames_per_video": 900,
+            "min_registered_ratio": 0.6,
+            "navmesh_agent_height": 1.8,
+            "navmesh_agent_radius": 0.35,
+            "navmesh_edge_max_len": 12.0,
+            "gsplat_keyframe_every": 500,
+            "semantic_sample_every": 1,
+            "alignment_voxel_size_m": 0.05,
+            "cleanup_stat_std_ratio": 2.0,
+            "navmesh_edge_max_error": 1.3,
+            "navmesh_verts_per_poly": 6.0,
+            "grounding_dino_revision": null,
+            "navmesh_agent_max_climb": 0.4,
+            "navmesh_region_min_size": 8.0,
+            "object_cluster_distance": 0.75,
+            "object_detection_prompt": "chair. table. sofa. couch. desk. door. window. sign. elevator. stairs. plant. artwork. reception desk. bench. shelf. counter. restroom sign. exit sign. fire extinguisher.",
+            "plane_ransac_iterations": 1000,
+            "privacy_screen_detector": "heuristic-quad",
+            "semantic_confidence_min": 0.5,
+            "cleanup_radius_nb_points": 8,
+            "ksplat_compression_level": 0,
+            "min_alignment_confidence": 0.6,
+            "cleanup_opacity_threshold": 0.05,
+            "cleanup_stat_nb_neighbors": 20,
+            "navmesh_region_merge_size": 20.0,
+            "navmesh_detail_sample_dist": 6.0,
+            "navmesh_max_ramp_slope_deg": 5.0,
+            "navmesh_agent_max_slope_deg": 45.0,
+            "semantic_segmentation_model": "nvidia/segformer-b0-finetuned-ade-512-512",
+            "gsplat_min_compute_capability": 7.0,
+            "cleanup_semantic_min_neighbors": 3,
+            "object_detection_box_threshold": 0.35,
+            "semantic_indexing_sample_every": 3,
+            "semantic_segmentation_revision": null,
+            "navmesh_detail_sample_max_error": 1.0,
+            "object_detection_text_threshold": 0.25,
+            "plane_ransac_distance_threshold": 0.02
+          },
+          "worker": {
+            "id": "e2e-toolchain-worker",
+            "version": "0.1.0"
+          },
+          "commands": [
+            [
+              "/usr/bin/colmap",
+              "feature_extractor",
+              "--database_path",
+              "/work/40302bca-c426-43bc-9ab5-550499afefd8/database.db",
+              "--image_path",
+              "/work/40302bca-c426-43bc-9ab5-550499afefd8/images",
+              "--ImageReader.single_camera",
+              "1",
+              "--ImageReader.camera_model",
+              "SIMPLE_RADIAL",
+              "--SiftExtraction.use_gpu",
+              "0",
+              "--SiftExtraction.num_threads",
+              "2"
+            ],
+            [
+              "/usr/bin/colmap",
+              "exhaustive_matcher",
+              "--database_path",
+              "/work/40302bca-c426-43bc-9ab5-550499afefd8/database.db",
+              "--SiftMatching.use_gpu",
+              "0",
+              "--SiftMatching.num_threads",
+              "2"
+            ],
+            [
+              "/usr/bin/colmap",
+              "mapper",
+              "--database_path",
+              "/work/40302bca-c426-43bc-9ab5-550499afefd8/database.db",
+              "--image_path",
+              "/work/40302bca-c426-43bc-9ab5-550499afefd8/images",
+              "--output_path",
+              "/work/40302bca-c426-43bc-9ab5-550499afefd8/sparse"
+            ],
+            [
+              "/usr/bin/colmap",
+              "model_converter",
+              "--input_path",
+              "/work/40302bca-c426-43bc-9ab5-550499afefd8/sparse/0",
+              "--output_path",
+              "/work/40302bca-c426-43bc-9ab5-550499afefd8/txt",
+              "--output_type",
+              "TXT"
+            ]
+          ]
+        },
+        "stage_workers": [
+          "INPUT_VALIDATION=e2e-cpu-worker",
+          "FFMPEG_PREPROCESS=e2e-cpu-worker",
+          "FRAME_QUALITY_FILTER=e2e-cpu-worker",
+          "PRIVACY_PREPROCESS=e2e-cpu-worker",
+          "POSE_ESTIMATION=e2e-toolchain-worker",
+          "SPLAT_RECONSTRUCTION=e2e-toolchain-worker"
+        ]
+      }
+    },
+    {
+      "step": "10",
+      "name": "Reconstruction stage SPLAT_RECONSTRUCTION",
+      "expected": "runs, or fails honestly with DEPENDENCY_UNAVAILABLE when the toolchain is absent",
+      "actual": "run FAILED at SPLAT_RECONSTRUCTION: DEPENDENCY_UNAVAILABLE - SPLAT_RECONSTRUCTION cannot run on this worker; missing: torch, gsplat, cuda; retryable=True; quality=None",
+      "status": "BLOCKED",
+      "blocked_dependency": "SPLAT_RECONSTRUCTION: SPLAT_RECONSTRUCTION cannot run on this worker; missing: torch, gsplat, cuda",
+      "evidence": {
+        "errorDetails": {
+          "tools": [
+            {
+              "name": "torch",
+              "path": null,
+              "detail": "python module 'torch' is not installed",
+              "version": null,
+              "available": false
+            },
+            {
+              "name": "gsplat",
+              "path": null,
+              "detail": "python module 'gsplat' is not installed",
+              "version": null,
+              "available": false
+            },
+            {
+              "name": "cuda",
+              "path": null,
+              "detail": "torch is not installed, so no CUDA device can be used",
+              "version": null,
+              "available": false
+            }
+          ],
+          "missing": [
+            "torch",
+            "gsplat",
+            "cuda"
+          ]
+        },
+        "stdout": {
+          "id": "9fb5f56c-276b-4237-b1f9-1ab81a91fc2a",
+          "kind": "LOG_STDOUT",
+          "bucket": "chaya-derived",
+          "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/SPLAT_RECONSTRUCTION/attempt-1/logs/stdout.log",
+          "sizeBytes": 4717,
+          "sha256": "77f18c947030a7f3acffdfe8ce4db32af4c23d9ff8d0456f667f8720b7fb9339",
+          "contentType": "text/plain",
+          "partial": false,
+          "containsPii": false
+        },
+        "stderr": {
+          "id": "3c77d77c-9aaf-4707-8d98-9cea74a0f2f1",
+          "kind": "LOG_STDERR",
+          "bucket": "chaya-derived",
+          "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/SPLAT_RECONSTRUCTION/attempt-1/logs/stderr.log",
+          "sizeBytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "contentType": "text/plain",
+          "partial": false,
+          "containsPii": false
+        }
+      }
+    },
+    {
+      "step": "10",
+      "name": "Reconstruction stage SEMANTIC_SEGMENTATION",
+      "expected": "runs",
+      "actual": "not reached (state=PENDING); the run stops at SPLAT_RECONSTRUCTION",
+      "status": "BLOCKED",
+      "blocked_dependency": "upstream SPLAT_RECONSTRUCTION",
+      "evidence": null
+    },
+    {
+      "step": "10",
+      "name": "Reconstruction stage GEOMETRIC_CLEANUP",
+      "expected": "runs",
+      "actual": "not reached (state=PENDING); the run stops at SPLAT_RECONSTRUCTION",
+      "status": "BLOCKED",
+      "blocked_dependency": "upstream SPLAT_RECONSTRUCTION",
+      "evidence": null
+    },
+    {
+      "step": "10",
+      "name": "Reconstruction stage PLANE_FITTING",
+      "expected": "runs",
+      "actual": "not reached (state=PENDING); the run stops at SPLAT_RECONSTRUCTION",
+      "status": "BLOCKED",
+      "blocked_dependency": "upstream SPLAT_RECONSTRUCTION",
+      "evidence": null
+    },
+    {
+      "step": "10",
+      "name": "Reconstruction stage ARTIFACT_GENERATION",
+      "expected": "runs",
+      "actual": "not reached (state=PENDING); the run stops at SPLAT_RECONSTRUCTION",
+      "status": "BLOCKED",
+      "blocked_dependency": "upstream SPLAT_RECONSTRUCTION",
+      "evidence": null
+    },
+    {
+      "step": "10",
+      "name": "Reconstruction stage SEMANTIC_INDEXING",
+      "expected": "runs",
+      "actual": "not reached (state=PENDING); the run stops at SPLAT_RECONSTRUCTION",
+      "status": "BLOCKED",
+      "blocked_dependency": "upstream SPLAT_RECONSTRUCTION",
+      "evidence": null
+    },
+    {
+      "step": "10",
+      "name": "Reconstruction stage NAVIGATION_BAKING",
+      "expected": "runs",
+      "actual": "not reached (state=PENDING); the run stops at SPLAT_RECONSTRUCTION",
+      "status": "BLOCKED",
+      "blocked_dependency": "upstream SPLAT_RECONSTRUCTION",
+      "evidence": null
+    },
+    {
+      "step": "10.1",
+      "name": "A failed run is not reported as success",
+      "expected": "quality null, capture stays PROCESSING",
+      "actual": "run.status=FAILED quality=None capture=PROCESSING",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "10.2",
+      "name": "Retry re-runs only the failed stage",
+      "expected": "202; attempt 2 of the failed stage; earlier stages not repeated",
+      "actual": "retry HTTP 202; SPLAT_RECONSTRUCTION attempts=2; result=FAILED DEPENDENCY_UNAVAILABLE",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "11",
+      "name": "Generated artifacts stored in MinIO derived bucket",
+      "expected": "every non-PII artifact present, size+sha256 match the DB record",
+      "actual": "23 artifact records (FRAME_ARCHIVE, FRAME_ARCHIVE_ANON, FRAME_ARCHIVE_SELECTED, FRAME_MANIFEST, FRAME_QUALITY_REPORT, INPUT_REPORT, LOG_STDERR, LOG_STDOUT, POSES, PRIVACY_REPORT, SPARSE_MODEL); 21 verified byte-for-byte; 2 PII objects purged; mismatches=[]",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": {
+        "object_count_for_run": 21,
+        "sample_keys": [
+          "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/FFMPEG_PREPROCESS/attempt-1/frames-manifest.json",
+          "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/FFMPEG_PREPROCESS/attempt-1/logs/stderr.log",
+          "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/FFMPEG_PREPROCESS/attempt-1/logs/stdout.log",
+          "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/FRAME_QUALITY_FILTER/attempt-1/logs/stderr.log",
+          "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/FRAME_QUALITY_FILTER/attempt-1/logs/stdout.log",
+          "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/FRAME_QUALITY_FILTER/attempt-1/quality-report.json",
+          "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/INPUT_VALIDATION/attempt-1/input-report.json",
+          "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/INPUT_VALIDATION/attempt-1/logs/stderr.log"
+        ]
+      }
+    },
+    {
+      "step": "11.1",
+      "name": "PII staging objects purged after privacy stage",
+      "expected": "no /pii/ object remains for the run",
+      "actual": "0 /pii/ objects remain",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "11.2",
+      "name": "PII purge audited",
+      "expected": "audit row pipeline.pii_purged",
+      "actual": "pipeline.pii_purged rows: 1",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "11.3",
+      "name": "Reconstruction artifacts (splat / .ksplat / manifest / viewer bundle)",
+      "expected": "stored",
+      "actual": "none produced: the stages that create them did not run",
+      "status": "BLOCKED",
+      "blocked_dependency": "SPLAT_RECONSTRUCTION / ARTIFACT_GENERATION",
+      "evidence": null
+    },
+    {
+      "step": "12",
+      "name": "Register reconstruction version",
+      "expected": "FINALIZED scan_version (needs a SUCCEEDED run)",
+      "actual": "refused correctly: HTTP 404 {\"type\":\"about:blank\",\"title\":\"Not Found\",\"status\":404,\"detail\":\"no successful full-venue reconstruction exists yet for this floor to finalize as a version\",\"instance\":\"/api/v1/venues/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/floors/e3ae8afa-5a4a-40f3-9bb",
+      "status": "BLOCKED",
+      "blocked_dependency": "no SUCCEEDED pipeline run (GPU reconstruction stages unavailable)",
+      "evidence": null
+    },
+    {
+      "step": "13",
+      "name": "Load reconstruction (API for the viewer)",
+      "expected": "latest reconstruction with .ksplat artifact",
+      "actual": "list=HTTP 200 []; latest=HTTP 404 {\"type\":\"about:blank\",\"title\":\"Not Found\",\"status\":404,\"detail\":\"no reconstruction is available for this floor yet\",\"instance\":\"/api/v1/venues/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/floors/e3ae8afa-5a4a",
+      "status": "BLOCKED",
+      "blocked_dependency": "no reconstruction artifact exists (SPLAT_RECONSTRUCTION needs a CUDA GPU + torch + gsplat)",
+      "evidence": null
+    },
+    {
+      "step": "14",
+      "name": "Create manual POIs (venue manager)",
+      "expected": "4 POIs created, version 1 each",
+      "actual": "created 4: ['Reception desk', 'Accessible restroom', 'Cafe', 'Elevator A']",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "14.1",
+      "name": "POIs indexed for semantic (vector) search",
+      "expected": "poi_version.embedding set",
+      "actual": "poi_version rows (label|version|source|has_embedding): Accessible restroom|1|MANUAL|f; Cafe|1|MANUAL|f; Elevator A|1|MANUAL|f; Reception desk|1|MANUAL|f",
+      "status": "FAIL",
+      "blocked_dependency": null,
+      "evidence": {
+        "note": "Manual POIs are stored without a CLIP embedding; only AUTO_DETECTED POIs (SEMANTIC_INDEXING) get one. See findings."
+      }
+    },
+    {
+      "step": "14.2",
+      "name": "Auto-detected POIs (SEMANTIC_INDEXING: Grounding DINO + CLIP)",
+      "expected": "POIs ingested from DETECTED_OBJECTS",
+      "actual": "stage not reached",
+      "status": "BLOCKED",
+      "blocked_dependency": "SEMANTIC_INDEXING needs a trained splat + torch/transformers/open_clip + Grounding DINO weights",
+      "evidence": null
+    },
+    {
+      "step": "15.0",
+      "name": "Vision service embeds query text (real CLIP)",
+      "expected": "200, 512-d vector",
+      "actual": "HTTP 200 dim=512 model=open_clip:ViT-B-32:openai",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "15",
+      "name": "Search for a POI ('restroom') with vision service up",
+      "expected": "200, matchType=embedding, 'Accessible restroom' ranked first",
+      "actual": "HTTP 200 matchType=embedding results=[]",
+      "status": "FAIL",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "15.1",
+      "name": "Search degrades honestly when vision is down",
+      "expected": "200, matchType=lexical_fallback, finds 'Accessible restroom'",
+      "actual": "HTTP 200 matchType=lexical_fallback results=['Accessible restroom']",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "15.2",
+      "name": "Search queries logged (analytics)",
+      "expected": ">= 2 search_query rows",
+      "actual": "search_query rows: 2",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "16",
+      "name": "Request a navigation route",
+      "expected": "route over the NAVIGATION_BAKING graph",
+      "actual": "HTTP 404 {\"type\":\"about:blank\",\"title\":\"Not Found\",\"status\":404,\"detail\":\"no route could be found between the start point and the destination on this floor\",\"instance\":\"/api/v1/navigation/routes\",\"code\":\"ROUTE_UNAVAILABLE\"}; navigation_graph rows for venue: 0",
+      "status": "BLOCKED",
+      "blocked_dependency": "NAVIGATION_BAKING (needs plane fitting output + recast-cli) never ran; no navigation graph exists",
+      "evidence": null
+    },
+    {
+      "step": "17",
+      "name": "Display the route in the viewer",
+      "expected": "route polyline over the splat",
+      "actual": "no route and no reconstruction to draw it on",
+      "status": "BLOCKED",
+      "blocked_dependency": "steps 13 and 16",
+      "evidence": null
+    },
+    {
+      "step": "18.1",
+      "name": "Manager cannot read another venue in the same org",
+      "expected": "404 (no enumeration)",
+      "actual": "HTTP 404 {\"type\":\"about:blank\",\"title\":\"Not Found\",\"status\":404,\"detail\":\"venue not found\",\"instance\":\"/api/v1/venues/c5f7f8c0-dd",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "18.2",
+      "name": "Manager cannot write to another venue",
+      "expected": "404",
+      "actual": "HTTP 404 {\"type\":\"about:blank\",\"title\":\"Not Found\",\"status\":404,\"detail\":\"venue not found\",\"instance\":\"/api/v1/venues/c5f7f8c0-dd",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "18.3",
+      "name": "Manager cannot read the org-wide audit log",
+      "expected": "403",
+      "actual": "HTTP 403 ",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "18.4",
+      "name": "Viewer can read POIs of own venue",
+      "expected": "200",
+      "actual": "HTTP 200, 4 POIs",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "18.5",
+      "name": "Viewer cannot create POIs",
+      "expected": "403",
+      "actual": "HTTP 403 ",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "18.6",
+      "name": "Viewer cannot create capture sessions",
+      "expected": "403",
+      "actual": "HTTP 403 ",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "18.7",
+      "name": "Admin of another organization cannot read the venue",
+      "expected": "404",
+      "actual": "HTTP 404 {\"type\":\"about:blank\",\"title\":\"Not Found\",\"status\":404,\"detail\":\"venue not found\",\"instance\":\"/api/v1/venues/f0a46359-6c",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "18.8",
+      "name": "Other org's venue list excludes it",
+      "expected": "200, []",
+      "actual": "HTTP 200 []",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "18.9",
+      "name": "Worker service account cannot use user endpoints",
+      "expected": "403",
+      "actual": "HTTP 403 ",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "18.10",
+      "name": "User token cannot use worker control-plane endpoints",
+      "expected": "403",
+      "actual": "HTTP 403 ",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "18.11",
+      "name": "Cross-venue refusals are audited",
+      "expected": ">= 1 DENIED audit row for venue B",
+      "actual": "DENIED rows for venue B: 2",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "19.1",
+      "name": "Create public viewer link (venue manager)",
+      "expected": "200/201 with secret",
+      "actual": "HTTP 201; secret chl_\u2026 (redacted)",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "19.2",
+      "name": "Link secret is not stored in plaintext",
+      "expected": "0 rows containing the secret",
+      "actual": "rows containing secret: 0",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "19.3",
+      "name": "Exchange secret for anonymous viewer token",
+      "expected": "200 with token scoped to venue A",
+      "actual": "HTTP 200; token cvt_\u2026 (redacted); venueId=f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44; expiresAt=2026-09-24T13:42:05.405474Z",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "19.4",
+      "name": "Public viewer can read venue, POIs, search",
+      "expected": "200 x3",
+      "actual": "venue=200 pois=200 (4) search=200 matchType=embedding",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "19.5",
+      "name": "Public viewer can load the reconstruction",
+      "expected": "200 with artifacts",
+      "actual": "HTTP 404 {\"type\":\"about:blank\",\"title\":\"Not Found\",\"status\":404,\"detail\":\"no reconstruction is available for this floor yet\",\"instance\":\"/api/v1/venues/f0a46359-6c64-4a3",
+      "status": "BLOCKED",
+      "blocked_dependency": "no reconstruction exists (step 13)",
+      "evidence": null
+    },
+    {
+      "step": "19.6",
+      "name": "Public viewer cannot write",
+      "expected": "403",
+      "actual": "HTTP 403 ",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "19.7",
+      "name": "Public viewer token is scoped to one venue",
+      "expected": "404 for venue B",
+      "actual": "HTTP 404 {\"type\":\"about:blank\",\"title\":\"Not Found\",\"status\":404,\"detail\":\"venue not found\",\"instance\":\"/api/v",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "19.8",
+      "name": "Public viewer cannot see captures",
+      "expected": "403",
+      "actual": "HTTP 403 ",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "19.9",
+      "name": "Revoked link: secret and issued token stop working",
+      "expected": "revoke 204; exchange 4xx; token 401",
+      "actual": "revoke=204 exchange=404 token=401",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "19.10",
+      "name": "Unknown secret rejected",
+      "expected": "4xx",
+      "actual": "HTTP 404 {\"type\":\"about:blank\",\"title\":\"Not Found\",\"status\":404,\"detail\":\"link not found or expired\",\"instanc",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "20",
+      "name": "Create regional rescan",
+      "expected": "rescan capture created against a FINALIZED parent version",
+      "actual": "no FINALIZED version exists; request with a non-existent parent refused: HTTP 404 {\"type\":\"about:blank\",\"title\":\"Not Found\",\"status\":404,\"detail\":\"scan version not found\",\"instance\":\"/api/v1/venues/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/floors/e3ae8afa-5a4a-40f3-9bbd-649c5484bcec/res",
+      "status": "BLOCKED",
+      "blocked_dependency": "no FINALIZED scan_version (step 12)",
+      "evidence": null
+    },
+    {
+      "step": "20.1",
+      "name": "Rescan region validation",
+      "expected": "400 for a 2-point region",
+      "actual": "HTTP 400 {\"type\":\"about:blank\",\"title\":\"Bad Request\",\"status\":400,\"detail\":\"Invalid request content.\",\"instance\":\"/api/v1/venues/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/flo",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "21",
+      "name": "Scan version history",
+      "expected": "list of versions with parent links",
+      "actual": "HTTP 200 [] (empty: nothing could be finalized)",
+      "status": "BLOCKED",
+      "blocked_dependency": "no FINALIZED scan_version (step 12)",
+      "evidence": null
+    },
+    {
+      "step": "21.1",
+      "name": "POI version history (append-only)",
+      "expected": "update -> version 2; version 1 kept",
+      "actual": "HTTP 200; poi_version rows: 1|Cafe|-4; 2|Cafe & bakery|-4.5",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "21.2",
+      "name": "POI versions are immutable in the database",
+      "expected": "UPDATE rejected",
+      "actual": "ERROR:  poi_version 2128846f-25c7-4e56-85b9-8efce5ba4625 is immutable (only a missing embedding may be filled in)\nCONTEXT:  PL/pgSQL function poi_version_guard() line 11 at RAISE",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "22",
+      "name": "Audit log (admin API) covers the workflow",
+      "expected": "contains ['floor.create', 'pipeline.pii_purged', 'pipeline.retry', 'pipeline.stage_failed', 'pipeline.stage_succeeded', 'pipeline.start', 'poi.create', 'poi.update', 'venue.access', 'venue.create']",
+      "actual": "HTTP 200; 45 entries; actions=['capture.create', 'capture.start_processing', 'capture.upload_complete', 'floor.create', 'job.claim', 'media.accept', 'media.reject', 'media.upload_complete', 'media.upload_init', 'pipeline.failed', 'pipeline.pii_purged', 'pipeline.retry', 'pipeline.stage_failed', 'pipeline.stage_succeeded', 'pipeline.start', 'poi.create', 'poi.update', 'public_link.create', 'public_link.exchange', 'public_link.revoke', 'venue.access', 'venue.create']; missing=[]",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "22.1",
+      "name": "Venue-scoped audit view (ops dashboard) for manager",
+      "expected": "200, entries only for venue A",
+      "actual": "HTTP 200 entries=41",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    },
+    {
+      "step": "22.2",
+      "name": "Audit log is append-only",
+      "expected": "UPDATE rejected",
+      "actual": "ERROR:  audit_log is append-only (UPDATE rejected)\nCONTEXT:  PL/pgSQL function audit_log_append_only() line 3 at RAISE",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "evidence": null
+    }
+  ],
+  "context": {
+    "org": "3977dddd-5e6d-4876-b334-76a0a13c33b1",
+    "other_org": "68eba9cd-0404-4f54-af04-20bbab3adde5",
+    "venue": "f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44",
+    "venue_b": "c5f7f8c0-dde7-4716-b2d6-5370588801f4",
+    "evidence_venue_db": "f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44|3977dddd-5e6d-4876-b334-76a0a13c33b1|e2e-venue|E2E Venue|Asia/Kolkata\nc5f7f8c0-dde7-4716-b2d6-5370588801f4|3977dddd-5e6d-4876-b334-76a0a13c33b1|e2e-venue-b|E2E Venue B|UTC",
+    "floor": "e3ae8afa-5a4a-40f3-9bbd-649c5484bcec",
+    "capture": "136ab547-4547-40d6-b601-865f3b8a1058",
+    "media": "969b78da-9632-4cf9-8b8a-b90f00fe8c6b",
+    "media_view": {
+      "id": "969b78da-9632-4cf9-8b8a-b90f00fe8c6b",
+      "kind": "VIDEO",
+      "status": "ACCEPTED",
+      "filename": "sceaux-castle.mp4",
+      "claimedContentType": "video/mp4",
+      "detectedContentType": "video/quicktime",
+      "sizeBytes": 4917797,
+      "sha256": "f960743de6220499436815d55489bd052323d67160367c2e41301cc8cb6921fb",
+      "rejectionCode": null,
+      "rejectionMessage": null,
+      "totalParts": 1,
+      "partSizeBytes": 8388608,
+      "uploadedParts": [
+        1
+      ],
+      "createdAt": "2026-09-24T13:27:06.080603Z"
+    },
+    "media_row": "ACCEPTED|chaya-raw|org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/capture/136ab547-4547-40d6-b601-865f3b8a1058/raw/969b78da-9632-4cf9-8b8a-b90f00fe8c6b|4917797|f960743de6220499436815d55489bd052323d67160367c2e41301cc8cb6921fb",
+    "run": "74f4f90d-8285-4cdf-830d-19f7a9a8088d",
+    "run_view": {
+      "id": "74f4f90d-8285-4cdf-830d-19f7a9a8088d",
+      "status": "FAILED",
+      "quality": null,
+      "privacyEnabled": true,
+      "timeBudgetSeconds": 1800,
+      "startedAt": "2026-09-24T13:27:39.616935Z",
+      "deadlineAt": "2026-09-24T13:59:37.505017Z",
+      "finishedAt": "2026-09-24T13:29:42.687210Z",
+      "failureStage": "SPLAT_RECONSTRUCTION",
+      "failureCode": "DEPENDENCY_UNAVAILABLE",
+      "failureMessage": "SPLAT_RECONSTRUCTION cannot run on this worker; missing: torch, gsplat, cuda",
+      "retryable": true,
+      "stages": [
+        {
+          "stage": "INPUT_VALIDATION",
+          "state": "SUCCEEDED",
+          "attempts": 1,
+          "lastRun": {
+            "attempt": 1,
+            "status": "SUCCEEDED",
+            "startedAt": "2026-09-24T13:27:44.625Z",
+            "finishedAt": "2026-09-24T13:27:45.620Z",
+            "exitStatus": 0,
+            "errorCode": null,
+            "errorMessage": null,
+            "errorDetails": null,
+            "outputSha256": "3b26a8e3687ed36957ffbfc1daadd1d60de3e349024e34b94ec47fa082841acb",
+            "workerId": "e2e-cpu-worker",
+            "command": {
+              "argv": [
+                "/usr/bin/ffmpeg",
+                "-hide_banner",
+                "-nostdin",
+                "-i",
+                "/work/ba213c5b-1b4d-4540-8a7a-1ac34583fc3a/inputs/969b78da-9632-4cf9-8b8a-b90f00fe8c6b-969b78da-9632-4cf9-8b8a-b90f00fe8c6b"
+              ],
+              "stage": "INPUT_VALIDATION",
+              "tools": {
+                "ffmpeg": "ffmpeg version 5.1.9-0+deb12u1 Copyright (c) 2000-2026 the FFmpeg developers"
+              },
+              "config": {
+                "frame_fps": 2.0,
+                "min_frames": 10,
+                "blur_threshold": 40.0,
+                "cleanup_radius": 0.05,
+                "plane_ransac_n": 3,
+                "clip_model_name": "ViT-B-32",
+                "clip_pretrained": "openai",
+                "gsplat_lr_other": 0.005,
+                "max_frame_height": 1080,
+                "plane_max_planes": 6,
+                "dark_fraction_max": 0.6,
+                "gsplat_iterations": 7000,
+                "navmesh_cell_size": 0.3,
+                "plane_min_inliers": 200,
+                "colmap_num_threads": -1,
+                "duplicate_distance": 2.0,
+                "gsplat_lr_position": 0.00016,
+                "gsplat_ssim_weight": 0.2,
+                "bright_fraction_max": 0.6,
+                "navmesh_cell_height": 0.2,
+                "allow_pickle_weights": false,
+                "grounding_dino_model": "IDEA-Research/grounding-dino-tiny",
+                "max_frames_per_video": 900,
+                "min_registered_ratio": 0.6,
+                "navmesh_agent_height": 1.8,
+                "navmesh_agent_radius": 0.35,
+                "navmesh_edge_max_len": 12.0,
+                "gsplat_keyframe_every": 500,
+                "semantic_sample_every": 1,
+                "alignment_voxel_size_m": 0.05,
+                "cleanup_stat_std_ratio": 2.0,
+                "navmesh_edge_max_error": 1.3,
+                "navmesh_verts_per_poly": 6.0,
+                "grounding_dino_revision": null,
+                "navmesh_agent_max_climb": 0.4,
+                "navmesh_region_min_size": 8.0,
+                "object_cluster_distance": 0.75,
+                "object_detection_prompt": "chair. table. sofa. couch. desk. door. window. sign. elevator. stairs. plant. artwork. reception desk. bench. shelf. counter. restroom sign. exit sign. fire extinguisher.",
+                "plane_ransac_iterations": 1000,
+                "privacy_screen_detector": "heuristic-quad",
+                "semantic_confidence_min": 0.5,
+                "cleanup_radius_nb_points": 8,
+                "ksplat_compression_level": 0,
+                "min_alignment_confidence": 0.6,
+                "cleanup_opacity_threshold": 0.05,
+                "cleanup_stat_nb_neighbors": 20,
+                "navmesh_region_merge_size": 20.0,
+                "navmesh_detail_sample_dist": 6.0,
+                "navmesh_max_ramp_slope_deg": 5.0,
+                "navmesh_agent_max_slope_deg": 45.0,
+                "semantic_segmentation_model": "nvidia/segformer-b0-finetuned-ade-512-512",
+                "gsplat_min_compute_capability": 7.0,
+                "cleanup_semantic_min_neighbors": 3,
+                "object_detection_box_threshold": 0.35,
+                "semantic_indexing_sample_every": 3,
+                "semantic_segmentation_revision": null,
+                "navmesh_detail_sample_max_error": 1.0,
+                "object_detection_text_threshold": 0.25,
+                "plane_ransac_distance_threshold": 0.02
+              },
+              "worker": {
+                "id": "e2e-cpu-worker",
+                "version": "0.1.0"
+              },
+              "commands": [
+                [
+                  "/usr/bin/ffmpeg",
+                  "-hide_banner",
+                  "-nostdin",
+                  "-i",
+                  "/work/ba213c5b-1b4d-4540-8a7a-1ac34583fc3a/inputs/969b78da-9632-4cf9-8b8a-b90f00fe8c6b-969b78da-9632-4cf9-8b8a-b90f00fe8c6b"
+                ],
+                [
+                  "/usr/bin/ffmpeg",
+                  "-v",
+                  "error",
+                  "-nostdin",
+                  "-i",
+                  "/work/ba213c5b-1b4d-4540-8a7a-1ac34583fc3a/inputs/969b78da-9632-4cf9-8b8a-b90f00fe8c6b-969b78da-9632-4cf9-8b8a-b90f00fe8c6b",
+                  "-frames:v",
+                  "1",
+                  "-f",
+                  "null",
+                  "-"
+                ]
+              ]
+            },
+            "stdout": {
+              "id": "2bf66daf-1827-4d67-b9e0-9fdbed4a5c25",
+              "kind": "LOG_STDOUT",
+              "bucket": "chaya-derived",
+              "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/INPUT_VALIDATION/attempt-1/logs/stdout.log",
+              "sizeBytes": 1517,
+              "sha256": "7d580c5e41a6ca918636bd42e6dc57b37e94264db8de704e8844bca9e11fa773",
+              "contentType": "text/plain",
+              "partial": false,
+              "containsPii": false
+            },
+            "stderr": {
+              "id": "36d6fc4e-ef69-4de2-a529-cd0b443b7517",
+              "kind": "LOG_STDERR",
+              "bucket": "chaya-derived",
+              "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/INPUT_VALIDATION/attempt-1/logs/stderr.log",
+              "sizeBytes": 718,
+              "sha256": "ef0e80f217622aa042299b64750bcdb5ae8a6d244a46d8f6767040cd44819ead",
+              "contentType": "text/plain",
+              "partial": false,
+              "containsPii": false
+            },
+            "artifacts": [
+              {
+                "id": "39e2064d-1a17-4c35-8c98-f63a8fcba138",
+                "kind": "INPUT_REPORT",
+                "bucket": "chaya-derived",
+                "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/INPUT_VALIDATION/attempt-1/input-report.json",
+                "sizeBytes": 400,
+                "sha256": "0ac03cae2df7f17d4b93728cee220f9296a4e49d481f6e430324d92496a785af",
+                "contentType": "application/json",
+                "partial": false,
+                "containsPii": false
+              }
+            ]
+          }
+        },
+        {
+          "stage": "FFMPEG_PREPROCESS",
+          "state": "SUCCEEDED",
+          "attempts": 1,
+          "lastRun": {
+            "attempt": 1,
+            "status": "SUCCEEDED",
+            "startedAt": "2026-09-24T13:27:45.780Z",
+            "finishedAt": "2026-09-24T13:27:46.894Z",
+            "exitStatus": 0,
+            "errorCode": null,
+            "errorMessage": null,
+            "errorDetails": null,
+            "outputSha256": "316619afc85c756e540a5489d88c9630a0f1b9569d528f89a139c53f0fcc1891",
+            "workerId": "e2e-cpu-worker",
+            "command": {
+              "argv": [
+                "/usr/bin/ffmpeg",
+                "-hide_banner",
+                "-nostdin",
+                "-y",
+                "-i",
+                "/work/0b492d6f-e113-4e29-9b82-7a727bfe201b/inputs/969b78da-9632-4cf9-8b8a-b90f00fe8c6b-969b78da-9632-4cf9-8b8a-b90f00fe8c6b",
+                "-vf",
+                "fps=2,scale=-2:'min(1080,ih)'",
+                "-frames:v",
+                "900",
+                "-q:v",
+                "2",
+                "/work/0b492d6f-e113-4e29-9b82-7a727bfe201b/frames/v00-%06d.jpg"
+              ],
+              "stage": "FFMPEG_PREPROCESS",
+              "tools": {
+                "ffmpeg": "ffmpeg version 5.1.9-0+deb12u1 Copyright (c) 2000-2026 the FFmpeg developers"
+              },
+              "config": {
+                "frame_fps": 2.0,
+                "min_frames": 10,
+                "blur_threshold": 40.0,
+                "cleanup_radius": 0.05,
+                "plane_ransac_n": 3,
+                "clip_model_name": "ViT-B-32",
+                "clip_pretrained": "openai",
+                "gsplat_lr_other": 0.005,
+                "max_frame_height": 1080,
+                "plane_max_planes": 6,
+                "dark_fraction_max": 0.6,
+                "gsplat_iterations": 7000,
+                "navmesh_cell_size": 0.3,
+                "plane_min_inliers": 200,
+                "colmap_num_threads": -1,
+                "duplicate_distance": 2.0,
+                "gsplat_lr_position": 0.00016,
+                "gsplat_ssim_weight": 0.2,
+                "bright_fraction_max": 0.6,
+                "navmesh_cell_height": 0.2,
+                "allow_pickle_weights": false,
+                "grounding_dino_model": "IDEA-Research/grounding-dino-tiny",
+                "max_frames_per_video": 900,
+                "min_registered_ratio": 0.6,
+                "navmesh_agent_height": 1.8,
+                "navmesh_agent_radius": 0.35,
+                "navmesh_edge_max_len": 12.0,
+                "gsplat_keyframe_every": 500,
+                "semantic_sample_every": 1,
+                "alignment_voxel_size_m": 0.05,
+                "cleanup_stat_std_ratio": 2.0,
+                "navmesh_edge_max_error": 1.3,
+                "navmesh_verts_per_poly": 6.0,
+                "grounding_dino_revision": null,
+                "navmesh_agent_max_climb": 0.4,
+                "navmesh_region_min_size": 8.0,
+                "object_cluster_distance": 0.75,
+                "object_detection_prompt": "chair. table. sofa. couch. desk. door. window. sign. elevator. stairs. plant. artwork. reception desk. bench. shelf. counter. restroom sign. exit sign. fire extinguisher.",
+                "plane_ransac_iterations": 1000,
+                "privacy_screen_detector": "heuristic-quad",
+                "semantic_confidence_min": 0.5,
+                "cleanup_radius_nb_points": 8,
+                "ksplat_compression_level": 0,
+                "min_alignment_confidence": 0.6,
+                "cleanup_opacity_threshold": 0.05,
+                "cleanup_stat_nb_neighbors": 20,
+                "navmesh_region_merge_size": 20.0,
+                "navmesh_detail_sample_dist": 6.0,
+                "navmesh_max_ramp_slope_deg": 5.0,
+                "navmesh_agent_max_slope_deg": 45.0,
+                "semantic_segmentation_model": "nvidia/segformer-b0-finetuned-ade-512-512",
+                "gsplat_min_compute_capability": 7.0,
+                "cleanup_semantic_min_neighbors": 3,
+                "object_detection_box_threshold": 0.35,
+                "semantic_indexing_sample_every": 3,
+                "semantic_segmentation_revision": null,
+                "navmesh_detail_sample_max_error": 1.0,
+                "object_detection_text_threshold": 0.25,
+                "plane_ransac_distance_threshold": 0.02
+              },
+              "worker": {
+                "id": "e2e-cpu-worker",
+                "version": "0.1.0"
+              },
+              "commands": [
+                [
+                  "/usr/bin/ffmpeg",
+                  "-hide_banner",
+                  "-nostdin",
+                  "-y",
+                  "-i",
+                  "/work/0b492d6f-e113-4e29-9b82-7a727bfe201b/inputs/969b78da-9632-4cf9-8b8a-b90f00fe8c6b-969b78da-9632-4cf9-8b8a-b90f00fe8c6b",
+                  "-vf",
+                  "fps=2,scale=-2:'min(1080,ih)'",
+                  "-frames:v",
+                  "900",
+                  "-q:v",
+                  "2",
+                  "/work/0b492d6f-e113-4e29-9b82-7a727bfe201b/frames/v00-%06d.jpg"
+                ]
+              ]
+            },
+            "stdout": {
+              "id": "ae64bffb-b9b8-4775-8405-bfa831c16e2e",
+              "kind": "LOG_STDOUT",
+              "bucket": "chaya-derived",
+              "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/FFMPEG_PREPROCESS/attempt-1/logs/stdout.log",
+              "sizeBytes": 2270,
+              "sha256": "2493a3b891067b6b2a38507c3d01810f2e140322f51de6b6d2a87d53aa3a6dff",
+              "contentType": "text/plain",
+              "partial": false,
+              "containsPii": false
+            },
+            "stderr": {
+              "id": "53f432a1-6a15-4be1-af17-4f28585d2e1c",
+              "kind": "LOG_STDERR",
+              "bucket": "chaya-derived",
+              "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/FFMPEG_PREPROCESS/attempt-1/logs/stderr.log",
+              "sizeBytes": 11017,
+              "sha256": "2d761c3b3c7300513ad1b9f6c0f5c8ed58d373bbd46e07f0ee73937f8abda4a9",
+              "contentType": "text/plain",
+              "partial": false,
+              "containsPii": false
+            },
+            "artifacts": [
+              {
+                "id": "3363d589-e7a0-4e49-8c81-97b6e33b0a7a",
+                "kind": "FRAME_ARCHIVE",
+                "bucket": "chaya-derived",
+                "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/FFMPEG_PREPROCESS/attempt-1/pii/frames.tar",
+                "sizeBytes": 3409920,
+                "sha256": "59ea653570cf96476f35d0a8a3bb9d5e9e20889945a8d8ad16c21ae9b83ed7ca",
+                "contentType": "application/x-tar",
+                "partial": false,
+                "containsPii": true
+              },
+              {
+                "id": "593d83ab-b3b6-47b4-9033-c7217332cdb7",
+                "kind": "FRAME_MANIFEST",
+                "bucket": "chaya-derived",
+                "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/FFMPEG_PREPROCESS/attempt-1/frames-manifest.json",
+                "sizeBytes": 416,
+                "sha256": "4840d28a6468456498bf688c246933a0644577a7fa8049f98af7008ae1ab9d6b",
+                "contentType": "application/json",
+                "partial": false,
+                "containsPii": false
+              }
+            ]
+          }
+        },
+        {
+          "stage": "FRAME_QUALITY_FILTER",
+          "state": "SUCCEEDED",
+          "attempts": 1,
+          "lastRun": {
+            "attempt": 1,
+            "status": "SUCCEEDED",
+            "startedAt": "2026-09-24T13:27:47.087Z",
+            "finishedAt": "2026-09-24T13:27:47.909Z",
+            "exitStatus": null,
+            "errorCode": null,
+            "errorMessage": null,
+            "errorDetails": null,
+            "outputSha256": "f94942ae9bd4a227a4124c57d7ea165efe679714c1fa1efa1028e04b488f6f4d",
+            "workerId": "e2e-cpu-worker",
+            "command": {
+              "argv": [
+                "python",
+                "-m",
+                "chaya_worker",
+                "FRAME_QUALITY_FILTER"
+              ],
+              "stage": "FRAME_QUALITY_FILTER",
+              "tools": {
+                "ffmpeg": "ffmpeg version 5.1.9-0+deb12u1 Copyright (c) 2000-2026 the FFmpeg developers"
+              },
+              "config": {
+                "frame_fps": 2.0,
+                "min_frames": 10,
+                "blur_threshold": 40.0,
+                "cleanup_radius": 0.05,
+                "plane_ransac_n": 3,
+                "clip_model_name": "ViT-B-32",
+                "clip_pretrained": "openai",
+                "gsplat_lr_other": 0.005,
+                "max_frame_height": 1080,
+                "plane_max_planes": 6,
+                "dark_fraction_max": 0.6,
+                "gsplat_iterations": 7000,
+                "navmesh_cell_size": 0.3,
+                "plane_min_inliers": 200,
+                "colmap_num_threads": -1,
+                "duplicate_distance": 2.0,
+                "gsplat_lr_position": 0.00016,
+                "gsplat_ssim_weight": 0.2,
+                "bright_fraction_max": 0.6,
+                "navmesh_cell_height": 0.2,
+                "allow_pickle_weights": false,
+                "grounding_dino_model": "IDEA-Research/grounding-dino-tiny",
+                "max_frames_per_video": 900,
+                "min_registered_ratio": 0.6,
+                "navmesh_agent_height": 1.8,
+                "navmesh_agent_radius": 0.35,
+                "navmesh_edge_max_len": 12.0,
+                "gsplat_keyframe_every": 500,
+                "semantic_sample_every": 1,
+                "alignment_voxel_size_m": 0.05,
+                "cleanup_stat_std_ratio": 2.0,
+                "navmesh_edge_max_error": 1.3,
+                "navmesh_verts_per_poly": 6.0,
+                "grounding_dino_revision": null,
+                "navmesh_agent_max_climb": 0.4,
+                "navmesh_region_min_size": 8.0,
+                "object_cluster_distance": 0.75,
+                "object_detection_prompt": "chair. table. sofa. couch. desk. door. window. sign. elevator. stairs. plant. artwork. reception desk. bench. shelf. counter. restroom sign. exit sign. fire extinguisher.",
+                "plane_ransac_iterations": 1000,
+                "privacy_screen_detector": "heuristic-quad",
+                "semantic_confidence_min": 0.5,
+                "cleanup_radius_nb_points": 8,
+                "ksplat_compression_level": 0,
+                "min_alignment_confidence": 0.6,
+                "cleanup_opacity_threshold": 0.05,
+                "cleanup_stat_nb_neighbors": 20,
+                "navmesh_region_merge_size": 20.0,
+                "navmesh_detail_sample_dist": 6.0,
+                "navmesh_max_ramp_slope_deg": 5.0,
+                "navmesh_agent_max_slope_deg": 45.0,
+                "semantic_segmentation_model": "nvidia/segformer-b0-finetuned-ade-512-512",
+                "gsplat_min_compute_capability": 7.0,
+                "cleanup_semantic_min_neighbors": 3,
+                "object_detection_box_threshold": 0.35,
+                "semantic_indexing_sample_every": 3,
+                "semantic_segmentation_revision": null,
+                "navmesh_detail_sample_max_error": 1.0,
+                "object_detection_text_threshold": 0.25,
+                "plane_ransac_distance_threshold": 0.02
+              },
+              "worker": {
+                "id": "e2e-cpu-worker",
+                "version": "0.1.0"
+              },
+              "commands": []
+            },
+            "stdout": {
+              "id": "746f720c-eb76-47a1-8b86-d37d17c6a290",
+              "kind": "LOG_STDOUT",
+              "bucket": "chaya-derived",
+              "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/FRAME_QUALITY_FILTER/attempt-1/logs/stdout.log",
+              "sizeBytes": 2402,
+              "sha256": "f0e4c0a335e04be92c23072fd6c8f82a50f01ad9503b78d78a9caefe0aeab3ce",
+              "contentType": "text/plain",
+              "partial": false,
+              "containsPii": false
+            },
+            "stderr": {
+              "id": "51b7a517-2ede-4fa8-bf1e-ed2666210c3f",
+              "kind": "LOG_STDERR",
+              "bucket": "chaya-derived",
+              "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/FRAME_QUALITY_FILTER/attempt-1/logs/stderr.log",
+              "sizeBytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "contentType": "text/plain",
+              "partial": false,
+              "containsPii": false
+            },
+            "artifacts": [
+              {
+                "id": "7413123a-167e-42ef-8f18-5416dfa3b1ae",
+                "kind": "FRAME_ARCHIVE_SELECTED",
+                "bucket": "chaya-derived",
+                "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/FRAME_QUALITY_FILTER/attempt-1/pii/frames-selected.tar",
+                "sizeBytes": 3409920,
+                "sha256": "11d7ddb53f42385cdfc0cddc0582f7f21c055d9517d9a268b3501002aa3d3506",
+                "contentType": "application/x-tar",
+                "partial": false,
+                "containsPii": true
+              },
+              {
+                "id": "a1d6f4c9-6ca6-4755-8c48-26e0619cabf0",
+                "kind": "FRAME_QUALITY_REPORT",
+                "bucket": "chaya-derived",
+                "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/FRAME_QUALITY_FILTER/attempt-1/quality-report.json",
+                "sizeBytes": 4738,
+                "sha256": "7bc9303a63a72d15817f850eeed9652439806f5b34810a1dba7822c8114e3b9c",
+                "contentType": "application/json",
+                "partial": false,
+                "containsPii": false
+              }
+            ]
+          }
+        },
+        {
+          "stage": "PRIVACY_PREPROCESS",
+          "state": "SUCCEEDED",
+          "attempts": 1,
+          "lastRun": {
+            "attempt": 1,
+            "status": "SUCCEEDED",
+            "startedAt": "2026-09-24T13:27:48.098Z",
+            "finishedAt": "2026-09-24T13:28:08.990Z",
+            "exitStatus": null,
+            "errorCode": null,
+            "errorMessage": null,
+            "errorDetails": null,
+            "outputSha256": "48797fd944147a6743c8ebe985921fcf45b05686c34fac18e32671117d34e1c6",
+            "workerId": "e2e-cpu-worker",
+            "command": {
+              "argv": [
+                "python",
+                "-m",
+                "chaya_worker",
+                "PRIVACY_PREPROCESS"
+              ],
+              "stage": "PRIVACY_PREPROCESS",
+              "tools": {
+                "ffmpeg": "ffmpeg version 5.1.9-0+deb12u1 Copyright (c) 2000-2026 the FFmpeg developers"
+              },
+              "config": {
+                "detectors": {
+                  "faces": "opencv-haar-faces",
+                  "screens_documents": "heuristic-quad"
+                },
+                "frame_fps": 2.0,
+                "min_frames": 10,
+                "blur_threshold": 40.0,
+                "cleanup_radius": 0.05,
+                "plane_ransac_n": 3,
+                "clip_model_name": "ViT-B-32",
+                "clip_pretrained": "openai",
+                "gsplat_lr_other": 0.005,
+                "max_frame_height": 1080,
+                "plane_max_planes": 6,
+                "dark_fraction_max": 0.6,
+                "gsplat_iterations": 7000,
+                "navmesh_cell_size": 0.3,
+                "plane_min_inliers": 200,
+                "colmap_num_threads": -1,
+                "duplicate_distance": 2.0,
+                "gsplat_lr_position": 0.00016,
+                "gsplat_ssim_weight": 0.2,
+                "bright_fraction_max": 0.6,
+                "navmesh_cell_height": 0.2,
+                "allow_pickle_weights": false,
+                "grounding_dino_model": "IDEA-Research/grounding-dino-tiny",
+                "max_frames_per_video": 900,
+                "min_registered_ratio": 0.6,
+                "navmesh_agent_height": 1.8,
+                "navmesh_agent_radius": 0.35,
+                "navmesh_edge_max_len": 12.0,
+                "gsplat_keyframe_every": 500,
+                "semantic_sample_every": 1,
+                "alignment_voxel_size_m": 0.05,
+                "cleanup_stat_std_ratio": 2.0,
+                "navmesh_edge_max_error": 1.3,
+                "navmesh_verts_per_poly": 6.0,
+                "grounding_dino_revision": null,
+                "navmesh_agent_max_climb": 0.4,
+                "navmesh_region_min_size": 8.0,
+                "object_cluster_distance": 0.75,
+                "object_detection_prompt": "chair. table. sofa. couch. desk. door. window. sign. elevator. stairs. plant. artwork. reception desk. bench. shelf. counter. restroom sign. exit sign. fire extinguisher.",
+                "plane_ransac_iterations": 1000,
+                "privacy_screen_detector": "heuristic-quad",
+                "semantic_confidence_min": 0.5,
+                "cleanup_radius_nb_points": 8,
+                "ksplat_compression_level": 0,
+                "min_alignment_confidence": 0.6,
+                "cleanup_opacity_threshold": 0.05,
+                "cleanup_stat_nb_neighbors": 20,
+                "navmesh_region_merge_size": 20.0,
+                "navmesh_detail_sample_dist": 6.0,
+                "navmesh_max_ramp_slope_deg": 5.0,
+                "navmesh_agent_max_slope_deg": 45.0,
+                "semantic_segmentation_model": "nvidia/segformer-b0-finetuned-ade-512-512",
+                "gsplat_min_compute_capability": 7.0,
+                "cleanup_semantic_min_neighbors": 3,
+                "object_detection_box_threshold": 0.35,
+                "semantic_indexing_sample_every": 3,
+                "semantic_segmentation_revision": null,
+                "navmesh_detail_sample_max_error": 1.0,
+                "object_detection_text_threshold": 0.25,
+                "plane_ransac_distance_threshold": 0.02
+              },
+              "worker": {
+                "id": "e2e-cpu-worker",
+                "version": "0.1.0"
+              },
+              "commands": []
+            },
+            "stdout": {
+              "id": "3de475c6-980a-446f-86d0-74dc5d3d8446",
+              "kind": "LOG_STDOUT",
+              "bucket": "chaya-derived",
+              "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/PRIVACY_PREPROCESS/attempt-1/logs/stdout.log",
+              "sizeBytes": 3306,
+              "sha256": "c880df0e5ab133ced6890b3bef24f226436d6ba4947c8dc1db0ae2316d8e8d13",
+              "contentType": "text/plain",
+              "partial": false,
+              "containsPii": false
+            },
+            "stderr": {
+              "id": "6dc9c3b1-0f45-4916-9056-a3dc05ceff5c",
+              "kind": "LOG_STDERR",
+              "bucket": "chaya-derived",
+              "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/PRIVACY_PREPROCESS/attempt-1/logs/stderr.log",
+              "sizeBytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "contentType": "text/plain",
+              "partial": false,
+              "containsPii": false
+            },
+            "artifacts": [
+              {
+                "id": "b5de166b-369a-4e02-8d1f-abc23dc50671",
+                "kind": "FRAME_ARCHIVE_ANON",
+                "bucket": "chaya-derived",
+                "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/PRIVACY_PREPROCESS/attempt-1/frames-anon.tar",
+                "sizeBytes": 3502080,
+                "sha256": "a47edafb24f2d3cbdd556972669183e2b0e37acaf6819b2307c0a24402ae88cc",
+                "contentType": "application/x-tar",
+                "partial": false,
+                "containsPii": false
+              },
+              {
+                "id": "1ec4f4b7-19e6-4061-a35f-c1808957499b",
+                "kind": "PRIVACY_REPORT",
+                "bucket": "chaya-derived",
+                "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/PRIVACY_PREPROCESS/attempt-1/privacy-report.json",
+                "sizeBytes": 8898,
+                "sha256": "dbbc676c4cae30a1f07e78829956bb1351076e43dab5a04e604d6e144dcf2ca1",
+                "contentType": "application/json",
+                "partial": false,
+                "containsPii": false
+              }
+            ]
+          }
+        },
+        {
+          "stage": "POSE_ESTIMATION",
+          "state": "SUCCEEDED",
+          "attempts": 1,
+          "lastRun": {
+            "attempt": 1,
+            "status": "SUCCEEDED",
+            "startedAt": "2026-09-24T13:28:09.722Z",
+            "finishedAt": "2026-09-24T13:29:26.766Z",
+            "exitStatus": 0,
+            "errorCode": null,
+            "errorMessage": null,
+            "errorDetails": null,
+            "outputSha256": "2e6bba0675c74c8cc2573756672b01cbdf0ff4805423a7f7d7875698ff7b124e",
+            "workerId": "e2e-toolchain-worker",
+            "command": {
+              "argv": [
+                "/usr/bin/colmap",
+                "feature_extractor",
+                "--database_path",
+                "/work/40302bca-c426-43bc-9ab5-550499afefd8/database.db",
+                "--image_path",
+                "/work/40302bca-c426-43bc-9ab5-550499afefd8/images",
+                "--ImageReader.single_camera",
+                "1",
+                "--ImageReader.camera_model",
+                "SIMPLE_RADIAL",
+                "--SiftExtraction.use_gpu",
+                "0",
+                "--SiftExtraction.num_threads",
+                "2"
+              ],
+              "stage": "POSE_ESTIMATION",
+              "tools": {
+                "colmap": "COLMAP 3.8 -- Structure-from-Motion and Multi-View Stereo",
+                "ffmpeg": "ffmpeg version 5.1.9-0+deb12u1 Copyright (c) 2000-2026 the FFmpeg developers"
+              },
+              "config": {
+                "gpu": false,
+                "frame_fps": 2.0,
+                "min_frames": 10,
+                "mapper_used": "colmap",
+                "fallback_used": false,
+                "blur_threshold": 40.0,
+                "cleanup_radius": 0.05,
+                "plane_ransac_n": 3,
+                "clip_model_name": "ViT-B-32",
+                "clip_pretrained": "openai",
+                "gsplat_lr_other": 0.005,
+                "max_frame_height": 1080,
+                "plane_max_planes": 6,
+                "dark_fraction_max": 0.6,
+                "gsplat_iterations": 7000,
+                "navmesh_cell_size": 0.3,
+                "plane_min_inliers": 200,
+                "colmap_num_threads": 2,
+                "duplicate_distance": 2.0,
+                "gsplat_lr_position": 0.00016,
+                "gsplat_ssim_weight": 0.2,
+                "bright_fraction_max": 0.6,
+                "navmesh_cell_height": 0.2,
+                "allow_pickle_weights": false,
+                "grounding_dino_model": "IDEA-Research/grounding-dino-tiny",
+                "max_frames_per_video": 900,
+                "min_registered_ratio": 0.6,
+                "navmesh_agent_height": 1.8,
+                "navmesh_agent_radius": 0.35,
+                "navmesh_edge_max_len": 12.0,
+                "gsplat_keyframe_every": 500,
+                "semantic_sample_every": 1,
+                "alignment_voxel_size_m": 0.05,
+                "cleanup_stat_std_ratio": 2.0,
+                "navmesh_edge_max_error": 1.3,
+                "navmesh_verts_per_poly": 6.0,
+                "grounding_dino_revision": null,
+                "navmesh_agent_max_climb": 0.4,
+                "navmesh_region_min_size": 8.0,
+                "object_cluster_distance": 0.75,
+                "object_detection_prompt": "chair. table. sofa. couch. desk. door. window. sign. elevator. stairs. plant. artwork. reception desk. bench. shelf. counter. restroom sign. exit sign. fire extinguisher.",
+                "plane_ransac_iterations": 1000,
+                "privacy_screen_detector": "heuristic-quad",
+                "semantic_confidence_min": 0.5,
+                "cleanup_radius_nb_points": 8,
+                "ksplat_compression_level": 0,
+                "min_alignment_confidence": 0.6,
+                "cleanup_opacity_threshold": 0.05,
+                "cleanup_stat_nb_neighbors": 20,
+                "navmesh_region_merge_size": 20.0,
+                "navmesh_detail_sample_dist": 6.0,
+                "navmesh_max_ramp_slope_deg": 5.0,
+                "navmesh_agent_max_slope_deg": 45.0,
+                "semantic_segmentation_model": "nvidia/segformer-b0-finetuned-ade-512-512",
+                "gsplat_min_compute_capability": 7.0,
+                "cleanup_semantic_min_neighbors": 3,
+                "object_detection_box_threshold": 0.35,
+                "semantic_indexing_sample_every": 3,
+                "semantic_segmentation_revision": null,
+                "navmesh_detail_sample_max_error": 1.0,
+                "object_detection_text_threshold": 0.25,
+                "plane_ransac_distance_threshold": 0.02
+              },
+              "worker": {
+                "id": "e2e-toolchain-worker",
+                "version": "0.1.0"
+              },
+              "commands": [
+                [
+                  "/usr/bin/colmap",
+                  "feature_extractor",
+                  "--database_path",
+                  "/work/40302bca-c426-43bc-9ab5-550499afefd8/database.db",
+                  "--image_path",
+                  "/work/40302bca-c426-43bc-9ab5-550499afefd8/images",
+                  "--ImageReader.single_camera",
+                  "1",
+                  "--ImageReader.camera_model",
+                  "SIMPLE_RADIAL",
+                  "--SiftExtraction.use_gpu",
+                  "0",
+                  "--SiftExtraction.num_threads",
+                  "2"
+                ],
+                [
+                  "/usr/bin/colmap",
+                  "exhaustive_matcher",
+                  "--database_path",
+                  "/work/40302bca-c426-43bc-9ab5-550499afefd8/database.db",
+                  "--SiftMatching.use_gpu",
+                  "0",
+                  "--SiftMatching.num_threads",
+                  "2"
+                ],
+                [
+                  "/usr/bin/colmap",
+                  "mapper",
+                  "--database_path",
+                  "/work/40302bca-c426-43bc-9ab5-550499afefd8/database.db",
+                  "--image_path",
+                  "/work/40302bca-c426-43bc-9ab5-550499afefd8/images",
+                  "--output_path",
+                  "/work/40302bca-c426-43bc-9ab5-550499afefd8/sparse"
+                ],
+                [
+                  "/usr/bin/colmap",
+                  "model_converter",
+                  "--input_path",
+                  "/work/40302bca-c426-43bc-9ab5-550499afefd8/sparse/0",
+                  "--output_path",
+                  "/work/40302bca-c426-43bc-9ab5-550499afefd8/txt",
+                  "--output_type",
+                  "TXT"
+                ]
+              ]
+            },
+            "stdout": {
+              "id": "1b772ba9-5718-43f1-a97d-30bd992122d4",
+              "kind": "LOG_STDOUT",
+              "bucket": "chaya-derived",
+              "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/POSE_ESTIMATION/attempt-1/logs/stdout.log",
+              "sizeBytes": 45204,
+              "sha256": "b314905afef4db928c5eeaebf406e2dc2c0e5d6ef7714ca52a378d5c1c984bcc",
+              "contentType": "text/plain",
+              "partial": false,
+              "containsPii": false
+            },
+            "stderr": {
+              "id": "332b9514-d469-44a2-bf28-04348015b173",
+              "kind": "LOG_STDERR",
+              "bucket": "chaya-derived",
+              "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/POSE_ESTIMATION/attempt-1/logs/stderr.log",
+              "sizeBytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "contentType": "text/plain",
+              "partial": false,
+              "containsPii": false
+            },
+            "artifacts": [
+              {
+                "id": "a552198e-c70a-40b2-9b63-3c91a645e17d",
+                "kind": "SPARSE_MODEL",
+                "bucket": "chaya-derived",
+                "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/POSE_ESTIMATION/attempt-1/sparse-model.tar",
+                "sizeBytes": 3235840,
+                "sha256": "1b45bafc997c8cdc8e05df9a82ae2330edae6d0570112bbbbda5af3a506b1861",
+                "contentType": "application/x-tar",
+                "partial": false,
+                "containsPii": false
+              },
+              {
+                "id": "cfdde13f-12e2-4baa-95bd-8ede4919b969",
+                "kind": "POSES",
+                "bucket": "chaya-derived",
+                "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/POSE_ESTIMATION/attempt-1/poses.json",
+                "sizeBytes": 3996,
+                "sha256": "0a5ac0b834c6429985d1085853a6636ded60e0a762ee6144f231ce7a7ba96939",
+                "contentType": "application/json",
+                "partial": false,
+                "containsPii": false
+              }
+            ]
+          }
+        },
+        {
+          "stage": "SPLAT_RECONSTRUCTION",
+          "state": "FAILED",
+          "attempts": 2,
+          "lastRun": {
+            "attempt": 2,
+            "status": "FAILED",
+            "startedAt": "2026-09-24T13:29:42.534Z",
+            "finishedAt": "2026-09-24T13:29:42.648Z",
+            "exitStatus": null,
+            "errorCode": "DEPENDENCY_UNAVAILABLE",
+            "errorMessage": "SPLAT_RECONSTRUCTION cannot run on this worker; missing: torch, gsplat, cuda",
+            "errorDetails": {
+              "tools": [
+                {
+                  "name": "torch",
+                  "path": null,
+                  "detail": "python module 'torch' is not installed",
+                  "version": null,
+                  "available": false
+                },
+                {
+                  "name": "gsplat",
+                  "path": null,
+                  "detail": "python module 'gsplat' is not installed",
+                  "version": null,
+                  "available": false
+                },
+                {
+                  "name": "cuda",
+                  "path": null,
+                  "detail": "torch is not installed, so no CUDA device can be used",
+                  "version": null,
+                  "available": false
+                }
+              ],
+              "missing": [
+                "torch",
+                "gsplat",
+                "cuda"
+              ]
+            },
+            "outputSha256": null,
+            "workerId": "e2e-toolchain-worker",
+            "command": {
+              "argv": [
+                "python",
+                "-m",
+                "chaya_worker",
+                "SPLAT_RECONSTRUCTION"
+              ],
+              "stage": "SPLAT_RECONSTRUCTION",
+              "tools": {
+                "colmap": "COLMAP 3.8 -- Structure-from-Motion and Multi-View Stereo",
+                "ffmpeg": "ffmpeg version 5.1.9-0+deb12u1 Copyright (c) 2000-2026 the FFmpeg developers"
+              },
+              "config": {
+                "frame_fps": 2.0,
+                "min_frames": 10,
+                "blur_threshold": 40.0,
+                "cleanup_radius": 0.05,
+                "plane_ransac_n": 3,
+                "clip_model_name": "ViT-B-32",
+                "clip_pretrained": "openai",
+                "gsplat_lr_other": 0.005,
+                "max_frame_height": 1080,
+                "plane_max_planes": 6,
+                "dark_fraction_max": 0.6,
+                "gsplat_iterations": 7000,
+                "navmesh_cell_size": 0.3,
+                "plane_min_inliers": 200,
+                "colmap_num_threads": 2,
+                "duplicate_distance": 2.0,
+                "gsplat_lr_position": 0.00016,
+                "gsplat_ssim_weight": 0.2,
+                "bright_fraction_max": 0.6,
+                "navmesh_cell_height": 0.2,
+                "allow_pickle_weights": false,
+                "grounding_dino_model": "IDEA-Research/grounding-dino-tiny",
+                "max_frames_per_video": 900,
+                "min_registered_ratio": 0.6,
+                "navmesh_agent_height": 1.8,
+                "navmesh_agent_radius": 0.35,
+                "navmesh_edge_max_len": 12.0,
+                "gsplat_keyframe_every": 500,
+                "semantic_sample_every": 1,
+                "alignment_voxel_size_m": 0.05,
+                "cleanup_stat_std_ratio": 2.0,
+                "navmesh_edge_max_error": 1.3,
+                "navmesh_verts_per_poly": 6.0,
+                "grounding_dino_revision": null,
+                "navmesh_agent_max_climb": 0.4,
+                "navmesh_region_min_size": 8.0,
+                "object_cluster_distance": 0.75,
+                "object_detection_prompt": "chair. table. sofa. couch. desk. door. window. sign. elevator. stairs. plant. artwork. reception desk. bench. shelf. counter. restroom sign. exit sign. fire extinguisher.",
+                "plane_ransac_iterations": 1000,
+                "privacy_screen_detector": "heuristic-quad",
+                "semantic_confidence_min": 0.5,
+                "cleanup_radius_nb_points": 8,
+                "ksplat_compression_level": 0,
+                "min_alignment_confidence": 0.6,
+                "cleanup_opacity_threshold": 0.05,
+                "cleanup_stat_nb_neighbors": 20,
+                "navmesh_region_merge_size": 20.0,
+                "navmesh_detail_sample_dist": 6.0,
+                "navmesh_max_ramp_slope_deg": 5.0,
+                "navmesh_agent_max_slope_deg": 45.0,
+                "semantic_segmentation_model": "nvidia/segformer-b0-finetuned-ade-512-512",
+                "gsplat_min_compute_capability": 7.0,
+                "cleanup_semantic_min_neighbors": 3,
+                "object_detection_box_threshold": 0.35,
+                "semantic_indexing_sample_every": 3,
+                "semantic_segmentation_revision": null,
+                "navmesh_detail_sample_max_error": 1.0,
+                "object_detection_text_threshold": 0.25,
+                "plane_ransac_distance_threshold": 0.02
+              },
+              "worker": {
+                "id": "e2e-toolchain-worker",
+                "version": "0.1.0"
+              },
+              "commands": []
+            },
+            "stdout": {
+              "id": "43f5b5d6-5435-408b-86f2-cf05bc92a86d",
+              "kind": "LOG_STDOUT",
+              "bucket": "chaya-derived",
+              "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/SPLAT_RECONSTRUCTION/attempt-2/logs/stdout.log",
+              "sizeBytes": 4717,
+              "sha256": "adb00cde04b926d9d10e607cd0680f81933e0d3597cbd67751b749bb36399e08",
+              "contentType": "text/plain",
+              "partial": false,
+              "containsPii": false
+            },
+            "stderr": {
+              "id": "95619fac-0a8e-458d-b620-93cd57b1bad5",
+              "kind": "LOG_STDERR",
+              "bucket": "chaya-derived",
+              "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/SPLAT_RECONSTRUCTION/attempt-2/logs/stderr.log",
+              "sizeBytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "contentType": "text/plain",
+              "partial": false,
+              "containsPii": false
+            },
+            "artifacts": []
+          }
+        },
+        {
+          "stage": "SEMANTIC_SEGMENTATION",
+          "state": "PENDING",
+          "attempts": 0,
+          "lastRun": null
+        },
+        {
+          "stage": "GEOMETRIC_CLEANUP",
+          "state": "PENDING",
+          "attempts": 0,
+          "lastRun": null
+        },
+        {
+          "stage": "PLANE_FITTING",
+          "state": "PENDING",
+          "attempts": 0,
+          "lastRun": null
+        },
+        {
+          "stage": "ARTIFACT_GENERATION",
+          "state": "PENDING",
+          "attempts": 0,
+          "lastRun": null
+        },
+        {
+          "stage": "SEMANTIC_INDEXING",
+          "state": "PENDING",
+          "attempts": 0,
+          "lastRun": null
+        },
+        {
+          "stage": "NAVIGATION_BAKING",
+          "state": "PENDING",
+          "attempts": 0,
+          "lastRun": null
+        }
+      ]
+    },
+    "stages": {
+      "INPUT_VALIDATION": {
+        "stage": "INPUT_VALIDATION",
+        "state": "SUCCEEDED",
+        "attempts": 1,
+        "lastRun": {
+          "attempt": 1,
+          "status": "SUCCEEDED",
+          "startedAt": "2026-09-24T13:27:44.625Z",
+          "finishedAt": "2026-09-24T13:27:45.620Z",
+          "exitStatus": 0,
+          "errorCode": null,
+          "errorMessage": null,
+          "errorDetails": null,
+          "outputSha256": "3b26a8e3687ed36957ffbfc1daadd1d60de3e349024e34b94ec47fa082841acb",
+          "workerId": "e2e-cpu-worker",
+          "command": {
+            "argv": [
+              "/usr/bin/ffmpeg",
+              "-hide_banner",
+              "-nostdin",
+              "-i",
+              "/work/ba213c5b-1b4d-4540-8a7a-1ac34583fc3a/inputs/969b78da-9632-4cf9-8b8a-b90f00fe8c6b-969b78da-9632-4cf9-8b8a-b90f00fe8c6b"
+            ],
+            "stage": "INPUT_VALIDATION",
+            "tools": {
+              "ffmpeg": "ffmpeg version 5.1.9-0+deb12u1 Copyright (c) 2000-2026 the FFmpeg developers"
+            },
+            "config": {
+              "frame_fps": 2.0,
+              "min_frames": 10,
+              "blur_threshold": 40.0,
+              "cleanup_radius": 0.05,
+              "plane_ransac_n": 3,
+              "clip_model_name": "ViT-B-32",
+              "clip_pretrained": "openai",
+              "gsplat_lr_other": 0.005,
+              "max_frame_height": 1080,
+              "plane_max_planes": 6,
+              "dark_fraction_max": 0.6,
+              "gsplat_iterations": 7000,
+              "navmesh_cell_size": 0.3,
+              "plane_min_inliers": 200,
+              "colmap_num_threads": -1,
+              "duplicate_distance": 2.0,
+              "gsplat_lr_position": 0.00016,
+              "gsplat_ssim_weight": 0.2,
+              "bright_fraction_max": 0.6,
+              "navmesh_cell_height": 0.2,
+              "allow_pickle_weights": false,
+              "grounding_dino_model": "IDEA-Research/grounding-dino-tiny",
+              "max_frames_per_video": 900,
+              "min_registered_ratio": 0.6,
+              "navmesh_agent_height": 1.8,
+              "navmesh_agent_radius": 0.35,
+              "navmesh_edge_max_len": 12.0,
+              "gsplat_keyframe_every": 500,
+              "semantic_sample_every": 1,
+              "alignment_voxel_size_m": 0.05,
+              "cleanup_stat_std_ratio": 2.0,
+              "navmesh_edge_max_error": 1.3,
+              "navmesh_verts_per_poly": 6.0,
+              "grounding_dino_revision": null,
+              "navmesh_agent_max_climb": 0.4,
+              "navmesh_region_min_size": 8.0,
+              "object_cluster_distance": 0.75,
+              "object_detection_prompt": "chair. table. sofa. couch. desk. door. window. sign. elevator. stairs. plant. artwork. reception desk. bench. shelf. counter. restroom sign. exit sign. fire extinguisher.",
+              "plane_ransac_iterations": 1000,
+              "privacy_screen_detector": "heuristic-quad",
+              "semantic_confidence_min": 0.5,
+              "cleanup_radius_nb_points": 8,
+              "ksplat_compression_level": 0,
+              "min_alignment_confidence": 0.6,
+              "cleanup_opacity_threshold": 0.05,
+              "cleanup_stat_nb_neighbors": 20,
+              "navmesh_region_merge_size": 20.0,
+              "navmesh_detail_sample_dist": 6.0,
+              "navmesh_max_ramp_slope_deg": 5.0,
+              "navmesh_agent_max_slope_deg": 45.0,
+              "semantic_segmentation_model": "nvidia/segformer-b0-finetuned-ade-512-512",
+              "gsplat_min_compute_capability": 7.0,
+              "cleanup_semantic_min_neighbors": 3,
+              "object_detection_box_threshold": 0.35,
+              "semantic_indexing_sample_every": 3,
+              "semantic_segmentation_revision": null,
+              "navmesh_detail_sample_max_error": 1.0,
+              "object_detection_text_threshold": 0.25,
+              "plane_ransac_distance_threshold": 0.02
+            },
+            "worker": {
+              "id": "e2e-cpu-worker",
+              "version": "0.1.0"
+            },
+            "commands": [
+              [
+                "/usr/bin/ffmpeg",
+                "-hide_banner",
+                "-nostdin",
+                "-i",
+                "/work/ba213c5b-1b4d-4540-8a7a-1ac34583fc3a/inputs/969b78da-9632-4cf9-8b8a-b90f00fe8c6b-969b78da-9632-4cf9-8b8a-b90f00fe8c6b"
+              ],
+              [
+                "/usr/bin/ffmpeg",
+                "-v",
+                "error",
+                "-nostdin",
+                "-i",
+                "/work/ba213c5b-1b4d-4540-8a7a-1ac34583fc3a/inputs/969b78da-9632-4cf9-8b8a-b90f00fe8c6b-969b78da-9632-4cf9-8b8a-b90f00fe8c6b",
+                "-frames:v",
+                "1",
+                "-f",
+                "null",
+                "-"
+              ]
+            ]
+          },
+          "stdout": {
+            "id": "2bf66daf-1827-4d67-b9e0-9fdbed4a5c25",
+            "kind": "LOG_STDOUT",
+            "bucket": "chaya-derived",
+            "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/INPUT_VALIDATION/attempt-1/logs/stdout.log",
+            "sizeBytes": 1517,
+            "sha256": "7d580c5e41a6ca918636bd42e6dc57b37e94264db8de704e8844bca9e11fa773",
+            "contentType": "text/plain",
+            "partial": false,
+            "containsPii": false
+          },
+          "stderr": {
+            "id": "36d6fc4e-ef69-4de2-a529-cd0b443b7517",
+            "kind": "LOG_STDERR",
+            "bucket": "chaya-derived",
+            "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/INPUT_VALIDATION/attempt-1/logs/stderr.log",
+            "sizeBytes": 718,
+            "sha256": "ef0e80f217622aa042299b64750bcdb5ae8a6d244a46d8f6767040cd44819ead",
+            "contentType": "text/plain",
+            "partial": false,
+            "containsPii": false
+          },
+          "artifacts": [
+            {
+              "id": "39e2064d-1a17-4c35-8c98-f63a8fcba138",
+              "kind": "INPUT_REPORT",
+              "bucket": "chaya-derived",
+              "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/INPUT_VALIDATION/attempt-1/input-report.json",
+              "sizeBytes": 400,
+              "sha256": "0ac03cae2df7f17d4b93728cee220f9296a4e49d481f6e430324d92496a785af",
+              "contentType": "application/json",
+              "partial": false,
+              "containsPii": false
+            }
+          ]
+        }
+      },
+      "FFMPEG_PREPROCESS": {
+        "stage": "FFMPEG_PREPROCESS",
+        "state": "SUCCEEDED",
+        "attempts": 1,
+        "lastRun": {
+          "attempt": 1,
+          "status": "SUCCEEDED",
+          "startedAt": "2026-09-24T13:27:45.780Z",
+          "finishedAt": "2026-09-24T13:27:46.894Z",
+          "exitStatus": 0,
+          "errorCode": null,
+          "errorMessage": null,
+          "errorDetails": null,
+          "outputSha256": "316619afc85c756e540a5489d88c9630a0f1b9569d528f89a139c53f0fcc1891",
+          "workerId": "e2e-cpu-worker",
+          "command": {
+            "argv": [
+              "/usr/bin/ffmpeg",
+              "-hide_banner",
+              "-nostdin",
+              "-y",
+              "-i",
+              "/work/0b492d6f-e113-4e29-9b82-7a727bfe201b/inputs/969b78da-9632-4cf9-8b8a-b90f00fe8c6b-969b78da-9632-4cf9-8b8a-b90f00fe8c6b",
+              "-vf",
+              "fps=2,scale=-2:'min(1080,ih)'",
+              "-frames:v",
+              "900",
+              "-q:v",
+              "2",
+              "/work/0b492d6f-e113-4e29-9b82-7a727bfe201b/frames/v00-%06d.jpg"
+            ],
+            "stage": "FFMPEG_PREPROCESS",
+            "tools": {
+              "ffmpeg": "ffmpeg version 5.1.9-0+deb12u1 Copyright (c) 2000-2026 the FFmpeg developers"
+            },
+            "config": {
+              "frame_fps": 2.0,
+              "min_frames": 10,
+              "blur_threshold": 40.0,
+              "cleanup_radius": 0.05,
+              "plane_ransac_n": 3,
+              "clip_model_name": "ViT-B-32",
+              "clip_pretrained": "openai",
+              "gsplat_lr_other": 0.005,
+              "max_frame_height": 1080,
+              "plane_max_planes": 6,
+              "dark_fraction_max": 0.6,
+              "gsplat_iterations": 7000,
+              "navmesh_cell_size": 0.3,
+              "plane_min_inliers": 200,
+              "colmap_num_threads": -1,
+              "duplicate_distance": 2.0,
+              "gsplat_lr_position": 0.00016,
+              "gsplat_ssim_weight": 0.2,
+              "bright_fraction_max": 0.6,
+              "navmesh_cell_height": 0.2,
+              "allow_pickle_weights": false,
+              "grounding_dino_model": "IDEA-Research/grounding-dino-tiny",
+              "max_frames_per_video": 900,
+              "min_registered_ratio": 0.6,
+              "navmesh_agent_height": 1.8,
+              "navmesh_agent_radius": 0.35,
+              "navmesh_edge_max_len": 12.0,
+              "gsplat_keyframe_every": 500,
+              "semantic_sample_every": 1,
+              "alignment_voxel_size_m": 0.05,
+              "cleanup_stat_std_ratio": 2.0,
+              "navmesh_edge_max_error": 1.3,
+              "navmesh_verts_per_poly": 6.0,
+              "grounding_dino_revision": null,
+              "navmesh_agent_max_climb": 0.4,
+              "navmesh_region_min_size": 8.0,
+              "object_cluster_distance": 0.75,
+              "object_detection_prompt": "chair. table. sofa. couch. desk. door. window. sign. elevator. stairs. plant. artwork. reception desk. bench. shelf. counter. restroom sign. exit sign. fire extinguisher.",
+              "plane_ransac_iterations": 1000,
+              "privacy_screen_detector": "heuristic-quad",
+              "semantic_confidence_min": 0.5,
+              "cleanup_radius_nb_points": 8,
+              "ksplat_compression_level": 0,
+              "min_alignment_confidence": 0.6,
+              "cleanup_opacity_threshold": 0.05,
+              "cleanup_stat_nb_neighbors": 20,
+              "navmesh_region_merge_size": 20.0,
+              "navmesh_detail_sample_dist": 6.0,
+              "navmesh_max_ramp_slope_deg": 5.0,
+              "navmesh_agent_max_slope_deg": 45.0,
+              "semantic_segmentation_model": "nvidia/segformer-b0-finetuned-ade-512-512",
+              "gsplat_min_compute_capability": 7.0,
+              "cleanup_semantic_min_neighbors": 3,
+              "object_detection_box_threshold": 0.35,
+              "semantic_indexing_sample_every": 3,
+              "semantic_segmentation_revision": null,
+              "navmesh_detail_sample_max_error": 1.0,
+              "object_detection_text_threshold": 0.25,
+              "plane_ransac_distance_threshold": 0.02
+            },
+            "worker": {
+              "id": "e2e-cpu-worker",
+              "version": "0.1.0"
+            },
+            "commands": [
+              [
+                "/usr/bin/ffmpeg",
+                "-hide_banner",
+                "-nostdin",
+                "-y",
+                "-i",
+                "/work/0b492d6f-e113-4e29-9b82-7a727bfe201b/inputs/969b78da-9632-4cf9-8b8a-b90f00fe8c6b-969b78da-9632-4cf9-8b8a-b90f00fe8c6b",
+                "-vf",
+                "fps=2,scale=-2:'min(1080,ih)'",
+                "-frames:v",
+                "900",
+                "-q:v",
+                "2",
+                "/work/0b492d6f-e113-4e29-9b82-7a727bfe201b/frames/v00-%06d.jpg"
+              ]
+            ]
+          },
+          "stdout": {
+            "id": "ae64bffb-b9b8-4775-8405-bfa831c16e2e",
+            "kind": "LOG_STDOUT",
+            "bucket": "chaya-derived",
+            "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/FFMPEG_PREPROCESS/attempt-1/logs/stdout.log",
+            "sizeBytes": 2270,
+            "sha256": "2493a3b891067b6b2a38507c3d01810f2e140322f51de6b6d2a87d53aa3a6dff",
+            "contentType": "text/plain",
+            "partial": false,
+            "containsPii": false
+          },
+          "stderr": {
+            "id": "53f432a1-6a15-4be1-af17-4f28585d2e1c",
+            "kind": "LOG_STDERR",
+            "bucket": "chaya-derived",
+            "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/FFMPEG_PREPROCESS/attempt-1/logs/stderr.log",
+            "sizeBytes": 11017,
+            "sha256": "2d761c3b3c7300513ad1b9f6c0f5c8ed58d373bbd46e07f0ee73937f8abda4a9",
+            "contentType": "text/plain",
+            "partial": false,
+            "containsPii": false
+          },
+          "artifacts": [
+            {
+              "id": "3363d589-e7a0-4e49-8c81-97b6e33b0a7a",
+              "kind": "FRAME_ARCHIVE",
+              "bucket": "chaya-derived",
+              "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/FFMPEG_PREPROCESS/attempt-1/pii/frames.tar",
+              "sizeBytes": 3409920,
+              "sha256": "59ea653570cf96476f35d0a8a3bb9d5e9e20889945a8d8ad16c21ae9b83ed7ca",
+              "contentType": "application/x-tar",
+              "partial": false,
+              "containsPii": true
+            },
+            {
+              "id": "593d83ab-b3b6-47b4-9033-c7217332cdb7",
+              "kind": "FRAME_MANIFEST",
+              "bucket": "chaya-derived",
+              "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/FFMPEG_PREPROCESS/attempt-1/frames-manifest.json",
+              "sizeBytes": 416,
+              "sha256": "4840d28a6468456498bf688c246933a0644577a7fa8049f98af7008ae1ab9d6b",
+              "contentType": "application/json",
+              "partial": false,
+              "containsPii": false
+            }
+          ]
+        }
+      },
+      "FRAME_QUALITY_FILTER": {
+        "stage": "FRAME_QUALITY_FILTER",
+        "state": "SUCCEEDED",
+        "attempts": 1,
+        "lastRun": {
+          "attempt": 1,
+          "status": "SUCCEEDED",
+          "startedAt": "2026-09-24T13:27:47.087Z",
+          "finishedAt": "2026-09-24T13:27:47.909Z",
+          "exitStatus": null,
+          "errorCode": null,
+          "errorMessage": null,
+          "errorDetails": null,
+          "outputSha256": "f94942ae9bd4a227a4124c57d7ea165efe679714c1fa1efa1028e04b488f6f4d",
+          "workerId": "e2e-cpu-worker",
+          "command": {
+            "argv": [
+              "python",
+              "-m",
+              "chaya_worker",
+              "FRAME_QUALITY_FILTER"
+            ],
+            "stage": "FRAME_QUALITY_FILTER",
+            "tools": {
+              "ffmpeg": "ffmpeg version 5.1.9-0+deb12u1 Copyright (c) 2000-2026 the FFmpeg developers"
+            },
+            "config": {
+              "frame_fps": 2.0,
+              "min_frames": 10,
+              "blur_threshold": 40.0,
+              "cleanup_radius": 0.05,
+              "plane_ransac_n": 3,
+              "clip_model_name": "ViT-B-32",
+              "clip_pretrained": "openai",
+              "gsplat_lr_other": 0.005,
+              "max_frame_height": 1080,
+              "plane_max_planes": 6,
+              "dark_fraction_max": 0.6,
+              "gsplat_iterations": 7000,
+              "navmesh_cell_size": 0.3,
+              "plane_min_inliers": 200,
+              "colmap_num_threads": -1,
+              "duplicate_distance": 2.0,
+              "gsplat_lr_position": 0.00016,
+              "gsplat_ssim_weight": 0.2,
+              "bright_fraction_max": 0.6,
+              "navmesh_cell_height": 0.2,
+              "allow_pickle_weights": false,
+              "grounding_dino_model": "IDEA-Research/grounding-dino-tiny",
+              "max_frames_per_video": 900,
+              "min_registered_ratio": 0.6,
+              "navmesh_agent_height": 1.8,
+              "navmesh_agent_radius": 0.35,
+              "navmesh_edge_max_len": 12.0,
+              "gsplat_keyframe_every": 500,
+              "semantic_sample_every": 1,
+              "alignment_voxel_size_m": 0.05,
+              "cleanup_stat_std_ratio": 2.0,
+              "navmesh_edge_max_error": 1.3,
+              "navmesh_verts_per_poly": 6.0,
+              "grounding_dino_revision": null,
+              "navmesh_agent_max_climb": 0.4,
+              "navmesh_region_min_size": 8.0,
+              "object_cluster_distance": 0.75,
+              "object_detection_prompt": "chair. table. sofa. couch. desk. door. window. sign. elevator. stairs. plant. artwork. reception desk. bench. shelf. counter. restroom sign. exit sign. fire extinguisher.",
+              "plane_ransac_iterations": 1000,
+              "privacy_screen_detector": "heuristic-quad",
+              "semantic_confidence_min": 0.5,
+              "cleanup_radius_nb_points": 8,
+              "ksplat_compression_level": 0,
+              "min_alignment_confidence": 0.6,
+              "cleanup_opacity_threshold": 0.05,
+              "cleanup_stat_nb_neighbors": 20,
+              "navmesh_region_merge_size": 20.0,
+              "navmesh_detail_sample_dist": 6.0,
+              "navmesh_max_ramp_slope_deg": 5.0,
+              "navmesh_agent_max_slope_deg": 45.0,
+              "semantic_segmentation_model": "nvidia/segformer-b0-finetuned-ade-512-512",
+              "gsplat_min_compute_capability": 7.0,
+              "cleanup_semantic_min_neighbors": 3,
+              "object_detection_box_threshold": 0.35,
+              "semantic_indexing_sample_every": 3,
+              "semantic_segmentation_revision": null,
+              "navmesh_detail_sample_max_error": 1.0,
+              "object_detection_text_threshold": 0.25,
+              "plane_ransac_distance_threshold": 0.02
+            },
+            "worker": {
+              "id": "e2e-cpu-worker",
+              "version": "0.1.0"
+            },
+            "commands": []
+          },
+          "stdout": {
+            "id": "746f720c-eb76-47a1-8b86-d37d17c6a290",
+            "kind": "LOG_STDOUT",
+            "bucket": "chaya-derived",
+            "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/FRAME_QUALITY_FILTER/attempt-1/logs/stdout.log",
+            "sizeBytes": 2402,
+            "sha256": "f0e4c0a335e04be92c23072fd6c8f82a50f01ad9503b78d78a9caefe0aeab3ce",
+            "contentType": "text/plain",
+            "partial": false,
+            "containsPii": false
+          },
+          "stderr": {
+            "id": "51b7a517-2ede-4fa8-bf1e-ed2666210c3f",
+            "kind": "LOG_STDERR",
+            "bucket": "chaya-derived",
+            "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/FRAME_QUALITY_FILTER/attempt-1/logs/stderr.log",
+            "sizeBytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "contentType": "text/plain",
+            "partial": false,
+            "containsPii": false
+          },
+          "artifacts": [
+            {
+              "id": "7413123a-167e-42ef-8f18-5416dfa3b1ae",
+              "kind": "FRAME_ARCHIVE_SELECTED",
+              "bucket": "chaya-derived",
+              "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/FRAME_QUALITY_FILTER/attempt-1/pii/frames-selected.tar",
+              "sizeBytes": 3409920,
+              "sha256": "11d7ddb53f42385cdfc0cddc0582f7f21c055d9517d9a268b3501002aa3d3506",
+              "contentType": "application/x-tar",
+              "partial": false,
+              "containsPii": true
+            },
+            {
+              "id": "a1d6f4c9-6ca6-4755-8c48-26e0619cabf0",
+              "kind": "FRAME_QUALITY_REPORT",
+              "bucket": "chaya-derived",
+              "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/FRAME_QUALITY_FILTER/attempt-1/quality-report.json",
+              "sizeBytes": 4738,
+              "sha256": "7bc9303a63a72d15817f850eeed9652439806f5b34810a1dba7822c8114e3b9c",
+              "contentType": "application/json",
+              "partial": false,
+              "containsPii": false
+            }
+          ]
+        }
+      },
+      "PRIVACY_PREPROCESS": {
+        "stage": "PRIVACY_PREPROCESS",
+        "state": "SUCCEEDED",
+        "attempts": 1,
+        "lastRun": {
+          "attempt": 1,
+          "status": "SUCCEEDED",
+          "startedAt": "2026-09-24T13:27:48.098Z",
+          "finishedAt": "2026-09-24T13:28:08.990Z",
+          "exitStatus": null,
+          "errorCode": null,
+          "errorMessage": null,
+          "errorDetails": null,
+          "outputSha256": "48797fd944147a6743c8ebe985921fcf45b05686c34fac18e32671117d34e1c6",
+          "workerId": "e2e-cpu-worker",
+          "command": {
+            "argv": [
+              "python",
+              "-m",
+              "chaya_worker",
+              "PRIVACY_PREPROCESS"
+            ],
+            "stage": "PRIVACY_PREPROCESS",
+            "tools": {
+              "ffmpeg": "ffmpeg version 5.1.9-0+deb12u1 Copyright (c) 2000-2026 the FFmpeg developers"
+            },
+            "config": {
+              "detectors": {
+                "faces": "opencv-haar-faces",
+                "screens_documents": "heuristic-quad"
+              },
+              "frame_fps": 2.0,
+              "min_frames": 10,
+              "blur_threshold": 40.0,
+              "cleanup_radius": 0.05,
+              "plane_ransac_n": 3,
+              "clip_model_name": "ViT-B-32",
+              "clip_pretrained": "openai",
+              "gsplat_lr_other": 0.005,
+              "max_frame_height": 1080,
+              "plane_max_planes": 6,
+              "dark_fraction_max": 0.6,
+              "gsplat_iterations": 7000,
+              "navmesh_cell_size": 0.3,
+              "plane_min_inliers": 200,
+              "colmap_num_threads": -1,
+              "duplicate_distance": 2.0,
+              "gsplat_lr_position": 0.00016,
+              "gsplat_ssim_weight": 0.2,
+              "bright_fraction_max": 0.6,
+              "navmesh_cell_height": 0.2,
+              "allow_pickle_weights": false,
+              "grounding_dino_model": "IDEA-Research/grounding-dino-tiny",
+              "max_frames_per_video": 900,
+              "min_registered_ratio": 0.6,
+              "navmesh_agent_height": 1.8,
+              "navmesh_agent_radius": 0.35,
+              "navmesh_edge_max_len": 12.0,
+              "gsplat_keyframe_every": 500,
+              "semantic_sample_every": 1,
+              "alignment_voxel_size_m": 0.05,
+              "cleanup_stat_std_ratio": 2.0,
+              "navmesh_edge_max_error": 1.3,
+              "navmesh_verts_per_poly": 6.0,
+              "grounding_dino_revision": null,
+              "navmesh_agent_max_climb": 0.4,
+              "navmesh_region_min_size": 8.0,
+              "object_cluster_distance": 0.75,
+              "object_detection_prompt": "chair. table. sofa. couch. desk. door. window. sign. elevator. stairs. plant. artwork. reception desk. bench. shelf. counter. restroom sign. exit sign. fire extinguisher.",
+              "plane_ransac_iterations": 1000,
+              "privacy_screen_detector": "heuristic-quad",
+              "semantic_confidence_min": 0.5,
+              "cleanup_radius_nb_points": 8,
+              "ksplat_compression_level": 0,
+              "min_alignment_confidence": 0.6,
+              "cleanup_opacity_threshold": 0.05,
+              "cleanup_stat_nb_neighbors": 20,
+              "navmesh_region_merge_size": 20.0,
+              "navmesh_detail_sample_dist": 6.0,
+              "navmesh_max_ramp_slope_deg": 5.0,
+              "navmesh_agent_max_slope_deg": 45.0,
+              "semantic_segmentation_model": "nvidia/segformer-b0-finetuned-ade-512-512",
+              "gsplat_min_compute_capability": 7.0,
+              "cleanup_semantic_min_neighbors": 3,
+              "object_detection_box_threshold": 0.35,
+              "semantic_indexing_sample_every": 3,
+              "semantic_segmentation_revision": null,
+              "navmesh_detail_sample_max_error": 1.0,
+              "object_detection_text_threshold": 0.25,
+              "plane_ransac_distance_threshold": 0.02
+            },
+            "worker": {
+              "id": "e2e-cpu-worker",
+              "version": "0.1.0"
+            },
+            "commands": []
+          },
+          "stdout": {
+            "id": "3de475c6-980a-446f-86d0-74dc5d3d8446",
+            "kind": "LOG_STDOUT",
+            "bucket": "chaya-derived",
+            "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/PRIVACY_PREPROCESS/attempt-1/logs/stdout.log",
+            "sizeBytes": 3306,
+            "sha256": "c880df0e5ab133ced6890b3bef24f226436d6ba4947c8dc1db0ae2316d8e8d13",
+            "contentType": "text/plain",
+            "partial": false,
+            "containsPii": false
+          },
+          "stderr": {
+            "id": "6dc9c3b1-0f45-4916-9056-a3dc05ceff5c",
+            "kind": "LOG_STDERR",
+            "bucket": "chaya-derived",
+            "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/PRIVACY_PREPROCESS/attempt-1/logs/stderr.log",
+            "sizeBytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "contentType": "text/plain",
+            "partial": false,
+            "containsPii": false
+          },
+          "artifacts": [
+            {
+              "id": "b5de166b-369a-4e02-8d1f-abc23dc50671",
+              "kind": "FRAME_ARCHIVE_ANON",
+              "bucket": "chaya-derived",
+              "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/PRIVACY_PREPROCESS/attempt-1/frames-anon.tar",
+              "sizeBytes": 3502080,
+              "sha256": "a47edafb24f2d3cbdd556972669183e2b0e37acaf6819b2307c0a24402ae88cc",
+              "contentType": "application/x-tar",
+              "partial": false,
+              "containsPii": false
+            },
+            {
+              "id": "1ec4f4b7-19e6-4061-a35f-c1808957499b",
+              "kind": "PRIVACY_REPORT",
+              "bucket": "chaya-derived",
+              "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/PRIVACY_PREPROCESS/attempt-1/privacy-report.json",
+              "sizeBytes": 8898,
+              "sha256": "dbbc676c4cae30a1f07e78829956bb1351076e43dab5a04e604d6e144dcf2ca1",
+              "contentType": "application/json",
+              "partial": false,
+              "containsPii": false
+            }
+          ]
+        }
+      },
+      "POSE_ESTIMATION": {
+        "stage": "POSE_ESTIMATION",
+        "state": "SUCCEEDED",
+        "attempts": 1,
+        "lastRun": {
+          "attempt": 1,
+          "status": "SUCCEEDED",
+          "startedAt": "2026-09-24T13:28:09.722Z",
+          "finishedAt": "2026-09-24T13:29:26.766Z",
+          "exitStatus": 0,
+          "errorCode": null,
+          "errorMessage": null,
+          "errorDetails": null,
+          "outputSha256": "2e6bba0675c74c8cc2573756672b01cbdf0ff4805423a7f7d7875698ff7b124e",
+          "workerId": "e2e-toolchain-worker",
+          "command": {
+            "argv": [
+              "/usr/bin/colmap",
+              "feature_extractor",
+              "--database_path",
+              "/work/40302bca-c426-43bc-9ab5-550499afefd8/database.db",
+              "--image_path",
+              "/work/40302bca-c426-43bc-9ab5-550499afefd8/images",
+              "--ImageReader.single_camera",
+              "1",
+              "--ImageReader.camera_model",
+              "SIMPLE_RADIAL",
+              "--SiftExtraction.use_gpu",
+              "0",
+              "--SiftExtraction.num_threads",
+              "2"
+            ],
+            "stage": "POSE_ESTIMATION",
+            "tools": {
+              "colmap": "COLMAP 3.8 -- Structure-from-Motion and Multi-View Stereo",
+              "ffmpeg": "ffmpeg version 5.1.9-0+deb12u1 Copyright (c) 2000-2026 the FFmpeg developers"
+            },
+            "config": {
+              "gpu": false,
+              "frame_fps": 2.0,
+              "min_frames": 10,
+              "mapper_used": "colmap",
+              "fallback_used": false,
+              "blur_threshold": 40.0,
+              "cleanup_radius": 0.05,
+              "plane_ransac_n": 3,
+              "clip_model_name": "ViT-B-32",
+              "clip_pretrained": "openai",
+              "gsplat_lr_other": 0.005,
+              "max_frame_height": 1080,
+              "plane_max_planes": 6,
+              "dark_fraction_max": 0.6,
+              "gsplat_iterations": 7000,
+              "navmesh_cell_size": 0.3,
+              "plane_min_inliers": 200,
+              "colmap_num_threads": 2,
+              "duplicate_distance": 2.0,
+              "gsplat_lr_position": 0.00016,
+              "gsplat_ssim_weight": 0.2,
+              "bright_fraction_max": 0.6,
+              "navmesh_cell_height": 0.2,
+              "allow_pickle_weights": false,
+              "grounding_dino_model": "IDEA-Research/grounding-dino-tiny",
+              "max_frames_per_video": 900,
+              "min_registered_ratio": 0.6,
+              "navmesh_agent_height": 1.8,
+              "navmesh_agent_radius": 0.35,
+              "navmesh_edge_max_len": 12.0,
+              "gsplat_keyframe_every": 500,
+              "semantic_sample_every": 1,
+              "alignment_voxel_size_m": 0.05,
+              "cleanup_stat_std_ratio": 2.0,
+              "navmesh_edge_max_error": 1.3,
+              "navmesh_verts_per_poly": 6.0,
+              "grounding_dino_revision": null,
+              "navmesh_agent_max_climb": 0.4,
+              "navmesh_region_min_size": 8.0,
+              "object_cluster_distance": 0.75,
+              "object_detection_prompt": "chair. table. sofa. couch. desk. door. window. sign. elevator. stairs. plant. artwork. reception desk. bench. shelf. counter. restroom sign. exit sign. fire extinguisher.",
+              "plane_ransac_iterations": 1000,
+              "privacy_screen_detector": "heuristic-quad",
+              "semantic_confidence_min": 0.5,
+              "cleanup_radius_nb_points": 8,
+              "ksplat_compression_level": 0,
+              "min_alignment_confidence": 0.6,
+              "cleanup_opacity_threshold": 0.05,
+              "cleanup_stat_nb_neighbors": 20,
+              "navmesh_region_merge_size": 20.0,
+              "navmesh_detail_sample_dist": 6.0,
+              "navmesh_max_ramp_slope_deg": 5.0,
+              "navmesh_agent_max_slope_deg": 45.0,
+              "semantic_segmentation_model": "nvidia/segformer-b0-finetuned-ade-512-512",
+              "gsplat_min_compute_capability": 7.0,
+              "cleanup_semantic_min_neighbors": 3,
+              "object_detection_box_threshold": 0.35,
+              "semantic_indexing_sample_every": 3,
+              "semantic_segmentation_revision": null,
+              "navmesh_detail_sample_max_error": 1.0,
+              "object_detection_text_threshold": 0.25,
+              "plane_ransac_distance_threshold": 0.02
+            },
+            "worker": {
+              "id": "e2e-toolchain-worker",
+              "version": "0.1.0"
+            },
+            "commands": [
+              [
+                "/usr/bin/colmap",
+                "feature_extractor",
+                "--database_path",
+                "/work/40302bca-c426-43bc-9ab5-550499afefd8/database.db",
+                "--image_path",
+                "/work/40302bca-c426-43bc-9ab5-550499afefd8/images",
+                "--ImageReader.single_camera",
+                "1",
+                "--ImageReader.camera_model",
+                "SIMPLE_RADIAL",
+                "--SiftExtraction.use_gpu",
+                "0",
+                "--SiftExtraction.num_threads",
+                "2"
+              ],
+              [
+                "/usr/bin/colmap",
+                "exhaustive_matcher",
+                "--database_path",
+                "/work/40302bca-c426-43bc-9ab5-550499afefd8/database.db",
+                "--SiftMatching.use_gpu",
+                "0",
+                "--SiftMatching.num_threads",
+                "2"
+              ],
+              [
+                "/usr/bin/colmap",
+                "mapper",
+                "--database_path",
+                "/work/40302bca-c426-43bc-9ab5-550499afefd8/database.db",
+                "--image_path",
+                "/work/40302bca-c426-43bc-9ab5-550499afefd8/images",
+                "--output_path",
+                "/work/40302bca-c426-43bc-9ab5-550499afefd8/sparse"
+              ],
+              [
+                "/usr/bin/colmap",
+                "model_converter",
+                "--input_path",
+                "/work/40302bca-c426-43bc-9ab5-550499afefd8/sparse/0",
+                "--output_path",
+                "/work/40302bca-c426-43bc-9ab5-550499afefd8/txt",
+                "--output_type",
+                "TXT"
+              ]
+            ]
+          },
+          "stdout": {
+            "id": "1b772ba9-5718-43f1-a97d-30bd992122d4",
+            "kind": "LOG_STDOUT",
+            "bucket": "chaya-derived",
+            "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/POSE_ESTIMATION/attempt-1/logs/stdout.log",
+            "sizeBytes": 45204,
+            "sha256": "b314905afef4db928c5eeaebf406e2dc2c0e5d6ef7714ca52a378d5c1c984bcc",
+            "contentType": "text/plain",
+            "partial": false,
+            "containsPii": false
+          },
+          "stderr": {
+            "id": "332b9514-d469-44a2-bf28-04348015b173",
+            "kind": "LOG_STDERR",
+            "bucket": "chaya-derived",
+            "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/POSE_ESTIMATION/attempt-1/logs/stderr.log",
+            "sizeBytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "contentType": "text/plain",
+            "partial": false,
+            "containsPii": false
+          },
+          "artifacts": [
+            {
+              "id": "a552198e-c70a-40b2-9b63-3c91a645e17d",
+              "kind": "SPARSE_MODEL",
+              "bucket": "chaya-derived",
+              "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/POSE_ESTIMATION/attempt-1/sparse-model.tar",
+              "sizeBytes": 3235840,
+              "sha256": "1b45bafc997c8cdc8e05df9a82ae2330edae6d0570112bbbbda5af3a506b1861",
+              "contentType": "application/x-tar",
+              "partial": false,
+              "containsPii": false
+            },
+            {
+              "id": "cfdde13f-12e2-4baa-95bd-8ede4919b969",
+              "kind": "POSES",
+              "bucket": "chaya-derived",
+              "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/POSE_ESTIMATION/attempt-1/poses.json",
+              "sizeBytes": 3996,
+              "sha256": "0a5ac0b834c6429985d1085853a6636ded60e0a762ee6144f231ce7a7ba96939",
+              "contentType": "application/json",
+              "partial": false,
+              "containsPii": false
+            }
+          ]
+        }
+      },
+      "SPLAT_RECONSTRUCTION": {
+        "stage": "SPLAT_RECONSTRUCTION",
+        "state": "FAILED",
+        "attempts": 1,
+        "lastRun": {
+          "attempt": 1,
+          "status": "FAILED",
+          "startedAt": "2026-09-24T13:29:27.132Z",
+          "finishedAt": "2026-09-24T13:29:27.329Z",
+          "exitStatus": null,
+          "errorCode": "DEPENDENCY_UNAVAILABLE",
+          "errorMessage": "SPLAT_RECONSTRUCTION cannot run on this worker; missing: torch, gsplat, cuda",
+          "errorDetails": {
+            "tools": [
+              {
+                "name": "torch",
+                "path": null,
+                "detail": "python module 'torch' is not installed",
+                "version": null,
+                "available": false
+              },
+              {
+                "name": "gsplat",
+                "path": null,
+                "detail": "python module 'gsplat' is not installed",
+                "version": null,
+                "available": false
+              },
+              {
+                "name": "cuda",
+                "path": null,
+                "detail": "torch is not installed, so no CUDA device can be used",
+                "version": null,
+                "available": false
+              }
+            ],
+            "missing": [
+              "torch",
+              "gsplat",
+              "cuda"
+            ]
+          },
+          "outputSha256": null,
+          "workerId": "e2e-toolchain-worker",
+          "command": {
+            "argv": [
+              "python",
+              "-m",
+              "chaya_worker",
+              "SPLAT_RECONSTRUCTION"
+            ],
+            "stage": "SPLAT_RECONSTRUCTION",
+            "tools": {
+              "colmap": "COLMAP 3.8 -- Structure-from-Motion and Multi-View Stereo",
+              "ffmpeg": "ffmpeg version 5.1.9-0+deb12u1 Copyright (c) 2000-2026 the FFmpeg developers"
+            },
+            "config": {
+              "frame_fps": 2.0,
+              "min_frames": 10,
+              "blur_threshold": 40.0,
+              "cleanup_radius": 0.05,
+              "plane_ransac_n": 3,
+              "clip_model_name": "ViT-B-32",
+              "clip_pretrained": "openai",
+              "gsplat_lr_other": 0.005,
+              "max_frame_height": 1080,
+              "plane_max_planes": 6,
+              "dark_fraction_max": 0.6,
+              "gsplat_iterations": 7000,
+              "navmesh_cell_size": 0.3,
+              "plane_min_inliers": 200,
+              "colmap_num_threads": 2,
+              "duplicate_distance": 2.0,
+              "gsplat_lr_position": 0.00016,
+              "gsplat_ssim_weight": 0.2,
+              "bright_fraction_max": 0.6,
+              "navmesh_cell_height": 0.2,
+              "allow_pickle_weights": false,
+              "grounding_dino_model": "IDEA-Research/grounding-dino-tiny",
+              "max_frames_per_video": 900,
+              "min_registered_ratio": 0.6,
+              "navmesh_agent_height": 1.8,
+              "navmesh_agent_radius": 0.35,
+              "navmesh_edge_max_len": 12.0,
+              "gsplat_keyframe_every": 500,
+              "semantic_sample_every": 1,
+              "alignment_voxel_size_m": 0.05,
+              "cleanup_stat_std_ratio": 2.0,
+              "navmesh_edge_max_error": 1.3,
+              "navmesh_verts_per_poly": 6.0,
+              "grounding_dino_revision": null,
+              "navmesh_agent_max_climb": 0.4,
+              "navmesh_region_min_size": 8.0,
+              "object_cluster_distance": 0.75,
+              "object_detection_prompt": "chair. table. sofa. couch. desk. door. window. sign. elevator. stairs. plant. artwork. reception desk. bench. shelf. counter. restroom sign. exit sign. fire extinguisher.",
+              "plane_ransac_iterations": 1000,
+              "privacy_screen_detector": "heuristic-quad",
+              "semantic_confidence_min": 0.5,
+              "cleanup_radius_nb_points": 8,
+              "ksplat_compression_level": 0,
+              "min_alignment_confidence": 0.6,
+              "cleanup_opacity_threshold": 0.05,
+              "cleanup_stat_nb_neighbors": 20,
+              "navmesh_region_merge_size": 20.0,
+              "navmesh_detail_sample_dist": 6.0,
+              "navmesh_max_ramp_slope_deg": 5.0,
+              "navmesh_agent_max_slope_deg": 45.0,
+              "semantic_segmentation_model": "nvidia/segformer-b0-finetuned-ade-512-512",
+              "gsplat_min_compute_capability": 7.0,
+              "cleanup_semantic_min_neighbors": 3,
+              "object_detection_box_threshold": 0.35,
+              "semantic_indexing_sample_every": 3,
+              "semantic_segmentation_revision": null,
+              "navmesh_detail_sample_max_error": 1.0,
+              "object_detection_text_threshold": 0.25,
+              "plane_ransac_distance_threshold": 0.02
+            },
+            "worker": {
+              "id": "e2e-toolchain-worker",
+              "version": "0.1.0"
+            },
+            "commands": []
+          },
+          "stdout": {
+            "id": "9fb5f56c-276b-4237-b1f9-1ab81a91fc2a",
+            "kind": "LOG_STDOUT",
+            "bucket": "chaya-derived",
+            "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/SPLAT_RECONSTRUCTION/attempt-1/logs/stdout.log",
+            "sizeBytes": 4717,
+            "sha256": "77f18c947030a7f3acffdfe8ce4db32af4c23d9ff8d0456f667f8720b7fb9339",
+            "contentType": "text/plain",
+            "partial": false,
+            "containsPii": false
+          },
+          "stderr": {
+            "id": "3c77d77c-9aaf-4707-8d98-9cea74a0f2f1",
+            "kind": "LOG_STDERR",
+            "bucket": "chaya-derived",
+            "key": "org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/scan/17877aba-e070-4974-a401-6be5e358ea47/run/74f4f90d-8285-4cdf-830d-19f7a9a8088d/SPLAT_RECONSTRUCTION/attempt-1/logs/stderr.log",
+            "sizeBytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "contentType": "text/plain",
+            "partial": false,
+            "containsPii": false
+          },
+          "artifacts": []
+        }
+      },
+      "SEMANTIC_SEGMENTATION": {
+        "stage": "SEMANTIC_SEGMENTATION",
+        "state": "PENDING",
+        "attempts": 0,
+        "lastRun": null
+      },
+      "GEOMETRIC_CLEANUP": {
+        "stage": "GEOMETRIC_CLEANUP",
+        "state": "PENDING",
+        "attempts": 0,
+        "lastRun": null
+      },
+      "PLANE_FITTING": {
+        "stage": "PLANE_FITTING",
+        "state": "PENDING",
+        "attempts": 0,
+        "lastRun": null
+      },
+      "ARTIFACT_GENERATION": {
+        "stage": "ARTIFACT_GENERATION",
+        "state": "PENDING",
+        "attempts": 0,
+        "lastRun": null
+      },
+      "SEMANTIC_INDEXING": {
+        "stage": "SEMANTIC_INDEXING",
+        "state": "PENDING",
+        "attempts": 0,
+        "lastRun": null
+      },
+      "NAVIGATION_BAKING": {
+        "stage": "NAVIGATION_BAKING",
+        "state": "PENDING",
+        "attempts": 0,
+        "lastRun": null
+      }
+    },
+    "poses_summary": {
+      "mapper": "colmap",
+      "fallback_used": false,
+      "frames": 11,
+      "registered": 11
+    },
+    "stage_workers": [
+      "INPUT_VALIDATION=e2e-cpu-worker",
+      "FFMPEG_PREPROCESS=e2e-cpu-worker",
+      "FRAME_QUALITY_FILTER=e2e-cpu-worker",
+      "PRIVACY_PREPROCESS=e2e-cpu-worker",
+      "POSE_ESTIMATION=e2e-toolchain-worker",
+      "SPLAT_RECONSTRUCTION=e2e-toolchain-worker"
+    ],
+    "run_status": "FAILED",
+    "latest_status": 404,
+    "pois": {
+      "Reception desk": "4e42ed74-f635-4ef3-89f2-95dfa7492a90",
+      "Accessible restroom": "5d5eba02-88d4-44a9-904c-3b916715b802",
+      "Cafe": "41280b38-0df8-4c06-9b7e-d9c63a43ced7",
+      "Elevator A": "dfa93173-73eb-42db-a757-477884c2b7d1"
+    },
+    "poi_rows": "Accessible restroom|1|MANUAL|f\nCafe|1|MANUAL|f\nElevator A|1|MANUAL|f\nReception desk|1|MANUAL|f",
+    "search_embedding": {
+      "query": "restroom",
+      "matchType": "embedding",
+      "results": []
+    },
+    "search_count": "1|1",
+    "audit_counts": [
+      "capture.create:SUCCESS=1",
+      "capture.start_processing:SUCCESS=1",
+      "capture.upload_complete:SUCCESS=1",
+      "floor.create:SUCCESS=1",
+      "job.claim:SUCCESS=7",
+      "media.accept:SUCCESS=1",
+      "media.reject:FAILURE=2",
+      "media.upload_complete:SUCCESS=3",
+      "media.upload_init:SUCCESS=3",
+      "pipeline.failed:SUCCESS=2",
+      "pipeline.pii_purged:SUCCESS=1",
+      "pipeline.retry:SUCCESS=1",
+      "pipeline.stage_failed:SUCCESS=2",
+      "pipeline.stage_succeeded:SUCCESS=5",
+      "pipeline.start:SUCCESS=1",
+      "poi.create:SUCCESS=4",
+      "poi.update:SUCCESS=1",
+      "public_link.create:SUCCESS=1",
+      "public_link.exchange:SUCCESS=1",
+      "public_link.revoke:SUCCESS=1",
+      "venue.access:DENIED=4",
+      "venue.create:SUCCESS=2"
+    ]
+  }
+}

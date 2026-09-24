@@ -24,8 +24,12 @@ RUN if [ "$INSTALL_MODEL" = "true" ]; then \
     fi
 
 FROM python:3.12-slim-bookworm
+# The weight cache is a named volume in compose (vision-cache:/home/vision/.cache). Docker seeds a new named volume from
+# the image's directory, ownership included; without the mkdir/chown it is created root-owned and the download fails.
 RUN groupadd -g 10001 vision \
- && useradd -u 10001 -g vision -m -d /home/vision -s /usr/sbin/nologin vision
+ && useradd -u 10001 -g vision -m -d /home/vision -s /usr/sbin/nologin vision \
+ && mkdir -p /home/vision/.cache/huggingface \
+ && chown -R vision:vision /home/vision/.cache
 COPY --from=build /opt/venv /opt/venv
 WORKDIR /srv
 COPY app ./app

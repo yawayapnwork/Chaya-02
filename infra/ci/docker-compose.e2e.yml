@@ -1,0 +1,92 @@
+# Overlay for the full end-to-end validation (docs/E2E_VALIDATION.md): the development infrastructure
+# (infra/docker/docker-compose.yml) + the real API container (infra/ci/docker-compose.smoke.yml) + this file, which adds
+# the vision service (CLIP text embeddings), the web app, and points the CPU reconstruction worker at the API over the
+# compose network.
+#
+#   docker compose -p chaya-e2e --env-file <env> -f infra/docker/docker-compose.yml \
+#     -f infra/ci/docker-compose.smoke.yml -f infra/ci/docker-compose.e2e.yml --profile pipeline up -d --build
+services:
+  api:
+    environment:
+      # E2E_VISION_URL=http://host.docker.internal:<port> when the vision service runs on the host instead of in
+      # the `vision` container (e.g. a Docker VM too small for PyTorch + CLIP next to ClamAV and Keycloak).
+      VISION_SERVICE_URL: ${E2E_VISION_URL:-http://vision:8090}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # The production CPU worker: claims only the stages its image can run, exactly as in infra/deploy.
+  reconstruction-worker:
+    environment:
+      CHAYA_API_URL: http://api:8080
+      WORKER_ID: e2e-cpu-worker
+      WORKER_STAGES: INPUT_VALIDATION,FFMPEG_PREPROCESS,FRAME_QUALITY_FILTER,PRIVACY_PREPROCESS,REGION_SPLICE,ARTIFACT_GENERATION
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # Stands in for a GPU host's worker (DEPLOYMENT.md "GPU workers"): claims POSE_ESTIMATION and every later toolchain
+  # stage, with the reconstruction storage account (no raw bucket, no pii/). This host has CPU COLMAP only
+  # (worker-colmap.Dockerfile), so POSE_ESTIMATION runs for real and SPLAT_RECONSTRUCTION (CUDA) fails honestly.
+  toolchain-worker:
+    profiles: ["pipeline"]
+    build:
+      # Relative to the first compose file (infra/docker), like the other build contexts in this overlay.
+      context: ../ci
+      dockerfile: worker-colmap.Dockerfile
+      additional_contexts:
+        base: "service:reconstruction-worker"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+    # COLMAP's CPU SIFT holds ~450 MiB per thread; the limit keeps an overrun inside this container.
+    mem_limit: 2g
+    environment:
+      CHAYA_API_URL: http://api:8080
+      CHAYA_TOKEN_URL: http://keycloak:8080/realms/chaya/protocol/openid-connect/token
+      CHAYA_CLIENT_ID: chaya-worker
+      CHAYA_CLIENT_SECRET: ${CHAYA_WORKER_CLIENT_SECRET:?set CHAYA_WORKER_CLIENT_SECRET}
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${S3_RECON_ACCESS_KEY:?set S3_RECON_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_RECON_SECRET_KEY:?set S3_RECON_SECRET_KEY}
+      WORKER_ID: e2e-toolchain-worker
+      WORKER_WORKDIR: /work
+      WORKER_STAGES: POSE_ESTIMATION,SPLAT_RECONSTRUCTION,SEMANTIC_SEGMENTATION,GEOMETRIC_CLEANUP,REGION_ALIGNMENT,PLANE_FITTING,SEMANTIC_INDEXING,NAVIGATION_BAKING
+      COLMAP_NUM_THREADS: "2"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  vision:
+    build:
+      context: ../../services/vision
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+    # CPU PyTorch + CLIP ViT-B/32; the limit keeps a load failure inside this container instead of the Docker VM.
+    mem_limit: 2g
+    ports:
+      - "127.0.0.1:${VISION_SERVICE_PORT:-8090}:8090"
+    volumes:
+      - vision-cache:/home/vision/.cache
+
+  web:
+    build:
+      context: ../../apps/web
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs: ["/tmp", "/app/.next/cache"]
+    environment:
+      CHAYA_API_BASE_URL: http://api:8080
+      CHAYA_PUBLIC_API_BASE_URL: http://localhost:${API_PORT:-8080}
+      CHAYA_PUBLIC_OIDC_ISSUER: http://localhost:${KEYCLOAK_PORT:-8081}/realms/chaya
+      CHAYA_PUBLIC_OIDC_CLIENT_ID: chaya-web
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  vision-cache:

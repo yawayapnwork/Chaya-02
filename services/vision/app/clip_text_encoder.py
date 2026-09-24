@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import threading
 
 EMBEDDING_DIM = 512
 DEFAULT_MODEL_NAME = os.environ.get("CLIP_MODEL_NAME", "ViT-B-32")
@@ -28,6 +29,10 @@ class ClipTextEncoder:
         self._model = None
         self._tokenizer = None
         self._torch = None
+        # FastAPI runs these sync handlers on a thread pool. Without this lock every request that arrives during the
+        # first load (Docker's health check every 30 s, searches) starts its own load: ~1 GiB each, until the container
+        # is OOM-killed. With it the model is loaded exactly once.
+        self._load_lock = threading.Lock()
 
     @property
     def model_id(self) -> str:
@@ -41,16 +46,19 @@ class ClipTextEncoder:
             return
         if not self.available():
             raise ModelUnavailable("torch and open_clip are not installed")
-        try:
-            import open_clip
-            import torch
+        with self._load_lock:
+            if self._model is not None:  # loaded by another thread while this one waited
+                return
+            try:
+                import open_clip
+                import torch
 
-            model, _, _ = open_clip.create_model_and_transforms(self.model_name, pretrained=self.pretrained)
-            self._tokenizer = open_clip.get_tokenizer(self.model_name)
-            self._model = model.eval()
-            self._torch = torch
-        except Exception as exc:  # noqa: BLE001 - any load failure means "unavailable", not a crash
-            raise ModelUnavailable(f"failed to load {self.model_id}: {exc}") from exc
+                model, _, _ = open_clip.create_model_and_transforms(self.model_name, pretrained=self.pretrained)
+                self._tokenizer = open_clip.get_tokenizer(self.model_name)
+                self._torch = torch
+                self._model = model.eval()  # last: _model set means everything above is ready
+            except Exception as exc:  # noqa: BLE001 - any load failure means "unavailable", not a crash
+                raise ModelUnavailable(f"failed to load {self.model_id}: {exc}") from exc
 
     def ready(self) -> tuple[bool, str | None]:
         """Whether the model is actually loaded (loading it if needed), not merely installed. A failed load is
@@ -59,6 +67,9 @@ class ClipTextEncoder:
 
         if self._model is not None:
             return True, None
+        if self._load_lock.locked():
+            # Answer the probe now instead of queueing it behind the load (and holding a pool thread for it).
+            return False, f"{self.model_id} is loading"
         now = time.monotonic()
         last = getattr(self, "_last_failure", None)
         if last is not None and now - last[0] < 60:

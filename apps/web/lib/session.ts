@@ -34,12 +34,13 @@ export function publicViewerVenueId(): string | null {
   return livePublicSession()?.venueId ?? null;
 }
 
-/** A currently valid bearer token: the public-viewer token if one is active, otherwise the OIDC token.
- * Throws NotSignedInError when neither is available. */
-export async function currentAuthToken(): Promise<string> {
+/** The API header that authenticates the current session. A public-viewer token is an opaque token, not a
+ * JWT: the backend reads it only from X-Chaya-Viewer-Token (PublicViewerTokenFilter) and rejects it as a
+ * bearer token. Otherwise the OIDC access token as a bearer. Throws NotSignedInError when neither is available. */
+export async function currentAuthHeaders(): Promise<Record<string, string>> {
   const live = livePublicSession();
-  if (live) return live.token;
-  return oidcAccessToken();
+  if (live) return { "X-Chaya-Viewer-Token": live.token };
+  return { Authorization: `Bearer ${await oidcAccessToken()}` };
 }
 
 export { NotSignedInError };

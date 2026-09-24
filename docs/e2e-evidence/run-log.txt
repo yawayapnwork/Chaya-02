@@ -1,0 +1,97 @@
+2026-09-24 18:55:14 +0530
+[PASS   ] 0.1   API health (/api/v1/health): HTTP 200 status=UP
+[PASS   ] 0.2   API readiness (Flyway migrations applied, deps answering): HTTP 200 {"status":"UP"}
+[PASS   ] 0.3   API version: HTTP 200 {"name":"chaya-api","version":"0.1.0-SNAPSHOT","apiVersion":"v1"}
+[PASS   ] 0.4   Database migrations and extensions: migrations(count|max)=16|16; extensions: pg_trgm 1.6, plpgsql 1.0, vector 0.8.6
+[PASS   ] 0.5   Web readiness (/api/health): HTTP 200 {"status":"UP","backend":{"reachable":true,"status":"UP","httpStatus":200},"problems":[]}
+[PASS   ] 0.6   Vision service readiness (CLIP loaded): HTTP 200 {"status":"UP","model":"open_clip:ViT-B-32:openai","modelAvailable":true,"reason":null}
+[PASS   ] 0.7   Redis reachable (password-protected): PONG (note: no Chaya service uses Redis today; see compose comment)
+[PASS   ] 2     Create organization: created via SQL (no organization API exists): 3977dddd-5e6d-4876-b334-76a0a13c33b1; second org for isolation tests: 68eba9cd-0404-4f54-af04-20bbab3adde5
+[PASS   ] 3.0   Venue manager may NOT create a venue: HTTP 403 
+[PASS   ] 3     Create venue (as admin): HTTP 200 {"id":"f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44","organizationId":"3977dddd-5e6d-4876-b334-76a0a13c33b1","slug":"e2e-venue","name":"E2E Venue","timezone":"Asia/Kolkata"}
+[PASS   ] 3.1   Venue persisted: rows: f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44|3977dddd-5e6d-4876-b334-76a0a13c33b1|e2e-venue|E2E Venue|Asia/Kolkata
+c5f7f8c0-dde7-4716-b2d6-5370588801f4|3977dddd-5e6d-4876-b334-76a0a13c33b1|e2e-venue-b|E2E Venue B|UTC
+[PASS   ] 1     Authenticate as venue manager (Keycloak): HTTP 200; roles=['venue-manager', 'offline_access', 'default-roles-chaya', 'uma_authorization']; org_id=3977dddd-5e6d-4876-b334-76a0a13c33b1; venue_id=['f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44']; aud=chaya-api; iss=http://localhost:8081/realms/chaya
+[PASS   ] 1.1   Manager's token accepted; sees only own venue: HTTP 200 venues=['f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44']
+[PASS   ] 1.2   No token is rejected: HTTP 401 
+[PASS   ] 1.3   Tampered token signature is rejected: HTTP 401 
+[PASS   ] 1.4   Wrong password is rejected by Keycloak: HTTP 401 {"error":"invalid_grant","error_description":"Invalid user credentials"}
+[PASS   ] 4     Create floor (venue manager): HTTP 201 {"id":"e3ae8afa-5a4a-40f3-9bbd-649c5484bcec","level":0,"name":"Ground floor"}
+[PASS   ] 4.1   Floor persisted: e3ae8afa-5a4a-40f3-9bbd-649c5484bcec|f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44|0|Ground floor
+[PASS   ] 5     Create capture session: HTTP 201 {"id":"136ab547-4547-40d6-b601-865f3b8a1058","venueId":"f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44","floorId":"e3ae8afa-5a4a-40f3-9bbd-649c5484bcec","operatorId":"a6fafba3-27c7-4f82-bece-c0f33d1dae2b","status":"CREATED","device":{"app":"scripts/e2e","model":"e2e-fixture"},"startedAt":"2026-09-24T13:27:03.822655Z","endedAt":null,"durationSeconds":null,"qualityState":"NOT_ASSESSED","failureCode":null,"fai
+[PASS   ] 6.1   Initiate media upload: HTTP 201 {"mediaId":"969b78da-9632-4cf9-8b8a-b90f00fe8c6b","partSizeBytes":8388608,"totalParts":1}
+[PASS   ] 6     Upload real capture fixture (multipart): 4917797 bytes, sha256=f960743de6220499436815d55489bd052323d67160367c2e41301cc8cb6921fb, parts=[204], complete=HTTP 202
+[PASS   ] 7     Upload validated (checksum, content sniffing, ClamAV): status history ['ACCEPTED']; {"status": "ACCEPTED", "detectedContentType": "video/quicktime", "rejectionCode": null, "rejectionMessage": null, "sha256": "f960743de6220499436815d55489bd052323d67160367c2e41301cc8cb6921fb"}
+[PASS   ] 7.1   Object stored in MinIO raw bucket, checksum matches: s3://chaya-raw/org/3977dddd-5e6d-4876-b334-76a0a13c33b1/venue/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/capture/136ab547-4547-40d6-b601-865f3b8a1058/raw/969b78da-9632-4cf9-8b8a-b90f00fe8c6b 4917797 bytes sha256 ok
+[PASS   ] 7.2   Least-privilege storage account cannot write: An error occurred (AccessDenied) when calling the PutObject operation: Access Denied.
+[PASS   ] 7.3   Raw bucket is private (anonymous GET): HTTP 403
+[PASS   ] 7.4   Checksum mismatch is rejected: {"status": "REJECTED", "rejectionCode": "CHECKSUM_MISMATCH", "rejectionMessage": "content SHA-256 does not match the declared checksum"}
+[PASS   ] 7.5   EICAR test file is not accepted: {"status": "REJECTED", "rejectionCode": "MALWARE_DETECTED", "rejectionMessage": "malware signature found: Eicar-Test-Signature", "detectedContentType": null}
+[PASS   ] 7.6   Complete capture upload: HTTP 200 {"id":"136ab547-4547-40d6-b601-865f3b8a1058","venueId":"f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44","floorId":"e3ae8afa-5a4a-40f3-9bbd-649c5484bcec","operatorId":"a6fafba3-27c7-4f82-bece-c0f33d1dae2b","status":"READY_FOR_PROCESSING","device":{"app":"script
+[PASS   ] 8     Create processing job: HTTP 202 {"captureId":"136ab547-4547-40d6-b601-865f3b8a1058","captureStatus":"PROCESSING","scanId":"17877aba-e070-4974-a401-6be5e358ea47","run":{"id":"74f4f90d-8285-4cdf-830d-19f7a9a8088d","status":"RUNNING","quality":null,"privacyEnabled":true,"timeBudgetSeconds":1800,"startedAt":"2026-09-24T13:27:39.616935
+[PASS   ] 8.1   Job queued in database: processing_job: INPUT_VALIDATION|QUEUED
+[PASS   ] 9.1   Preprocessing stage INPUT_VALIDATION (real worker container): state=SUCCEEDED attempts=1 exit=0 outputs=1 err=None
+[PASS   ] 9.2   Preprocessing stage FFMPEG_PREPROCESS (real worker container): state=SUCCEEDED attempts=1 exit=0 outputs=2 err=None
+[PASS   ] 9.3   Preprocessing stage FRAME_QUALITY_FILTER (real worker container): state=SUCCEEDED attempts=1 exit=None outputs=2 err=None
+[PASS   ] 9.4   Preprocessing stage PRIVACY_PREPROCESS (real worker container): state=SUCCEEDED attempts=1 exit=None outputs=2 err=None
+[PASS   ] 9.5   POSE_ESTIMATION (real CPU COLMAP, toolchain worker): state=SUCCEEDED exit=0 outputs=['SPARSE_MODEL', 'POSES'] 11/11 frames registered, mapper=colmap err=None
+[BLOCKED] 10    Reconstruction stage SPLAT_RECONSTRUCTION: run FAILED at SPLAT_RECONSTRUCTION: DEPENDENCY_UNAVAILABLE - SPLAT_RECONSTRUCTION cannot run on this worker; missing: torch, gsplat, cuda; retryable=True; quality=None
+[BLOCKED] 10    Reconstruction stage SEMANTIC_SEGMENTATION: not reached (state=PENDING); the run stops at SPLAT_RECONSTRUCTION
+[BLOCKED] 10    Reconstruction stage GEOMETRIC_CLEANUP: not reached (state=PENDING); the run stops at SPLAT_RECONSTRUCTION
+[BLOCKED] 10    Reconstruction stage PLANE_FITTING: not reached (state=PENDING); the run stops at SPLAT_RECONSTRUCTION
+[BLOCKED] 10    Reconstruction stage ARTIFACT_GENERATION: not reached (state=PENDING); the run stops at SPLAT_RECONSTRUCTION
+[BLOCKED] 10    Reconstruction stage SEMANTIC_INDEXING: not reached (state=PENDING); the run stops at SPLAT_RECONSTRUCTION
+[BLOCKED] 10    Reconstruction stage NAVIGATION_BAKING: not reached (state=PENDING); the run stops at SPLAT_RECONSTRUCTION
+[PASS   ] 10.1  A failed run is not reported as success: run.status=FAILED quality=None capture=PROCESSING
+[PASS   ] 10.2  Retry re-runs only the failed stage: retry HTTP 202; SPLAT_RECONSTRUCTION attempts=2; result=FAILED DEPENDENCY_UNAVAILABLE
+[PASS   ] 11    Generated artifacts stored in MinIO derived bucket: 23 artifact records (FRAME_ARCHIVE, FRAME_ARCHIVE_ANON, FRAME_ARCHIVE_SELECTED, FRAME_MANIFEST, FRAME_QUALITY_REPORT, INPUT_REPORT, LOG_STDERR, LOG_STDOUT, POSES, PRIVACY_REPORT, SPARSE_MODEL); 21 verified byte-for-byte; 2 PII objects purged; mismatches=[]
+[PASS   ] 11.1  PII staging objects purged after privacy stage: 0 /pii/ objects remain
+[PASS   ] 11.2  PII purge audited: pipeline.pii_purged rows: 1
+[BLOCKED] 11.3  Reconstruction artifacts (splat / .ksplat / manifest / viewer bundle): none produced: the stages that create them did not run
+[BLOCKED] 12    Register reconstruction version: refused correctly: HTTP 404 {"type":"about:blank","title":"Not Found","status":404,"detail":"no successful full-venue reconstruction exists yet for this floor to finalize as a version","instance":"/api/v1/venues/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/floors/e3ae8afa-5a4a-40f3-9bb
+[BLOCKED] 13    Load reconstruction (API for the viewer): list=HTTP 200 []; latest=HTTP 404 {"type":"about:blank","title":"Not Found","status":404,"detail":"no reconstruction is available for this floor yet","instance":"/api/v1/venues/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/floors/e3ae8afa-5a4a
+[PASS   ] 14    Create manual POIs (venue manager): created 4: ['Reception desk', 'Accessible restroom', 'Cafe', 'Elevator A']
+[FAIL   ] 14.1  POIs indexed for semantic (vector) search: poi_version rows (label|version|source|has_embedding): Accessible restroom|1|MANUAL|f; Cafe|1|MANUAL|f; Elevator A|1|MANUAL|f; Reception desk|1|MANUAL|f
+[BLOCKED] 14.2  Auto-detected POIs (SEMANTIC_INDEXING: Grounding DINO + CLIP): stage not reached
+[PASS   ] 15.0  Vision service embeds query text (real CLIP): HTTP 200 dim=512 model=open_clip:ViT-B-32:openai
+[FAIL   ] 15    Search for a POI ('restroom') with vision service up: HTTP 200 matchType=embedding results=[]
+[PASS   ] 15.1  Search degrades honestly when vision is down: HTTP 200 matchType=lexical_fallback results=['Accessible restroom']
+chaya-e2e-vision-1
+[PASS   ] 15.2  Search queries logged (analytics): search_query rows: 2
+[BLOCKED] 16    Request a navigation route: HTTP 404 {"type":"about:blank","title":"Not Found","status":404,"detail":"no route could be found between the start point and the destination on this floor","instance":"/api/v1/navigation/routes","code":"ROUTE_UNAVAILABLE"}; navigation_graph rows for venue: 0
+[BLOCKED] 17    Display the route in the viewer: no route and no reconstruction to draw it on
+[PASS   ] 18.1  Manager cannot read another venue in the same org: HTTP 404 {"type":"about:blank","title":"Not Found","status":404,"detail":"venue not found","instance":"/api/v1/venues/c5f7f8c0-dd
+[PASS   ] 18.2  Manager cannot write to another venue: HTTP 404 {"type":"about:blank","title":"Not Found","status":404,"detail":"venue not found","instance":"/api/v1/venues/c5f7f8c0-dd
+[PASS   ] 18.3  Manager cannot read the org-wide audit log: HTTP 403 
+[PASS   ] 18.4  Viewer can read POIs of own venue: HTTP 200, 4 POIs
+[PASS   ] 18.5  Viewer cannot create POIs: HTTP 403 
+[PASS   ] 18.6  Viewer cannot create capture sessions: HTTP 403 
+[PASS   ] 18.7  Admin of another organization cannot read the venue: HTTP 404 {"type":"about:blank","title":"Not Found","status":404,"detail":"venue not found","instance":"/api/v1/venues/f0a46359-6c
+[PASS   ] 18.8  Other org's venue list excludes it: HTTP 200 []
+[PASS   ] 18.9  Worker service account cannot use user endpoints: HTTP 403 
+[PASS   ] 18.10 User token cannot use worker control-plane endpoints: HTTP 403 
+[PASS   ] 18.11 Cross-venue refusals are audited: DENIED rows for venue B: 2
+[PASS   ] 19.1  Create public viewer link (venue manager): HTTP 201; secret chl_… (redacted)
+[PASS   ] 19.2  Link secret is not stored in plaintext: rows containing secret: 0
+[PASS   ] 19.3  Exchange secret for anonymous viewer token: HTTP 200; token cvt_… (redacted); venueId=f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44; expiresAt=2026-09-24T13:42:05.405474Z
+[PASS   ] 19.4  Public viewer can read venue, POIs, search: venue=200 pois=200 (4) search=200 matchType=embedding
+[BLOCKED] 19.5  Public viewer can load the reconstruction: HTTP 404 {"type":"about:blank","title":"Not Found","status":404,"detail":"no reconstruction is available for this floor yet","instance":"/api/v1/venues/f0a46359-6c64-4a3
+[PASS   ] 19.6  Public viewer cannot write: HTTP 403 
+[PASS   ] 19.7  Public viewer token is scoped to one venue: HTTP 404 {"type":"about:blank","title":"Not Found","status":404,"detail":"venue not found","instance":"/api/v
+[PASS   ] 19.8  Public viewer cannot see captures: HTTP 403 
+[PASS   ] 19.9  Revoked link: secret and issued token stop working: revoke=204 exchange=404 token=401
+[PASS   ] 19.10 Unknown secret rejected: HTTP 404 {"type":"about:blank","title":"Not Found","status":404,"detail":"link not found or expired","instanc
+[BLOCKED] 20    Create regional rescan: no FINALIZED version exists; request with a non-existent parent refused: HTTP 404 {"type":"about:blank","title":"Not Found","status":404,"detail":"scan version not found","instance":"/api/v1/venues/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/floors/e3ae8afa-5a4a-40f3-9bbd-649c5484bcec/res
+[PASS   ] 20.1  Rescan region validation: HTTP 400 {"type":"about:blank","title":"Bad Request","status":400,"detail":"Invalid request content.","instance":"/api/v1/venues/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/flo
+[BLOCKED] 21    Scan version history: HTTP 200 [] (empty: nothing could be finalized)
+[PASS   ] 21.1  POI version history (append-only): HTTP 200; poi_version rows: 1|Cafe|-4; 2|Cafe & bakery|-4.5
+[PASS   ] 21.2  POI versions are immutable in the database: ERROR:  poi_version 2128846f-25c7-4e56-85b9-8efce5ba4625 is immutable (only a missing embedding may be filled in)
+CONTEXT:  PL/pgSQL function poi_version_guard() line 11 at RAISE
+[PASS   ] 22    Audit log (admin API) covers the workflow: HTTP 200; 45 entries; actions=['capture.create', 'capture.start_processing', 'capture.upload_complete', 'floor.create', 'job.claim', 'media.accept', 'media.reject', 'media.upload_complete', 'media.upload_init', 'pipeline.failed', 'pipeline.pii_purged', 'pipeline.retry', 'pipeline.stage_failed', 'pipeline.stage_succeeded', 'pipeline.start', 'poi.create', 'poi.update', 'public_link.create', 'public_link.exchange', 'public_link.revoke', 'venue.access', 'venue.create']; missing=[]
+[PASS   ] 22.1  Venue-scoped audit view (ops dashboard) for manager: HTTP 200 entries=41
+[PASS   ] 22.2  Audit log is append-only: ERROR:  audit_log is append-only (UPDATE rejected)
+CONTEXT:  PL/pgSQL function audit_log_append_only() line 3 at RAISE
+
+PASS=70 FAIL=2 BLOCKED=16 -> docs/e2e-evidence/results.json
+harness exit 0
+2026-09-24 19:02:46 +0530

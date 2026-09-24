@@ -15,7 +15,10 @@ RUN --mount=type=cache,target=/root/.m2 mvn -B -ntp -q -Dmaven.test.skip=true pa
  && java -Djarmode=tools -jar "$(ls target/chaya-api-*.jar | head -1)" extract --layers --launcher --destination /extracted
 
 FROM eclipse-temurin:21-jre-alpine
-RUN addgroup -S -g 10001 chaya && adduser -S -D -H -u 10001 -G chaya chaya
+# apk upgrade: take Alpine security fixes published since the base image was last rebuilt (the image scan fails on
+# fixable HIGH/CRITICAL findings, and the base tag can lag by weeks). Upgrades only; nothing new is installed.
+RUN apk upgrade --no-cache \
+ && addgroup -S -g 10001 chaya && adduser -S -D -H -u 10001 -G chaya chaya
 WORKDIR /app
 # Layers from least to most frequently changing, so a code change re-ships only the last one. Owned by root and not
 # writable by the runtime user: the application cannot modify itself.

@@ -25,7 +25,11 @@ COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
 # The one writable path (Next's image/fetch cache); everything else stays root-owned and read-only to the app.
-RUN mkdir -p .next/cache && chown node:node .next/cache
+# The runtime only executes `node server.js`: remove the package managers the base image ships (npm, npx, corepack,
+# yarn). They are unused attack surface, and npm's bundled dependencies are where the image scanner's findings were.
+RUN mkdir -p .next/cache && chown node:node .next/cache \
+ && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /opt/yarn-* \
+           /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /usr/local/bin/yarn /usr/local/bin/yarnpkg
 USER node
 EXPOSE 3000
 # Readiness: browser configuration complete AND the API reachable (app/api/health/route.ts). Liveness: /api/health/live.

@@ -97,6 +97,18 @@ def test_pose_commands_use_glomap_when_available_and_colmap_otherwise():
         build_pose_commands(glomap=None, mapper="glomap", **common)
 
 
+def test_pose_commands_bound_colmap_threads_only_when_configured():
+    common = dict(colmap="colmap", glomap=None, mapper="colmap", database=Path("db"), images=Path("img"), sparse=Path("sp"),
+                  use_gpu=False, frame_count=11)
+    default = build_pose_commands(**common)
+    assert not [a for cmd in default.values() for a in cmd if "num_threads" in a], "COLMAP's own default when unset"
+    bounded = build_pose_commands(num_threads=2, **common)
+    fe, m = bounded["feature_extractor"], bounded["matcher"]
+    assert fe[fe.index("--SiftExtraction.num_threads") + 1] == "2" and m[m.index("--SiftMatching.num_threads") + 1] == "2"
+    assert Settings.from_env({"COLMAP_NUM_THREADS": "2"}).colmap_num_threads == 2
+    assert Settings.from_env({}).colmap_num_threads == -1
+
+
 def test_images_txt_parser_reads_colmap_text_model_format():
     # Format documented by COLMAP: header comment lines, then per image a pose line followed by a 2D-points line.
     text = """# Image list with two lines of data per image:

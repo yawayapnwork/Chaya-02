@@ -1,0 +1,8 @@
+[PASS] B1 Public link: viewer loads venue data: headers ok=true; floors/pois/reconstructions 200=true; page: Digital twin viewer Public viewing link Venue: f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44 Floor Select… Ground floor (level 0) Reconstruction No reconstructions No reconstruction available. This floor has not produced a viewable reconstruction yet. Search 🎤 Go This floor only Accessible only Points of in
+[PASS] B1.1 Public link: reconstruction state shown honestly: explicit empty state: 'No reconstruction available'
+[FAIL] B2 Public link: search 'restroom' in the viewer: search HTTP 200; results panel: 'No matches.'
+[BLOCKED] B3 Public link: route 'Reception desk' -> 'Elevator A' drawn: route HTTP 404; panel: No route available: no route could be found between the start point and the destination on this floor
+[PASS] B-A Public link: no unexpected browser console errors: 0 unexpected of 1 console errors
+[PASS] B4.1 Sign-in goes to Keycloak with authorization code + PKCE (client chaya-web): http://localhost:8081/realms/chaya/protocol/openid-connect/auth; response_type=code; code_challenge_method=S256; client_id=chaya-web
+[PASS] B4 Signed-in manager: viewer loads own venue as a Bearer JWT: bearer on every call=true; venues+POIs 200=true; page: Digital twin viewer Venue Select… E2E Venue Floor Select… Ground floor (level 0) Reconstruction No reconstructions No reconstruction available. This floor has not produced a viewable reconstruction yet. Search 🎤 Go This floor only Accessible only Points of interest (4) Accessible restroom Cafe & ba
+[PASS] B-B Signed-in manager: no browser console errors: 0 console errors

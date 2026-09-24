@@ -38,6 +38,15 @@ How Chaya 02 is built, shipped, started, checked, rolled back, backed up and rec
 | `reconstruction-smoke` | PRs touching the pipeline, main, nightly | see [Smoke tests](#smoke-tests) |
 | `deploy` | after `docker` succeeds on main (staging), or manually (production, rollback) | CI passed for the images' commit ([deploy gate](#deploy-gate)); the images exist; the deploy with automatic rollback; public health checks from outside |
 
+**Actions are pinned by commit SHA** (`uses: owner/action@<40-char sha> # vX.Y.Z`), not by tag. A tag can be moved
+or deleted: `docker` and `deploy` hold `packages: write`, `id-token: write` and the deploy SSH key, so a re-pointed
+tag would run someone else's code with those. It has already bitten this repository once: the `docker` workflow
+referenced `aquasecurity/trivy-action@0.28.0`, a tag that no longer exists upstream (only `v0.28.0` does), so every
+`docker` run would have failed at the scan step and staging would never have deployed. Dependabot
+(`.github/dependabot.yml`, `github-actions`) updates the SHA and the version comment together. When adding an
+action, pin it the same way: `git ls-remote --tags https://github.com/<owner>/<action>` gives the commit (use the
+`^{}` line for annotated tags).
+
 **Branch protection (GitHub settings, not in the repository).** Require `frontend`, `backend`, `python`,
 `docker`, `reconstruction-smoke` and `security` on `main`. Because these workflows are path-filtered, mark them as
 required only together with a branch ruleset that treats skipped workflows as passing, or drop the path filters.
@@ -236,6 +245,18 @@ If any step after the switch fails, it **automatically rolls back** to the previ
 `./deploy.sh <previous-tag>`. Images are immutable, so this redeploys exactly what ran before. The schema stays
 where it is. That is safe under the migration rule in section 5; if that rule was broken, see Recovery.
 
+**Third-party images.** `deploy.sh` runs `compose pull` on every deploy, so any floating tag in the compose file
+can change under a deploy or a rollback. How each one is pinned:
+
+| Image | Pin | Why |
+|---|---|---|
+| `chaya-*` | `sha-<commit>` | Immutable by construction |
+| `quay.io/minio/minio`, `quay.io/minio/mc` | release tag **and** `@sha256` digest | `latest` would silently upgrade the object store holding every capture. Upstream's `latest` has not moved since `RELEASE.2025-09-07` (minio) / `RELEASE.2025-08-13` (mc), the versions pinned and tested; watch for security releases yourself, since Dependabot does not track quay.io digests in compose files. Same pins in `infra/docker` and `scripts/backup/common.sh`. |
+| `postgres` (`pgvector:pg17`), `keycloak:26.0`, `clamav:1.4`, `caddy:2.10-alpine` | major/minor tag | Patch releases (security fixes) are taken on the next deploy. A major upgrade (Postgres especially: a new major needs `pg_upgrade` or dump/restore) is a deliberate change to this file. |
+
+To upgrade MinIO: set `MINIO_IMAGE`/`MC_IMAGE` in the host `.env` on staging, deploy, run `verify.sh`, then move the
+pin in the compose file.
+
 ## 8. Backups
 
 These are the same scripts as in development (docs/backup-recovery.md). On the host, run:
@@ -285,6 +306,9 @@ A GPU worker needs:
 
 - the same package (`pip install ./services/reconstruction[reconstruction]`);
 - `WORKER_STAGES` set to the GPU stages, which all run **after** `PRIVACY_PREPROCESS`;
+- on a worker that runs `POSE_ESTIMATION` **without** a GPU, `COLMAP_NUM_THREADS` (for example 2). COLMAP otherwise
+  starts one CPU SIFT thread per host core, at about 450 MiB each for 1600×1200 frames, so an 18-core host wants
+  about 8.5 GiB and is OOM-killed (docs/E2E_VALIDATION.md, 6.2). GPU workers extract on the GPU and leave it unset;
 - the `chaya-worker` client secret and the **reconstruction** MinIO account (`S3_RECON_ACCESS_KEY` /
   `S3_RECON_SECRET_KEY` on the main host, passed to the GPU worker as its `S3_ACCESS_KEY` / `S3_SECRET_KEY`). That
   account cannot read the raw bucket or the `pii/` staging objects. **Do not** give a GPU host the `S3_WORKER_*`
@@ -315,12 +339,30 @@ Checked on 2026-09-24, on a Windows workstation with Docker Desktop. The same co
 | Deploy gate | `scripts/ci/require-green.sh` was tested against recorded run lists. A pass with a path-filtered workflow absent exits 0. A failed run exits 1 and names it. A run still in progress is waited for, then fails at the timeout. |
 | Backups | backup → verify → restore, end to end (docs/backup-recovery.md, "What has been verified"). |
 
+**Second pass, same day: running each workflow's steps found two things that would have failed CI on GitHub.**
+
+| Finding | Fix | Re-verified |
+|---|---|---|
+| `aquasecurity/trivy-action@0.28.0` no longer exists upstream (`git ls-remote`: only `v0.28.0`). Every `docker` run would fail at the scan, so staging would never deploy (it triggers on a successful `docker` run). | Every action pinned by commit SHA ([section 1](#1-cicd-pipeline)); Trivy action `v0.36.0`. | `actionlint` clean. |
+| With the scan running, `api` and `web` **failed** it: Trivy 0.70.0 (the action's default), fixable HIGH/CRITICAL. api: Spring Boot 3.5.6 stack (CRITICAL in `spring-security-web`, `tomcat-embed-core`, `netty-handler`; HIGH in pgjdbc, Spring Framework, Jackson, Micrometer) and `libexpat` in the Alpine base. web: all inside npm, which the base image ships and the runtime never runs. | Spring Boot 3.5.16, with pgjdbc 42.7.12, netty 4.1.137 and Tomcat 10.1.60 set ahead of Boot's managed versions (`services/api/pom.xml`); `apk upgrade` in the API runtime stage; npm, npx, corepack and yarn removed from the web runtime stage. | All four images scan clean with the workflow's exact flags (`--severity CRITICAL,HIGH --ignore-unfixed --scanners vuln,secret`). `mvn verify` on Boot 3.5.16: 271 tests, 0 failures, all five Testcontainers suites ran. The web container still serves: no package managers, `/api/health/live` 200, `/api/health` 503 with no API, `/status` renders. |
+| MinIO and `mc` defaulted to `:latest`, re-pulled on every deploy and rollback. | Pinned by release tag and digest ([section 7](#7-deploying-and-rolling-back)). | Both pins resolve; `docker compose config` passes for `infra/deploy` and `infra/docker`. |
+
+Also re-run in this pass, on Linux containers matching CI (Node 22, Python 3.12, Temurin 21): frontend lint, 61 unit
+tests, typecheck and a build with no environment; ruff and pytest for both Python services (worker 116 passed and 12
+skipped, vision 7 passed); the worker image smoke (11 passed inside the production image, liveness fails before the
+first control-plane call); `npm audit` and `pip-audit` for both services: no findings. The stack smoke was re-run
+against the upgraded API image and the pinned MinIO: readiness UP with every dependency UP, the worker ran the CPU
+stages through the real API, and the run stopped with a structured failure at the first GPU stage (1 passed).
+
 **Not verified:**
 
 - A real deploy: `deploy.yml` and `deploy.sh` have never run against a host with public DNS, ACME certificates
   and GHCR images, and nor has the automatic rollback path. Do it on staging first, including one deliberate failed
   deploy to watch the rollback.
-- The GHCR push, SBOM and provenance attestation, and the Trivy scan. These only run in GitHub Actions.
+- The GHCR push, SBOM and provenance attestation. These only run in GitHub Actions. (The Trivy scan was reproduced
+  locally with the same Trivy version and flags, not in Actions.)
+- New advisories. The image scan gates on what is fixable **today**, so a green image can fail a week later with no
+  code change. The fix is a dependency or base-image bump, as in the second pass above.
 - The `security` workflow's OWASP Dependency-Check. It needs the NVD database (`NVD_API_KEY`).
 - `require-green.sh` against the live GitHub API. Only its decision logic was tested.
 - GPU workers: no GPU image exists, and the full reconstruction (`pytest -m gpu`) needs a GPU host.

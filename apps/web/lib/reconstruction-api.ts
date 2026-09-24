@@ -2,7 +2,7 @@
 
 import { ApiError, api } from "./capture-api";
 import { publicConfig } from "./env";
-import { currentAuthToken } from "./session";
+import { currentAuthHeaders } from "./session";
 
 /** Mirrors dev.chaya.api.reconstruction.ReconstructionService.ReconstructionVersion. */
 export interface ReconstructionVersion {
@@ -62,14 +62,13 @@ export async function exchangePublicLink(secret: string): Promise<PublicViewerTo
 }
 
 /**
- * Downloads an artifact `url` (as returned in ArtifactRef, e.g. the .ksplat) with the caller's bearer
- * token and reports real download progress from the stream, so the viewer can show it without guessing.
+ * Downloads an artifact `url` (as returned in ArtifactRef, e.g. the .ksplat) with the caller's
+ * credentials (bearer or public-viewer token) and reports real download progress from the stream, so the viewer can show it without guessing.
  * Returns a Blob; the caller turns it into an object URL for the GaussianSplats3D loader, since that
  * loader fetches the path itself and cannot be handed an Authorization header directly.
  */
 export async function fetchArtifact(url: string, onProgress?: (loadedBytes: number, totalBytes: number | null) => void): Promise<Blob> {
-  const token = await currentAuthToken();
-  const res = await fetch(`${publicConfig().apiBaseUrl}${url}`, { headers: { Authorization: `Bearer ${token}` } });
+  const res = await fetch(`${publicConfig().apiBaseUrl}${url}`, { headers: await currentAuthHeaders() });
   if (!res.ok) throw new ApiError(res.status, "ARTIFACT_FETCH_FAILED", `Could not load the reconstruction asset (HTTP ${res.status}).`);
   const contentType = res.headers.get("Content-Type") ?? "application/octet-stream";
   const totalHeader = res.headers.get("Content-Length");

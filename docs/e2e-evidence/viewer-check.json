@@ -1,0 +1,100 @@
+[
+  {
+    "id": "B1",
+    "name": "Public link: viewer loads venue data",
+    "expected": "link exchanged; floors, POIs, reconstructions 200; token in X-Chaya-Viewer-Token only",
+    "status": "PASS",
+    "blocked_dependency": null,
+    "actual": "headers ok=true; floors/pois/reconstructions 200=true; page: Digital twin viewer Public viewing link Venue: f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44 Floor Select… Ground floor (level 0) Reconstruction No reconstructions No reconstruction available. This floor has not produced a viewable reconstruction yet. Search 🎤 Go This floor only Accessible only Points of in",
+    "evidence": {
+      "api": [
+        "200 POST /api/v1/public/viewer-token",
+        "200 GET /api/v1/venues/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/floors",
+        "200 GET /api/v1/venues/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/floors/e3ae8afa-5a4a-40f3-9bbd-649c5484bcec/reconstructions",
+        "200 GET /api/v1/venues/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/pois"
+      ],
+      "consoleErrors": [
+        "Failed to load resource: the server responded with a status of 404 ()"
+      ]
+    }
+  },
+  {
+    "id": "B1.1",
+    "name": "Public link: reconstruction state shown honestly",
+    "expected": "a viewable scene, or an explicit empty state (never a fake scene)",
+    "status": "PASS",
+    "blocked_dependency": null,
+    "actual": "explicit empty state: 'No reconstruction available'",
+    "evidence": {
+      "screenshot": "viewer-public.png"
+    }
+  },
+  {
+    "id": "B2",
+    "name": "Public link: search 'restroom' in the viewer",
+    "expected": "search 200 and 'Accessible restroom' in the search results",
+    "status": "FAIL",
+    "blocked_dependency": null,
+    "actual": "search HTTP 200; results panel: 'No matches.'",
+    "evidence": {
+      "screenshot": "viewer-search.png"
+    }
+  },
+  {
+    "id": "B3",
+    "name": "Public link: route 'Reception desk' -> 'Elevator A' drawn",
+    "expected": "route 200 and drawn over the scene",
+    "status": "BLOCKED",
+    "blocked_dependency": "NAVIGATION_BAKING (no navigation graph)",
+    "actual": "route HTTP 404; panel: No route available: no route could be found between the start point and the destination on this floor",
+    "evidence": {
+      "screenshot": "viewer-route.png"
+    }
+  },
+  {
+    "id": "B-A",
+    "name": "Public link: no unexpected browser console errors",
+    "expected": "none besides the logged route 404",
+    "status": "PASS",
+    "blocked_dependency": null,
+    "actual": "0 unexpected of 1 console errors",
+    "evidence": [
+      "Failed to load resource: the server responded with a status of 404 ()"
+    ]
+  },
+  {
+    "id": "B4.1",
+    "name": "Sign-in goes to Keycloak with authorization code + PKCE (client chaya-web)",
+    "expected": "Keycloak login page; response_type=code, code_challenge_method=S256, client_id=chaya-web",
+    "status": "PASS",
+    "blocked_dependency": null,
+    "actual": "http://localhost:8081/realms/chaya/protocol/openid-connect/auth; response_type=code; code_challenge_method=S256; client_id=chaya-web"
+  },
+  {
+    "id": "B4",
+    "name": "Signed-in manager: viewer loads own venue as a Bearer JWT",
+    "expected": "venues, floors, POIs 200 with Authorization: Bearer",
+    "status": "PASS",
+    "blocked_dependency": null,
+    "actual": "bearer on every call=true; venues+POIs 200=true; page: Digital twin viewer Venue Select… E2E Venue Floor Select… Ground floor (level 0) Reconstruction No reconstructions No reconstruction available. This floor has not produced a viewable reconstruction yet. Search 🎤 Go This floor only Accessible only Points of interest (4) Accessible restroom Cafe & ba",
+    "evidence": {
+      "api": [
+        "200 GET /api/v1/venues",
+        "200 GET /api/v1/venues/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/floors",
+        "200 GET /api/v1/venues/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/floors/e3ae8afa-5a4a-40f3-9bbd-649c5484bcec/reconstructions",
+        "200 GET /api/v1/venues/f0a46359-6c64-4a3c-ac9b-fd9eadfe5e44/pois"
+      ],
+      "consoleErrors": [],
+      "screenshot": "viewer-signed-in.png"
+    }
+  },
+  {
+    "id": "B-B",
+    "name": "Signed-in manager: no browser console errors",
+    "expected": "none",
+    "status": "PASS",
+    "blocked_dependency": null,
+    "actual": "0 console errors",
+    "evidence": []
+  }
+]
