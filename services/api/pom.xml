@@ -42,7 +42,7 @@
       <artifactId>tika-core</artifactId>
       <!-- 3.2.2+: fixes the critical XXE advisory CVE-2025-66516 affecting tika-core 1.13-3.2.1. Only magic-byte
            detection is used here (no PDF/XML parsing), but the vulnerable range is not kept. -->
-      <version>3.2.2</version>
+      <version>4.0.0</version>
     </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
