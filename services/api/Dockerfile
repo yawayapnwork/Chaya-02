@@ -6,7 +6,7 @@
 # every credential arrives as an environment variable at run time (DEPLOYMENT.md). Tests are neither compiled nor run
 # here; CI compiles and runs them (.github/workflows/backend.yml) on the same commit.
 
-FROM maven:3.9-eclipse-temurin-21 AS build
+FROM maven:3-eclipse-temurin-26 AS build
 WORKDIR /src
 COPY pom.xml ./
 RUN --mount=type=cache,target=/root/.m2 mvn -B -ntp -q dependency:go-offline
