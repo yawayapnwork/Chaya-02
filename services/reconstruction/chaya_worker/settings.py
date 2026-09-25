@@ -63,19 +63,26 @@ class Settings:
     semantic_sample_every: int = 1  # segment every Nth registered frame (cost control)
     semantic_segmentation_model: str = "nvidia/segformer-b0-finetuned-ade-512-512"
     semantic_segmentation_revision: str = ""  # commit SHA; empty = unpinned (logged)
-    # GEOMETRIC_CLEANUP (Open3D)
+    # GEOMETRIC_CLEANUP (Open3D). Runs before metric calibration exists, in arbitrary reconstruction units, so its
+    # distance threshold is a multiple of the cloud's own median nearest-neighbour spacing (scale-invariant), never
+    # a number of metres. 3.0 is the scale-relative radius benchmarks/b2_geometry_cleanup already measured with;
+    # it has not been tuned on a real venue reconstruction.
     cleanup_stat_nb_neighbors: int = 20
     cleanup_stat_std_ratio: float = 2.0
     cleanup_radius_nb_points: int = 8
-    cleanup_radius: float = 0.05
+    cleanup_radius_spacing_factor: float = 3.0
     cleanup_opacity_threshold: float = 0.05
-    cleanup_semantic_min_neighbors: int = 3  # clutter points with fewer same-class neighbours in cleanup_radius are dropped
-    # PLANE_FITTING
-    plane_ransac_distance_threshold: float = 0.02
+    cleanup_semantic_min_neighbors: int = 3  # clutter points with fewer same-class neighbours within the cleanup radius are dropped
+    # PLANE_FITTING. Same reason: the RANSAC inlier distance is a multiple of the median nearest-neighbour spacing.
+    plane_ransac_distance_spacing_factor: float = 1.0
     plane_ransac_n: int = 3
     plane_ransac_iterations: int = 1000
     plane_max_planes: int = 6
     plane_min_inliers: int = 200
+    # Gravity estimate (chaya_worker.gravity), emitted by PLANE_FITTING as GRAVITY_ESTIMATE.
+    gravity_max_camera_plane_angle_deg: float = 30.0
+    gravity_min_camera_up_consistency: float = 0.5
+    gravity_min_cameras_above_fraction: float = 0.9
     # ARTIFACT_GENERATION
     ksplat_compression_level: int = 0
     # SEMANTIC_INDEXING (Grounding DINO + CLIP)
@@ -92,8 +99,10 @@ class Settings:
     clip_model_name: str = "ViT-B-32"
     clip_pretrained: str = "openai"  # 512-d, matches poi_version.embedding vector(512)
     semantic_indexing_sample_every: int = 3
-    object_cluster_distance: float = 0.75  # scene units; detections closer than this are one object
-    # NAVIGATION_BAKING (Recast). Names/defaults match Recast's own rcConfig fields.
+    object_cluster_distance_m: float = 0.75  # canonical metres (SEMANTIC_INDEXING requires a calibrated frame)
+    # NAVIGATION_BAKING (Recast). Names/defaults match Recast's own rcConfig fields. All lengths are canonical metres
+    # and all heights are along canonical +Z (Recast's +Y after chaya_worker.recast_boundary); the stage refuses to
+    # run without a calibrated frame, so these numbers are never applied to arbitrary reconstruction units.
     navmesh_cell_size: float = 0.3
     navmesh_cell_height: float = 0.2
     navmesh_agent_height: float = 1.8
@@ -110,8 +119,14 @@ class Settings:
     # ADA-inspired accessible-ramp threshold (1:12 rise:run ~= 4.8 degrees); a polygon steeper than this
     # is excluded from the STEP_FREE routing graph regardless of whether Recast still considers it walkable.
     navmesh_max_ramp_slope_deg: float = 5.0
-    # REGION_ALIGNMENT / REGION_SPLICE (incremental re-scan; see docs/rescan.md)
+    # A plane counts as horizontal (a floor candidate) within this angle of canonical +Z.
+    navmesh_floor_max_tilt_deg: float = 10.0
+    # REGION_ALIGNMENT / REGION_SPLICE (incremental re-scan; see docs/rescan.md). Registration runs in canonical
+    # metres: the region is pre-scaled by its own metric calibration, the venue by the parent's frame.
     alignment_voxel_size_m: float = 0.05
+    # Registration may refine the region's scale (its calibration is measured, not exact) but a correction beyond
+    # this fraction means the region's calibration and the venue's disagree; the stage fails instead of merging.
+    alignment_max_scale_correction: float = 0.1
     # The control plane independently re-checks this against chaya.rescan.min-alignment-confidence
     # (RescanProperties) before ever finalizing a ScanVersion -- this is the worker's own gate so a bad
     # splice is refused even before the report reaches the server. Never merge below this line.
@@ -160,14 +175,18 @@ class Settings:
             cleanup_stat_nb_neighbors=_int(e, "CLEANUP_STAT_NB_NEIGHBORS", d.cleanup_stat_nb_neighbors),
             cleanup_stat_std_ratio=_float(e, "CLEANUP_STAT_STD_RATIO", d.cleanup_stat_std_ratio),
             cleanup_radius_nb_points=_int(e, "CLEANUP_RADIUS_NB_POINTS", d.cleanup_radius_nb_points),
-            cleanup_radius=_float(e, "CLEANUP_RADIUS", d.cleanup_radius),
+            cleanup_radius_spacing_factor=_float(e, "CLEANUP_RADIUS_SPACING_FACTOR", d.cleanup_radius_spacing_factor),
             cleanup_opacity_threshold=_float(e, "CLEANUP_OPACITY_THRESHOLD", d.cleanup_opacity_threshold),
             cleanup_semantic_min_neighbors=_int(e, "CLEANUP_SEMANTIC_MIN_NEIGHBORS", d.cleanup_semantic_min_neighbors),
-            plane_ransac_distance_threshold=_float(e, "PLANE_RANSAC_DISTANCE_THRESHOLD", d.plane_ransac_distance_threshold),
+            plane_ransac_distance_spacing_factor=_float(e, "PLANE_RANSAC_DISTANCE_SPACING_FACTOR",
+                                                        d.plane_ransac_distance_spacing_factor),
             plane_ransac_n=_int(e, "PLANE_RANSAC_N", d.plane_ransac_n),
             plane_ransac_iterations=_int(e, "PLANE_RANSAC_ITERATIONS", d.plane_ransac_iterations),
             plane_max_planes=_int(e, "PLANE_MAX_PLANES", d.plane_max_planes),
             plane_min_inliers=_int(e, "PLANE_MIN_INLIERS", d.plane_min_inliers),
+            gravity_max_camera_plane_angle_deg=_float(e, "GRAVITY_MAX_CAMERA_PLANE_ANGLE_DEG", d.gravity_max_camera_plane_angle_deg),
+            gravity_min_camera_up_consistency=_float(e, "GRAVITY_MIN_CAMERA_UP_CONSISTENCY", d.gravity_min_camera_up_consistency),
+            gravity_min_cameras_above_fraction=_float(e, "GRAVITY_MIN_CAMERAS_ABOVE_FRACTION", d.gravity_min_cameras_above_fraction),
             ksplat_compression_level=_int(e, "KSPLAT_COMPRESSION_LEVEL", d.ksplat_compression_level),
             grounding_dino_model=e.get("GROUNDING_DINO_MODEL", d.grounding_dino_model),
             grounding_dino_revision=e.get("GROUNDING_DINO_REVISION", d.grounding_dino_revision),
@@ -178,7 +197,7 @@ class Settings:
             clip_model_name=e.get("CLIP_MODEL_NAME", d.clip_model_name),
             clip_pretrained=e.get("CLIP_PRETRAINED", d.clip_pretrained),
             semantic_indexing_sample_every=_int(e, "SEMANTIC_INDEXING_SAMPLE_EVERY", d.semantic_indexing_sample_every),
-            object_cluster_distance=_float(e, "OBJECT_CLUSTER_DISTANCE", d.object_cluster_distance),
+            object_cluster_distance_m=_float(e, "OBJECT_CLUSTER_DISTANCE_M", d.object_cluster_distance_m),
             navmesh_cell_size=_float(e, "NAVMESH_CELL_SIZE", d.navmesh_cell_size),
             navmesh_cell_height=_float(e, "NAVMESH_CELL_HEIGHT", d.navmesh_cell_height),
             navmesh_agent_height=_float(e, "NAVMESH_AGENT_HEIGHT", d.navmesh_agent_height),
@@ -193,7 +212,9 @@ class Settings:
             navmesh_detail_sample_dist=_float(e, "NAVMESH_DETAIL_SAMPLE_DIST", d.navmesh_detail_sample_dist),
             navmesh_detail_sample_max_error=_float(e, "NAVMESH_DETAIL_SAMPLE_MAX_ERROR", d.navmesh_detail_sample_max_error),
             navmesh_max_ramp_slope_deg=_float(e, "NAVMESH_MAX_RAMP_SLOPE_DEG", d.navmesh_max_ramp_slope_deg),
+            navmesh_floor_max_tilt_deg=_float(e, "NAVMESH_FLOOR_MAX_TILT_DEG", d.navmesh_floor_max_tilt_deg),
             alignment_voxel_size_m=_float(e, "ALIGNMENT_VOXEL_SIZE_M", d.alignment_voxel_size_m),
+            alignment_max_scale_correction=_float(e, "ALIGNMENT_MAX_SCALE_CORRECTION", d.alignment_max_scale_correction),
             min_alignment_confidence=_float(e, "MIN_ALIGNMENT_CONFIDENCE", d.min_alignment_confidence),
         )
 
@@ -222,19 +243,23 @@ class Settings:
             "semantic_segmentation_model": self.semantic_segmentation_model,
             "semantic_segmentation_revision": self.semantic_segmentation_revision or None,
             "cleanup_stat_nb_neighbors": self.cleanup_stat_nb_neighbors, "cleanup_stat_std_ratio": self.cleanup_stat_std_ratio,
-            "cleanup_radius_nb_points": self.cleanup_radius_nb_points, "cleanup_radius": self.cleanup_radius,
+            "cleanup_radius_nb_points": self.cleanup_radius_nb_points,
+            "cleanup_radius_spacing_factor": self.cleanup_radius_spacing_factor,
             "cleanup_opacity_threshold": self.cleanup_opacity_threshold,
             "cleanup_semantic_min_neighbors": self.cleanup_semantic_min_neighbors,
-            "plane_ransac_distance_threshold": self.plane_ransac_distance_threshold, "plane_ransac_n": self.plane_ransac_n,
+            "plane_ransac_distance_spacing_factor": self.plane_ransac_distance_spacing_factor, "plane_ransac_n": self.plane_ransac_n,
             "plane_ransac_iterations": self.plane_ransac_iterations, "plane_max_planes": self.plane_max_planes,
             "plane_min_inliers": self.plane_min_inliers, "ksplat_compression_level": self.ksplat_compression_level,
+            "gravity_max_camera_plane_angle_deg": self.gravity_max_camera_plane_angle_deg,
+            "gravity_min_camera_up_consistency": self.gravity_min_camera_up_consistency,
+            "gravity_min_cameras_above_fraction": self.gravity_min_cameras_above_fraction,
             "grounding_dino_model": self.grounding_dino_model, "object_detection_prompt": self.object_detection_prompt,
             "grounding_dino_revision": self.grounding_dino_revision or None, "allow_pickle_weights": self.allow_pickle_weights,
             "object_detection_box_threshold": self.object_detection_box_threshold,
             "object_detection_text_threshold": self.object_detection_text_threshold,
             "clip_model_name": self.clip_model_name, "clip_pretrained": self.clip_pretrained,
             "semantic_indexing_sample_every": self.semantic_indexing_sample_every,
-            "object_cluster_distance": self.object_cluster_distance,
+            "object_cluster_distance_m": self.object_cluster_distance_m,
             "navmesh_cell_size": self.navmesh_cell_size, "navmesh_cell_height": self.navmesh_cell_height,
             "navmesh_agent_height": self.navmesh_agent_height, "navmesh_agent_radius": self.navmesh_agent_radius,
             "navmesh_agent_max_climb": self.navmesh_agent_max_climb, "navmesh_agent_max_slope_deg": self.navmesh_agent_max_slope_deg,
@@ -243,6 +268,8 @@ class Settings:
             "navmesh_verts_per_poly": self.navmesh_verts_per_poly, "navmesh_detail_sample_dist": self.navmesh_detail_sample_dist,
             "navmesh_detail_sample_max_error": self.navmesh_detail_sample_max_error,
             "navmesh_max_ramp_slope_deg": self.navmesh_max_ramp_slope_deg,
+            "navmesh_floor_max_tilt_deg": self.navmesh_floor_max_tilt_deg,
             "alignment_voxel_size_m": self.alignment_voxel_size_m,
+            "alignment_max_scale_correction": self.alignment_max_scale_correction,
             "min_alignment_confidence": self.min_alignment_confidence,
         }

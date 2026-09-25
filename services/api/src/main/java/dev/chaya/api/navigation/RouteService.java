@@ -1,5 +1,7 @@
 package dev.chaya.api.navigation;
 
+import dev.chaya.api.frame.CoordinateFrameService;
+import dev.chaya.api.frame.FrameDtos.FrameView;
 import dev.chaya.api.navigation.NavigationDtos.BlockedRegion;
 import dev.chaya.api.navigation.NavigationDtos.FloorTransition;
 import dev.chaya.api.navigation.NavigationDtos.RouteRequest;
@@ -50,6 +52,14 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>Dynamic obstacles: {@code blockedRegions} in the request excludes graph nodes that fall inside them
  * for THIS query only (never written to the database) -- the architecture a runtime AR-reported obstacle
  * needs: the client observes something real and reports its region; this service never invents one.
+ *
+ * <p>Coordinates: every position, distance, clearance and blocked region here is canonical venue metres, +Z up
+ * (docs/coordinate-frames.md) -- which is only true of a graph and a POI in the floor's current calibrated frame. A
+ * floor without one is NAVIGATION_NOT_CALIBRATED; a graph baked in an older frame is NAVIGATION_FRAME_STALE; a
+ * destination POI not in the current frame is POI_NOT_CALIBRATED. Multi-floor routing matches connector POIs by
+ * horizontal distance across floors, which is meaningful only when both floors are registered to one venue datum
+ * (VENUE_CONTROL_POINTS); FLOOR_LOCAL frames each have their own origin and heading, so crossing them is refused
+ * (FLOORS_NOT_REGISTERED) rather than guessed.
  */
 @Service
 public class RouteService {
@@ -68,20 +78,24 @@ public class RouteService {
 
     private record RouteLeg(List<double[]> waypoints, double distanceMeters, UUID floorId) {}
 
-    private record PoiRow(UUID id, UUID floorId, double x, double y, double z) {}
+    private record PoiRow(UUID id, UUID floorId, double x, double y, double z, UUID frameId) {}
 
     private record FloorRow(UUID id, int level) {}
 
     private record FloorHop(UUID toFloor, String connectorType, UUID poiId, double[] entryPoint, double[] exitPoint) {}
 
+    private static final String VENUE_DATUM = "VENUE_CONTROL_POINTS";
+
     private final JdbcClient jdbc;
     private final TenantGuard guard;
     private final NavigationProperties props;
+    private final CoordinateFrameService frames;
 
-    public RouteService(JdbcClient jdbc, TenantGuard guard, NavigationProperties props) {
+    public RouteService(JdbcClient jdbc, TenantGuard guard, NavigationProperties props, CoordinateFrameService frames) {
         this.jdbc = jdbc;
         this.guard = guard;
         this.props = props;
+        this.frames = frames;
     }
 
     @Transactional(readOnly = true)
@@ -90,6 +104,20 @@ public class RouteService {
         String profile = normalizeProfile(request.accessibility());
         requireFloor(request.venueId(), request.floorId());
         PoiRow destination = loadPoi(actor.organizationId(), request.venueId(), request.destinationPoiId());
+        FrameView startFrame = requireCalibratedFloor(request.venueId(), request.floorId());
+        FrameView destinationFrame = destination.floorId() == null || destination.floorId().equals(request.floorId())
+            ? startFrame : requireCalibratedFloor(request.venueId(), destination.floorId());
+        if (!destinationFrame.id().equals(destination.frameId())) {
+            throw new ApiException(HttpStatus.CONFLICT, "POI_NOT_CALIBRATED", "the destination POI's coordinates are "
+                + (destination.frameId() == null ? "not bound to any calibrated coordinate frame"
+                    : "in coordinate frame " + destination.frameId() + ", not its floor's current frame " + destinationFrame.id())
+                + "; re-place it in the current frame before routing to it");
+        }
+        if (!request.floorId().equals(destination.floorId())
+                && !(VENUE_DATUM.equals(startFrame.horizontalDatum()) && VENUE_DATUM.equals(destinationFrame.horizontalDatum()))) {
+            throw new ApiException(HttpStatus.CONFLICT, "FLOORS_NOT_REGISTERED", "a multi-floor route needs both floors "
+                + "calibrated against the same surveyed venue control points; FLOOR_LOCAL frames have unrelated origins and headings");
+        }
 
         double[] start = {request.start().get(0), request.start().get(1), request.start().get(2)};
         List<BlockedRegion> blocked = request.blockedRegions() == null ? List.of() : request.blockedRegions();
@@ -160,9 +188,15 @@ public class RouteService {
         }
     }
 
+    private FrameView requireCalibratedFloor(UUID venueId, UUID floorId) {
+        return frames.currentForFloor(venueId, floorId).filter(FrameView::canonical)
+            .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, "NAVIGATION_NOT_CALIBRATED", "floor " + floorId
+                + " has no calibrated coordinate frame, so its navigation data cannot be in metres; calibrate its reconstruction first"));
+    }
+
     private PoiRow loadPoi(UUID orgId, UUID venueId, UUID poiId) {
         return jdbc.sql("""
-                SELECT p.id, p.floor_id, v.x, v.y, v.z
+                SELECT p.id, p.floor_id, v.x, v.y, v.z, v.coordinate_frame_id
                   FROM poi p
                   JOIN poi_version v ON v.poi_id = p.id
                  WHERE p.id = :poi AND p.venue_id = :venue AND p.organization_id = :org AND p.deleted_at IS NULL
@@ -170,7 +204,7 @@ public class RouteService {
                 """)
             .param("poi", poiId).param("venue", venueId).param("org", orgId)
             .query((rs, i) -> new PoiRow(rs.getObject("id", UUID.class), rs.getObject("floor_id", UUID.class),
-                rs.getDouble("x"), rs.getDouble("y"), rs.getDouble("z")))
+                rs.getDouble("x"), rs.getDouble("y"), rs.getDouble("z"), rs.getObject("coordinate_frame_id", UUID.class)))
             .optional().orElseThrow(() -> new NotFoundException("destination POI not found"));
     }
 
@@ -207,11 +241,21 @@ public class RouteService {
     }
 
     private GraphData loadGraph(UUID venueId, UUID floorId, String profile, List<BlockedRegion> blocked) {
-        UUID graphId = jdbc.sql("SELECT id FROM navigation_graph WHERE venue_id = :v AND floor_id = :f AND profile = :p AND status = 'ACTIVE'")
-            .param("v", venueId).param("f", floorId).param("p", profile).query(UUID.class).optional().orElse(null);
-        if (graphId == null) {
+        record ActiveGraph(UUID id, UUID frameId) {}
+        ActiveGraph active = jdbc.sql("SELECT id, coordinate_frame_id FROM navigation_graph WHERE venue_id = :v AND floor_id = :f "
+                + "AND profile = :p AND status = 'ACTIVE'")
+            .param("v", venueId).param("f", floorId).param("p", profile)
+            .query((rs, i) -> new ActiveGraph(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class))).optional().orElse(null);
+        if (active == null) {
             return null;
         }
+        UUID current = requireCalibratedFloor(venueId, floorId).id();
+        if (!current.equals(active.frameId())) {
+            throw new ApiException(HttpStatus.CONFLICT, "NAVIGATION_FRAME_STALE", "the " + profile + " navigation graph of floor "
+                + floorId + " was baked in coordinate frame " + active.frameId() + ", not the floor's current frame " + current
+                + "; it must be baked again before it can be routed on");
+        }
+        UUID graphId = active.id();
         List<NodeRow> nodeRows = jdbc.sql("SELECT id, x, y, z FROM navigation_node WHERE graph_id = :g").param("g", graphId)
             .query((rs, i) -> new NodeRow(rs.getObject("id", UUID.class), rs.getDouble("x"), rs.getDouble("y"), rs.getDouble("z"))).list();
 
@@ -335,7 +379,9 @@ public class RouteService {
                 return current.path();
             }
             for (FloorRow candidate : floors) {
-                if (visited.contains(candidate.id()) || !hasActiveGraph(venueId, candidate.id(), profile)) {
+                if (visited.contains(candidate.id()) || !hasActiveGraph(venueId, candidate.id(), profile)
+                        || !frames.currentForFloor(venueId, candidate.id())
+                            .map(f -> f.canonical() && VENUE_DATUM.equals(f.horizontalDatum())).orElse(false)) {
                     continue;
                 }
                 FloorHop hop = tryTransition(orgId, venueId, current.floor(), candidate.id(), levelOf, profile);
@@ -391,16 +437,17 @@ public class RouteService {
 
     private List<PoiRow> loadPoisByCategory(UUID orgId, UUID venueId, UUID floorId, String category) {
         return jdbc.sql("""
-                SELECT p.id, p.floor_id, v.x, v.y, v.z
+                SELECT p.id, p.floor_id, v.x, v.y, v.z, v.coordinate_frame_id
                   FROM poi p
                   JOIN poi_version v ON v.poi_id = p.id
                  WHERE p.venue_id = :venue AND p.organization_id = :org AND p.floor_id = :floor AND p.deleted_at IS NULL
                    AND lower(v.category) = :category
+                   AND v.coordinate_frame_id = (SELECT current_coordinate_frame_id FROM floor WHERE id = :floor)
                    AND v.version_number = (SELECT max(version_number) FROM poi_version WHERE poi_id = p.id)
                 """)
             .param("venue", venueId).param("org", orgId).param("floor", floorId).param("category", category)
             .query((rs, i) -> new PoiRow(rs.getObject("id", UUID.class), rs.getObject("floor_id", UUID.class),
-                rs.getDouble("x"), rs.getDouble("y"), rs.getDouble("z")))
+                rs.getDouble("x"), rs.getDouble("y"), rs.getDouble("z"), rs.getObject("coordinate_frame_id", UUID.class)))
             .list();
     }
 

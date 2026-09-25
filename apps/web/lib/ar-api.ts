@@ -14,6 +14,8 @@ export interface Anchor {
   digitalPose: Pose;
   calibrationStatus: "UNCALIBRATED" | "CALIBRATED" | "STALE";
   lastCalibratedAt: string | null;
+  /** The coordinate frame digitalPose (canonical metres, +Z up) is expressed in. */
+  coordinateFrameId: string | null;
 }
 
 export interface AnchorRequest {
@@ -24,18 +26,23 @@ export interface AnchorRequest {
 }
 
 /** Mirrors dev.chaya.api.ar.ArDtos.AnchorObservation: `observedPose` must be a real detection from this
- * device's own tracking session (a WebXR hit-test result), never fabricated. */
+ * device's own tracking session, never fabricated, in the device's own convention (metres, gravity-aligned, +Y up;
+ * lib/ar-frame-boundary.ts). The server applies the device/canonical boundary. */
 export interface AnchorObservation {
   anchorId: string;
   observedPose: Pose;
 }
 
 /** Mirrors dev.chaya.api.ar.ArDtos.RelocalizationResponse. residualMeters is a real measured spread
- * across the anchors used, never a claimed accuracy figure -- see docs/ar.md. */
+ * across the anchors used, never a claimed accuracy figure -- see docs/ar.md -- and null (unknown) when only one
+ * anchor was used. deviceToVenueTransform maps device tracking coordinates to canonical venue metres. */
 export interface RelocalizationResponse {
   deviceToVenueTransform: Pose;
-  residualMeters: number;
+  residualMeters: number | null;
   anchorsUsed: number;
+  gravityTiltDegrees: number;
+  deviceFrameConvention: string;
+  coordinateFrameId: string;
 }
 
 export const listAnchors = (venueId: string, floorId: string) =>

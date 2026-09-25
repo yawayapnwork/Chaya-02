@@ -8,6 +8,24 @@ implementation. It does not list strengths.
 Where a finding depends on an external library's behaviour that I could not run here, it says **needs verification** and
 names the test that would settle it.
 
+> **Status update (coordinate-frame correction).** The findings below remain as written against `cf92005`. Since then the
+> coordinate-frame model in [coordinate-frames.md](coordinate-frames.md) has been implemented. What follows is what
+> it changes. "Addressed" means implemented and tested with synthetic mathematical fixtures. **None of it has been
+> validated on a real capture.**
+>
+> | Finding | State |
+> |---|---|
+> | R-2 no metric scale / gravity | Addressed. Calibration comes from measured distances or control points, gravity from the reconstructed floor plane, operator floor points or control points. Metric stages fail `NOT_CALIBRATED` without it. Pre-calibration cleanup and RANSAC thresholds are scale-invariant (spacing multiples; untuned). |
+> | D-1 spatial data not bound to a frame | Addressed. POIs, anchors and navigation graphs record their frame. Recalibrating the same reconstruction re-projects POIs and anchors; a different reconstruction makes them STALE, and routing and relocalization refuse them. |
+> | V-1 rigid registration across SfM scales | Addressed in code: the region is pre-scaled by its own calibration, registration refines scale, and a correction beyond 10 % fails. The Open3D test for it was **not executed** in this environment. |
+> | V-2 splice appends the whole region | Addressed. Region Gaussians outside the polygon are discarded; the polygon is tested in canonical x/y. |
+> | V-3 rescan indexing mixes frames | Addressed. Cameras are re-expressed in the parent reconstruction frame with REGION_ALIGNMENT's similarity. |
+> | N-4 step-free slope in an arbitrary frame | Partially. Slope is now measured against canonical +Z, and obstacles are filtered by height band. The single-floor-plane input remains. |
+> | N-5 multi-floor in unrelated frames | Addressed. Both floors must be registered to one surveyed venue datum, otherwise `FLOORS_NOT_REGISTERED`. Connectors are still matched by proximity within that datum. |
+> | AR-3 relocalization | Partially. One anchor gives `residualMeters: null`; observations are capped and must be distinct; a gravity-tilt check is added. `physicalPose` is still unused. |
+> | AR-4 anchors never invalidated | Addressed. Anchors are bound to the floor's current frame and become STALE when a different reconstruction becomes current. |
+> | Everything else (R-1 `.ksplat` format, N-1 `recast-cli`, N-2, N-3, AR-1, AR-2, security, ops, …) | Unchanged. |
+
 Severity scale:
 
 | Severity | Meaning |

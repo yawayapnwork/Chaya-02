@@ -113,3 +113,18 @@ def test_alignment_confidence_is_a_real_function_of_its_inputs_not_a_constant():
     assert alignment_confidence(fitness=0.0, inlier_rmse=0.0, voxel_size=0.05) == 0.0
     with pytest.raises(ValueError):
         alignment_confidence(fitness=1.0, inlier_rmse=0.0, voxel_size=0.0)
+
+
+def test_scale_aware_alignment_recovers_a_residual_calibration_scale_error():
+    """A region pre-scaled by its own metric calibration is still off by that calibration's error. With
+    with_scaling=True registration must recover it; this is the case REGION_ALIGNMENT runs (docs/coordinate-frames.md)."""
+    rng = np.random.default_rng(4)
+    target = _room_corner(rng=rng)
+    true_scale = 1.04  # a 4 % calibration error on the region
+    source = _apply_transform(target, _rotation_matrix_z(5.0), np.array([0.2, 0.1, 0.0])) * true_scale
+
+    result = align_region(source, target, voxel_size=0.05, with_scaling=True)
+
+    recovered_scale = float(np.cbrt(np.linalg.det(result.transform[:3, :3])))
+    assert abs(recovered_scale * true_scale - 1.0) < 0.01, f"scale not recovered: {recovered_scale} vs {1 / true_scale}"
+    assert result.confidence > 0.6

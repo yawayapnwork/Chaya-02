@@ -106,6 +106,15 @@ chaya:
     min-alignment-confidence: 0.6
     min-region-area-square-meters: 1.0
     max-region-area-square-meters: 2000.0
+  frames:
+    # Coordinate-frame calibration acceptance limits (dev.chaya.api.frame.FrameProperties, docs/coordinate-frames.md).
+    # A calibration whose own references disagree by more than these is refused, never averaged into a "metric" frame.
+    min-distance-references: 2
+    max-scale-relative-spread: 0.03
+    max-control-point-rms-m: 0.05
+    max-floor-points-rms-m: 0.05
+    max-gravity-disagreement-deg: 5.0
+    max-device-gravity-tilt-deg: 10.0
 
 management:
   endpoints:

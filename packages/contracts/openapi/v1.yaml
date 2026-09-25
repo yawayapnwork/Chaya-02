@@ -95,11 +95,16 @@ paths:
   /api/v1/venues/{venueId}/ops/audit:
     get: { summary: "This venue's audit trail, newest first (admin, venue-manager; query: limit<=500)", responses: { "200": { description: Audit entries }, "403": { description: OPS_SECTION_FORBIDDEN } } }
   /api/v1/internal/jobs/claim:
-    post: { summary: "Worker: claim the oldest queued job of the given stage(s); returns a work order (inputs, output prefix, deadline). Service role only.", responses: { "200": { description: Work order }, "204": { description: Nothing queued } } }
+    post: { summary: "Worker: claim the oldest queued job of the given stage(s); returns a work order (inputs, output prefix, deadline, coordinateFrame and -- for REGION_ALIGNMENT/REGION_SPLICE -- parentCoordinateFrame, each null when not calibrated). Service role only.", responses: { "200": { description: Work order }, "204": { description: Nothing queued } } }
   /api/v1/internal/jobs/{jobId}/heartbeat:
     post: { summary: "Worker: extend the lease; keepGoing=false means stop (cancelled or lease lost)", responses: { "200": { description: "{keepGoing, deadlineAt}" } } }
   /api/v1/internal/jobs/{jobId}/report:
-    post: { summary: "Worker: submit the stage record (command, timings, exit status, checksums, log locations, artifacts, error). Verified before it is applied.", responses: { "200": { description: Applied }, "409": { description: Rejected (ARTIFACT_MISSING, PII_AFTER_PRIVACY, JOB_NOT_RUNNING ...) } } }
+    post: { summary: "Worker: submit the stage record (command, timings, exit status, checksums, log locations, artifacts, error). Verified before it is applied.", responses: { "200": { description: Applied }, "409": { description: "Rejected (ARTIFACT_MISSING, PII_AFTER_PRIVACY, JOB_NOT_RUNNING, ARTIFACT_FRAME_MISMATCH ...)" } } }
+  /api/v1/venues/{venueId}/reconstructions/{runId}/coordinate-frames:
+    get: { summary: "Every calibration version of this reconstruction's coordinate frame, newest first (docs/coordinate-frames.md)", responses: { "200": { description: Frame versions } } }
+    post: { summary: "Calibrate: body distanceReferences (>= 2 measured distances between reconstruction points) and optional gravity {source: RECONSTRUCTED_FLOOR_PLANE | OPERATOR_FLOOR_POINTS (floorPoints, pointAboveFloor) | NONE}, or controlPoints (>= 3 reconstruction/venue pairs). Stores a new immutable version X_canonical = s R X_reconstruction + t (metres, +Z up) and supersedes the previous one (admin, venue-manager, operator)", responses: { "201": { description: Frame version }, "400": { description: INVALID_CALIBRATION }, "409": { description: "RECONSTRUCTION_FRAME_UNAVAILABLE, GRAVITY_UNAVAILABLE" }, "422": { description: "CALIBRATION_INCONSISTENT: the references disagree beyond chaya.frames limits" } } }
+  /api/v1/venues/{venueId}/floors/{floorId}/coordinate-frame:
+    get: { summary: "The floor's current canonical coordinate frame: the frame its POIs, anchors and navigation graphs are in", responses: { "200": { description: Frame version }, "404": { description: NOT_CALIBRATED } } }
 components:
   schemas:
     Health:

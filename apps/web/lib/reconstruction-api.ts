@@ -1,6 +1,7 @@
 "use client";
 
 import { ApiError, api } from "./capture-api";
+import type { CoordinateFrame } from "./coordinate-frame";
 import { publicConfig } from "./env";
 import { currentAuthHeaders } from "./session";
 
@@ -23,7 +24,8 @@ export interface ArtifactRef {
   url: string;
 }
 
-/** Mirrors dev.chaya.api.reconstruction.ReconstructionService.Reconstruction. */
+/** Mirrors dev.chaya.api.reconstruction.ReconstructionService.Reconstruction. The artifacts are in the
+ * reconstruction's own frame; `coordinateFrame` (null until calibrated) is how they are placed in canonical metres. */
 export interface Reconstruction {
   runId: string;
   scanId: string;
@@ -32,6 +34,7 @@ export interface Reconstruction {
   runStatus: string;
   runQuality: string | null;
   artifacts: ArtifactRef[];
+  coordinateFrame: CoordinateFrame | null;
 }
 
 export const listReconstructions = (venueId: string, floorId: string) =>

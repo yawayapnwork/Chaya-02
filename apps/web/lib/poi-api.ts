@@ -11,9 +11,13 @@ export interface Poi {
   category: string | null;
   description: string | null;
   tags: string[];
+  /** Canonical venue metres (+Z up) in `coordinateFrameId` (docs/coordinate-frames.md). */
   x: number;
   y: number;
   z: number;
+  coordinateFrameId: string | null;
+  /** CURRENT: in the floor's current frame. STALE: in an older one. UNBOUND: in no calibrated frame. */
+  frameStatus: "CURRENT" | "STALE" | "UNBOUND";
 }
 
 export const listPois = (venueId: string) => api<Poi[]>(`/venues/${venueId}/pois`);

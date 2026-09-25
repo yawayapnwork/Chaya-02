@@ -1,15 +1,20 @@
 """Replacing the changed region of a venue-wide GaussianCloud with a newly captured, aligned one -- the
 splice step of an incremental re-scan (see docs/rescan.md). Real geometric operations only: a
-point-in-polygon crop of the existing global cloud plus a rigid-transform application to the new region's
-cloud, then concatenation. Never a full re-reconstruction, and the region's Gaussians are never merely
-translated -- their own orientation quaternions are rotated by the alignment transform too, so splat
-orientation stays correct in the merged frame. Pure numpy; no optional dependency needed.
+similarity-transform application to the new region's cloud, a point-in-polygon crop of both clouds, then
+concatenation. Never a full re-reconstruction, and the region's Gaussians are never merely translated --
+their own orientation quaternions are rotated, and their scales multiplied, by the alignment transform, so
+splat shape stays correct in the merged frame. Pure numpy; no optional dependency needed.
+
+The region polygon is in the canonical venue frame (metres, +Z up; chaya_worker.frames): its (x, y) are
+horizontal coordinates only there. The clouds themselves stay in the parent reconstruction's frame, so the
+polygon test is done on their canonical positions, through the parent's calibrated frame.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
+from .frames import Similarity
 from .ply import GaussianCloud
 
 
@@ -42,83 +47,50 @@ def polygon_area(polygon_xy: np.ndarray) -> float:
     return float(0.5 * abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))))
 
 
-def transform_gaussians(cloud: GaussianCloud, transform: np.ndarray) -> GaussianCloud:
-    """Applies a rigid 4x4 transform to every Gaussian: rotates and translates its position AND rotates its
-    own orientation quaternion by the transform's rotation component -- not just a position translation."""
-    transform = np.asarray(transform, dtype=np.float64)
-    if transform.shape != (4, 4):
-        raise ValueError("transform must be 4x4")
-    rotation = transform[:3, :3]
-    translation = transform[:3, 3]
-    positions = cloud.positions.astype(np.float64) @ rotation.T + translation
-    rotation_quat_wxyz = _matrix_to_quaternion_wxyz(rotation)
-    rotations = _quaternion_multiply(rotation_quat_wxyz, cloud.rotations_normalized().astype(np.float64))
-    return GaussianCloud(positions.astype(np.float32), cloud.scales_log.copy(), rotations.astype(np.float32),
+def transform_gaussians(cloud: GaussianCloud, transform: Similarity | np.ndarray) -> GaussianCloud:
+    """Applies a similarity transform (a :class:`Similarity`, or a 4x4 [[s*R, t], [0, 1]] matrix) to every
+    Gaussian: position -> s*R*p + t, orientation -> R*q, and every axis scale multiplied by s (log-scale + ln s)."""
+    if not isinstance(transform, Similarity):
+        transform = np.asarray(transform, dtype=np.float64)
+        if transform.shape != (4, 4):
+            raise ValueError("transform must be 4x4")
+        transform = Similarity.from_matrix4(transform)
+    positions = transform.apply(cloud.positions)
+    rotations = transform.apply_orientation(cloud.rotations_normalized())
+    scales_log = cloud.scales_log.astype(np.float64) + np.log(transform.scale)
+    return GaussianCloud(positions.astype(np.float32), scales_log.astype(np.float32), rotations.astype(np.float32),
                          cloud.opacity_logit.copy(), cloud.colors_dc.copy())
 
 
-def splice_region(global_cloud: GaussianCloud, aligned_region_cloud: GaussianCloud,
-                  polygon_xy: np.ndarray) -> tuple[GaussianCloud, dict]:
-    """Removes every Gaussian of `global_cloud` whose (x, y) falls inside `polygon_xy` and appends
-    `aligned_region_cloud` (already transformed into the venue frame by `transform_gaussians`) in its
-    place. The rest of the venue's geometry -- everything outside the polygon -- is untouched, byte for
-    byte: this is a targeted replacement, not a re-reconstruction of the whole venue."""
+def splice_region(global_cloud: GaussianCloud, aligned_region_cloud: GaussianCloud, polygon_xy: np.ndarray,
+                  to_canonical: Similarity) -> tuple[GaussianCloud, dict]:
+    """Removes every Gaussian of `global_cloud` whose canonical (x, y) falls inside `polygon_xy` and replaces
+    them with the Gaussians of `aligned_region_cloud` (already in the global cloud's frame, see
+    chaya_worker.stages.region_alignment) whose canonical (x, y) also fall inside it. Region Gaussians the
+    operator captured outside the polygon are dropped, not appended: outside the polygon the venue keeps its
+    existing geometry, byte for byte, instead of gaining a second, overlapping copy.
+
+    `to_canonical` is the parent reconstruction's calibrated frame (reconstruction -> canonical metres)."""
     if len(aligned_region_cloud) == 0:
         raise ValueError("the aligned region cloud is empty; refusing to splice nothing into the venue")
-    keep_mask = ~point_in_polygon(global_cloud.positions[:, :2].astype(np.float64), polygon_xy)
+    polygon_xy = np.asarray(polygon_xy, dtype=np.float64)
+    keep_mask = ~point_in_polygon(to_canonical.apply(global_cloud.positions)[:, :2], polygon_xy)
+    region_inside = point_in_polygon(to_canonical.apply(aligned_region_cloud.positions)[:, :2], polygon_xy)
+    if not region_inside.any():
+        raise ValueError("no Gaussian of the aligned region falls inside the selected polygon; refusing to splice")
     kept = global_cloud.subset(keep_mask)
+    added = aligned_region_cloud.subset(region_inside)
     merged = GaussianCloud(
-        positions=np.concatenate([kept.positions, aligned_region_cloud.positions]),
-        scales_log=np.concatenate([kept.scales_log, aligned_region_cloud.scales_log]),
-        rotations_wxyz=np.concatenate([kept.rotations_wxyz, aligned_region_cloud.rotations_wxyz]),
-        opacity_logit=np.concatenate([kept.opacity_logit, aligned_region_cloud.opacity_logit]),
-        colors_dc=np.concatenate([kept.colors_dc, aligned_region_cloud.colors_dc]))
+        positions=np.concatenate([kept.positions, added.positions]),
+        scales_log=np.concatenate([kept.scales_log, added.scales_log]),
+        rotations_wxyz=np.concatenate([kept.rotations_wxyz, added.rotations_wxyz]),
+        opacity_logit=np.concatenate([kept.opacity_logit, added.opacity_logit]),
+        colors_dc=np.concatenate([kept.colors_dc, added.colors_dc]))
     report = {
         "removed_from_global": int((~keep_mask).sum()),
         "kept_from_global": int(keep_mask.sum()),
-        "added_from_region": len(aligned_region_cloud),
+        "added_from_region": int(region_inside.sum()),
+        "discarded_from_region_outside_polygon": int((~region_inside).sum()),
         "total_after": len(merged),
     }
     return merged, report
-
-
-def _matrix_to_quaternion_wxyz(m: np.ndarray) -> np.ndarray:
-    """Rotation matrix -> quaternion (w, x, y, z), Shepperd's method (numerically stable across all
-    rotation angles, unlike the naive single-branch formula)."""
-    trace = np.trace(m)
-    if trace > 0:
-        s = 0.5 / np.sqrt(trace + 1.0)
-        w = 0.25 / s
-        x = (m[2, 1] - m[1, 2]) * s
-        y = (m[0, 2] - m[2, 0]) * s
-        z = (m[1, 0] - m[0, 1]) * s
-    elif m[0, 0] > m[1, 1] and m[0, 0] > m[2, 2]:
-        s = 2.0 * np.sqrt(1.0 + m[0, 0] - m[1, 1] - m[2, 2])
-        w = (m[2, 1] - m[1, 2]) / s
-        x = 0.25 * s
-        y = (m[0, 1] + m[1, 0]) / s
-        z = (m[0, 2] + m[2, 0]) / s
-    elif m[1, 1] > m[2, 2]:
-        s = 2.0 * np.sqrt(1.0 + m[1, 1] - m[0, 0] - m[2, 2])
-        w = (m[0, 2] - m[2, 0]) / s
-        x = (m[0, 1] + m[1, 0]) / s
-        y = 0.25 * s
-        z = (m[1, 2] + m[2, 1]) / s
-    else:
-        s = 2.0 * np.sqrt(1.0 + m[2, 2] - m[0, 0] - m[1, 1])
-        w = (m[1, 0] - m[0, 1]) / s
-        x = (m[0, 2] + m[2, 0]) / s
-        y = (m[1, 2] + m[2, 1]) / s
-        z = 0.25 * s
-    return np.array([w, x, y, z])
-
-
-def _quaternion_multiply(q_wxyz: np.ndarray, others_wxyz: np.ndarray) -> np.ndarray:
-    """q_wxyz (4,) applied to each row of others_wxyz (N, 4): result[i] = q * others[i]."""
-    w1, x1, y1, z1 = q_wxyz
-    w2, x2, y2, z2 = others_wxyz[:, 0], others_wxyz[:, 1], others_wxyz[:, 2], others_wxyz[:, 3]
-    w = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2
-    x = w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2
-    y = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2
-    z = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
-    return np.stack([w, x, y, z], axis=1)

@@ -28,7 +28,13 @@ from pathlib import Path
 
 import numpy as np
 
-from ..geometry_cleanup import opacity_threshold_mask, radius_outlier_mask, semantic_aware_mask, statistical_outlier_mask
+from ..geometry_cleanup import (
+    characteristic_spacing,
+    opacity_threshold_mask,
+    radius_outlier_mask,
+    semantic_aware_mask,
+    statistical_outlier_mask,
+)
 from ..ply import GaussianCloud, read_ply
 from ..settings import Settings
 from ..toolchain import Toolchain
@@ -62,6 +68,8 @@ def run_methods(cloud: GaussianCloud, *, labels: np.ndarray | None, settings: Se
                 toolchain: Toolchain, render_eval: Callable[[GaussianCloud], tuple[float | None, str | None, float | None, str | None]] | None = None
                 ) -> list[MethodResult]:
     n = len(cloud)
+    # The production radius is scale-invariant: a multiple of the cloud's own median nearest-neighbour spacing.
+    radius = settings.cleanup_radius_spacing_factor * characteristic_spacing(cloud.positions)
     results: list[MethodResult] = []
     open3d_ok = toolchain.module("open3d").available
 
@@ -89,7 +97,7 @@ def run_methods(cloud: GaussianCloud, *, labels: np.ndarray | None, settings: Se
             cloud, nb_neighbors=settings.cleanup_stat_nb_neighbors, std_ratio=settings.cleanup_stat_std_ratio)[0])
         results.append(finish("statistical_outlier", mask, seconds))
         mask, seconds = _timed_mask(cloud, lambda: radius_outlier_mask(
-            cloud, nb_points=settings.cleanup_radius_nb_points, radius=settings.cleanup_radius)[0])
+            cloud, nb_points=settings.cleanup_radius_nb_points, radius=radius)[0])
         results.append(finish("density_outlier", mask, seconds))
 
     if not open3d_ok:
@@ -98,7 +106,7 @@ def run_methods(cloud: GaussianCloud, *, labels: np.ndarray | None, settings: Se
         results.append(MethodResult("semantic_aware", False, "no semantic labels were given to the benchmark"))
     else:
         mask, seconds = _timed_mask(cloud, lambda: semantic_aware_mask(
-            cloud, labels, radius=settings.cleanup_radius, min_same_class_neighbors=settings.cleanup_semantic_min_neighbors)[0])
+            cloud, labels, radius=radius, min_same_class_neighbors=settings.cleanup_semantic_min_neighbors)[0])
         results.append(finish("semantic_aware", mask, seconds))
 
     return results

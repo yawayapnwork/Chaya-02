@@ -54,13 +54,16 @@ EXCLUDED_IN_CI = {
     "SPLAT_RECONSTRUCTION": ("needs gsplat + a CUDA GPU", "DEPENDENCY_UNAVAILABLE"),
     "SEMANTIC_SEGMENTATION": ("needs torch + transformers (SegFormer)", "DEPENDENCY_UNAVAILABLE"),
     "GEOMETRIC_CLEANUP": ("needs Open3D", "DEPENDENCY_UNAVAILABLE"),
-    "REGION_ALIGNMENT": ("needs Open3D; incremental re-scan only", "DEPENDENCY_UNAVAILABLE"),
+    # The stages below also need a calibrated coordinate frame (docs/coordinate-frames.md). This control plane stand-in
+    # hands out none, so the calibration gate -- checked before any toolchain -- is the structured failure they report.
+    "REGION_ALIGNMENT": ("needs Open3D and calibrated frames; incremental re-scan only", "NOT_CALIBRATED"),
     # CPU-only (numpy), but it only runs in an incremental re-scan, on REGION_ALIGNMENT's output (which needs Open3D).
-    # Its splice logic is covered by tests/unit/test_region_splice.py; here it must refuse to run without that input.
-    "REGION_SPLICE": ("needs REGION_ALIGNMENT's SPLAT_ALIGNED output (Open3D); incremental re-scan only", "INPUT_INVALID"),
+    # Its splice logic is covered by tests/unit/test_region_splice.py.
+    "REGION_SPLICE": ("needs REGION_ALIGNMENT's SPLAT_ALIGNED output and a calibrated frame; incremental re-scan only",
+                      "NOT_CALIBRATED"),
     "PLANE_FITTING": ("needs Open3D", "DEPENDENCY_UNAVAILABLE"),
-    "SEMANTIC_INDEXING": ("needs torch + Grounding DINO + CLIP", "DEPENDENCY_UNAVAILABLE"),
-    "NAVIGATION_BAKING": ("needs recast-cli", "DEPENDENCY_UNAVAILABLE"),
+    "SEMANTIC_INDEXING": ("needs torch + Grounding DINO + CLIP, and a calibrated frame", "NOT_CALIBRATED"),
+    "NAVIGATION_BAKING": ("needs recast-cli and a calibrated frame", "NOT_CALIBRATED"),
 }
 
 NO_TOOLS = Toolchain(env={}, which=lambda _n: None)
@@ -198,7 +201,8 @@ def test_excluded_stages_keep_their_orchestration_contract_without_their_toolcha
     """The excluded stages are not executed in CI. What CI does prove is how the orchestrator treats them on a worker
     that lacks their toolchain or upstream input: claimed, reported as a structured failure (DEPENDENCY_UNAVAILABLE
     naming what is missing, or INPUT_INVALID), no artifacts, never a success -- so a CPU-only worker can never fake a
-    reconstruction."""
+    reconstruction. A stage that needs a calibrated frame reports NOT_CALIBRATED here, since this stand-in control
+    plane never hands one out."""
     storage = LocalStorage(tmp_path / "objects")
     plane = SequencingControlPlane([stage], [], {})
     settings = Settings(workdir=tmp_path / "work", worker_id="ci-contract", stages=(stage,), heartbeat_interval=0.05)

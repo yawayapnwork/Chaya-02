@@ -14,8 +14,10 @@ pipeline run, not a separate system.
    /venues/{v}/floors/{f}/scan-versions/finalize-current` bootstraps version 1 from the floor's latest
    successful full-venue pipeline run (`dev.chaya.api.rescan.RescanService#finalizeCurrent`) -- it
    formalizes an already-completed reconstruction as a version record, it does not fabricate one.
-2. **Select the changed region** -- a simple polygon (`{"points": [[x, y], ...]}`, >= 3 vertices) in the
-   floor's venue frame.
+2. **Select the changed region** -- a simple polygon (`{"points": [[x, y], ...]}`, >= 3 vertices) in canonical
+   venue metres (x, y horizontal; [coordinate-frames.md](coordinate-frames.md)). The parent version's reconstruction
+   must have a canonical coordinate frame, or initiation is refused with `409 NOT_CALIBRATED` -- a polygon in metres
+   has no location in an uncalibrated reconstruction.
 3. **Capture only that region** -- `POST /venues/{v}/floors/{f}/rescan` (`RescanController#initiate`)
    validates the version and region (`PolygonGeometry.area` must fall within
    `chaya.rescan.min/max-region-area-square-meters`) and creates a region-scoped `capture_session`
@@ -54,27 +56,51 @@ before the run is even created -- see "NAVIGATION".
 
 ## ALIGNMENT
 
+### Frames
+
+Two independent SfM reconstructions differ by an arbitrary similarity **including scale**, so a rigid registration
+between them cannot be right. Registration therefore runs in canonical metres, and both sides must be calibrated
+([coordinate-frames.md](coordinate-frames.md)):
+
+- the parent reconstruction's canonical frame (work order `parentCoordinateFrame`): moves `GLOBAL_CLOUD` into metres,
+  +Z up, where the region polygon crops it;
+- the re-scan capture's own calibration (work order `coordinateFrame`): only its metric scale is required -- the
+  operator calibrates this run's reconstruction with at least two measured distances once it stops with
+  `NOT_CALIBRATED` at REGION_ALIGNMENT, then retries. Its rotation, if unknown, is found by registration.
+
+Registration is allowed to refine scale (the region's calibration is a measurement, not exact); a correction beyond
+`alignment_max_scale_correction` (10 %) means the two calibrations disagree and the stage fails
+(`ALIGNMENT_SCALE_INCONSISTENT`). The aligned region is written in the **parent reconstruction's** frame, so the merged
+cloud, and every stage after REGION_SPLICE, stays in that one calibrated frame. `ALIGNMENT_REPORT` records the
+region->canonical and region->parent-reconstruction similarities; SEMANTIC_INDEXING uses the latter to move this
+capture's cameras into the merged cloud's frame before projecting detections.
+
+### Registration
+
 `REGION_ALIGNMENT` (`chaya_worker.stages.region_alignment`, math in `chaya_worker.region_alignment`) aligns
-the region's own `GEOMETRIC_CLEANUP` output (`SPLAT_CLEAN`, in an arbitrary local frame from this capture's
-own `POSE_ESTIMATION`) onto `GLOBAL_CLOUD` -- the selected parent version's own cleaned/merged
+the region's own `GEOMETRIC_CLEANUP` output (`SPLAT_CLEAN`, pre-scaled to metres by its calibration) onto
+`GLOBAL_CLOUD` -- the selected parent version's own cleaned/merged
 reconstruction, supplied by the control plane (`PipelineService#globalCloudInput`; **never** the current
 run's own output, which would be aligning the region against itself). Real, two-stage registration, never
 a hardcoded translation:
 
 1. **Feature matching**: FPFH descriptors + RANSAC correspondence matching (Open3D
-   `registration_ransac_based_on_feature_matching`) -- coarse global registration, no initial guess needed.
-2. **ICP**: point-to-plane `registration_icp`, refined from step 1's result.
+   `registration_ransac_based_on_feature_matching`, point-to-point estimation with scaling) -- coarse global
+   registration, no initial guess needed. FPFH radii are multiples of `alignment_voxel_size_m`, which is metres
+   because both clouds are.
+2. **ICP**: point-to-point `registration_icp` with scaling, refined from step 1's result.
 
 `alignment_confidence(fitness, inlier_rmse, voxel_size)` turns Open3D's own registration-quality numbers
 into the single score everything gates on: `fitness` (a real correspondence-coverage fraction) scaled down
 the closer `inlier_rmse` gets to the voxel size (an RMSE near the voxel size means the "inliers" barely
 qualify). This is never a constant and never independent of what the registration actually found.
 
-`REGION_SPLICE` (`chaya_worker.region_splice`) then does the actual replacement: every Gaussian of
-`GLOBAL_CLOUD` whose (x, y) falls inside the region polygon is removed (`point_in_polygon`, ray casting),
-and the aligned region's Gaussians (`transform_gaussians` -- position **and** the Gaussian's own orientation
-quaternion are both rotated by the alignment transform, not just translated) are appended in their place.
-Everything outside the polygon is untouched, byte for byte.
+`REGION_SPLICE` (`chaya_worker.region_splice`) then does the actual replacement, testing the polygon on canonical
+(x, y) through the parent's frame: every Gaussian of `GLOBAL_CLOUD` inside the region polygon is removed
+(`point_in_polygon`, ray casting), and the aligned region's Gaussians **inside the polygon** are added in their place
+(`transform_gaussians` applied the full similarity: position, the Gaussian's own orientation quaternion, and its
+scale). Region Gaussians captured outside the polygon are discarded, not appended, so the venue does not gain a
+second, overlapping copy of geometry it already had. Everything outside the polygon is untouched, byte for byte.
 
 ## QUALITY GATES
 
@@ -162,7 +188,8 @@ Three separated tiers, matching the rest of the pipeline's testing story (docs/p
 | Tier | Where | Needs |
 |---|---|---|
 | Anchor-free geometry (polygon crop, quaternion transform) | `tests/unit/test_region_splice.py` | nothing -- pure numpy |
-| Real feature-matching + ICP alignment, with known-transform fixtures | `tests/gpu/test_region_alignment.py` | Open3D (skipped, not failed, without it) |
+| Real feature-matching + ICP alignment, with known-transform fixtures (rigid, and a 4 % scale error recovered with scaling) | `tests/gpu/test_region_alignment.py` | Open3D (skipped, not failed, without it) |
+| Frame gates (NOT_CALIBRATED), camera re-expression in the parent frame | `tests/unit/test_calibration_gates.py` | nothing |
 | Control-plane orchestration, gating and versioning | `RescanServiceTest`, `RescanControlPlaneTest` | Testcontainers Postgres + MinIO (skipped, not failed, without Docker) |
 
 `test_region_alignment.py`'s known-transform fixture (`_room_corner` + a known rotation/translation) is

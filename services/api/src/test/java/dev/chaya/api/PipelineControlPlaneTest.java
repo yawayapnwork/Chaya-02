@@ -396,13 +396,14 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
 
     // ---- SEMANTIC_INDEXING ingestion (DETECTED_OBJECTS -> poi/poi_version rows) -------------------
 
-    private static String detectedObjectsJson(double x, double y, double z, String label, double confidence) {
+    private static String detectedObjectsJson(String frameId, double x, double y, double z, String label, double confidence) {
         StringBuilder embedding = new StringBuilder();
         for (int i = 0; i < 512; i++) {
             if (i > 0) embedding.append(',');
             embedding.append(String.format(java.util.Locale.ROOT, "%.4f", Math.sin(i * 0.017)));
         }
-        return "{\"detector_model\":\"IDEA-Research/grounding-dino-tiny\",\"detector_fine_tuned\":false,"
+        return "{\"coordinate_frame\":{\"id\":\"" + frameId + "\",\"units\":\"m\",\"up_axis\":\"+Z\"},"
+            + "\"detector_model\":\"IDEA-Research/grounding-dino-tiny\",\"detector_fine_tuned\":false,"
             + "\"embedding_model\":\"open_clip:ViT-B-32:openai\",\"frames_processed\":4,\"raw_detection_count\":3,"
             + "\"objects\":[{\"label\":\"" + label + "\",\"confidence\":" + confidence + ",\"position\":[" + x + "," + y + "," + z + "],"
             + "\"embedding\":[" + embedding + "],"
@@ -413,11 +414,19 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
     @Test
     void semanticIndexingDetectionsAreIngestedAsAutoDetectedPoisWithProvenance() throws Exception {
         var s = startRun();
+        String frameId = null;
         for (var stage : PipelineDefinition.STAGES) {
+            if (stage.name().equals("SEMANTIC_INDEXING")) {
+                frameId = calibrateOk(s, controlPointCalibration(0)).get("id").asText();
+            }
             JsonNode order = claimExpecting(stage.name());
             if (stage.name().equals("SEMANTIC_INDEXING")) {
+                assertThat(order.get("coordinateFrame").get("id").asText()).isEqualTo(frameId);
+                Map<String, Object> wrongFrame = artifact(order, "detected-objects-wrong.json", "DETECTED_OBJECTS", false, false,
+                    detectedObjectsJson(UUID.randomUUID().toString(), 1.5, 2.5, 0.75, "reception chair", 0.87));
+                send(order, report("SUCCEEDED", List.of(wrongFrame), null, null), svc).andExpect(status().isConflict());
                 Map<String, Object> detected = artifact(order, "detected-objects.json", "DETECTED_OBJECTS", false, false,
-                    detectedObjectsJson(1.5, 2.5, 0.75, "reception chair", 0.87));
+                    detectedObjectsJson(frameId, 1.5, 2.5, 0.75, "reception chair", 0.87));
                 send(order, report("SUCCEEDED", List.of(detected), null, null), svc).andExpect(status().isOk());
                 break;
             }
@@ -446,5 +455,8 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
         assertThat(row.get("model")).isEqualTo("open_clip:ViT-B-32:openai");
         assertThat((String) row.get("boundingBox")).contains("\"frameWidth\"");
         assertThat(row.get("runId")).isEqualTo(s.run());
+        UUID storedFrame = jdbc.sql("SELECT v.coordinate_frame_id FROM poi p JOIN poi_version v ON v.poi_id = p.id "
+                + "WHERE p.venue_id = :v AND v.source = 'AUTO_DETECTED'").param("v", s.c().venue()).query(UUID.class).single();
+        assertThat(storedFrame).as("the POI's coordinates are canonical metres in that frame").isEqualTo(UUID.fromString(frameId));
     }
 }

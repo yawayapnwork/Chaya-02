@@ -6,6 +6,9 @@ import dev.chaya.api.ar.ArDtos.AnchorRequest;
 import dev.chaya.api.ar.ArDtos.Pose;
 import dev.chaya.api.ar.ArDtos.RelocalizationResponse;
 import dev.chaya.api.audit.AuditService;
+import dev.chaya.api.frame.CoordinateFrameService;
+import dev.chaya.api.frame.FrameDtos.FrameView;
+import dev.chaya.api.frame.FrameProperties;
 import dev.chaya.api.security.Actor;
 import dev.chaya.api.security.TenantGuard;
 import dev.chaya.api.web.ApiException;
@@ -28,6 +31,12 @@ import org.springframework.transaction.annotation.Transactional;
  * goes through {@link TenantGuard} first (see docs/security.md); a floor-scoped AR session (authenticated
  * user or PUBLIC_VIEWER, both already bound to one venue by the token that authenticated them) can never
  * read another venue's anchors -- there is no path here that queries by anchor id alone.
+ *
+ * <p>Frames (docs/coordinate-frames.md): an anchor's digital pose is canonical venue metres, +Z up, in the frame recorded
+ * on it -- always the floor's current coordinate frame when the pose was entered, so anchors cannot be created on a floor
+ * without one (NOT_CALIBRATED). An anchor whose frame is no longer the floor's current one cannot be calibrated or used
+ * for relocalization (ANCHOR_FRAME_STALE) until its pose is re-entered; CoordinateFrameService re-projects anchors
+ * automatically when only the calibration of the same reconstruction changed.
  */
 @Service
 public class AnchorService {
@@ -36,7 +45,7 @@ public class AnchorService {
             SELECT id, venue_id, floor_id, marker_type, marker_identifier,
                    physical_x, physical_y, physical_z, physical_qx, physical_qy, physical_qz, physical_qw,
                    digital_x, digital_y, digital_z, digital_qx, digital_qy, digital_qz, digital_qw,
-                   calibration_status, last_calibrated_at
+                   calibration_status, last_calibrated_at, coordinate_frame_id
               FROM ar_anchor
              WHERE venue_id = :v AND organization_id = :o AND floor_id = :f AND deleted_at IS NULL
             """;
@@ -44,11 +53,16 @@ public class AnchorService {
     private final JdbcClient jdbc;
     private final TenantGuard guard;
     private final AuditService audit;
+    private final CoordinateFrameService frames;
+    private final FrameProperties frameProps;
 
-    public AnchorService(JdbcClient jdbc, TenantGuard guard, AuditService audit) {
+    public AnchorService(JdbcClient jdbc, TenantGuard guard, AuditService audit, CoordinateFrameService frames,
+                         FrameProperties frameProps) {
         this.jdbc = jdbc;
         this.guard = guard;
         this.audit = audit;
+        this.frames = frames;
+        this.frameProps = frameProps;
     }
 
     private static Anchor map(ResultSet rs, int i) throws SQLException {
@@ -61,7 +75,7 @@ public class AnchorService {
         Instant lastCalibratedAt = calibrated == null ? null : calibrated.toInstant();
         return new Anchor(rs.getObject("id", UUID.class), rs.getObject("venue_id", UUID.class),
             rs.getObject("floor_id", UUID.class), rs.getString("marker_type"), rs.getString("marker_identifier"),
-            physical, digital, rs.getString("calibration_status"), lastCalibratedAt);
+            physical, digital, rs.getString("calibration_status"), lastCalibratedAt, rs.getObject("coordinate_frame_id", UUID.class));
     }
 
     @Transactional(readOnly = true)
@@ -85,14 +99,15 @@ public class AnchorService {
         guard.requireVenue(actor, venueId);
         requireFloor(venueId, floorId);
         requireMarkerType(r.markerType());
+        UUID frame = requireCurrentFrame(venueId, floorId).id();
         UUID id = jdbc.sql("""
                 INSERT INTO ar_anchor (organization_id, venue_id, floor_id, marker_type, marker_identifier,
                     physical_x, physical_y, physical_z, physical_qx, physical_qy, physical_qz, physical_qw,
-                    digital_x, digital_y, digital_z, digital_qx, digital_qy, digital_qz, digital_qw)
-                VALUES (:o, :v, :f, :mt, :mi, :px, :py, :pz, :pqx, :pqy, :pqz, :pqw, :dx, :dy, :dz, :dqx, :dqy, :dqz, :dqw)
+                    digital_x, digital_y, digital_z, digital_qx, digital_qy, digital_qz, digital_qw, coordinate_frame_id)
+                VALUES (:o, :v, :f, :mt, :mi, :px, :py, :pz, :pqx, :pqy, :pqz, :pqw, :dx, :dy, :dz, :dqx, :dqy, :dqz, :dqw, :frame)
                 RETURNING id
                 """)
-            .param("o", actor.organizationId()).param("v", venueId).param("f", floorId)
+            .param("o", actor.organizationId()).param("v", venueId).param("f", floorId).param("frame", frame)
             .param("mt", r.markerType()).param("mi", r.markerIdentifier())
             .param("px", r.physicalPose().x()).param("py", r.physicalPose().y()).param("pz", r.physicalPose().z())
             .param("pqx", r.physicalPose().qx()).param("pqy", r.physicalPose().qy()).param("pqz", r.physicalPose().qz()).param("pqw", r.physicalPose().qw())
@@ -109,8 +124,9 @@ public class AnchorService {
     public Anchor update(Actor actor, UUID venueId, UUID floorId, UUID anchorId, AnchorRequest r) {
         guard.requireVenue(actor, venueId);
         requireMarkerType(r.markerType());
+        UUID frame = requireCurrentFrame(venueId, floorId).id();
         int rows = jdbc.sql("""
-                UPDATE ar_anchor SET marker_type = :mt, marker_identifier = :mi,
+                UPDATE ar_anchor SET marker_type = :mt, marker_identifier = :mi, coordinate_frame_id = :frame,
                     physical_x = :px, physical_y = :py, physical_z = :pz,
                     physical_qx = :pqx, physical_qy = :pqy, physical_qz = :pqz, physical_qw = :pqw,
                     digital_x = :dx, digital_y = :dy, digital_z = :dz,
@@ -124,7 +140,7 @@ public class AnchorService {
             .param("dx", r.digitalPose().x()).param("dy", r.digitalPose().y()).param("dz", r.digitalPose().z())
             .param("dqx", r.digitalPose().qx()).param("dqy", r.digitalPose().qy()).param("dqz", r.digitalPose().qz()).param("dqw", r.digitalPose().qw())
             .param("a", anchorId).param("v", venueId).param("f", floorId).param("o", actor.organizationId())
-            .update();
+            .param("frame", frame).update();
         if (rows == 0) {
             throw new NotFoundException("anchor not found");
         }
@@ -137,6 +153,7 @@ public class AnchorService {
     @Transactional
     public Anchor calibrate(Actor actor, UUID venueId, UUID floorId, UUID anchorId) {
         guard.requireVenue(actor, venueId);
+        requireInCurrentFrame(get(actor, venueId, floorId, anchorId), requireCurrentFrame(venueId, floorId));
         int rows = jdbc.sql("""
                 UPDATE ar_anchor SET calibration_status = 'CALIBRATED', last_calibrated_at = now()
                 WHERE id = :a AND venue_id = :v AND floor_id = :f AND organization_id = :o AND deleted_at IS NULL
@@ -175,17 +192,51 @@ public class AnchorService {
         if (observations == null || observations.isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "NO_OBSERVATIONS", "at least one anchor observation is required");
         }
+        if (observations.size() > MAX_OBSERVATIONS
+                || observations.stream().map(AnchorObservation::anchorId).distinct().count() != observations.size()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_OBSERVATIONS",
+                "at most " + MAX_OBSERVATIONS + " observations, each of a different anchor");
+        }
+        FrameView current = requireCurrentFrame(venueId, floorId);
         List<Pose> candidates = new ArrayList<>();
+        double tilt = 0;
         for (AnchorObservation obs : observations) {
             Anchor anchor = get(actor, venueId, floorId, obs.anchorId());
             if (!"CALIBRATED".equals(anchor.calibrationStatus())) {
                 throw new ApiException(HttpStatus.CONFLICT, "ANCHOR_NOT_CALIBRATED",
                     "anchor " + anchor.id() + " has not been calibrated and cannot be used for relocalization");
             }
-            candidates.add(CoordinateTransform.deviceToVenueFromAnchor(anchor.digitalPose(), obs.observedPose()));
+            requireInCurrentFrame(anchor, current);
+            Pose candidate = CoordinateTransform.deviceToVenueFromAnchor(anchor.digitalPose(), obs.observedPose());
+            tilt = Math.max(tilt, ArDeviceFrame.gravityTiltDegrees(candidate));
+            candidates.add(candidate);
+        }
+        if (tilt > frameProps.maxDeviceGravityTiltDeg()) {
+            throw new ApiException(HttpStatus.CONFLICT, "RELOCALIZATION_GRAVITY_MISMATCH", "the solved transform tilts the device's "
+                + "gravity-aligned up by " + Math.round(tilt * 10) / 10.0 + " degrees from the venue's +Z (limit "
+                + frameProps.maxDeviceGravityTiltDeg() + "); an anchor's digital orientation or the observation's axis convention ("
+                + ArDeviceFrame.CONVENTION + ") is wrong");
         }
         CoordinateTransform.Blended blended = CoordinateTransform.blend(candidates);
-        return new RelocalizationResponse(blended.transform(), blended.residualMeters(), candidates.size());
+        // One anchor gives nothing to compare against: its residual is unknown, not zero.
+        Double residual = candidates.size() == 1 ? null : blended.residualMeters();
+        return new RelocalizationResponse(blended.transform(), residual, candidates.size(),
+            ArDeviceFrame.gravityTiltDegrees(blended.transform()), ArDeviceFrame.CONVENTION, current.id());
+    }
+
+    private static final int MAX_OBSERVATIONS = 16;
+
+    private FrameView requireCurrentFrame(UUID venueId, UUID floorId) {
+        return frames.currentForFloor(venueId, floorId).filter(FrameView::canonical)
+            .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, CoordinateFrameService.NOT_CALIBRATED,
+                "floor " + floorId + " has no calibrated coordinate frame; anchor poses cannot be expressed in venue metres"));
+    }
+
+    private static void requireInCurrentFrame(Anchor anchor, FrameView current) {
+        if (!current.id().equals(anchor.coordinateFrameId())) {
+            throw new ApiException(HttpStatus.CONFLICT, "ANCHOR_FRAME_STALE", "anchor " + anchor.id() + " was placed in coordinate frame "
+                + anchor.coordinateFrameId() + ", not the floor's current frame " + current.id() + "; re-enter its digital pose");
+        }
     }
 
     private void requireFloor(UUID venueId, UUID floorId) {

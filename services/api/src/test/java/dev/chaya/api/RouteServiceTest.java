@@ -36,9 +36,23 @@ class RouteServiceTest extends AbstractIntegrationTest {
         return new Actor(Actor.Kind.USER, "test-user", org, Set.of(venue), Set.of(Role.ADMIN));
     }
 
+    /** A tree whose floor has a canonical frame registered to the venue datum (an identity fixture frame). */
+    private Fixtures.Tree calibratedTree() {
+        var t = fx.tree();
+        fx.calibratedFloor(t.org(), t.venue(), t.floor(), "VENUE_CONTROL_POINTS");
+        return t;
+    }
+
+    private UUID calibratedFloor(Fixtures.Tree t, int level, String datum) {
+        UUID floor = fx.floor(t.org(), t.venue(), level);
+        fx.calibratedFloor(t.org(), t.venue(), floor, datum);
+        return floor;
+    }
+
+    /** Graphs and POIs are written in the floor's current coordinate frame, as ingestion and PoiService do. */
     private UUID insertGraph(UUID org, UUID venue, UUID floor, String profile) {
-        return jdbc.sql("INSERT INTO navigation_graph (organization_id, venue_id, floor_id, profile, status) "
-                + "VALUES (:o, :v, :f, :p, 'DRAFT') RETURNING id")
+        return jdbc.sql("INSERT INTO navigation_graph (organization_id, venue_id, floor_id, profile, status, coordinate_frame_id) "
+                + "VALUES (:o, :v, :f, :p, 'DRAFT', (SELECT current_coordinate_frame_id FROM floor WHERE id = :f)) RETURNING id")
             .param("o", org).param("v", venue).param("f", floor).param("p", profile).query(UUID.class).single();
     }
 
@@ -60,10 +74,11 @@ class RouteServiceTest extends AbstractIntegrationTest {
         UUID poiId = jdbc.sql("INSERT INTO poi (organization_id, venue_id, floor_id) VALUES (:o, :v, :f) RETURNING id")
             .param("o", org).param("v", venue).param("f", floor).query(UUID.class).single();
         jdbc.sql("""
-                INSERT INTO poi_version (organization_id, venue_id, poi_id, version_number, label, category, tags, x, y, z, created_by)
-                VALUES (:o, :v, :p, 1, :label, :cat, '{}', :x, :y, :z, 'test')
+                INSERT INTO poi_version (organization_id, venue_id, poi_id, version_number, label, category, tags, x, y, z,
+                    coordinate_frame_id, created_by)
+                VALUES (:o, :v, :p, 1, :label, :cat, '{}', :x, :y, :z, (SELECT current_coordinate_frame_id FROM floor WHERE id = :f), 'test')
                 """)
-            .param("o", org).param("v", venue).param("p", poiId).param("label", label).param("cat", category)
+            .param("o", org).param("v", venue).param("p", poiId).param("label", label).param("cat", category).param("f", floor)
             .param("x", x).param("y", y).param("z", z).update();
         return poiId;
     }
@@ -76,7 +91,7 @@ class RouteServiceTest extends AbstractIntegrationTest {
 
     @Test
     void aRouteExistsAcrossTwoConnectedWaypointsToTheDestinationPoi() {
-        var t = fx.tree();
+        var t = calibratedTree();
         UUID graph = insertGraph(t.org(), t.venue(), t.floor(), "STANDARD");
         UUID a = insertNode(t.org(), t.venue(), graph, t.floor(), 0, 0, 0);
         UUID b = insertNode(t.org(), t.venue(), graph, t.floor(), 5, 0, 0);
@@ -99,7 +114,7 @@ class RouteServiceTest extends AbstractIntegrationTest {
 
     @Test
     void routeUnavailableWhenNoActiveGraphExistsForTheFloor() {
-        var t = fx.tree();
+        var t = calibratedTree();
         UUID destination = insertPoi(t.org(), t.venue(), t.floor(), "Somewhere", null, 5, 0, 0);
 
         assertThatThrownBy(() -> routeService.route(actorFor(t.org(), t.venue()),
@@ -110,7 +125,7 @@ class RouteServiceTest extends AbstractIntegrationTest {
 
     @Test
     void routeUnavailableWhenTheGraphIsDisconnected() {
-        var t = fx.tree();
+        var t = calibratedTree();
         UUID graph = insertGraph(t.org(), t.venue(), t.floor(), "STANDARD");
         insertNode(t.org(), t.venue(), graph, t.floor(), 0, 0, 0);
         insertNode(t.org(), t.venue(), graph, t.floor(), 5, 0, 0);
@@ -127,7 +142,7 @@ class RouteServiceTest extends AbstractIntegrationTest {
 
     @Test
     void aReportedObstacleRegionExcludesTheOnlyPathAndTheRouteBecomesUnavailable() {
-        var t = fx.tree();
+        var t = calibratedTree();
         UUID graph = insertGraph(t.org(), t.venue(), t.floor(), "STANDARD");
         UUID a = insertNode(t.org(), t.venue(), graph, t.floor(), 0, 0, 0);
         UUID mid = insertNode(t.org(), t.venue(), graph, t.floor(), 2.5, 0, 0);
@@ -152,7 +167,7 @@ class RouteServiceTest extends AbstractIntegrationTest {
 
     @Test
     void theAccessibleProfileNeverUsesAStairsOnlyPathTheStandardProfileWouldUse() {
-        var t = fx.tree();
+        var t = calibratedTree();
         UUID standard = insertGraph(t.org(), t.venue(), t.floor(), "STANDARD");
         UUID a1 = insertNode(t.org(), t.venue(), standard, t.floor(), 0, 0, 0);
         UUID b1 = insertNode(t.org(), t.venue(), standard, t.floor(), 5, 0, 0);
@@ -177,7 +192,7 @@ class RouteServiceTest extends AbstractIntegrationTest {
 
     @Test
     void theAccessibleProfileRejectsAnEdgeNarrowerThanTheConfiguredMinimumClearance() {
-        var t = fx.tree();
+        var t = calibratedTree();
         UUID graph = insertGraph(t.org(), t.venue(), t.floor(), "STEP_FREE");
         UUID a = insertNode(t.org(), t.venue(), graph, t.floor(), 0, 0, 0);
         UUID b = insertNode(t.org(), t.venue(), graph, t.floor(), 5, 0, 0);
@@ -194,8 +209,8 @@ class RouteServiceTest extends AbstractIntegrationTest {
 
     @Test
     void aMultiFloorRouteCrossesViaAMatchingElevatorPoiPair() {
-        var t = fx.tree();
-        UUID floor2 = fx.floor(t.org(), t.venue(), 1);
+        var t = calibratedTree();
+        UUID floor2 = calibratedFloor(t, 1, "VENUE_CONTROL_POINTS");
 
         UUID g1 = insertGraph(t.org(), t.venue(), t.floor(), "STANDARD");
         UUID start1 = insertNode(t.org(), t.venue(), g1, t.floor(), 0, 0, 0);
@@ -227,8 +242,8 @@ class RouteServiceTest extends AbstractIntegrationTest {
 
     @Test
     void multiFloorRouteUnavailableWithNoMatchingConnectorPoi() {
-        var t = fx.tree();
-        UUID floor2 = fx.floor(t.org(), t.venue(), 1);
+        var t = calibratedTree();
+        UUID floor2 = calibratedFloor(t, 1, "VENUE_CONTROL_POINTS");
         insertGraph(t.org(), t.venue(), t.floor(), "STANDARD");
         insertGraph(t.org(), t.venue(), floor2, "STANDARD");
         UUID destination = insertPoi(t.org(), t.venue(), floor2, "Unreachable", null, 15, 0, 0);
@@ -255,12 +270,68 @@ class RouteServiceTest extends AbstractIntegrationTest {
 
     @Test
     void anActorWithoutAccessToTheVenueIsRejectedBeforeAnythingElse() {
-        var t = fx.tree();
+        var t = calibratedTree();
         UUID destination = insertPoi(t.org(), t.venue(), t.floor(), "Somewhere", null, 5, 0, 0);
         Actor outsider = new Actor(Actor.Kind.USER, "outsider", fx.organization(), Set.of(), Set.of(Role.OPERATOR));
 
         assertThatThrownBy(() -> routeService.route(outsider,
             request(t.venue(), t.floor(), new double[]{0, 0, 0}, destination, null, null)))
             .isInstanceOf(NotFoundException.class);
+    }
+
+    // ---- coordinate frames -----------------------------------------------------------------------------
+
+    @Test
+    void aFloorWithoutACalibratedFrameCannotBeRoutedOn() {
+        var t = fx.tree();
+        UUID destination = insertPoi(t.org(), t.venue(), t.floor(), "Somewhere", null, 5, 0, 0);
+        assertThatThrownBy(() -> routeService.route(actorFor(t.org(), t.venue()),
+            request(t.venue(), t.floor(), new double[]{0, 0, 0}, destination, null, null)))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.code()).isEqualTo("NAVIGATION_NOT_CALIBRATED"));
+    }
+
+    @Test
+    void aGraphBakedInAnOlderFrameIsRefusedNotRoutedInTheWrongPlace() {
+        var t = calibratedTree();
+        UUID graph = insertGraph(t.org(), t.venue(), t.floor(), "STANDARD");
+        UUID a = insertNode(t.org(), t.venue(), graph, t.floor(), 0, 0, 0);
+        UUID b = insertNode(t.org(), t.venue(), graph, t.floor(), 5, 0, 0);
+        insertEdge(t.org(), t.venue(), graph, a, b, 5.0, 1.2);
+        Actor actor = actorFor(t.org(), t.venue()); // activates the graph in the first frame
+        fx.calibratedFloor(t.org(), t.venue(), t.floor(), "VENUE_CONTROL_POINTS"); // a new reconstruction becomes current
+        UUID destination = insertPoi(t.org(), t.venue(), t.floor(), "Reception", null, 5, 0, 0);
+
+        assertThatThrownBy(() -> routeService.route(actor, request(t.venue(), t.floor(), new double[]{0, 0, 0}, destination, null, null)))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.code()).isEqualTo("NAVIGATION_FRAME_STALE"));
+    }
+
+    @Test
+    void aDestinationPoiNotInTheCurrentFrameIsRefused() {
+        var t = calibratedTree();
+        UUID graph = insertGraph(t.org(), t.venue(), t.floor(), "STANDARD");
+        insertNode(t.org(), t.venue(), graph, t.floor(), 0, 0, 0);
+        UUID destination = insertPoi(t.org(), t.venue(), t.floor(), "Old reception", null, 5, 0, 0);
+        UUID newFrame = fx.calibratedFloor(t.org(), t.venue(), t.floor(), "VENUE_CONTROL_POINTS");
+        jdbc.sql("UPDATE navigation_graph SET coordinate_frame_id = :c WHERE id = :g").param("c", newFrame).param("g", graph).update();
+
+        assertThatThrownBy(() -> routeService.route(actorFor(t.org(), t.venue()),
+            request(t.venue(), t.floor(), new double[]{0, 0, 0}, destination, null, null)))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.code()).isEqualTo("POI_NOT_CALIBRATED"));
+    }
+
+    @Test
+    void aMultiFloorRouteBetweenFloorLocalFramesIsRefusedBecauseTheirOriginsAreUnrelated() {
+        var t = fx.tree();
+        fx.calibratedFloor(t.org(), t.venue(), t.floor(), "FLOOR_LOCAL");
+        UUID floor2 = calibratedFloor(t, 1, "FLOOR_LOCAL");
+        insertGraph(t.org(), t.venue(), t.floor(), "STANDARD");
+        insertGraph(t.org(), t.venue(), floor2, "STANDARD");
+        insertPoi(t.org(), t.venue(), t.floor(), "Elevator", "elevator", 10, 0, 0);
+        insertPoi(t.org(), t.venue(), floor2, "Elevator", "elevator", 10, 0, 0);
+        UUID destination = insertPoi(t.org(), t.venue(), floor2, "Floor 2 office", null, 15, 0, 0);
+
+        assertThatThrownBy(() -> routeService.route(actorFor(t.org(), t.venue()),
+            request(t.venue(), t.floor(), new double[]{0, 0, 0}, destination, null, null)))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.code()).isEqualTo("FLOORS_NOT_REGISTERED"));
     }
 }

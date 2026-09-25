@@ -24,22 +24,32 @@ A floor may have several anchors — see "Relocalization" below for why that is 
 ## Anchors and calibration
 
 `POST/PUT /venues/{v}/floors/{f}/anchors` (ADMIN/VENUE_MANAGER/OPERATOR) registers a marker's
-`physicalPose` (the marker's own physical placement) and `digitalPose` (its pose in the reconstruction's
-venue frame, established by venue setup). A new or edited anchor starts `UNCALIBRATED`; an operator marks
+`physicalPose` (the marker's own physical placement) and `digitalPose` (its pose in canonical venue metres, +Z up,
+in the floor's **current coordinate frame** -- [coordinate-frames.md](coordinate-frames.md)). A floor without a
+calibrated frame cannot have anchors (`409 NOT_CALIBRATED`); every anchor records the frame its pose is in
+(`coordinateFrameId`). A new or edited anchor starts `UNCALIBRATED`; an operator marks
 it `CALIBRATED` with `POST .../anchors/{a}/calibrate` only after physically verifying `digitalPose` against
 the built reconstruction. **Relocalization refuses an uncalibrated anchor** (`ANCHOR_NOT_CALIBRATED`, 409)
-rather than trusting an unverified pose.
+rather than trusting an unverified pose, and refuses an anchor whose frame is no longer the floor's current one
+(`ANCHOR_FRAME_STALE`, 409). Recalibrating the same reconstruction re-projects anchors exactly; a different
+reconstruction becoming current marks calibrated anchors `STALE` until their poses are re-entered.
 
 ## Relocalization
 
-`POST /venues/{v}/floors/{f}/anchors/relocalize` takes one or more `{anchorId, observedPose}` pairs — each
-`observedPose` is the marker's pose as the *client's own tracking session* currently reports it (a WebXR
-hit-test result or an ARKit detected `ARImageAnchor`/`ARReferenceMarker`, never fabricated — see "Do not
-fabricate device sensor data" below). The server (`dev.chaya.api.ar.AnchorService#relocalize`,
-`CoordinateTransform`) composes each anchor's known `digitalPose` with the inverse of its `observedPose` to
-get a candidate device-frame → venue-frame transform, then:
+`POST /venues/{v}/floors/{f}/anchors/relocalize` takes one to 16 `{anchorId, observedPose}` pairs, one per anchor
+— each `observedPose` is the marker's pose as the *client's own tracking session* currently reports it, in the
+device's native convention (metres, gravity-aligned, **+Y up**: `DEVICE_Y_UP_RIGHT_HANDED_METRES`), never
+fabricated — see "Do not fabricate device sensor data" below. The server (`dev.chaya.api.ar.AnchorService#relocalize`,
+`CoordinateTransform`) composes each anchor's known `digitalPose` (canonical, +Z up) with the inverse of its
+`observedPose` to get a candidate device-frame → venue-frame transform. The device/canonical axis boundary is
+`dev.chaya.api.ar.ArDeviceFrame` (web: `lib/ar-frame-boundary.ts`): because both frames are gravity-aligned, each
+candidate must send device +Y to canonical +Z; one that tilts it by more than `chaya.frames.max-device-gravity-tilt-deg`
+is refused (`RELOCALIZATION_GRAVITY_MISMATCH`, 409) -- the signature of a mis-entered anchor orientation or an
+axis-convention mistake. The response reports the measured `gravityTiltDegrees`, the `deviceFrameConvention`, and
+the `coordinateFrameId` the transform lands in. Then:
 
-- **one anchor**: that transform is used directly, residual `0`.
+- **one anchor**: that transform is used directly; the residual is `null` -- unknown, since there is nothing to
+  compare it against (never reported as 0).
 - **several anchors**: candidates are blended (translation averaged, quaternions nlerp-averaged), and the
   **residual** returned is the real, measured largest pairwise translation disagreement between the
   candidates — never a fabricated or assumed accuracy number. **Never claim centimeter accuracy without
@@ -127,6 +137,7 @@ Three separated tiers, per `apps/ios-ar/README.md` and the test files themselves
 | Tier | Where | Requires a physical device? |
 |---|---|---|
 | Coordinate transformation / anchor math | `CoordinateTransformTest.java`, `ar-anchor-math.test.ts`, `AnchorMathTests.swift` | No — pure functions, run in CI |
+| Device/canonical axis boundary, gravity-tilt check | `ArDeviceFrameTest.java`, `ar-frame-boundary.test.ts` | No — pure functions. The iOS package has **not** been updated to the boundary (no Swift toolchain here) |
 | Relocalization state machine | `ar-relocalization.test.ts`, `RelocalizationStateMachineTests.swift` | No — pure state transitions |
 | Anchor CRUD / calibration / relocalization service | `AnchorServiceTest.java` | No — Testcontainers Postgres only (skipped, not failed, without Docker) |
 | WebXR capability detection (unsupported-device branch) | `webxr-support.test.ts` | No — mocks `navigator.xr`'s presence/absence |

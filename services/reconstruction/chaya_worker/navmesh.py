@@ -13,30 +13,19 @@ from typing import Any
 
 import numpy as np
 
+from .frames import CANONICAL_UP
+from .recast_boundary import canonical_to_recast, recast_to_canonical
+
 # ---- input side: walkable surface from real geometry -------------------------------------------------
-
-
-def orthonormal_basis(normal: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Pure: an arbitrary right-handed (u, v) basis perpendicular to `normal`."""
-    normal = normal / np.linalg.norm(normal)
-    helper = np.array([1.0, 0.0, 0.0]) if abs(normal[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
-    u = np.cross(normal, helper)
-    u = u / np.linalg.norm(u)
-    v = np.cross(normal, u)
-    return u, v
-
-
-def project_to_plane(points: np.ndarray, plane_point: np.ndarray, normal: np.ndarray) -> np.ndarray:
-    """Pure: (N, 3) world points to (N, 2) local (u, v) coordinates in the plane's own frame."""
-    if len(points) == 0:
-        return np.zeros((0, 2))
-    u, v = orthonormal_basis(normal)
-    rel = points - plane_point
-    return np.stack([rel @ u, rel @ v], axis=1)
+#
+# Every coordinate in this module is in the Chaya canonical frame (chaya_worker.frames: metres, +Z up), except
+# inside the two functions that cross the Recast boundary (write_walkable_obj, parse_recast_polygons), which
+# convert through chaya_worker.recast_boundary and nowhere else.
 
 
 def triangulate_walkable_area(floor_points_2d: np.ndarray) -> np.ndarray:
-    """Pure: Delaunay triangulation of the floor footprint. Returns (M, 3) vertex indices."""
+    """Pure: Delaunay triangulation of the floor footprint, given as canonical horizontal (x, y) metres.
+    Returns (M, 3) vertex indices."""
     from scipy.spatial import Delaunay  # noqa: PLC0415
 
     if len(floor_points_2d) < 4:
@@ -58,13 +47,14 @@ def carve_obstacles(vertices_2d: np.ndarray, triangles: np.ndarray, obstacle_poi
     return dist >= agent_radius
 
 
-def write_walkable_obj(path: Path, vertices_3d: np.ndarray, triangles: np.ndarray, walkable_mask: np.ndarray) -> int:
-    """Writes only the walkable triangles as a Wavefront OBJ (Recast's standard input format).
-    Returns the number of triangles written."""
+def write_walkable_obj(path: Path, vertices_canonical: np.ndarray, triangles: np.ndarray, walkable_mask: np.ndarray) -> int:
+    """Writes only the walkable triangles as a Wavefront OBJ (Recast's standard input format), converting the
+    canonical vertices to Recast's +Y-up axes at the boundary. Returns the number of triangles written."""
     kept = triangles[walkable_mask]
     used = sorted(set(int(i) for i in kept.flatten().tolist()))
     remap = {old: i + 1 for i, old in enumerate(used)}  # OBJ vertex indices are 1-based
-    lines = [f"v {vertices_3d[i][0]:.6f} {vertices_3d[i][1]:.6f} {vertices_3d[i][2]:.6f}" for i in used]
+    recast_vertices = canonical_to_recast(np.asarray(vertices_canonical, dtype=np.float64)[used]) if used else np.zeros((0, 3))
+    lines = [f"v {v[0]:.6f} {v[1]:.6f} {v[2]:.6f}" for v in recast_vertices]
     for tri in kept:
         lines.append(f"f {remap[int(tri[0])]} {remap[int(tri[1])]} {remap[int(tri[2])]}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -106,10 +96,12 @@ class Polygon:
 
 
 def parse_recast_polygons(doc: dict[str, Any]) -> list[Polygon]:
-    """Pure: validates and parses recast-cli's polygon JSON output."""
+    """Pure: validates and parses recast-cli's polygon JSON output, converting its +Y-up vertices back to the
+    canonical frame at the boundary. Every Polygon this returns is in canonical metres, +Z up."""
     polygons = []
     for raw in doc.get("polygons", []):
-        vertices = [tuple(float(c) for c in v) for v in raw["vertices"]]
+        recast_vertices = np.array([[float(c) for c in v] for v in raw["vertices"]], dtype=np.float64).reshape(-1, 3)
+        vertices = [tuple(float(c) for c in v) for v in recast_to_canonical(recast_vertices)]
         if len(vertices) < 3:
             raise ValueError(f"polygon {raw.get('id')} has fewer than 3 vertices")
         polygons.append(Polygon(id=int(raw["id"]), vertices=vertices, neighbors=[int(n) for n in raw.get("neighbors", [])]))
@@ -121,14 +113,15 @@ def polygon_centroid(poly: Polygon) -> np.ndarray:
 
 
 def polygon_slope_degrees(poly: Polygon) -> float:
-    """Pure: angle between the polygon's own face normal and vertical (z-up), in degrees. 0 = flat."""
+    """Pure: angle between the polygon's own face normal and the canonical vertical (+Z), in degrees. 0 = flat.
+    Meaningful only because the polygon is in the canonical frame, where +Z really is opposite to gravity."""
     v = np.array(poly.vertices[:3])
     normal = np.cross(v[1] - v[0], v[2] - v[0])
     norm = np.linalg.norm(normal)
     if norm < 1e-9:
         return 0.0
     normal = normal / norm
-    cos_angle = abs(float(np.dot(normal, np.array([0.0, 0.0, 1.0]))))
+    cos_angle = abs(float(np.dot(normal, CANONICAL_UP)))
     return float(np.degrees(np.arccos(np.clip(cos_angle, 0.0, 1.0))))
 
 
@@ -176,3 +169,36 @@ def build_routing_graphs(polygons: list[Polygon], *, max_ramp_slope_deg: float) 
                 step_free_edges.append(edge)
 
     return {"STANDARD": {"nodes": nodes, "edges": standard_edges}, "STEP_FREE": {"nodes": nodes, "edges": step_free_edges}}
+
+
+# ---- floor and obstacles in the canonical frame ------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CanonicalPlane:
+    """A fitted plane expressed in the canonical frame: unit normal oriented towards +Z, the median height of its
+    inliers (metres), and the inlier indices into the cloud it was fitted on."""
+
+    normal: np.ndarray
+    height: float
+    inlier_indices: np.ndarray
+
+
+def select_floor_plane(planes: list[CanonicalPlane], *, max_tilt_deg: float, min_relative_support: float = 0.25) -> CanonicalPlane | None:
+    """Pure: the walkable floor among fitted planes. Horizontal means within `max_tilt_deg` of canonical +Z.
+    Among horizontal planes with at least `min_relative_support` of the best-supported one's inliers, the floor is
+    the lowest -- a ceiling or a table top is above it. None when no plane is horizontal."""
+    cos_limit = np.cos(np.radians(max_tilt_deg))
+    horizontal = [p for p in planes if abs(float(np.asarray(p.normal) @ CANONICAL_UP)) >= cos_limit]
+    if not horizontal:
+        return None
+    largest = max(len(p.inlier_indices) for p in horizontal)
+    candidates = [p for p in horizontal if len(p.inlier_indices) >= min_relative_support * largest]
+    return min(candidates, key=lambda p: p.height)
+
+
+def obstacle_band_mask(points_canonical: np.ndarray, floor_height: float, *, agent_max_climb: float, agent_height: float) -> np.ndarray:
+    """Pure: which points can block a walking agent -- those between the height it can step over and its own
+    height, measured along canonical +Z from the floor. Ceiling and floor-level geometry never block."""
+    z = np.asarray(points_canonical, dtype=np.float64)[:, 2] - floor_height
+    return (z > agent_max_climb) & (z < agent_height)

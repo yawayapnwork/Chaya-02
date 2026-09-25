@@ -28,6 +28,9 @@ class RescanControlPlaneTest extends PipelineTestSupport {
      * in the derived bucket, exactly the shape PipelineService#globalCloudInput looks for -- so the
      * REGION_ALIGNMENT/REGION_SPLICE work orders in this test get a real GLOBAL_CLOUD input, the same way
      * a version produced by an earlier real run would. */
+    /** The parent reconstruction's canonical frame (an identity fixture frame), set by finalizedParentWithGlobalCloud. */
+    private UUID parentFrame;
+
     private UUID finalizedParentWithGlobalCloud(Ctx c) {
         UUID session = jdbc.sql("INSERT INTO capture_session (organization_id, venue_id, floor_id, operator_id) "
                 + "VALUES (:o, :v, :f, 'operator-sub') RETURNING id")
@@ -39,6 +42,8 @@ class RescanControlPlaneTest extends PipelineTestSupport {
                 VALUES (:o, :v, :s, :cs, 'SUCCEEDED', 'FINAL', '{}', 3600, now(), now(), 'tester') RETURNING id
                 """)
             .param("o", c.org()).param("v", c.venue()).param("s", scan).param("cs", session).query(UUID.class).single();
+        jdbc.sql("UPDATE pipeline_run SET reconstruction_frame_run_id = id WHERE id = :r").param("r", run).update();
+        parentFrame = fx.identityFrame(c.org(), c.venue(), c.floor(), run, "FLOOR_LOCAL");
         UUID job = jdbc.sql("""
                 INSERT INTO processing_job (organization_id, venue_id, scan_id, run_id, stage, status, started_at, finished_at)
                 VALUES (:o, :v, :s, :r, 'GEOMETRIC_CLEANUP', 'SUCCEEDED', now() - interval '1 minute', now()) RETURNING id
@@ -148,10 +153,16 @@ class RescanControlPlaneTest extends PipelineTestSupport {
         // from this run -- proving the alignment stage actually had something real to align against.
         assertThat(alignOrder.get("inputs").findValuesAsText("kind")).contains("GLOBAL_CLOUD");
         assertThat(alignOrder.get("regionGeometry").get("points").size()).isEqualTo(4);
+        // The region's own frame is uncalibrated here (a real worker would stop with NOT_CALIBRATED); the parent's frame,
+        // in which the region polygon and the venue cloud are interpreted, is on the order.
+        assertThat(alignOrder.get("parentCoordinateFrame").get("id").asText()).isEqualTo(parentFrame.toString());
+        assertThat(alignOrder.get("coordinateFrame").isNull()).isTrue();
         send(alignOrder, alignmentReport(alignOrder, 0.9), svc).andExpect(status().isOk());
 
         JsonNode spliceOrder = claimExpecting("REGION_SPLICE");
         assertThat(spliceOrder.get("inputs").findValuesAsText("kind")).contains("GLOBAL_CLOUD");
+        assertThat(spliceOrder.get("coordinateFrame").get("id").asText())
+            .as("from the splice on, the run's geometry is in the parent reconstruction's frame").isEqualTo(parentFrame.toString());
         succeed(spliceOrder);
 
         JsonNode order;

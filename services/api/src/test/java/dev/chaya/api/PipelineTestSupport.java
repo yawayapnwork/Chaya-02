@@ -6,7 +6,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.chaya.api.pipeline.PipelineDefinition;
 import dev.chaya.api.storage.ObjectStore;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -173,5 +175,31 @@ abstract class PipelineTestSupport extends CaptureTestSupport {
         } catch (RuntimeException e) {
             return false;
         }
+    }
+
+    // ---- coordinate frames ------------------------------------------------------------------------
+
+    /** The shared synthetic MATHEMATICAL calibration fixture (not venue data): packages/contracts/fixtures. */
+    protected JsonNode calibrationFixture() throws IOException {
+        return mapper.readTree(Path.of("../../packages/contracts/fixtures/synthetic-calibration.json").toFile());
+    }
+
+    /** A calibration request with the fixture's control points, their venue coordinates shifted by dx metres in x. */
+    protected String controlPointCalibration(double dx) throws IOException {
+        List<Map<String, Object>> cps = new ArrayList<>();
+        for (JsonNode cp : calibrationFixture().get("controlPoints")) {
+            List<Double> venue = List.of(cp.get("venue").get(0).asDouble() + dx, cp.get("venue").get(1).asDouble(), cp.get("venue").get(2).asDouble());
+            cps.add(Map.of("label", cp.get("label").asText(), "reconstruction", mapper.convertValue(cp.get("reconstruction"), List.class),
+                "venue", venue));
+        }
+        return mapper.writeValueAsString(Map.of("controlPoints", cps));
+    }
+
+    protected org.springframework.test.web.servlet.ResultActions calibrate(Started s, String body) throws Exception {
+        return post("/api/v1/venues/" + s.c().venue() + "/reconstructions/" + s.run() + "/coordinate-frames", s.c().operator(), body);
+    }
+
+    protected JsonNode calibrateOk(Started s, String body) throws Exception {
+        return mapper.readTree(calibrate(s, body).andExpect(status().isCreated()).andReturn().getResponse().getContentAsString());
     }
 }

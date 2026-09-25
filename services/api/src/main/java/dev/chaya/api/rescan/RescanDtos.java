@@ -12,7 +12,8 @@ public final class RescanDtos {
 
     private RescanDtos() {}
 
-    /** A simple polygon in the floor's venue frame: {@code points} are [x, y] pairs, at least 3, in order. */
+    /** A simple polygon in canonical venue metres (x, y horizontal; docs/coordinate-frames.md): {@code points} are
+     * [x, y] pairs, at least 3, in order. */
     public record RegionGeometry(@NotNull @Size(min = 3) List<@Size(min = 2, max = 2) List<Double>> points) {}
 
     /** Steps 1-2 of the incremental re-scan flow: select an existing (FINALIZED) venue version and the

@@ -20,8 +20,10 @@ Which metrics are valid depends on the input, and the runner only reports those:
                               cleanup do not apply to SfM points.
 
 Scale: splats trained from COLMAP poses and SfM clouds have an arbitrary unit. The statistical filter is
-scale-invariant (neighbour count, std ratio); the radius filter's production value (0.05 m) is metric, so it is run
-BOTH at that value and at a scale-relative radius (3 x the cloud's median nearest-neighbour distance), and says so.
+scale-invariant (neighbour count, std ratio). The radius filter used to be a fixed 0.05 "m" applied to arbitrary units;
+production now uses Settings.cleanup_radius_spacing_factor x the cloud's median nearest-neighbour distance
+(docs/coordinate-frames.md), so both radius rows below apply that rule (production factor, and this benchmark's own
+RADIUS_RELATIVE_K). Results recorded before that change measured the old fixed radius.
 
     python benchmarks/b2_geometry_cleanup/run.py --ply playroom/point_cloud.ply --sfm-points castle/points3D.txt
 """
@@ -78,8 +80,9 @@ def splat_benchmark(run: Run, ply: Path, labels_path: Path | None) -> None:
             Metric("opacity threshold", s.cleanup_opacity_threshold, "sigmoid(opacity)", "configuration", cond, "Settings.cleanup_opacity_threshold"),
             Metric("statistical filter", f"{s.cleanup_stat_nb_neighbors} neighbours, std ratio {s.cleanup_stat_std_ratio}", "",
                    "configuration", cond, "Settings.cleanup_stat_*"),
-            Metric("radius filter (production)", f"{s.cleanup_radius_nb_points} points within {s.cleanup_radius}", "scene units",
-                   "configuration", cond, "Settings.cleanup_radius*", note="metric in production; this splat's unit is arbitrary"),
+            Metric("radius filter (production)", f"{s.cleanup_radius_nb_points} points within {s.cleanup_radius_spacing_factor} x "
+                   f"median NN = {s.cleanup_radius_spacing_factor * nn:.5f}", "scene units", "configuration", cond,
+                   "Settings.cleanup_radius_spacing_factor", note="scale-invariant: production uses the same rule"),
             Metric("radius filter (scale-relative)", f"{s.cleanup_radius_nb_points} points within {RADIUS_RELATIVE_K} x median NN "
                    f"= {RADIUS_RELATIVE_K * nn:.5f}", "scene units", "configuration", cond, "this benchmark"))
 
@@ -88,8 +91,8 @@ def splat_benchmark(run: Run, ply: Path, labels_path: Path | None) -> None:
         "opacity_filtering": lambda: opacity_threshold_mask(cloud, s.cleanup_opacity_threshold),
         "outlier_filtering (statistical)": lambda: statistical_outlier_mask(
             cloud, nb_neighbors=s.cleanup_stat_nb_neighbors, std_ratio=s.cleanup_stat_std_ratio)[0],
-        "outlier_filtering (radius, production 0.05)": lambda: radius_outlier_mask(
-            cloud, nb_points=s.cleanup_radius_nb_points, radius=s.cleanup_radius)[0],
+        "outlier_filtering (radius, production spacing factor)": lambda: radius_outlier_mask(
+            cloud, nb_points=s.cleanup_radius_nb_points, radius=s.cleanup_radius_spacing_factor * nn)[0],
         "outlier_filtering (radius, scale-relative)": lambda: radius_outlier_mask(
             cloud, nb_points=s.cleanup_radius_nb_points, radius=RADIUS_RELATIVE_K * nn)[0],
     }
@@ -119,7 +122,7 @@ def splat_benchmark(run: Run, ply: Path, labels_path: Path | None) -> None:
     else:
         import json
         labels = np.asarray(json.loads(labels_path.read_text(encoding="utf-8"))["labels"])
-        mask, secs = timed(lambda: semantic_aware_mask(cloud, labels, radius=s.cleanup_radius,
+        mask, secs = timed(lambda: semantic_aware_mask(cloud, labels, radius=s.cleanup_radius_spacing_factor * nn,
                                                        min_same_class_neighbors=s.cleanup_semantic_min_neighbors)[0])
         run.add(Metric("Gaussians removed", n - int(mask.sum()), "count", "measured", f"{cond} | semantic_aware", "geometry_cleanup"),
                 Metric("runtime", round(secs, 3), "s", "measured", f"{cond} | semantic_aware", "wall clock"))

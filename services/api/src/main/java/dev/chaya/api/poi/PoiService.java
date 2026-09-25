@@ -15,7 +15,15 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/** POIs are versioned: every modification appends an immutable poi_version. */
+/**
+ * POIs are versioned: every modification appends an immutable poi_version.
+ *
+ * <p>Coordinates are canonical venue metres (+Z up, docs/coordinate-frames.md) in the frame recorded on the version:
+ * the floor's current coordinate frame at the time the version was written, or none (UNBOUND) when the floor had no
+ * calibrated frame. frameStatus tells a reader whether the coordinates are in the floor's current frame (CURRENT), an
+ * older one (STALE: the floor was re-reconstructed and the POI has not been re-placed), or none (UNBOUND). Routing only
+ * accepts CURRENT POIs.
+ */
 @Service
 public class PoiService {
 
@@ -23,13 +31,18 @@ public class PoiService {
                           List<String> tags, double x, double y, double z) {}
 
     public record Poi(UUID id, UUID floorId, UUID spaceId, int version, String label, String category,
-                      String description, List<String> tags, double x, double y, double z) {}
+                      String description, List<String> tags, double x, double y, double z, UUID coordinateFrameId,
+                      String frameStatus) {}
 
     private static final String LATEST = """
             SELECT p.id, p.floor_id, p.space_id, v.version_number, v.label, v.category, v.description,
-                   v.tags, v.x, v.y, v.z
+                   v.tags, v.x, v.y, v.z, v.coordinate_frame_id,
+                   CASE WHEN v.coordinate_frame_id IS NULL THEN 'UNBOUND'
+                        WHEN v.coordinate_frame_id = f.current_coordinate_frame_id THEN 'CURRENT'
+                        ELSE 'STALE' END AS frame_status
               FROM poi p
               JOIN poi_version v ON v.poi_id = p.id
+              LEFT JOIN floor f ON f.id = p.floor_id
              WHERE p.venue_id = :v AND p.organization_id = :o AND p.deleted_at IS NULL
                AND v.version_number = (SELECT max(version_number) FROM poi_version WHERE poi_id = p.id)
             """;
@@ -51,7 +64,8 @@ public class PoiService {
         return new Poi(rs.getObject("id", UUID.class), rs.getObject("floor_id", UUID.class),
             rs.getObject("space_id", UUID.class), rs.getInt("version_number"), rs.getString("label"),
             rs.getString("category"), rs.getString("description"), List.of(tags),
-            rs.getDouble("x"), rs.getDouble("y"), rs.getDouble("z"));
+            rs.getDouble("x"), rs.getDouble("y"), rs.getDouble("z"), rs.getObject("coordinate_frame_id", UUID.class),
+            rs.getString("frame_status"));
     }
 
     @Transactional(readOnly = true)
@@ -123,12 +137,13 @@ public class PoiService {
 
     private void insertVersion(Actor actor, UUID venueId, UUID poi, int number, PoiData d) {
         jdbc.sql("INSERT INTO poi_version (organization_id, venue_id, poi_id, version_number, label, category, description, "
-                + "tags, x, y, z, created_by) VALUES (:o, :v, :p, :n, :label, :cat, :desc, "
-                + "ARRAY(SELECT jsonb_array_elements_text(CAST(:tags AS jsonb))), :x, :y, :z, :by)")
+                + "tags, x, y, z, coordinate_frame_id, created_by) VALUES (:o, :v, :p, :n, :label, :cat, :desc, "
+                + "ARRAY(SELECT jsonb_array_elements_text(CAST(:tags AS jsonb))), :x, :y, :z, "
+                + "(SELECT current_coordinate_frame_id FROM floor WHERE id = CAST(:floor AS uuid)), :by)")
             .param("o", actor.organizationId()).param("v", venueId).param("p", poi).param("n", number)
             .param("label", d.label()).param("cat", d.category()).param("desc", d.description())
             .param("tags", toJson(d.tags() == null ? List.of() : d.tags()))
-            .param("x", d.x()).param("y", d.y()).param("z", d.z()).param("by", actor.subject())
+            .param("x", d.x()).param("y", d.y()).param("z", d.z()).param("floor", d.floorId()).param("by", actor.subject())
             .update();
     }
 

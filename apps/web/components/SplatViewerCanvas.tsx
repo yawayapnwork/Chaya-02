@@ -5,11 +5,16 @@ import * as THREE from "three";
 import * as GaussianSplats3D from "@mkkellogg/gaussian-splats-3d";
 import { CSS2DObject, CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import type { Poi } from "@/lib/poi-api";
+import type { Similarity } from "@/lib/coordinate-frame";
 import { type DeviceProfile } from "@/lib/device-profile";
 
 interface SplatViewerCanvasProps {
   /** An object URL for the already-downloaded .ksplat bytes (see lib/reconstruction-api.fetchArtifact). */
   blobUrl: string;
+  /** The reconstruction's calibrated reconstruction -> canonical transform, or null when it has none. With it the
+   * splat is placed in canonical metres (+Z up) and POIs/routes (canonical) are drawn on it; without it the splat is
+   * shown in its own arbitrary frame and nothing canonical is overlaid. */
+  toCanonical: Similarity | null;
   deviceProfile: DeviceProfile;
   pois: Poi[];
   selectedPoiId: string | null;
@@ -28,6 +33,7 @@ interface SplatViewerCanvasProps {
  * never a stale viewer instance to reconcile. */
 export default function SplatViewerCanvas({
   blobUrl,
+  toCanonical,
   deviceProfile,
   pois,
   selectedPoiId,
@@ -74,8 +80,17 @@ export default function SplatViewerCanvas({
     let camera: THREE.PerspectiveCamera;
     try {
       camera = new THREE.PerspectiveCamera(60, container.clientWidth / Math.max(1, container.clientHeight), 0.05, 1000);
-      camera.position.set(0, -2, 4);
-      camera.up.set(0, -1, -0.6);
+      if (toCanonical) {
+        // Canonical frame: metres, +Z up. Start at eye height a few metres from the floor origin.
+        camera.up.set(0, 0, 1);
+        camera.position.set(0, -4, 1.7);
+        camera.lookAt(0, 0, 1);
+      } else {
+        // Uncalibrated: the reconstruction frame has no known up. This is a viewing default only (COLMAP's cameras look
+        // along +Z with image-down +Y); nothing measured or canonical is derived from it or drawn on it.
+        camera.position.set(0, -2, 4);
+        camera.up.set(0, -1, -0.6);
+      }
 
       renderer = new THREE.WebGLRenderer({ antialias: false });
       renderer.setPixelRatio(deviceProfile.ignoreDevicePixelRatio ? 1 : window.devicePixelRatio);
@@ -118,6 +133,12 @@ export default function SplatViewerCanvas({
       .addSplatScene(blobUrl, {
         format: GaussianSplats3D.SceneFormat.KSplat,
         showLoadingUI: false,
+        // Places the reconstruction-frame splat in canonical metres: X_c = s R X_r + t (lib/coordinate-frame.ts).
+        ...(toCanonical ? {
+          position: toCanonical.translation,
+          rotation: [toCanonical.rotation.x, toCanonical.rotation.y, toCanonical.rotation.z, toCanonical.rotation.w],
+          scale: [toCanonical.scale, toCanonical.scale, toCanonical.scale],
+        } : {}),
         splatAlphaRemovalThreshold: deviceProfile.splatAlphaRemovalThreshold,
         onProgress: (percent: number) => {
           if (!disposed) onProgress(Math.round(percent));
@@ -162,6 +183,7 @@ export default function SplatViewerCanvas({
     markerElsRef.current.forEach((el) => el.remove());
     markerElsRef.current.clear();
     scene.clear();
+    if (!toCanonical) return; // POIs are canonical; they have no place on an uncalibrated splat
     for (const poi of pois) {
       const el = document.createElement("div");
       el.className = "chaya-poi-marker";
@@ -207,14 +229,14 @@ export default function SplatViewerCanvas({
       (routeLineRef.current.material as THREE.Material).dispose();
       routeLineRef.current = null;
     }
-    if (!routeWaypoints || routeWaypoints.length < 2) return;
+    if (!toCanonical || !routeWaypoints || routeWaypoints.length < 2) return;
     const geometry = new THREE.BufferGeometry().setFromPoints(routeWaypoints.map((w) => new THREE.Vector3(w.x, w.y, w.z)));
     const material = new THREE.LineDashedMaterial({ color: 0xf59e0b, dashSize: 0.15, gapSize: 0.1, linewidth: 2 });
     const line = new THREE.Line(geometry, material);
     line.computeLineDistances();
     scene.add(line);
     routeLineRef.current = line;
-  }, [routeWaypoints, blobUrl]);
+  }, [routeWaypoints, blobUrl, toCanonical]);
 
   return (
     <div

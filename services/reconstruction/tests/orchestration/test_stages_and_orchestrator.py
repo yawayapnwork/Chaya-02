@@ -253,16 +253,35 @@ def test_unwritten_stages_never_succeed_and_never_create_reconstruction_files(ha
     assert not [k for k in harness.storage.keys(DERIVED_BUCKET) if k.endswith((".ply", ".splat", ".ksplat", ".obj", ".glb"))]
 
 
+# A canonical frame fixture (identity transform). Mathematical test data, not a calibration of anything.
+CANONICAL_FRAME = {"id": "frame-fixture", "sourceRunId": "run-fixture", "version": 1, "metricStatus": "METRIC",
+                   "gravityStatus": "ALIGNED", "horizontalDatum": "FLOOR_LOCAL", "scale": 1.0,
+                   "rotation": {"w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0}, "translation": {"x": 0.0, "y": 0.0, "z": 0.0}}
+METRIC_STAGES = ("NAVIGATION_BAKING", "SEMANTIC_INDEXING")
+
+
 @pytest.mark.parametrize("stage", ["SPLAT_RECONSTRUCTION", "SEMANTIC_SEGMENTATION", "GEOMETRIC_CLEANUP", "PLANE_FITTING",
                                    "NAVIGATION_BAKING", "SEMANTIC_INDEXING"])
 def test_implemented_reconstruction_stages_refuse_to_run_without_their_real_dependencies(harness, stage):
     """SPLAT_RECONSTRUCTION..PLANE_FITTING are real implementations (not PlannedStage placeholders), but on a
     worker without torch/gsplat/CUDA/Open3D/transformers they must still fail structured, produce nothing,
-    and never reach the point of touching (nonexistent) inputs with a fake result."""
-    report = harness.run(harness.order(stage, []), toolchain=NO_TOOLS)
+    and never reach the point of touching (nonexistent) inputs with a fake result. The metric stages are given a
+    calibrated frame here so that the dependency check, not the calibration gate, is what is exercised."""
+    order = harness.order(stage, [])
+    if stage in METRIC_STAGES:
+        order["coordinateFrame"] = CANONICAL_FRAME
+    report = harness.run(order, toolchain=NO_TOOLS)
     assert report["status"] == "FAILED" and report["errorCode"] == "DEPENDENCY_UNAVAILABLE"
     assert report["artifacts"] == [] and report["errorDetails"]["missing"]
     assert not [k for k in harness.storage.keys(DERIVED_BUCKET) if k.endswith((".ply", ".ksplat"))]
+
+
+@pytest.mark.parametrize("stage", METRIC_STAGES)
+def test_metric_stages_report_not_calibrated_without_a_coordinate_frame(harness, stage):
+    """No frame on the work order: a structured, retryable NOT_CALIBRATED failure with no output -- whatever tools
+    the worker has, and never a result in reconstruction units presented as metres."""
+    report = harness.run(harness.order(stage, []), toolchain=AllAvailable())
+    assert report["status"] == "FAILED" and report["errorCode"] == "NOT_CALIBRATED" and report["artifacts"] == []
 
 
 def test_artifact_generation_refuses_to_run_without_a_splat_and_never_writes_a_placeholder_ksplat(harness):

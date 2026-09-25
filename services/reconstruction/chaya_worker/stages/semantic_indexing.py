@@ -11,6 +11,15 @@ similarity is; see docs/search.md). The result is written as a DETECTED_OBJECTS 
 no database access (see ARCHITECTURE.md), so turning these into `poi`/`poi_version` rows with pgvector
 embeddings is the control plane's job (dev.chaya.api.search on ingest of this stage's report).
 
+Object positions are published in the canonical venue frame (chaya_worker.frames: metres, +Z up), and the
+3D clustering distance is in metres, so the stage requires a calibrated coordinate frame on its work order and
+fails with NOT_CALIBRATED (before loading any model) when there is none.
+
+In an incremental re-scan the splat is the merged, venue-wide cloud in the parent reconstruction's frame,
+while POSES and SPARSE_MODEL are the region capture's own. The cameras are moved into the parent's frame with
+REGION_ALIGNMENT's region-to-parent similarity (ALIGNMENT_REPORT) before any projection; without that report
+the stage refuses to project, rather than attach detections to unrelated geometry.
+
 Needs torch + transformers (Grounding DINO) + open_clip (CLIP) + Pillow, the Grounding DINO checkpoint
 weights already cached locally, plus COLMAP to recover camera intrinsics like SEMANTIC_SEGMENTATION does.
 """
@@ -26,6 +35,7 @@ from .. import archive
 from ..clip_embeddings import ClipEmbedder
 from ..colmap_txt import parse_cameras_txt
 from ..contract import ArtifactSpec, StageContext, StageError, StageResult
+from ..frames import Similarity, frame_provenance, require_canonical
 from ..grounding_dino import Detection, GroundingDinoDetector
 from ..ply import read_ply
 from .base import command_record, write_json
@@ -45,8 +55,24 @@ def associate_detection_with_geometry(detection: Detection, positions: np.ndarra
     return np.median(positions[inside], axis=0), count
 
 
+def viewmat_in_other_frame(viewmat: np.ndarray, region_to_other: Similarity) -> np.ndarray:
+    """Pure: a camera posed in one reconstruction frame (world-to-camera rigid 4x4), re-expressed for points in
+    another frame related by X_other = region_to_other(X_region).
+
+    x_cam = R_c X_region + t_c with X_region = (1/s) R^T (X_other - t). Pinhole projection is invariant to a
+    uniform scale of camera coordinates, so multiplying by s gives the equivalent rigid view matrix
+    [R_c R^T | s t_c - R_c R^T t]: every point projects to the same pixel."""
+    v = np.asarray(viewmat, dtype=np.float64)
+    r_c, t_c = v[:3, :3], v[:3, 3]
+    r, t, scale = region_to_other.rotation, region_to_other.translation, region_to_other.scale
+    out = np.eye(4)
+    out[:3, :3] = r_c @ r.T
+    out[:3, 3] = scale * t_c - r_c @ r.T @ t
+    return out
+
+
 def cluster_by_distance(objects: list[dict[str, Any]], distance: float) -> list[dict[str, Any]]:
-    """Pure: greedy spatial clustering. Two raw detections within `distance` scene units of an existing
+    """Pure: greedy spatial clustering. Two raw detections within `distance` (canonical metres) of an existing
     cluster's running centroid are the same physical object, regardless of what label text either one
     carries -- label text is never the merge key, only 3D proximity. Each output cluster's `embedding` is
     the mean of its members' (already L2-normalised) embeddings, re-normalised; `confidence` is the max
@@ -93,10 +119,21 @@ class SemanticIndexing:
 
     def run(self, ctx: StageContext) -> StageResult:
         s = ctx.settings
+        frame = require_canonical(ctx.order, self.name)  # before any model is loaded
+        to_canonical = frame.to_canonical()
         ctx.toolchain.require(["py:torch", "py:transformers", "py:open_clip", "py:PIL", "colmap"], stage=self.name)
         ctx.toolchain.require([f"model:{s.grounding_dino_model}"], stage=self.name)
 
-        splats = ctx.inputs_of("SPLAT_MERGED") or ctx.inputs_of("SPLAT_CLEAN") or ctx.inputs_of("SPLAT")
+        merged = ctx.inputs_of("SPLAT_MERGED")
+        splats = merged or ctx.inputs_of("SPLAT_CLEAN") or ctx.inputs_of("SPLAT")
+        region_to_parent = None
+        if merged:
+            reports = ctx.inputs_of("ALIGNMENT_REPORT")
+            if not reports:
+                raise StageError("the merged splat is in the parent reconstruction's frame and no ALIGNMENT_REPORT relates this "
+                                 "capture's cameras to it", code="INPUT_INVALID")
+            region_to_parent = Similarity.from_dict(
+                json.loads(reports[0].path.read_text(encoding="utf-8"))["region_to_parent_reconstruction"])
         sparse_archives = ctx.inputs_of("SPARSE_MODEL")
         poses_inputs = ctx.inputs_of("POSES")
         frame_archives = ctx.inputs_of("FRAME_ARCHIVE_ANON")
@@ -116,6 +153,9 @@ class SemanticIndexing:
         cameras_model = parse_cameras_txt((txt_dir / "cameras.txt").read_text(encoding="utf-8"))
         poses = json.loads(poses_inputs[0].path.read_text(encoding="utf-8"))["poses"]
         cams = build_cameras(poses, cameras_model)[:: max(1, s.semantic_indexing_sample_every)]
+        if region_to_parent is not None:
+            for cam in cams:
+                cam["viewmat"] = viewmat_in_other_frame(cam["viewmat"], region_to_parent)
         images_dir = ctx.workdir / "images"
         archive.unpack(frame_archives[0].path, images_dir)
 
@@ -168,11 +208,14 @@ class SemanticIndexing:
         for obj, emb in zip(raw_objects, embeddings, strict=True):
             obj["embedding"] = emb.tolist()
 
-        objects = cluster_by_distance(raw_objects, s.object_cluster_distance)
+        for obj in raw_objects:  # reconstruction units -> canonical metres, before clustering in metres
+            obj["position"] = to_canonical.apply(np.asarray(obj["position"], dtype=np.float64)).tolist()
+        objects = cluster_by_distance(raw_objects, s.object_cluster_distance_m)
         ctx.logger.info("semantic indexing done", extra={"frames_processed": frames_processed, "raw_detections": len(raw_objects),
                                                           "objects": len(objects)})
 
         objects_path = write_json(ctx.workdir / "detected-objects.json", {
+            "coordinate_frame": frame_provenance(frame),
             "detector_model": detector.model_id, "detector_fine_tuned": detector.fine_tuned,
             "embedding_model": embedder.model_id, "embedding_dim": len(embeddings[0]) if len(embeddings) else 0,
             "frames_processed": frames_processed, "raw_detection_count": len(raw_objects), "objects": objects})

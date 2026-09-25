@@ -3,6 +3,8 @@ package dev.chaya.api.rescan;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.chaya.api.audit.AuditService;
+import dev.chaya.api.frame.CoordinateFrameService;
+import dev.chaya.api.frame.FrameDtos.FrameView;
 import dev.chaya.api.pipeline.PipelineDefinition;
 import dev.chaya.api.pipeline.PipelineService;
 import dev.chaya.api.processing.JobStage;
@@ -32,6 +34,10 @@ import org.springframework.transaction.annotation.Transactional;
  * (2), once that capture is ready, creating the DRAFT {@code scan_version} and starting the incremental
  * pipeline plan. Everything after that (alignment gating, splicing, conditional navigation/search updates,
  * finalization) happens inside {@link PipelineService}, which is where the worker's reports actually land.
+ *
+ * <p>The selected region is a polygon in canonical venue metres (docs/coordinate-frames.md), so the parent version's
+ * reconstruction must have a canonical coordinate frame: without one the polygon has no defined meaning, and the
+ * re-scan is refused (NOT_CALIBRATED) before any capture is created.
  */
 @Service
 public class RescanService {
@@ -44,15 +50,17 @@ public class RescanService {
     private final PipelineService pipeline;
     private final RescanProperties props;
     private final ObjectMapper mapper;
+    private final CoordinateFrameService frames;
 
     public RescanService(JdbcClient jdbc, TenantGuard guard, AuditService audit, PipelineService pipeline,
-                         RescanProperties props, ObjectMapper mapper) {
+                         RescanProperties props, ObjectMapper mapper, CoordinateFrameService frames) {
         this.jdbc = jdbc;
         this.guard = guard;
         this.audit = audit;
         this.pipeline = pipeline;
         this.props = props;
         this.mapper = mapper;
+        this.frames = frames;
     }
 
     /** Steps 1-2: select an existing (FINALIZED) version and the changed region. Creates a region-scoped
@@ -67,6 +75,7 @@ public class RescanService {
             throw new ApiException(HttpStatus.CONFLICT, "VERSION_WRONG_FLOOR",
                 "the selected version belongs to a different floor than " + floorId);
         }
+        FrameView parentFrame = requireCanonicalParentFrame(parent.id());
         double area = requireValidRegion(request.region());
         boolean navigationRebuildRequired = navigationIntersectsRegion(venueId, floorId, request.region().points());
 
@@ -82,7 +91,8 @@ public class RescanService {
 
         audit.success(actor, venueId, "rescan.initiate", "capture_session", captureId, Map.of(
             "floorId", floorId.toString(), "sourceVersionId", parent.id().toString(),
-            "regionAreaSquareMeters", area, "navigationRebuildRequired", navigationRebuildRequired));
+            "regionAreaSquareMeters", area, "navigationRebuildRequired", navigationRebuildRequired,
+            "parentCoordinateFrameId", parentFrame.id().toString()));
 
         return new RescanInitiated(captureId, null, parent.id(), navigationRebuildRequired, area);
     }
@@ -126,6 +136,18 @@ public class RescanService {
             "sourceVersionId", parent.id().toString(), "runId", runId.toString(),
             "navigationRebuildRequired", navigationRebuildRequired));
         return runId;
+    }
+
+    /** The canonical frame of the reconstruction the parent version's geometry is in (its run's reconstruction frame). */
+    private FrameView requireCanonicalParentFrame(UUID parentVersionId) {
+        UUID frameRun = jdbc.sql("""
+                SELECT coalesce(r.reconstruction_frame_run_id, r.id) FROM pipeline_run r
+                  JOIN scan_version v ON v.scan_id = r.scan_id WHERE v.id = :v
+                """).param("v", parentVersionId).query(UUID.class).optional().orElse(null);
+        return frames.activeForRun(frameRun).filter(FrameView::canonical)
+            .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, CoordinateFrameService.NOT_CALIBRATED,
+                "the selected version's reconstruction has no calibrated coordinate frame, so a region in venue metres cannot "
+                    + "be located in it; calibrate that reconstruction first"));
     }
 
     // ---- reading versions / bootstrapping the first one --------------------------------------------

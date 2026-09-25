@@ -4,8 +4,14 @@ standard approach when no initial transform is known:
 
   1. Coarse, feature-based global registration: FPFH descriptors + RANSAC correspondence matching
      (Open3D's `registration_ransac_based_on_feature_matching`). Works without an initial guess.
-  2. Point-to-plane ICP refinement seeded from the coarse result (Open3D's `registration_icp`):
-     high precision, but needs a starting point -- which step 1 provides.
+  2. ICP refinement seeded from the coarse result (Open3D's `registration_icp`): high precision, but needs
+     a starting point -- which step 1 provides. Point-to-plane for a rigid fit; point-to-point with scale
+     estimation when `with_scaling` is set.
+
+Both clouds must be in metres for `voxel_size` (and the FPFH radii derived from it) to mean anything; the
+REGION_ALIGNMENT stage pre-scales the region by its own metric calibration and the venue by its calibrated
+frame before calling align_region (chaya_worker.frames). `with_scaling=True` then lets registration refine
+the residual scale error of the region's calibration, which the stage bounds.
 
 The resulting transform is whatever these two real registration passes converge to; it is never a
 hardcoded or assumed translation. `alignment_confidence` turns Open3D's own registration-quality numbers
@@ -25,7 +31,7 @@ from .geometry_cleanup import _o3d_pointcloud
 
 @dataclass
 class AlignmentResult:
-    transform: np.ndarray  # (4, 4): maps source (region, local capture frame) into target (venue frame)
+    transform: np.ndarray  # (4, 4) [[s*R, t], [0, 1]]: maps source into target
     method: str  # "FEATURE_RANSAC_ICP"
     fitness: float  # Open3D ICP fitness: fraction of source points with a close correspondence, [0, 1]
     inlier_rmse: float  # RMSE, in meters, of those correspondences
@@ -57,7 +63,7 @@ def rotation_angle_degrees(rotation_matrix: np.ndarray) -> float:
     return float(np.degrees(np.arccos(trace)))
 
 
-def _feature_registration(source, target, voxel_size: float):
+def _feature_registration(source, target, voxel_size: float, with_scaling: bool = False):
     import open3d as o3d  # noqa: PLC0415 - intentionally lazy; caller already checked availability
 
     source_down = source.voxel_down_sample(voxel_size)
@@ -73,7 +79,7 @@ def _feature_registration(source, target, voxel_size: float):
     result = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
         source_down, target_down, source_fpfh, target_fpfh, mutual_filter=True,
         max_correspondence_distance=voxel_size * 1.5,
-        estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPoint(False),
+        estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPoint(with_scaling),
         ransac_n=4,
         checkers=[
             o3d.pipelines.registration.CorrespondenceCheckerBasedOnEdgeLength(0.9),
@@ -84,7 +90,7 @@ def _feature_registration(source, target, voxel_size: float):
 
 
 def align_region(source_positions: np.ndarray, target_positions: np.ndarray, *, voxel_size: float,
-                 icp_max_correspondence_distance: float | None = None) -> AlignmentResult:
+                 icp_max_correspondence_distance: float | None = None, with_scaling: bool = False) -> AlignmentResult:
     """Aligns `source_positions` (the freshly captured region's point cloud, in its own local frame) onto
     `target_positions` (the relevant crop of the venue's existing global reconstruction). Real Open3D
     global registration + ICP end to end; the transform returned is exactly what they converged to."""
@@ -96,13 +102,14 @@ def align_region(source_positions: np.ndarray, target_positions: np.ndarray, *, 
     source = _o3d_pointcloud(source_positions)
     target = _o3d_pointcloud(target_positions)
 
-    coarse, source_down, target_down = _feature_registration(source, target, voxel_size)
+    coarse, source_down, target_down = _feature_registration(source, target, voxel_size, with_scaling)
 
     icp_distance = icp_max_correspondence_distance or voxel_size * 1.5
     target_down.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=voxel_size * 2, max_nn=30))
+    estimation = (o3d.pipelines.registration.TransformationEstimationPointToPoint(True) if with_scaling
+                  else o3d.pipelines.registration.TransformationEstimationPointToPlane())
     icp = o3d.pipelines.registration.registration_icp(
-        source_down, target_down, icp_distance, coarse.transformation,
-        o3d.pipelines.registration.TransformationEstimationPointToPlane())
+        source_down, target_down, icp_distance, coarse.transformation, estimation)
 
     transform = np.asarray(icp.transformation, dtype=np.float64)
     confidence = alignment_confidence(icp.fitness, icp.inlier_rmse, voxel_size)
@@ -111,4 +118,4 @@ def align_region(source_positions: np.ndarray, target_positions: np.ndarray, *, 
         transform=transform, method="FEATURE_RANSAC_ICP", fitness=float(icp.fitness),
         inlier_rmse=float(icp.inlier_rmse), confidence=confidence,
         translation_m=float(np.linalg.norm(transform[:3, 3])),
-        rotation_deg=rotation_angle_degrees(transform[:3, :3]))
+        rotation_deg=rotation_angle_degrees(transform[:3, :3] / np.cbrt(np.linalg.det(transform[:3, :3]))))

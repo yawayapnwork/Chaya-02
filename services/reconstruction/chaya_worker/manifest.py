@@ -34,6 +34,9 @@ def build_manifest(*, run_id: str, scan_id: str, source_scan_version: str | None
                        processing_configuration=processing_configuration, created_at=created_at)
         for a in (*upstream_artifacts, *generated_artifacts)
     ]
-    return {"manifestVersion": "1.0", "runId": run_id, "scanId": scan_id, "sourceScanVersion": source_scan_version,
-           "workerVersion": worker_version, "createdAt": created_at, "processingConfiguration": processing_configuration,
-           "artifacts": entries}
+    # The splat is published in its reconstruction frame (arbitrary scale, rotation, origin). Canonical placement comes
+    # from the control plane's calibrated coordinate frame at read time (docs/coordinate-frames.md), never from this file.
+    return {"manifestVersion": "1.0", "coordinateSpace": "RECONSTRUCTION", "runId": run_id, "scanId": scan_id,
+            "sourceScanVersion": source_scan_version,
+            "workerVersion": worker_version, "createdAt": created_at, "processingConfiguration": processing_configuration,
+            "artifacts": entries}

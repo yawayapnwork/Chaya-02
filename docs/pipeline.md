@@ -43,11 +43,11 @@ belongs to the artifact-generation milestone, and a `PARTIAL` result must be fin
 | 5 | `POSE_ESTIMATION` | COLMAP feature extraction + matching, GLOMAP mapper, COLMAP mapper fallback, poses.json | implemented; **needs COLMAP** (GLOMAP optional); fails with `DEPENDENCY_UNAVAILABLE` here |
 | 6 | `SPLAT_RECONSTRUCTION` | gsplat training (Adam, L1+D-SSIM) seeded from the SfM point cloud; periodic keyframe renders | implemented; **needs torch + gsplat + CUDA + COLMAP**; fails with `DEPENDENCY_UNAVAILABLE` here |
 | 7 | `SEMANTIC_SEGMENTATION` | per-frame SegFormer (or any configured HF model) segmentation, projected onto the splat and bucketed into floor/wall/furniture/clutter | implemented; **needs torch + transformers + the model cached locally + COLMAP**; fails with `DEPENDENCY_UNAVAILABLE` here |
-| 8 | `GEOMETRIC_CLEANUP` | Open3D statistical + radius outlier removal, then semantic class-aware filtering (never opacity alone) | implemented; **needs Open3D**; fails with `DEPENDENCY_UNAVAILABLE` here |
-| 9 | `PLANE_FITTING` | iterative Open3D RANSAC plane extraction, floor/wall classification from a data-driven up axis | implemented; **needs Open3D**; fails with `DEPENDENCY_UNAVAILABLE` here |
+| 8 | `GEOMETRIC_CLEANUP` | Open3D statistical + radius outlier removal (radius a multiple of the cloud's own median nearest-neighbour spacing: scale-invariant, not metres), then semantic class-aware filtering (never opacity alone) | implemented; **needs Open3D**; fails with `DEPENDENCY_UNAVAILABLE` here |
+| 9 | `PLANE_FITTING` | iterative Open3D RANSAC plane extraction (spacing-relative inlier distance); floor/ceiling/wall classification against the calibrated frame's up or this reconstruction's `GRAVITY_ESTIMATE` (floor plane oriented by the cameras; [coordinate-frames.md](coordinate-frames.md)) | implemented; **needs Open3D**; fails with `DEPENDENCY_UNAVAILABLE` here |
 | 10 | `ARTIFACT_GENERATION` | `.ksplat` conversion (compression level 0), the artifact manifest, the compressed viewer bundle | implemented; only needs the cleaned splat as input |
-| 11 | `SEMANTIC_INDEXING` | Grounding DINO open-vocabulary detection (stock checkpoint, not fine-tuned) + 3D localisation against the splat + real CLIP embeddings; see [docs/search.md](docs/search.md) | implemented; **needs torch + transformers + open_clip + Pillow + the Grounding DINO checkpoint cached locally + COLMAP**; fails with `DEPENDENCY_UNAVAILABLE` here |
-| 12 | `NAVIGATION_BAKING` | walkable surface from the floor plane + wall/furniture obstacles, Recast (`recast-cli`) polygon navmesh, STANDARD/STEP_FREE routing graphs from real per-polygon slope; see [docs/navigation.md](docs/navigation.md) | implemented; **needs `recast-cli`**; fails with `DEPENDENCY_UNAVAILABLE` here |
+| 11 | `SEMANTIC_INDEXING` | Grounding DINO open-vocabulary detection (stock checkpoint, not fine-tuned) + 3D localisation against the splat + real CLIP embeddings, positions in canonical metres; see [docs/search.md](docs/search.md) | implemented; **needs a calibrated coordinate frame** (else `NOT_CALIBRATED`) **and torch + transformers + open_clip + Pillow + the Grounding DINO checkpoint cached locally + COLMAP** |
+| 12 | `NAVIGATION_BAKING` | walkable surface from the floor plane + wall/furniture obstacles in canonical metres, Recast (`recast-cli`) polygon navmesh through the single Recast axis boundary, STANDARD/STEP_FREE routing graphs from real per-polygon slope against canonical +Z; see [docs/navigation.md](docs/navigation.md) | implemented; **needs a calibrated coordinate frame** (else `NOT_CALIBRATED`) **and `recast-cli`** |
 
 Stage order runs SEMANTIC_INDEXING before NAVIGATION_BAKING (not their original numbering): neither
 depends on the other's output, and `recast-cli` is a much rarer thing to have installed than the
@@ -64,6 +64,13 @@ still ends `FAILED` at `SPLAT_RECONSTRUCTION`, which is the intended honest beha
 toolchain (`pip install chaya-worker[reconstruction]`) and a CUDA GPU are needed to get past it, and
 `recast-cli` specifically is needed only for `NAVIGATION_BAKING` (the run's last stage) to reach
 `SUCCEEDED` end to end.
+Coordinate frames ([coordinate-frames.md](coordinate-frames.md)): every stage up to ARTIFACT_GENERATION works in the
+reconstruction's own arbitrary frame, with scale-invariant thresholds. The stages whose output is metric --
+SEMANTIC_INDEXING, NAVIGATION_BAKING, REGION_ALIGNMENT, REGION_SPLICE -- read the calibrated frame from their work
+order and fail with `NOT_CALIBRATED` (retryable) when there is none; they are never run on reconstruction units
+presented as metres. A full run therefore stops at SEMANTIC_INDEXING until an operator calibrates the reconstruction
+(`POST /venues/{v}/reconstructions/{runId}/coordinate-frames`) and retries the run.
+
 The cleanup benchmark harness (`python -m chaya_worker.benchmarks.cleanup_benchmark`) compares no-cleanup,
 opacity-threshold, statistical-outlier, density/radius-outlier and semantic-aware cleanup on a trained
 splat; point counts and timings are always reported, PSNR/SSIM only when reference frames/poses and the

@@ -91,8 +91,14 @@ def summarise(nav: Nav, pairs: list[dict]) -> list[dict]:
 
 
 def seed_synthetic(stack: Stack) -> tuple[Nav, list[dict]]:
-    """Two floors (y = 0 and y = 4). Floor 0: a 10 m grid corridor loop, a two-step shortcut (not step-free) and a 0.7 m
-    passage (step-free but too narrow). Stairs and an elevator connect to floor 1. Hand-made: a SELF-TEST only."""
+    """Two floors (z = 0 and z = 4, canonical metres, +Z up; docs/coordinate-frames.md). Floor 0: a 10 m grid corridor
+    loop, a two-step shortcut (not step-free) and a 0.7 m passage (step-free but too narrow). Stairs and an elevator
+    connect to floor 1. Hand-made: a SELF-TEST only.
+
+    Routing only runs on graphs and POIs in a floor's current calibrated coordinate frame, and across floors only when
+    both are registered to one venue datum. Each floor therefore gets a SYNTHETIC identity frame with the
+    VENUE_CONTROL_POINTS datum, on a placeholder SUCCEEDED run -- self-test scaffolding that makes the hand-made
+    coordinates canonical by definition, not a calibration of anything."""
     s = stack
     s.ensure_test_client()
     tag = uuid.uuid4().hex[:8]
@@ -103,36 +109,52 @@ def seed_synthetic(stack: Stack) -> tuple[Nav, list[dict]]:
     s.create_user(user, "venue-manager", org, [venue])
     floors = {lvl: s.call(user, "POST", f"/api/v1/venues/{venue}/floors", json={"level": lvl, "name": f"Level {lvl}"}).json()["id"]
               for lvl in (0, 1)}
-    y = {0: 0.0, 1: 4.0}
+    height = {0: 0.0, 1: 4.0}
+    frame = {}
+    for lvl, f in floors.items():
+        session = s.psql(f"INSERT INTO capture_session (organization_id, venue_id, floor_id, operator_id) "
+                         f"VALUES ('{org}', '{venue}', '{f}', 'bench-b4') RETURNING id")
+        scan = s.psql(f"INSERT INTO scan (organization_id, venue_id, capture_session_id) VALUES ('{org}', '{venue}', '{session}') RETURNING id")
+        run = s.psql(f"INSERT INTO pipeline_run (organization_id, venue_id, scan_id, capture_session_id, status, quality, stages, "
+                     f"time_budget_seconds, deadline_at, finished_at, requested_by) VALUES ('{org}', '{venue}', '{scan}', '{session}', "
+                     f"'SUCCEEDED', 'FINAL', '{{}}', 3600, now(), now(), 'bench-b4-synthetic') RETURNING id")
+        s.psql(f"UPDATE pipeline_run SET reconstruction_frame_run_id = id WHERE id = '{run}'")
+        frame[lvl] = s.psql(
+            f"INSERT INTO coordinate_frame (organization_id, venue_id, floor_id, source_run_id, version, metric_status, gravity_status, "
+            f"horizontal_datum, scale, rotation_w, rotation_x, rotation_y, rotation_z, translation_x, translation_y, translation_z, "
+            f"scale_source, gravity_source, method, inputs, residuals, calibrated_by) VALUES ('{org}', '{venue}', '{f}', '{run}', 1, "
+            f"'METRIC', 'ALIGNED', 'VENUE_CONTROL_POINTS', 1, 1, 0, 0, 0, 0, 0, 0, 'CONTROL_POINTS', 'CONTROL_POINTS', "
+            f"'SYNTHETIC_BENCHMARK_SELF_TEST', '{{\"synthetic\": true}}', '{{}}', 'bench-b4') RETURNING id")
+        s.psql(f"UPDATE floor SET current_coordinate_frame_id = '{frame[lvl]}' WHERE id = '{f}'")
     layout = {
         0: {"nodes": {"A": (0, 0), "B": (10, 0), "C": (20, 0), "D": (20, 10), "E": (10, 10), "S": (5, 5), "L": (25, 5)},
             "edges": [("A", "B", 2.0, True), ("B", "C", 2.0, True), ("C", "D", 2.0, True), ("D", "E", 2.0, True),
                       ("B", "E", 0.7, True),    # narrow passage: step-free, but below the accessible clearance
                       ("A", "E", 1.5, False),   # two steps: shortest, not step-free
                       ("A", "S", 2.0, True), ("C", "L", 2.0, True)]},
-        1: {"nodes": {"S": (5, 5), "F": (10, 5), "G": (20, 5), "L": (25, 5)},
+        1: {"nodes": {"S": (5, 5), "F": (10, 5), "G": (20, 5), "L": (25, 5)},  # (x, y) horizontal, canonical metres
             "edges": [("S", "F", 2.0, True), ("F", "G", 2.0, True), ("G", "L", 2.0, True)]}}
     for lvl, spec in layout.items():
         f = floors[lvl]
         for profile in ("STANDARD", "STEP_FREE"):
-            g = s.psql(f"INSERT INTO navigation_graph (organization_id, venue_id, floor_id, profile, status) "
-                       f"VALUES ('{org}', '{venue}', '{f}', '{profile}', 'DRAFT') RETURNING id")
+            g = s.psql(f"INSERT INTO navigation_graph (organization_id, venue_id, floor_id, profile, status, coordinate_frame_id) "
+                       f"VALUES ('{org}', '{venue}', '{f}', '{profile}', 'DRAFT', '{frame[lvl]}') RETURNING id")
             ids = {k: s.psql(f"INSERT INTO navigation_node (organization_id, venue_id, graph_id, floor_id, kind, x, y, z) "
-                             f"VALUES ('{org}', '{venue}', '{g}', '{f}', 'WAYPOINT', {x}, {y[lvl]}, {z}) RETURNING id")
-                   for k, (x, z) in spec["nodes"].items()}
+                             f"VALUES ('{org}', '{venue}', '{g}', '{f}', 'WAYPOINT', {x}, {hy}, {height[lvl]}) RETURNING id")
+                   for k, (x, hy) in spec["nodes"].items()}
             for a, b, clearance, step_free in spec["edges"]:
                 if profile == "STEP_FREE" and not step_free:
                     continue  # the STEP_FREE graph is baked without them (navmesh.build_routing_graphs)
-                (xa, za), (xb, zb) = spec["nodes"][a], spec["nodes"][b]
-                length = ((xa - xb) ** 2 + (za - zb) ** 2) ** 0.5
+                (xa, ya), (xb, yb) = spec["nodes"][a], spec["nodes"][b]
+                length = ((xa - xb) ** 2 + (ya - yb) ** 2) ** 0.5
                 s.psql(f"INSERT INTO navigation_edge (organization_id, venue_id, graph_id, from_node_id, to_node_id, length_m, step_free, "
                        f"bidirectional, min_clearance_m) VALUES ('{org}', '{venue}', '{g}', '{ids[a]}', '{ids[b]}', {length}, "
                        f"{str(step_free).lower()}, true, {clearance})")
             s.psql(f"UPDATE navigation_graph SET status = 'ACTIVE' WHERE id = '{g}'")
 
-    def poi(lvl: int, label: str, category: str, x: float, z: float) -> str:
+    def poi(lvl: int, label: str, category: str, x: float, y: float) -> str:
         r = s.call(user, "POST", f"/api/v1/venues/{venue}/pois", json={"floorId": floors[lvl], "label": label, "category": category,
-                                                                    "tags": [], "x": x, "y": y[lvl], "z": z})
+                                                                    "tags": [], "x": x, "y": y, "z": height[lvl]})
         r.raise_for_status()
         return r.json()["id"]
     poi(0, "Stairs (ground)", "stairs", 5, 5)

@@ -18,10 +18,16 @@ public final class PipelineDtos {
 
     /** Everything a worker needs to execute one stage. `regionGeometry` is set only for an incremental
      * re-scan run (see dev.chaya.api.rescan.RescanService, chaya_worker.stages.region_alignment): the
-     * selected region's polygon, {@code {"points": [[x, y], ...]}} in the floor's venue frame. */
+     * selected region's polygon, {@code {"points": [[x, y], ...]}} in canonical venue metres (x, y horizontal).
+     *
+     * <p>`coordinateFrame` is the ACTIVE calibration of the reconstruction frame this stage's geometry is in (null when
+     * none exists; see dev.chaya.api.frame and docs/coordinate-frames.md); `parentCoordinateFrame` is the parent
+     * reconstruction's, set only for REGION_ALIGNMENT and REGION_SPLICE of an incremental re-scan. Both are
+     * {@link dev.chaya.api.frame.FrameDtos.FrameView#wire()} maps. */
     public record WorkOrder(UUID id, UUID organizationId, UUID venueId, UUID scanId, UUID scanVersionId, String stage,
                             UUID runId, int attempt, Instant deadlineAt, boolean privacyEnabled, String derivedBucket,
-                            String outputPrefix, List<InputRef> inputs, Map<String, Object> regionGeometry) {}
+                            String outputPrefix, List<InputRef> inputs, Map<String, Object> regionGeometry,
+                            Map<String, Object> coordinateFrame, Map<String, Object> parentCoordinateFrame) {}
 
     public record ArtifactReport(String kind, String key, String sha256, String contentType, long sizeBytes,
                                  boolean containsPii, boolean partial) {}

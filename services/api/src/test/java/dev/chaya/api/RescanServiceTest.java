@@ -67,6 +67,7 @@ class RescanServiceTest extends AbstractIntegrationTest {
     void regionMustBeWithinConfiguredAreaBounds() {
         var t = fx.tree();
         UUID parent = fx.finalizedScanVersion(t.org(), t.venue(), t.scan(), t.floor(), 2);
+        fx.calibratedRunForScan(t.org(), t.venue(), t.scan(), t.session(), t.floor(), "FLOOR_LOCAL");
         Actor actor = actorFor(t.org(), t.venue());
 
         RegionGeometry tiny = new RegionGeometry(List.of(
@@ -81,9 +82,20 @@ class RescanServiceTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void cannotRescanAVersionWhoseReconstructionHasNoCalibratedFrame() {
+        var t = fx.tree();
+        UUID parent = fx.finalizedScanVersion(t.org(), t.venue(), t.scan(), t.floor(), 2);
+        Actor actor = actorFor(t.org(), t.venue());
+        // The region is canonical metres; without the parent's calibration it has no location in its reconstruction.
+        assertThatThrownBy(() -> rescan.initiate(actor, t.venue(), t.floor(), new RescanRequest(parent, SQUARE, null)))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.code()).isEqualTo("NOT_CALIBRATED"));
+    }
+
+    @Test
     void initiateCreatesARescanScopedCaptureSessionAndAuditsWhoAndWhichRegion() {
         var t = fx.tree();
         UUID parent = fx.finalizedScanVersion(t.org(), t.venue(), t.scan(), t.floor(), 2);
+        fx.calibratedRunForScan(t.org(), t.venue(), t.scan(), t.session(), t.floor(), "FLOOR_LOCAL");
         Actor actor = actorFor(t.org(), t.venue());
 
         RescanInitiated result = rescan.initiate(actor, t.venue(), t.floor(), new RescanRequest(parent, SQUARE, null));

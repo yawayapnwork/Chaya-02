@@ -1,5 +1,7 @@
 package dev.chaya.api.reconstruction;
 
+import dev.chaya.api.frame.CoordinateFrameService;
+import dev.chaya.api.frame.FrameDtos.FrameView;
 import dev.chaya.api.security.Actor;
 import dev.chaya.api.security.TenantGuard;
 import dev.chaya.api.web.BadRequestException;
@@ -47,17 +49,22 @@ public class ReconstructionService {
 
     public record ArtifactRef(String kind, String contentType, long sizeBytes, String sha256, String url) {}
 
+    /** coordinateFrame: the ACTIVE calibration of the reconstruction frame the artifacts are in, or null when it has never
+     * been calibrated. The .ksplat is always in its reconstruction frame (arbitrary scale/rotation/origin); a viewer places
+     * it in canonical metres only through a canonical frame, and must not overlay canonical POIs or routes otherwise. */
     public record Reconstruction(UUID runId, UUID scanId, UUID floorId, Instant generatedAt, String runStatus,
-                                 String runQuality, List<ArtifactRef> artifacts) {}
+                                 String runQuality, List<ArtifactRef> artifacts, FrameView coordinateFrame) {}
 
     public record StoredArtifact(String bucket, String objectKey, String contentType, long sizeBytes) {}
 
     private final JdbcClient jdbc;
     private final TenantGuard guard;
+    private final CoordinateFrameService frames;
 
-    public ReconstructionService(JdbcClient jdbc, TenantGuard guard) {
+    public ReconstructionService(JdbcClient jdbc, TenantGuard guard, CoordinateFrameService frames) {
         this.jdbc = jdbc;
         this.guard = guard;
+        this.frames = frames;
     }
 
     @Transactional(readOnly = true)
@@ -92,9 +99,10 @@ public class ReconstructionService {
     @Transactional(readOnly = true)
     public Reconstruction get(Actor actor, UUID venueId, UUID runId) {
         guard.requireVenue(actor, venueId);
-        record Row(UUID scanId, UUID floorId, Instant generatedAt, String status, String quality) {}
+        record Row(UUID scanId, UUID floorId, Instant generatedAt, String status, String quality, UUID frameRunId) {}
         Row row = jdbc.sql("""
-                SELECT r.scan_id, cs.floor_id, sr.finished_at, r.status, r.quality
+                SELECT r.scan_id, cs.floor_id, sr.finished_at, r.status, r.quality,
+                       coalesce(r.reconstruction_frame_run_id, r.id) AS frame_run_id
                   FROM pipeline_stage_run sr
                   JOIN pipeline_run r ON r.id = sr.run_id
                   JOIN capture_session cs ON cs.id = r.capture_session_id
@@ -103,7 +111,8 @@ public class ReconstructionService {
                 """)
             .param("run", runId).param("venue", venueId).param("org", actor.organizationId())
             .query((rs, i) -> new Row(rs.getObject("scan_id", UUID.class), rs.getObject("floor_id", UUID.class),
-                rs.getTimestamp("finished_at").toInstant(), rs.getString("status"), rs.getString("quality")))
+                rs.getTimestamp("finished_at").toInstant(), rs.getString("status"), rs.getString("quality"),
+                rs.getObject("frame_run_id", UUID.class)))
             .optional().orElseThrow(() -> new NotFoundException("reconstruction not found"));
 
         List<ArtifactRef> artifacts = jdbc.sql("""
@@ -122,7 +131,8 @@ public class ReconstructionService {
             // ARTIFACT_GENERATION succeeded but the .ksplat itself is missing/was never published: nothing to view.
             throw new NotFoundException("reconstruction has no viewer asset (.ksplat) yet");
         }
-        return new Reconstruction(runId, row.scanId(), row.floorId(), row.generatedAt(), row.status(), row.quality(), artifacts);
+        return new Reconstruction(runId, row.scanId(), row.floorId(), row.generatedAt(), row.status(), row.quality(), artifacts,
+            frames.activeForRun(row.frameRunId()).orElse(null));
     }
 
     @Transactional(readOnly = true)

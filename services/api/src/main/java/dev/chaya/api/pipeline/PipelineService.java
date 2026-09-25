@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.chaya.api.audit.AuditService;
+import dev.chaya.api.frame.CoordinateFrameService;
+import dev.chaya.api.frame.FrameDtos.FrameView;
 import dev.chaya.api.pipeline.PipelineDtos.ArtifactReport;
 import dev.chaya.api.pipeline.PipelineDtos.ArtifactView;
 import dev.chaya.api.pipeline.PipelineDtos.Heartbeat;
@@ -80,7 +82,7 @@ public class PipelineService {
 
     private record RunRow(UUID id, UUID orgId, UUID venueId, UUID scanId, UUID scanVersionId, UUID captureId, String status,
                           List<JobStage> stages, boolean privacy, int budgetSeconds, Instant deadline,
-                          String failureStage) {}
+                          String failureStage, UUID reconstructionFrameRunId) {}
 
     private record JobRow(UUID id, UUID orgId, UUID venueId, UUID scanId, UUID runId, JobStage stage, String status,
                           int retryCount, String workerId, Instant startedAt) {}
@@ -94,12 +96,14 @@ public class PipelineService {
     private final TransactionTemplate tx;
     private final ObjectMapper mapper;
     private final String derivedBucketName;
+    private final CoordinateFrameService frames;
 
     public PipelineService(JdbcClient jdbc, ProcessingJobRepository jobs, AuditService audit,
                            @Qualifier("derived") ObjectStore derived, PipelineProperties props,
                            RescanProperties rescanProps,
-                           TransactionTemplate tx, ObjectMapper mapper, StorageProperties storage) {
+                           TransactionTemplate tx, ObjectMapper mapper, StorageProperties storage, CoordinateFrameService frames) {
         this.derivedBucketName = storage.derivedBucket();
+        this.frames = frames;
         this.jdbc = jdbc;
         this.jobs = jobs;
         this.audit = audit;
@@ -148,6 +152,17 @@ public class PipelineService {
             .param("o", actor.organizationId()).param("v", venueId).param("s", scanId).param("sv", scanVersionId).param("c", captureId)
             .param("stages", json(resolvedPlan.stream().map(Enum::name).toList())).param("p", privacy).param("b", budget)
             .param("by", actor.subject()).query(UUID.class).single();
+        // Full reconstruction: its own SfM frame. Incremental re-scan: the frame its merged output is spliced into -- the
+        // parent version's run's reconstruction frame (docs/coordinate-frames.md, "Incremental re-scans").
+        UUID frameRoot = scanVersionId == null ? runId : jdbc.sql("""
+                SELECT coalesce(p.reconstruction_frame_run_id, p.id)
+                  FROM scan_version v
+                  JOIN scan_version parent ON parent.id = v.parent_version_id
+                  JOIN pipeline_run p ON p.scan_id = parent.scan_id
+                 WHERE v.id = :sv
+                """).param("sv", scanVersionId).query(UUID.class).optional().orElse(null);
+        jdbc.sql("UPDATE pipeline_run SET reconstruction_frame_run_id = :root WHERE id = :r")
+            .param("root", frameRoot).param("r", runId).update();
         UUID first = jobs.enqueueForRun(actor.organizationId(), venueId, scanId, scanVersionId, runId, resolvedPlan.get(0));
         audit.success(actor, venueId, "pipeline.start", "pipeline_run", runId,
             Map.of("privacyEnabled", privacy, "timeBudgetSeconds", budget, "firstJobId", first.toString()));
@@ -211,14 +226,32 @@ public class PipelineService {
     private WorkOrder workOrder(ClaimedJob j) {
         if (j.runId() == null) { // legacy job: no run, no inputs
             return new WorkOrder(j.id(), j.organizationId(), j.venueId(), j.scanId(), j.scanVersionId(), j.stage().name(),
-                null, j.retryCount() + 1, null, false, null, null, List.of(), null);
+                null, j.retryCount() + 1, null, false, null, null, List.of(), null, null, null);
         }
         RunRow run = loadRun(j.runId());
         int attempt = j.retryCount() + 1;
         Map<String, Object> regionGeometry = run.scanVersionId() == null ? null : regionGeometryOf(run.scanVersionId());
+        Map<String, Object> frame = frames.activeForRun(frameSourceFor(run, j.stage())).map(FrameView::wire).orElse(null);
+        Map<String, Object> parentFrame = run.scanVersionId() != null
+            && (j.stage() == JobStage.REGION_ALIGNMENT || j.stage() == JobStage.REGION_SPLICE)
+            ? frames.activeForRun(run.reconstructionFrameRunId()).map(FrameView::wire).orElse(null) : null;
         return new WorkOrder(j.id(), j.organizationId(), j.venueId(), j.scanId(), j.scanVersionId(), j.stage().name(),
             run.id(), attempt, run.deadline(), run.privacy(), derivedBucketName, prefix(run, j.stage(), attempt),
-            inputs(run, j.stage()), regionGeometry);
+            inputs(run, j.stage()), regionGeometry, frame, parentFrame);
+    }
+
+    /**
+     * Which run's reconstruction frame a stage's geometry is in. An incremental re-scan works in its own capture's frame
+     * up to and including REGION_ALIGNMENT, and in the parent reconstruction's frame from REGION_SPLICE on (the splice
+     * writes the region into the parent's geometry). Everything else is in the run's own frame.
+     */
+    private static UUID frameSourceFor(RunRow run, JobStage stage) {
+        UUID root = run.reconstructionFrameRunId() == null ? run.id() : run.reconstructionFrameRunId();
+        if (run.scanVersionId() != null && run.stages().contains(JobStage.REGION_SPLICE)
+                && run.stages().indexOf(stage) < run.stages().indexOf(JobStage.REGION_SPLICE)) {
+            return run.id();
+        }
+        return root;
     }
 
     private Map<String, Object> regionGeometryOf(UUID scanVersionId) {
@@ -386,7 +419,7 @@ public class PipelineService {
             ingestDetectedObjects(job, run, outputs);
         }
         if (ok && job.stage() == JobStage.NAVIGATION_BAKING) {
-            ingestNavigationGraph(run, outputs);
+            ingestNavigationGraph(run, job.stage(), outputs);
         }
 
         if (ok) {
@@ -650,6 +683,7 @@ public class PipelineService {
             log.error("could not read DETECTED_OBJECTS artifact {}: {}", artifact.key(), e.getMessage());
             return;
         }
+        UUID frameId = requireCanonicalArtifactFrame(run, JobStage.SEMANTIC_INDEXING, doc, "DETECTED_OBJECTS");
         UUID floorId = jdbc.sql("SELECT floor_id FROM capture_session WHERE id = :c")
             .param("c", run.captureId()).query(UUID.class).optional().orElse(null);
         if (floorId == null) {
@@ -669,7 +703,7 @@ public class PipelineService {
         List<Map<String, Object>> objects = (List<Map<String, Object>>) doc.getOrDefault("objects", List.of());
         int inserted = 0;
         for (Map<String, Object> obj : objects) {
-            if (insertDetectedPoi(job, run, floorId, obj, embeddingModel)) {
+            if (insertDetectedPoi(job, run, floorId, obj, embeddingModel, frameId)) {
                 inserted++;
             }
         }
@@ -712,7 +746,8 @@ public class PipelineService {
     }
 
     @SuppressWarnings("unchecked")
-    private boolean insertDetectedPoi(JobRow job, RunRow run, UUID floorId, Map<String, Object> obj, String embeddingModel) {
+    private boolean insertDetectedPoi(JobRow job, RunRow run, UUID floorId, Map<String, Object> obj, String embeddingModel,
+                                      UUID frameId) {
         List<Number> position = obj.get("position") instanceof List<?> p ? (List<Number>) p : null;
         List<Number> embedding = obj.get("embedding") instanceof List<?> e ? (List<Number>) e : null;
         if (position == null || position.size() != 3 || embedding == null || embedding.isEmpty()) {
@@ -732,13 +767,13 @@ public class PipelineService {
         UUID poiId = jdbc.sql("INSERT INTO poi (organization_id, venue_id, floor_id) VALUES (:o, :v, :f) RETURNING id")
             .param("o", run.orgId()).param("v", run.venueId()).param("f", floorId).query(UUID.class).single();
         jdbc.sql("INSERT INTO poi_version (organization_id, venue_id, poi_id, version_number, label, tags, x, y, z, "
-                + "embedding, embedding_model, source, detection_confidence, bounding_box, pipeline_run_id, created_by) "
+                + "embedding, embedding_model, source, detection_confidence, bounding_box, pipeline_run_id, coordinate_frame_id, created_by) "
                 + "VALUES (:o, :v, :p, 1, :label, '{}', :x, :y, :z, CAST(:emb AS vector), :model, 'AUTO_DETECTED', :conf, "
-                + "CAST(:bbox AS jsonb), :run, 'system:semantic-indexing')")
+                + "CAST(:bbox AS jsonb), :run, :frame, 'system:semantic-indexing')")
             .param("o", run.orgId()).param("v", run.venueId()).param("p", poiId).param("label", label)
             .param("x", position.get(0).doubleValue()).param("y", position.get(1).doubleValue()).param("z", position.get(2).doubleValue())
             .param("emb", vectorLiteral(embedding)).param("model", embeddingModel).param("conf", confidence)
-            .param("bbox", bboxJson).param("run", run.id()).update();
+            .param("bbox", bboxJson).param("run", run.id()).param("frame", frameId).update();
         return true;
     }
 
@@ -759,7 +794,7 @@ public class PipelineService {
      * dev.chaya.api.navigation.RouteService always finds at most one ACTIVE graph to route against. A
      * missing or unparseable artifact is logged and skipped, same as ingestDetectedObjects.
      */
-    private void ingestNavigationGraph(RunRow run, List<ArtifactReport> outputs) {
+    private void ingestNavigationGraph(RunRow run, JobStage stage, List<ArtifactReport> outputs) {
         ArtifactReport artifact = outputs.stream().filter(a -> a.kind().equals("NAVIGATION_GRAPH")).findFirst().orElse(null);
         if (artifact == null) {
             return;
@@ -771,6 +806,7 @@ public class PipelineService {
             log.error("could not read NAVIGATION_GRAPH artifact {}: {}", artifact.key(), e.getMessage());
             return;
         }
+        UUID frameId = requireCanonicalArtifactFrame(run, stage, doc, "NAVIGATION_GRAPH");
         UUID floorId = jdbc.sql("SELECT floor_id FROM capture_session WHERE id = :c")
             .param("c", run.captureId()).query(UUID.class).optional().orElse(null);
         if (floorId == null) {
@@ -784,7 +820,7 @@ public class PipelineService {
         int ingested = 0;
         for (String profile : List.of("STANDARD", "STEP_FREE")) {
             Object graphRaw = graphs.get(profile);
-            if (graphRaw instanceof Map<?, ?> graph && ingestOneNavigationGraph(run, floorId, profile, graph)) {
+            if (graphRaw instanceof Map<?, ?> graph && ingestOneNavigationGraph(run, floorId, profile, graph, frameId)) {
                 ingested++;
             }
         }
@@ -797,7 +833,7 @@ public class PipelineService {
     }
 
     @SuppressWarnings("unchecked")
-    private boolean ingestOneNavigationGraph(RunRow run, UUID floorId, String profile, Map<?, ?> graph) {
+    private boolean ingestOneNavigationGraph(RunRow run, UUID floorId, String profile, Map<?, ?> graph, UUID frameId) {
         Object nodesRaw = graph.get("nodes");
         Object edgesRaw = graph.get("edges");
         List<Map<String, Object>> nodesDoc = nodesRaw instanceof List<?> l ? (List<Map<String, Object>>) l : List.of();
@@ -812,9 +848,10 @@ public class PipelineService {
             jdbc.sql("UPDATE navigation_graph SET status = 'RETIRED' WHERE id = :g").param("g", previousActive).update();
         }
 
-        UUID graphId = jdbc.sql("INSERT INTO navigation_graph (organization_id, venue_id, floor_id, profile, status) "
-                + "VALUES (:o, :v, :f, :p, 'DRAFT') RETURNING id")
-            .param("o", run.orgId()).param("v", run.venueId()).param("f", floorId).param("p", profile).query(UUID.class).single();
+        UUID graphId = jdbc.sql("INSERT INTO navigation_graph (organization_id, venue_id, floor_id, profile, status, coordinate_frame_id) "
+                + "VALUES (:o, :v, :f, :p, 'DRAFT', :frame) RETURNING id")
+            .param("o", run.orgId()).param("v", run.venueId()).param("f", floorId).param("p", profile).param("frame", frameId)
+            .query(UUID.class).single();
 
         Map<String, UUID> nodeIds = new LinkedHashMap<>();
         for (Map<String, Object> n : nodesDoc) {
@@ -847,6 +884,24 @@ public class PipelineService {
         }
         jdbc.sql("UPDATE navigation_graph SET status = 'ACTIVE' WHERE id = :g").param("g", graphId).update();
         return true;
+    }
+
+    /**
+     * A canonical-frame artifact (DETECTED_OBJECTS, NAVIGATION_GRAPH) must name the frame its coordinates are in, and that
+     * must be the frame this stage was given: the ACTIVE canonical calibration of its reconstruction frame. Anything
+     * else -- no frame, a superseded one (recalibrated while the stage ran), a non-canonical one -- is refused, so no
+     * coordinate ever enters the database in units or axes nobody can identify.
+     */
+    @SuppressWarnings("unchecked")
+    private UUID requireCanonicalArtifactFrame(RunRow run, JobStage stage, Map<String, Object> doc, String kind) {
+        Object claimed = doc.get("coordinate_frame") instanceof Map<?, ?> m ? ((Map<String, Object>) m).get("id") : null;
+        FrameView expected = frames.activeForRun(frameSourceFor(run, stage)).filter(FrameView::canonical).orElse(null);
+        if (expected == null || claimed == null || !expected.id().toString().equals(String.valueOf(claimed))) {
+            throw new ApiException(HttpStatus.CONFLICT, "ARTIFACT_FRAME_MISMATCH",
+                kind + " must be in the reconstruction's current canonical coordinate frame "
+                    + (expected == null ? "(none exists)" : expected.id()) + " but names " + claimed);
+        }
+        return expected.id();
     }
 
     // =========================================================================================
@@ -982,7 +1037,8 @@ public class PipelineService {
         return new RunRow(rs.getObject("id", UUID.class), rs.getObject("organization_id", UUID.class), rs.getObject("venue_id", UUID.class),
             rs.getObject("scan_id", UUID.class), rs.getObject("scan_version_id", UUID.class), rs.getObject("capture_session_id", UUID.class),
             rs.getString("status"), stages, rs.getBoolean("privacy_enabled"), rs.getInt("time_budget_seconds"),
-            rs.getTimestamp("deadline_at").toInstant(), rs.getString("failure_stage"));
+            rs.getTimestamp("deadline_at").toInstant(), rs.getString("failure_stage"),
+            rs.getObject("reconstruction_frame_run_id", UUID.class));
     }
 
     private JobRow lockJob(UUID jobId) {

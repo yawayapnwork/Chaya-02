@@ -6,6 +6,7 @@ import { NotSignedInError, signIn, userManager } from "@/lib/auth";
 import { clearPublicViewerSession, publicViewerVenueId, setPublicViewerSession } from "@/lib/session";
 import { ApiError, type Floor, type Venue, listFloors, listVenues } from "@/lib/capture-api";
 import { type Poi, listPois } from "@/lib/poi-api";
+import { isCanonical, toCanonical } from "@/lib/coordinate-frame";
 import {
   type Reconstruction,
   type ReconstructionVersion,
@@ -287,6 +288,15 @@ export default function ViewerWorkspace() {
 
   const routeWaypointsOnCurrentFloor = routeResponse ? routeResponse.waypoints.filter((w) => w.floorId === floorId) : null;
 
+  // POIs and routes are canonical venue metres; they are drawn on the splat only through its calibrated frame, and only
+  // POIs placed in that same frame (docs/coordinate-frames.md).
+  const frame = reconstruction?.coordinateFrame ?? null;
+  const canonicalTransform = useMemo(() => (isCanonical(frame) ? toCanonical(frame) : null), [frame]);
+  const placedPois = useMemo(
+    () => (canonicalTransform && frame ? pois.filter((p) => p.frameStatus === "CURRENT" && p.coordinateFrameId === frame.id) : []),
+    [pois, canonicalTransform, frame],
+  );
+
   if (phase === "checking") return <p className="p-8">Loading…</p>;
 
   if (phase === "signed-out") {
@@ -376,8 +386,9 @@ export default function ViewerWorkspace() {
             <SplatViewerCanvas
               key={blobUrl}
               blobUrl={blobUrl}
+              toCanonical={canonicalTransform}
               deviceProfile={deviceProfile}
-              pois={pois}
+              pois={placedPois}
               selectedPoiId={selectedPoiId}
               onSelectPoi={setSelectedPoiId}
               routeWaypoints={routeWaypointsOnCurrentFloor}
@@ -419,6 +430,12 @@ export default function ViewerWorkspace() {
                   <dt>Generated</dt><dd>{formatDate(reconstruction.generatedAt)}</dd>
                   <dt>Run status</dt><dd>{reconstruction.runStatus}</dd>
                   <dt>Quality</dt><dd>{reconstruction.runQuality ?? "—"}</dd>
+                  <dt>Coordinates</dt>
+                  <dd data-testid="coordinate-frame-status">
+                    {isCanonical(frame)
+                      ? `Calibrated, metres (${frame.horizontalDatum === "VENUE_CONTROL_POINTS" ? "venue datum" : "floor-local"}, v${frame.version})`
+                      : "Not calibrated: POIs and routes are not drawn on this reconstruction"}
+                  </dd>
                   {sceneLoad.phase === "ready" && <>
                     <dt>Splats</dt><dd>{sceneLoad.splatCount.toLocaleString()}</dd>
                   </>}

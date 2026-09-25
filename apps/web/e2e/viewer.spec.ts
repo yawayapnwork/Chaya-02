@@ -55,12 +55,13 @@ test("once a reconstruction exists, its version appears in the picker and a down
   ]);
   await mockJson(page, `**/mock-api/api/v1/venues/${VENUE_ID}/pois`, [
     { id: "poi-1", floorId: FLOOR_ID, spaceId: null, version: 1, label: "Main entrance", category: "entrance",
-      description: null, tags: [], x: 0, y: 0, z: 0 },
+      description: null, tags: [], x: 0, y: 0, z: 0, coordinateFrameId: null, frameStatus: "UNBOUND" },
   ]);
   await mockJson(page, `**/mock-api/api/v1/venues/${VENUE_ID}/reconstructions/${RUN_ID}`, {
     runId: RUN_ID, scanId: "scan-1", floorId: FLOOR_ID, generatedAt, runStatus: "FAILED", runQuality: null,
     artifacts: [{ kind: "KSPLAT", contentType: "application/octet-stream", sizeBytes: 12345, sha256: "a".repeat(64),
       url: `/api/v1/venues/${VENUE_ID}/reconstructions/${RUN_ID}/artifacts/KSPLAT` }],
+    coordinateFrame: null,
   });
   // Never resolves: this test only checks that a real, authenticated download request was made for the
   // real artifact URL the backend returned -- not that WebGL can render it in a headless browser.
@@ -70,7 +71,33 @@ test("once a reconstruction exists, its version appears in the picker and a down
   await page.goto(`/viewer?link=good-secret`);
   await expect(page.getByText("Points of interest (1)")).toBeVisible();
   await expect(page.getByRole("button", { name: "Main entrance" })).toBeVisible();
+  await expect(page.getByTestId("coordinate-frame-status")).toHaveText(/Not calibrated: POIs and routes are not drawn/);
   const request = await artifactRequest;
   expect(request.headers()["x-chaya-viewer-token"]).toBe("cvt_test");
   expect(request.headers()["authorization"]).toBeUndefined();
+});
+
+test("a calibrated reconstruction says so, with its datum and version", async ({ page }) => {
+  const expiresAt = new Date(Date.now() + 60_000).toISOString();
+  const generatedAt = new Date().toISOString();
+  await mockJson(page, "**/mock-api/api/v1/public/viewer-token", { token: "cvt_test", expiresAt, venueId: VENUE_ID });
+  await mockJson(page, `**/mock-api/api/v1/venues/${VENUE_ID}/floors`, [{ id: FLOOR_ID, level: 0, name: "Ground Floor" }]);
+  await mockJson(page, `**/mock-api/api/v1/venues/${VENUE_ID}/floors/${FLOOR_ID}/reconstructions`, [
+    { runId: RUN_ID, floorId: FLOOR_ID, generatedAt, runStatus: "SUCCEEDED", runQuality: "FINAL" },
+  ]);
+  await mockJson(page, `**/mock-api/api/v1/venues/${VENUE_ID}/pois`, []);
+  // A frame record in the API's shape (an identity transform): contract data for this UI check, not a calibration.
+  await mockJson(page, `**/mock-api/api/v1/venues/${VENUE_ID}/reconstructions/${RUN_ID}`, {
+    runId: RUN_ID, scanId: "scan-1", floorId: FLOOR_ID, generatedAt, runStatus: "SUCCEEDED", runQuality: "FINAL",
+    artifacts: [{ kind: "KSPLAT", contentType: "application/octet-stream", sizeBytes: 12345, sha256: "a".repeat(64),
+      url: `/api/v1/venues/${VENUE_ID}/reconstructions/${RUN_ID}/artifacts/KSPLAT` }],
+    coordinateFrame: { id: "frame-1", sourceRunId: RUN_ID, floorId: FLOOR_ID, version: 2, status: "ACTIVE", canonical: true,
+      metricStatus: "METRIC", gravityStatus: "ALIGNED", horizontalDatum: "FLOOR_LOCAL", scale: 1,
+      rotation: { w: 1, x: 0, y: 0, z: 0 }, translation: { x: 0, y: 0, z: 0 }, method: "MEASURED_DISTANCES+RECONSTRUCTED_FLOOR_PLANE",
+      calibratedAt: generatedAt },
+  });
+  await page.route(`**/mock-api/api/v1/venues/${VENUE_ID}/reconstructions/${RUN_ID}/artifacts/KSPLAT`, () => {});
+
+  await page.goto(`/viewer?link=good-secret`);
+  await expect(page.getByTestId("coordinate-frame-status")).toHaveText("Calibrated, metres (floor-local, v2)");
 });

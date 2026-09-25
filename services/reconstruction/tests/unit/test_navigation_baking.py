@@ -7,14 +7,16 @@ import numpy as np
 import pytest
 
 from chaya_worker.navmesh import (
+    CanonicalPlane,
     Polygon,
     build_recast_argv,
     build_routing_graphs,
     carve_obstacles,
+    obstacle_band_mask,
     parse_recast_polygons,
     polygon_centroid,
     polygon_slope_degrees,
-    project_to_plane,
+    select_floor_plane,
     shared_edge_length,
     triangulate_walkable_area,
     write_walkable_obj,
@@ -26,12 +28,28 @@ def _flat_floor_grid(n: int = 8, extent: float = 4.0) -> np.ndarray:
     return np.stack([xs.ravel(), ys.ravel(), np.zeros(xs.size)], axis=1)
 
 
-def test_project_to_plane_is_a_real_orthonormal_projection():
-    points = np.array([[1.0, 2.0, 5.0], [3.0, 4.0, 5.0]])
-    uv = project_to_plane(points, plane_point=np.array([0.0, 0.0, 5.0]), normal=np.array([0.0, 0.0, 1.0]))
-    assert uv.shape == (2, 2)
-    # A flat floor plane's normal is z; projecting drops z and keeps x/y (up to the chosen u/v basis).
-    assert np.allclose(np.linalg.norm(uv[0]), np.linalg.norm(points[0][:2]), atol=1e-6)
+def _plane(normal, height, inliers):
+    return CanonicalPlane(np.array(normal, dtype=float) / np.linalg.norm(normal), height, np.arange(inliers))
+
+
+def test_select_floor_plane_takes_the_lowest_well_supported_horizontal_plane():
+    floor = _plane([0, 0, 1], 0.0, 4000)
+    ceiling = _plane([0, 0, 1], 2.8, 9000)
+    table = _plane([0, 0, 1], 0.75, 300)  # horizontal but too little support to be the floor
+    wall = _plane([1, 0, 0], 1.2, 12000)
+    sub_basement_speck = _plane([0, 0, 1], -1.0, 100)
+    assert select_floor_plane([ceiling, wall, table, floor, sub_basement_speck], max_tilt_deg=10) is floor
+
+
+def test_select_floor_plane_refuses_when_nothing_is_horizontal_in_canonical_terms():
+    tilted = _plane([0, np.sin(np.radians(30)), np.cos(np.radians(30))], 0.0, 5000)
+    assert select_floor_plane([tilted, _plane([1, 0, 0], 0, 5000)], max_tilt_deg=10) is None
+
+
+def test_obstacle_band_keeps_only_heights_that_block_a_walking_agent():
+    pts = np.array([[0, 0, 0.1], [0, 0, 0.5], [0, 0, 1.7], [0, 0, 2.5]])  # floor clutter, knee, head, ceiling
+    mask = obstacle_band_mask(pts, 0.0, agent_max_climb=0.4, agent_height=1.8)
+    assert mask.tolist() == [False, True, True, False]
 
 
 def test_triangulate_walkable_area_needs_at_least_four_points():
@@ -41,7 +59,7 @@ def test_triangulate_walkable_area_needs_at_least_four_points():
 
 def test_triangulate_and_carve_real_floor_geometry():
     floor = _flat_floor_grid()
-    uv = project_to_plane(floor, plane_point=floor.mean(axis=0), normal=np.array([0.0, 0.0, 1.0]))
+    uv = floor[:, :2]  # canonical horizontal coordinates
     triangles = triangulate_walkable_area(uv)
     assert len(triangles) > 0
 
@@ -53,7 +71,7 @@ def test_triangulate_and_carve_real_floor_geometry():
 
 def test_carve_obstacles_keeps_everything_walkable_when_there_are_no_obstacles():
     floor = _flat_floor_grid()
-    uv = project_to_plane(floor, plane_point=floor.mean(axis=0), normal=np.array([0.0, 0.0, 1.0]))
+    uv = floor[:, :2]  # canonical horizontal coordinates
     triangles = triangulate_walkable_area(uv)
     mask = carve_obstacles(uv, triangles, np.zeros((0, 2)), agent_radius=0.5)
     assert mask.all()
@@ -61,7 +79,7 @@ def test_carve_obstacles_keeps_everything_walkable_when_there_are_no_obstacles()
 
 def test_write_walkable_obj_only_includes_walkable_triangles(tmp_path):
     floor = _flat_floor_grid(n=4)
-    uv = project_to_plane(floor, plane_point=floor.mean(axis=0), normal=np.array([0.0, 0.0, 1.0]))
+    uv = floor[:, :2]  # canonical horizontal coordinates
     triangles = triangulate_walkable_area(uv)
     mask = np.zeros(len(triangles), dtype=bool)
     mask[0] = True  # keep exactly one triangle

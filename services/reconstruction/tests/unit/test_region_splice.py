@@ -7,6 +7,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from chaya_worker.frames import Similarity
 from chaya_worker.ply import GaussianCloud
 from chaya_worker.region_splice import point_in_polygon, polygon_area, splice_region, transform_gaussians
 
@@ -71,27 +72,41 @@ def test_transform_gaussians_rejects_non_4x4():
         transform_gaussians(cloud, np.eye(3))
 
 
+def _region(positions: np.ndarray) -> GaussianCloud:
+    n = len(positions)
+    return GaussianCloud(
+        positions=np.asarray(positions, dtype=np.float32),
+        scales_log=np.ones((n, 3), dtype=np.float32),  # distinguishable from the global cloud's zeros
+        rotations_wxyz=np.tile(np.array([1.0, 0, 0, 0], dtype=np.float32), (n, 1)),
+        opacity_logit=np.ones(n, dtype=np.float32) * 5.0,
+        colors_dc=np.ones((n, 3), dtype=np.float32),
+    )
+
+
+def test_transform_gaussians_scales_positions_and_gaussian_extents_with_a_similarity():
+    cloud = _grid_cloud(nx=2, ny=2)
+    t = Similarity(2.5, np.eye(3), np.array([1.0, 0.0, 0.0]))
+    moved = transform_gaussians(cloud, t)
+    np.testing.assert_allclose(moved.positions, 2.5 * cloud.positions + [1.0, 0.0, 0.0], atol=1e-5)
+    np.testing.assert_allclose(moved.scales(), 2.5 * cloud.scales(), rtol=1e-6)
+
+
 def test_splice_region_replaces_only_the_polygon_and_leaves_the_rest_untouched():
     global_cloud = _grid_cloud(nx=10, ny=10, spacing=1.0)  # a 10x10m grid, one point per meter
     # Select the region x in [2, 5], y in [2, 5]: real grid points at x,y in {2,3,4} fall strictly inside.
     polygon = np.array([[2.0, 2.0], [2.0, 5.0], [5.0, 5.0], [5.0, 2.0]])
+    inside_region = [[3.0, 3.0, 0.0], [3.5, 4.0, 0.0], [4.5, 2.5, 1.0]]
+    outside_region = [[0.5, 0.5, 0.0], [6.0, 6.0, 0.0]]  # captured beyond the polygon: must not be appended
+    region_cloud = _region(np.array(inside_region + outside_region))
 
-    n_region = 5
-    region_cloud = GaussianCloud(
-        positions=np.zeros((n_region, 3), dtype=np.float32),  # already "aligned" to sit at the origin corner
-        scales_log=np.ones((n_region, 3), dtype=np.float32),  # distinguishable from the global cloud's zeros
-        rotations_wxyz=np.tile(np.array([1.0, 0, 0, 0], dtype=np.float32), (n_region, 1)),
-        opacity_logit=np.ones(n_region, dtype=np.float32) * 5.0,
-        colors_dc=np.ones((n_region, 3), dtype=np.float32),
-    )
-
-    merged, report = splice_region(global_cloud, region_cloud, polygon)
+    merged, report = splice_region(global_cloud, region_cloud, polygon, Similarity.identity())
 
     inside_mask = point_in_polygon(global_cloud.positions[:, :2].astype(np.float64), polygon)
     expected_removed = int(inside_mask.sum())
     assert report["removed_from_global"] == expected_removed
-    assert report["added_from_region"] == n_region
-    assert report["total_after"] == len(global_cloud) - expected_removed + n_region
+    assert report["added_from_region"] == len(inside_region)
+    assert report["discarded_from_region_outside_polygon"] == len(outside_region)
+    assert report["total_after"] == len(global_cloud) - expected_removed + len(inside_region)
     assert len(merged) == report["total_after"]
 
     # Every point outside the polygon must survive completely unchanged (same positions, in the same
@@ -99,16 +114,28 @@ def test_splice_region_replaces_only_the_polygon_and_leaves_the_rest_untouched()
     outside_original = global_cloud.positions[~inside_mask]
     outside_merged = merged.positions[: len(outside_original)]
     np.testing.assert_array_equal(outside_original, outside_merged)
-
-    # The new region's distinguishing opacity value must appear in the merged cloud.
-    assert np.any(merged.opacity_logit == 5.0)
+    assert np.sum(merged.opacity_logit == 5.0) == len(inside_region)
 
 
-def test_splice_region_refuses_an_empty_aligned_region():
+def test_splice_region_tests_the_polygon_in_canonical_coordinates_not_reconstruction_units():
+    # The clouds are in a reconstruction frame 0.5 units = 1 m, shifted by 10 m; the polygon is canonical metres.
+    to_canonical = Similarity(2.0, np.eye(3), np.array([10.0, 0.0, 0.0]))
+    global_cloud = _grid_cloud(nx=10, ny=10, spacing=0.5)  # canonical x in [10, 19], y in [0, 9]
+    polygon = np.array([[12.0, 2.0], [12.0, 5.0], [15.0, 5.0], [15.0, 2.0]])
+    region_cloud = _region(np.array([[1.5, 1.5, 0.0]]))  # canonical (13, 3): inside
+    merged, report = splice_region(global_cloud, region_cloud, polygon, to_canonical)
+    canonical_xy = to_canonical.apply(global_cloud.positions)[:, :2]
+    assert report["removed_from_global"] == int(point_in_polygon(canonical_xy, polygon).sum()) > 0
+    assert report["added_from_region"] == 1
+
+
+def test_splice_region_refuses_an_empty_aligned_region_or_one_entirely_outside_the_polygon():
     global_cloud = _grid_cloud(nx=3, ny=3)
     empty_region = GaussianCloud(
         positions=np.zeros((0, 3), dtype=np.float32), scales_log=np.zeros((0, 3), dtype=np.float32),
         rotations_wxyz=np.zeros((0, 4), dtype=np.float32), opacity_logit=np.zeros(0, dtype=np.float32),
         colors_dc=np.zeros((0, 3), dtype=np.float32))
     with pytest.raises(ValueError):
-        splice_region(global_cloud, empty_region, SQUARE)
+        splice_region(global_cloud, empty_region, SQUARE, Similarity.identity())
+    with pytest.raises(ValueError):
+        splice_region(global_cloud, _region(np.array([[5.0, 5.0, 0.0]])), SQUARE, Similarity.identity())

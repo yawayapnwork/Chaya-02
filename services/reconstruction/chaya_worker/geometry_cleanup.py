@@ -17,7 +17,30 @@ import numpy as np
 from .ply import GaussianCloud
 
 FLOOR, WALL, FURNITURE, CLUTTER, UNKNOWN = "floor", "wall", "furniture", "clutter", "unknown"
+CEILING = "ceiling"  # a plane classification only (never a semantic segmentation class)
 SEMANTIC_CLASSES = (FLOOR, WALL, FURNITURE, CLUTTER)
+
+
+def characteristic_spacing(positions: np.ndarray, *, sample: int = 20000, seed: int = 0) -> float:
+    """Median distance from a point to its nearest neighbour, in the cloud's own units.
+
+    GEOMETRIC_CLEANUP and PLANE_FITTING run before any metric calibration exists, in reconstruction units whose
+    scale is arbitrary (chaya_worker.frames). A distance threshold written in metres would mean something
+    different in every reconstruction. Expressing those thresholds as multiples of this spacing makes them
+    scale-invariant instead: the same fraction of structure is affected whatever the reconstruction's scale.
+    Deterministic for a given cloud (fixed-seed subsample)."""
+    from scipy.spatial import cKDTree  # noqa: PLC0415
+
+    p = np.asarray(positions, dtype=np.float64)
+    if len(p) < 2:
+        raise ValueError("need at least 2 points to measure spacing")
+    tree = cKDTree(p)
+    query = p if len(p) <= sample else p[np.random.default_rng(seed).choice(len(p), sample, replace=False)]
+    dist, _ = tree.query(query, k=2)
+    spacing = float(np.median(dist[:, 1]))
+    if not spacing > 0:
+        raise ValueError("the cloud has no measurable point spacing (duplicate points)")
+    return spacing
 
 
 def _o3d_pointcloud(positions: np.ndarray, colors01: np.ndarray | None = None):
@@ -86,7 +109,7 @@ def semantic_aware_mask(cloud: GaussianCloud, labels: np.ndarray, *, radius: flo
 class FittedPlane:
     equation: tuple[float, float, float, float]  # ax + by + cz + d = 0, normalised (a,b,c) unit normal
     inlier_indices: np.ndarray  # indices into the point cloud this plane was fit on
-    classification: str  # "floor" | "wall" | "other"
+    classification: str  # "floor" | "ceiling" | "wall" | "other" ("ceiling" only when gravity is known)
     confidence: float  # fraction of this plane's inliers whose semantic label agrees with `classification`
 
 
@@ -130,27 +153,51 @@ def fit_planes(positions: np.ndarray, *, distance_threshold: float, ransac_n: in
 
     up = _estimate_up_axis(positions, raw)
     for normal, global_idx in raw:
-        angle_to_up = np.degrees(np.arccos(np.clip(abs(float(np.dot(normal, up))), 0.0, 1.0)))
-        if angle_to_up <= 25.0:
-            classification = FLOOR
-        elif angle_to_up >= 65.0:
-            classification = WALL
-        else:
-            classification = "other"
-        confidence = 1.0
-        if labels is not None:
-            plane_labels = labels[global_idx]
-            agree_with = {FLOOR: FLOOR, WALL: WALL}.get(classification)
-            confidence = float((plane_labels == agree_with).mean()) if agree_with else float((plane_labels == UNKNOWN).mean())
+        classification = _classify(normal, up)
         planes.append(FittedPlane(tuple(float(v) for v in (*normal, -float(np.dot(normal, positions[global_idx].mean(axis=0))))),
-                                  global_idx, classification, confidence))
+                                  global_idx, classification, _agreement(classification, global_idx, labels)))
     return planes
 
 
+def _classify(normal: np.ndarray, up: np.ndarray) -> str:
+    angle_to_up = np.degrees(np.arccos(np.clip(abs(float(np.dot(normal, up))), 0.0, 1.0)))
+    if angle_to_up <= 25.0:
+        return FLOOR
+    if angle_to_up >= 65.0:
+        return WALL
+    return "other"
+
+
+def _agreement(classification: str, inlier_idx: np.ndarray, labels: np.ndarray | None) -> float:
+    if labels is None:
+        return 1.0
+    plane_labels = labels[inlier_idx]
+    agree_with = {FLOOR: FLOOR, WALL: WALL}.get(classification)
+    return float((plane_labels == agree_with).mean()) if agree_with else float((plane_labels == UNKNOWN).mean())
+
+
+def reclassify_planes(planes: list[FittedPlane], positions: np.ndarray, up: np.ndarray, reference_point: np.ndarray,
+                      labels: np.ndarray | None = None) -> list[FittedPlane]:
+    """Re-classifies already-fitted planes against a known up direction (chaya_worker.gravity, or a calibrated
+    frame's), in the same frame as `positions`. A horizontal plane below `reference_point` (the camera centroid)
+    is the floor, one above it a ceiling -- a distinction the up-axis-free classification in fit_planes cannot make."""
+    up = np.asarray(up, dtype=np.float64) / np.linalg.norm(up)
+    out = []
+    for p in planes:
+        normal = np.asarray(p.equation[:3], dtype=np.float64)
+        classification = _classify(normal, up)
+        if classification == FLOOR:
+            centre = positions[p.inlier_indices].mean(axis=0)
+            classification = FLOOR if float((np.asarray(reference_point) - centre) @ up) > 0 else CEILING
+        out.append(FittedPlane(p.equation, p.inlier_indices, classification, _agreement(classification, p.inlier_indices, labels)))
+    return out
+
+
 def _estimate_up_axis(positions: np.ndarray, raw_planes: list[tuple[np.ndarray, np.ndarray]]) -> np.ndarray:
-    """The axis most of the extracted plane normals cluster around or against (real planar surfaces in an
-    indoor scan are overwhelmingly floors/ceilings/walls, so this is a robust, data-driven up estimate --
-    not a hardcoded Y-up assumption, since COLMAP's world frame has no fixed convention)."""
+    """The axis most of the extracted plane normals cluster around or against. A weak, sign-free guess used only
+    for the provisional classification inside fit_planes; it can pick a dominant wall normal. PLANE_FITTING
+    replaces it with chaya_worker.gravity's estimate (or the calibrated frame's up) via reclassify_planes, and
+    nothing that needs the true up direction ever reads this one."""
     normals = np.array([n for n, _ in raw_planes])
     normals = np.where(normals[:, [0]] < 0, -normals, normals) if len(normals) else normals  # sign is arbitrary; pick a canonical half
     cov = normals.T @ normals

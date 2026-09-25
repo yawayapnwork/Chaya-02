@@ -1,0 +1,133 @@
+{
+  "SYNTHETIC": "Mathematical unit-test fixture only. Not a venue, not a reconstruction, not a measurement.",
+  "generator": "packages/contracts/fixtures/generate_synthetic_calibration.py",
+  "convention": "X_canonical = scale * R(rotation) * X_reconstruction + translation; quaternion (w, x, y, z)",
+  "truth": {
+    "scale": 0.37,
+    "rotation": {
+      "w": 0.4461978131098087,
+      "x": 0.2712060667738482,
+      "y": -0.7232161780635952,
+      "z": 0.4520101112897469
+    },
+    "translation": {
+      "x": 12.5,
+      "y": -4.25,
+      "z": 1.75
+    }
+  },
+  "controlPoints": [
+    {
+      "label": "cp0",
+      "reconstruction": [
+        11.27704290953562,
+        33.930855942601134,
+        4.1447653840620795
+      ],
+      "venue": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "label": "cp1",
+      "reconstruction": [
+        1.445484815650942,
+        16.7275461808347,
+        -4.508622405460453
+      ],
+      "venue": [
+        8.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "label": "cp2",
+      "reconstruction": [
+        1.6253326453103032,
+        23.931896298787873,
+        -19.035516860476935
+      ],
+      "venue": [
+        8.0,
+        6.0,
+        0.0
+      ]
+    },
+    {
+      "label": "cp3",
+      "reconstruction": [
+        11.456890739194982,
+        41.13520606055431,
+        -10.382129070954402
+      ],
+      "venue": [
+        0.0,
+        6.0,
+        0.0
+      ]
+    },
+    {
+      "label": "cp4",
+      "reconstruction": [
+        12.227862737196089,
+        26.26037757492412,
+        -8.698491900817436
+      ],
+      "venue": [
+        4.0,
+        3.0,
+        2.4
+      ]
+    }
+  ],
+  "distanceReferences": [
+    {
+      "label": "wall A",
+      "a": [
+        11.27704290953562,
+        33.930855942601134,
+        4.1447653840620795
+      ],
+      "b": [
+        1.445484815650942,
+        16.7275461808347,
+        -4.508622405460453
+      ],
+      "measuredMetres": 8.0
+    },
+    {
+      "label": "door jamb",
+      "a": [
+        8.999001215723812,
+        36.83437862011271,
+        -12.545476018335036
+      ],
+      "b": [
+        14.053591805525299,
+        34.497254892563625,
+        -13.641952660618792
+      ],
+      "measuredMetres": 2.1
+    }
+  ],
+  "gravity": {
+    "upReconstruction": [
+      0.8905707229650237,
+      -0.4117789424729345,
+      -0.19318874173570943
+    ],
+    "floorPointReconstruction": [
+      7.650157900881986,
+      29.881064821256448,
+      -3.942553188681032
+    ],
+    "cameraCentroidReconstruction": [
+      11.260579750740192,
+      28.211690730149957,
+      -4.725750790312286
+    ]
+  }
+}
