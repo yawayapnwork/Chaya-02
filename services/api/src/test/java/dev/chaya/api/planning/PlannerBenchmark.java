@@ -30,13 +30,27 @@ public final class PlannerBenchmark {
 
     private record Fixture(String name, PlanRequest request) {}
 
-    private record Row(String fixture, String strategy, int waypoints, double routeMeters, CoverageMetrics m, double baselineCoverage, Double millis) {}
+    /**
+     * @param lapSeconds         duration of the recon lap, from the trajectory's own timestamps
+     * @param routeSeconds       walking + dwell time of the secondary route: length / walkSpeed + waypoints * dwell (the planner's
+     *                           own formula, applied to every strategy); 0 for the lap alone
+     * @param redundantWaypoints waypoints whose marginal covered area, added in route order, is below {@link #REDUNDANT_GAIN_M2};
+     *                           -1 where there are no waypoints to judge
+     */
+    private record Row(String fixture, String strategy, int waypoints, double routeMeters, CoverageMetrics m, double baselineCoverage, Double millis,
+                       double lapSeconds, double routeSeconds, int redundantWaypoints) {}
+
+    /** A waypoint adding less covered area than four 0.25 m grid cells is counted as redundant. */
+    static final double REDUNDANT_GAIN_M2 = 0.25;
 
     public static void main(String[] args) throws IOException {
         Path csv = null;
+        Path json = null;
         for (int i = 0; i < args.length; i++) {
             if (args[i].equals("--csv") && i + 1 < args.length) {
                 csv = Path.of(args[++i]);
+            } else if (args[i].equals("--json") && i + 1 < args.length) {
+                json = Path.of(args[++i]);
             }
         }
         List<Fixture> fixtures = List.of(
@@ -53,7 +67,8 @@ public final class PlannerBenchmark {
         for (Fixture f : fixtures) {
             PlanRequest req = f.request();
             CoverageMetrics base = planner.baseline(req);
-            rows.add(new Row(f.name(), "recon lap only", 0, 0, base, base.coveragePercent(), null));
+            double lap = lapSeconds(req);
+            rows.add(new Row(f.name(), "recon lap only", 0, 0, base, base.coveragePercent(), null, lap, 0, -1));
 
             PlanResult plan = null;
             for (int i = 0; i < 3; i++) { // warm-up, so JIT compilation is not timed
@@ -68,25 +83,34 @@ public final class PlannerBenchmark {
             Arrays.sort(times);
             double ms = times[times.length / 2] / 1e6;
             int n = plan.waypoints().size();
-            rows.add(new Row(f.name(), "planner", n, plan.estimatedDistanceMeters(), plan.planned(), base.coveragePercent(), ms));
+            List<Viewpoint> planned = plan.waypoints().stream().map(w -> new Viewpoint(w.x(), w.y(), Math.toRadians(w.yawDegrees()))).toList();
+            rows.add(new Row(f.name(), "planner", n, plan.estimatedDistanceMeters(), plan.planned(), base.coveragePercent(), ms,
+                lap, plan.estimatedCaptureSeconds(), redundant(planner, req, planned)));
 
             Grid g = Grid.build(req.scene(), req.config());
             boolean[] reach = reachable(g, req);
-            var loop = planner.evaluate(req, boundaryLoop(g, reach, req.config(), n));
-            rows.add(new Row(f.name(), "boundary loop (" + n + " wp)", loop.reachableWaypoints(), loop.routeLengthMeters(), loop.metrics(), base.coveragePercent(), null));
+            List<Viewpoint> loopRoute = boundaryLoop(g, reach, req.config(), n);
+            var loop = planner.evaluate(req, loopRoute);
+            rows.add(new Row(f.name(), "boundary loop (" + n + " wp)", loop.reachableWaypoints(), loop.routeLengthMeters(), loop.metrics(), base.coveragePercent(), null,
+                lap, routeSeconds(req, loop), redundant(planner, req, loopRoute)));
             List<Viewpoint> mow = lawnmower(g, reach, req.config());
-            var sweep = planner.evaluate(req, mow.subList(0, Math.min(n, mow.size())));
-            rows.add(new Row(f.name(), "lawnmower (" + n + " wp)", sweep.reachableWaypoints(), sweep.routeLengthMeters(), sweep.metrics(), base.coveragePercent(), null));
+            List<Viewpoint> mowN = mow.subList(0, Math.min(n, mow.size()));
+            var sweep = planner.evaluate(req, mowN);
+            rows.add(new Row(f.name(), "lawnmower (" + n + " wp)", sweep.reachableWaypoints(), sweep.routeLengthMeters(), sweep.metrics(), base.coveragePercent(), null,
+                lap, routeSeconds(req, sweep), redundant(planner, req, mowN)));
             CapturePathPlanner.Evaluation matched = null;
+            int matchedK = 0;
             for (int k = 1; k <= mow.size(); k++) {
                 var e = planner.evaluate(req, mow.subList(0, k));
                 if (e.routeLengthMeters() > plan.estimatedDistanceMeters() && matched != null) {
                     break;
                 }
                 matched = e;
+                matchedK = k;
             }
             if (matched != null) {
-                rows.add(new Row(f.name(), "lawnmower (same distance)", matched.reachableWaypoints(), matched.routeLengthMeters(), matched.metrics(), base.coveragePercent(), null));
+                rows.add(new Row(f.name(), "lawnmower (same distance)", matched.reachableWaypoints(), matched.routeLengthMeters(), matched.metrics(), base.coveragePercent(), null,
+                    lap, routeSeconds(req, matched), redundant(planner, req, mow.subList(0, matchedK))));
             }
         }
         print(rows);
@@ -94,6 +118,36 @@ public final class PlannerBenchmark {
             writeCsv(csv, rows);
             System.out.println("\nCSV written to " + csv);
         }
+        if (json != null) {
+            writeJson(json, rows);
+            System.out.println("JSON written to " + json);
+        }
+    }
+
+    private static double lapSeconds(PlanRequest req) {
+        var t = req.trajectory();
+        return t.isEmpty() ? 0 : t.get(t.size() - 1).t() - t.get(0).t();
+    }
+
+    private static double routeSeconds(PlanRequest req, CapturePathPlanner.Evaluation e) {
+        return e.routeLengthMeters() / req.config().walkSpeedMetersPerSecond() + e.reachableWaypoints() * req.config().dwellSeconds();
+    }
+
+    /** Replays the route one waypoint at a time with the same coverage metric and counts waypoints that add almost nothing. */
+    static int redundant(CapturePathPlanner planner, PlanRequest req, List<Viewpoint> route) {
+        double covered = planner.evaluate(req, List.of()).metrics().coveredAreaM2();
+        int reachable = 0, redundant = 0;
+        for (int k = 1; k <= route.size(); k++) {
+            var e = planner.evaluate(req, route.subList(0, k));
+            if (e.reachableWaypoints() > reachable) {
+                if (e.metrics().coveredAreaM2() - covered < REDUNDANT_GAIN_M2) {
+                    redundant++;
+                }
+                reachable = e.reachableWaypoints();
+            }
+            covered = e.metrics().coveredAreaM2();
+        }
+        return redundant;
     }
 
     // ---- comparison strategies (deterministic, no randomness) ------------------------------------------------------
@@ -219,6 +273,37 @@ public final class PlannerBenchmark {
                 r.waypoints(), r.routeMeters(), r.m().coveragePercent(), r.m().coveragePercent() - r.baselineCoverage(),
                 r.m().uncoveredAreaM2(), r.m().redundantCapturePercent(), r.millis() == null ? "" : String.format(Locale.ROOT, "%.0f", r.millis())));
         }
+    }
+
+    private static void writeJson(Path path, List<Row> rows) throws IOException {
+        List<java.util.Map<String, Object>> out = new ArrayList<>();
+        for (Row r : rows) {
+            java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+            m.put("fixture", r.fixture());
+            m.put("strategy", r.strategy());
+            m.put("waypoints", r.waypoints());
+            m.put("route_m", r.routeMeters());
+            m.put("coverage_pct", r.m().coveragePercent());
+            m.put("weighted_coverage_pct", r.m().weightedCoveragePercent());
+            m.put("covered_m2", r.m().coveredAreaM2());
+            m.put("uncovered_m2", r.m().uncoveredAreaM2());
+            m.put("target_m2", r.m().targetAreaM2());
+            m.put("redundant_capture_pct", r.m().redundantCapturePercent());
+            m.put("redundant_waypoints", r.redundantWaypoints());
+            m.put("lap_s", r.lapSeconds());
+            m.put("route_s", r.routeSeconds());
+            m.put("total_capture_s", r.lapSeconds() + r.routeSeconds());
+            m.put("planner_ms", r.millis());
+            out.add(m);
+        }
+        PlannerConfig d = PlannerConfig.defaults(); // every fixture uses the defaults, except the one waypoint cap
+        java.util.Map<String, Object> doc = new java.util.LinkedHashMap<>();
+        doc.put("config", java.util.Map.of("walk_speed_mps", d.walkSpeedMetersPerSecond(), "dwell_s", d.dwellSeconds(),
+            "target_distance_m", d.targetDistance(), "redundant_gain_m2", REDUNDANT_GAIN_M2));
+        doc.put("java", System.getProperty("java.version"));
+        doc.put("cores", Runtime.getRuntime().availableProcessors());
+        doc.put("rows", out);
+        Files.writeString(path, new com.fasterxml.jackson.databind.ObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(doc));
     }
 
     private static void writeCsv(Path path, List<Row> rows) throws IOException {

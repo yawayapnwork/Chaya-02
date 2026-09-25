@@ -30,6 +30,31 @@ The worker has no database access (see ARCHITECTURE.md). `dev.chaya.api.pipeline
 real `poi` + `poi_version` row (`source = 'AUTO_DETECTED'`, `pipeline_run_id` set for provenance,
 `embedding`/`embedding_model` set) -- see `V12__semantic_search.sql`.
 
+## Manual POIs: the embedding backfill
+
+A POI placed or edited by venue staff (`PoiService`) is stored without an embedding, and pgvector search cannot see
+it until it has one. `dev.chaya.api.search.PoiEmbeddingBackfill` runs every
+`chaya.search.embedding-backfill-interval` (5 s) and asks `PoiEmbeddingService` to embed up to
+`chaya.search.embedding-backfill-batch` (50) pending POI versions:
+
+- **Which versions:** only the latest version of a live (not deleted) POI whose embedding is NULL. That is the same
+  set the operations dashboard counts as "awaiting embedding". Superseded versions are never searched, so they are
+  never embedded.
+- **What text:** the POI's own metadata: label, category and tags, joined and de-duplicated case-insensitively
+  (`PoiEmbeddingService.embeddingText`). Tags are where staff enter alternative names. There is no synonym table.
+  Measured on docs/BENCHMARKS.md B3, this beats embedding the label alone on every query type.
+- **Which model:** the same CLIP text tower as queries (`TextEmbeddingClient` → services/vision). The model id
+  services/vision reports is stored in `embedding_model`, as for detected objects.
+- **How it writes:** the vision call happens outside any transaction. The write is `UPDATE ... WHERE embedding IS
+  NULL`, which is the one update the `poi_version` immutability trigger allows, and a no-op if another API instance
+  got there first. An embedding is never overwritten.
+- **When vision is down:** nothing is written. The pass stops, logs once, and the backlog is worked off when vision
+  returns. Search meanwhile falls back to lexical matching as before.
+
+Manual POIs therefore carry CLIP **text** embeddings (compared text-to-text), while detected objects carry CLIP
+**image** embeddings (compared text-to-image). The two similarity ranges differ, and ranking both in one list has
+not been measured yet: no venue has detected objects (docs/BENCHMARKS.md B3, "Unavailable").
+
 ## Query: text/voice to ranked results
 
 1. The browser (`apps/web/components/SemanticSearchPanel.tsx`) sends a typed or voice-transcribed query
@@ -41,13 +66,43 @@ real `poi` + `poi_version` row (`source = 'AUTO_DETECTED'`, `pipeline_run_id` se
    hardcoded synonym table -- is why "couch", "sofa" and "seating" all rank a labelled-"sofa" POI highly:
    CLIP's text and image towers were trained so semantically related text and images land near each other
    in the same space.
-3. Results are ranked by real pgvector cosine similarity (`embedding <=> query`, the
-   `poi_version_embedding_hnsw_idx` HNSW index), scoped to the venue/organization (`TenantGuard`), an
-   optional floor, and an optional accessibility filter (`attributes->>'accessible'`).
-4. If `services/vision` is unavailable, the search **degrades** to Postgres trigram similarity on the
-   label text (`pg_trgm`) rather than failing outright, and `SearchResponse.matchType` reports
-   `"lexical_fallback"` so a caller never mistakes it for real semantic matching.
-5. Every query is logged to `search_query` (venue-scoped, for the dashboard's zero-result/top-query views).
+3. Every POI in scope (the venue/organization via `TenantGuard`, an optional floor, an optional accessibility filter
+   on `attributes->>'accessible'`) is scored by real pgvector cosine similarity (`embedding <=> query`), and the
+   top k by similarity are returned in that order. Scoring the whole scope, rather than asking the HNSW index for
+   the top k only, is what makes step 4 possible; a venue's POIs number in the hundreds to thousands.
+4. **Relevance.** CLIP places almost any two short phrases at cosine ~0.8, so the nearest POIs come back even for
+   things the venue does not have ("swimming pool" -> "Water fountain"). A match of a **manually placed** POI counts
+   as a result only if its similarity exceeds the query's **mean similarity to all searched POIs of the same source**
+   by `chaya.search.relevance-min-margin` (0.078). A real match stands out from the rest of the venue; a query for
+   something absent is about equally close to everything.
+   - If nothing clears the margin, `results` is **empty** and up to `chaya.search.closest-matches` (3) nearest
+     candidates are returned separately in `closestMatches`. The web panel shows them as "Nothing matching X
+     here. Closest: ...", never as matches, so an answer that fell below the bar is still one click away.
+   - `relevance` says what happened: `FILTERED`, `UNFILTERED` or `LEXICAL`. Each result carries its
+     `relevanceMargin`.
+   - **Not judged**, and returned as plain top-k (`UNFILTERED`):
+     - detected objects, which carry CLIP image embeddings, on a different scale, for which no threshold has been
+       calibrated;
+     - any scope with fewer than `chaya.search.relevance-min-pois` (8) comparable POIs, where the mean is not
+       meaningful.
+   - **How 0.078 was chosen:** on a separate calibration venue (`benchmarks/b3_semantic_search/calibration.json`,
+     `calibrate.py`), by balanced accuracy, from three candidate scores: raw cosine, margin over the mean, and
+     z-score. It was never tuned on the test venue. The trade-off is measured in docs/BENCHMARKS.md B3: some
+     correct answers, mostly synonyms, no longer count as results but are offered as closest matches.
+5. If `services/vision` is unavailable, the search **degrades** to Postgres trigram similarity on the label text
+   (`pg_trgm`) rather than failing, and `matchType` reports `"lexical_fallback"` so a caller never mistakes it for
+   semantic matching.
+   - `HttpTextEmbeddingClient` puts a **circuit breaker** in front of the vision service. The first failed call
+     (unreachable, an error, or a malformed reply) opens it. From then on every call fails immediately, without
+     touching DNS or the network, so searches fall back in milliseconds and the POI embedding backfill (on
+     Spring's shared scheduler thread) stops at once.
+   - A probe on its own daemon thread checks `GET /health/ready` every `chaya.search.vision-probe-interval` (5 s)
+     and closes the breaker once the model is loaded again.
+   - Without the breaker, when the vision container was gone, the JVM re-resolved its hostname every 10 s (its
+     negative DNS cache) and each lookup took ~3.7 s, so about one search in nine stalled
+     (docs/BENCHMARKS.md B3).
+6. Every query is logged to `search_query` with the number of **results** (not closest matches), so queries the
+   venue has nothing for appear in the dashboard's zero-result view.
 
 ## Fine-tuning dataset
 

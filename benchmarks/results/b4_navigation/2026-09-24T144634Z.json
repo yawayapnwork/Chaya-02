@@ -1,0 +1,558 @@
+{
+  "benchmark": "b4_navigation",
+  "title": "Navigation: shortest (STANDARD) vs accessible (STEP_FREE) route",
+  "started": "2026-09-24T14:46:34+00:00",
+  "finished": "2026-09-24T14:47:24+00:00",
+  "git": {
+    "commit": "998e1bc8383b0fc08ef48bdc70a028744e286eb1",
+    "dirty_files": 10
+  },
+  "environment": {
+    "python": "3.12.10",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "cpus": 18
+  },
+  "inputs": {},
+  "metrics": [
+    {
+      "metric": "minimum accessible clearance",
+      "value": 0.9,
+      "unit": "m",
+      "kind": "configuration",
+      "condition": "all",
+      "source": "chaya.navigation.min-accessible-clearance-m",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "walking speed standard / accessible",
+      "value": "1.3 / 1.0",
+      "unit": "m/s",
+      "kind": "configuration",
+      "condition": "all",
+      "source": "chaya.navigation.*-walking-speed-mps",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "graph",
+      "value": "hand-made 2-floor graph: 10 m corridor loop, 2-step shortcut, 0.7 m passage, stairs + elevator",
+      "unit": "",
+      "kind": "assumption",
+      "condition": "SYNTHETIC self-test graph",
+      "source": "benchmarks/b4_navigation/run.py seed_synthetic",
+      "note": "validates the benchmark and the router's rules only; not a venue measurement",
+      "command": null
+    },
+    {
+      "metric": "distance",
+      "value": 14.14,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | A -> Room E (same floor) | STANDARD",
+      "source": "POST /navigation/routes",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "estimated duration",
+      "value": 10.9,
+      "unit": "s",
+      "kind": "estimate",
+      "condition": "SYNTHETIC self-test graph | A -> Room E (same floor) | STANDARD",
+      "source": "router",
+      "note": "distance / configured walking speed + configured transition time",
+      "command": null
+    },
+    {
+      "metric": "floor transitions",
+      "value": "none",
+      "unit": "",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | A -> Room E (same floor) | STANDARD",
+      "source": "floorTransitions",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "stairs used (transitions + non-step-free edges)",
+      "value": 1,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | A -> Room E (same floor) | STANDARD",
+      "source": "floorTransitions + navigation_edge.step_free",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "clearance violations (edges < minimum)",
+      "value": 0,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | A -> Room E (same floor) | STANDARD",
+      "source": "navigation_edge.min_clearance_m",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "distance",
+      "value": 40.0,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | A -> Room E (same floor) | STEP_FREE",
+      "source": "POST /navigation/routes",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "estimated duration",
+      "value": 40.0,
+      "unit": "s",
+      "kind": "estimate",
+      "condition": "SYNTHETIC self-test graph | A -> Room E (same floor) | STEP_FREE",
+      "source": "router",
+      "note": "distance / configured walking speed + configured transition time",
+      "command": null
+    },
+    {
+      "metric": "floor transitions",
+      "value": "none",
+      "unit": "",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | A -> Room E (same floor) | STEP_FREE",
+      "source": "floorTransitions",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "stairs used (transitions + non-step-free edges)",
+      "value": 0,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | A -> Room E (same floor) | STEP_FREE",
+      "source": "floorTransitions + navigation_edge.step_free",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "clearance violations (edges < minimum)",
+      "value": 0,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | A -> Room E (same floor) | STEP_FREE",
+      "source": "navigation_edge.min_clearance_m",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "distance",
+      "value": 10.0,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | B -> Room E (same floor) | STANDARD",
+      "source": "POST /navigation/routes",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "estimated duration",
+      "value": 7.7,
+      "unit": "s",
+      "kind": "estimate",
+      "condition": "SYNTHETIC self-test graph | B -> Room E (same floor) | STANDARD",
+      "source": "router",
+      "note": "distance / configured walking speed + configured transition time",
+      "command": null
+    },
+    {
+      "metric": "floor transitions",
+      "value": "none",
+      "unit": "",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | B -> Room E (same floor) | STANDARD",
+      "source": "floorTransitions",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "stairs used (transitions + non-step-free edges)",
+      "value": 0,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | B -> Room E (same floor) | STANDARD",
+      "source": "floorTransitions + navigation_edge.step_free",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "clearance violations (edges < minimum)",
+      "value": 1,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | B -> Room E (same floor) | STANDARD",
+      "source": "navigation_edge.min_clearance_m",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "distance",
+      "value": 30.0,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | B -> Room E (same floor) | STEP_FREE",
+      "source": "POST /navigation/routes",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "estimated duration",
+      "value": 30.0,
+      "unit": "s",
+      "kind": "estimate",
+      "condition": "SYNTHETIC self-test graph | B -> Room E (same floor) | STEP_FREE",
+      "source": "router",
+      "note": "distance / configured walking speed + configured transition time",
+      "command": null
+    },
+    {
+      "metric": "floor transitions",
+      "value": "none",
+      "unit": "",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | B -> Room E (same floor) | STEP_FREE",
+      "source": "floorTransitions",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "stairs used (transitions + non-step-free edges)",
+      "value": 0,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | B -> Room E (same floor) | STEP_FREE",
+      "source": "floorTransitions + navigation_edge.step_free",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "clearance violations (edges < minimum)",
+      "value": 0,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | B -> Room E (same floor) | STEP_FREE",
+      "source": "navigation_edge.min_clearance_m",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "distance",
+      "value": 22.07,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | A -> Cafe (level 1) | STANDARD",
+      "source": "POST /navigation/routes",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "estimated duration",
+      "value": 37.0,
+      "unit": "s",
+      "kind": "estimate",
+      "condition": "SYNTHETIC self-test graph | A -> Cafe (level 1) | STANDARD",
+      "source": "router",
+      "note": "distance / configured walking speed + configured transition time",
+      "command": null
+    },
+    {
+      "metric": "floor transitions",
+      "value": "STAIRS",
+      "unit": "",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | A -> Cafe (level 1) | STANDARD",
+      "source": "floorTransitions",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "stairs used (transitions + non-step-free edges)",
+      "value": 1,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | A -> Cafe (level 1) | STANDARD",
+      "source": "floorTransitions + navigation_edge.step_free",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "clearance violations (edges < minimum)",
+      "value": 0,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | A -> Cafe (level 1) | STANDARD",
+      "source": "navigation_edge.min_clearance_m",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "distance",
+      "value": 32.07,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | A -> Cafe (level 1) | STEP_FREE",
+      "source": "POST /navigation/routes",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "estimated duration",
+      "value": 77.1,
+      "unit": "s",
+      "kind": "estimate",
+      "condition": "SYNTHETIC self-test graph | A -> Cafe (level 1) | STEP_FREE",
+      "source": "router",
+      "note": "distance / configured walking speed + configured transition time",
+      "command": null
+    },
+    {
+      "metric": "floor transitions",
+      "value": "ELEVATOR",
+      "unit": "",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | A -> Cafe (level 1) | STEP_FREE",
+      "source": "floorTransitions",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "stairs used (transitions + non-step-free edges)",
+      "value": 0,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | A -> Cafe (level 1) | STEP_FREE",
+      "source": "floorTransitions + navigation_edge.step_free",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "clearance violations (edges < minimum)",
+      "value": 0,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | A -> Cafe (level 1) | STEP_FREE",
+      "source": "navigation_edge.min_clearance_m",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "extra distance for the accessible route",
+      "value": 20.0,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | B -> Room E (same floor) | STEP_FREE vs STANDARD",
+      "source": "difference",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "stairs avoided",
+      "value": 0,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | B -> Room E (same floor) | STEP_FREE vs STANDARD",
+      "source": "difference",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "clearance violations avoided",
+      "value": 1,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | B -> Room E (same floor) | STEP_FREE vs STANDARD",
+      "source": "difference",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "extra distance for the accessible route",
+      "value": 10.0,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | A -> Cafe (level 1) | STEP_FREE vs STANDARD",
+      "source": "difference",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "stairs avoided",
+      "value": 1,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | A -> Cafe (level 1) | STEP_FREE vs STANDARD",
+      "source": "difference",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "clearance violations avoided",
+      "value": 0,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | A -> Cafe (level 1) | STEP_FREE vs STANDARD",
+      "source": "difference",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "extra distance for the accessible route",
+      "value": 25.86,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | A -> Room E (same floor) | STEP_FREE vs STANDARD",
+      "source": "difference",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "stairs avoided",
+      "value": 1,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | A -> Room E (same floor) | STEP_FREE vs STANDARD",
+      "source": "difference",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "clearance violations avoided",
+      "value": 0,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "SYNTHETIC self-test graph | A -> Room E (same floor) | STEP_FREE vs STANDARD",
+      "source": "difference",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "distance, standard vs accessible",
+      "value": null,
+      "unit": "m",
+      "kind": "unavailable",
+      "condition": "real venue",
+      "source": "",
+      "note": "no venue has navigation graphs: NAVIGATION_BAKING needs a reconstruction (SPLAT_RECONSTRUCTION, CUDA GPU), plane fitting (Open3D) and recast-cli",
+      "command": "python benchmarks/b4_navigation/run.py --env-file <env> --venue <venue id> --pairs <pairs.json> --user <user>"
+    },
+    {
+      "metric": "floor transitions",
+      "value": null,
+      "unit": "count",
+      "kind": "unavailable",
+      "condition": "real venue",
+      "source": "",
+      "note": "no venue has navigation graphs: NAVIGATION_BAKING needs a reconstruction (SPLAT_RECONSTRUCTION, CUDA GPU), plane fitting (Open3D) and recast-cli",
+      "command": "python benchmarks/b4_navigation/run.py --env-file <env> --venue <venue id> --pairs <pairs.json> --user <user>"
+    },
+    {
+      "metric": "stairs avoided",
+      "value": null,
+      "unit": "count",
+      "kind": "unavailable",
+      "condition": "real venue",
+      "source": "",
+      "note": "no venue has navigation graphs: NAVIGATION_BAKING needs a reconstruction (SPLAT_RECONSTRUCTION, CUDA GPU), plane fitting (Open3D) and recast-cli",
+      "command": "python benchmarks/b4_navigation/run.py --env-file <env> --venue <venue id> --pairs <pairs.json> --user <user>"
+    },
+    {
+      "metric": "clearance violations",
+      "value": null,
+      "unit": "count",
+      "kind": "unavailable",
+      "condition": "real venue",
+      "source": "",
+      "note": "no venue has navigation graphs: NAVIGATION_BAKING needs a reconstruction (SPLAT_RECONSTRUCTION, CUDA GPU), plane fitting (Open3D) and recast-cli",
+      "command": "python benchmarks/b4_navigation/run.py --env-file <env> --venue <venue id> --pairs <pairs.json> --user <user>"
+    }
+  ],
+  "details": {
+    "routes": [
+      {
+        "pair": "A -> Room E (same floor)",
+        "profile": "STANDARD",
+        "http": 200,
+        "distance_m": 14.142135623730951,
+        "duration_s": 10.878565864408424,
+        "transitions": [],
+        "stairs_transitions": 0,
+        "non_step_free_edges": 1,
+        "clearance_violations": 0,
+        "edges_matched": 1
+      },
+      {
+        "pair": "A -> Room E (same floor)",
+        "profile": "STEP_FREE",
+        "http": 200,
+        "distance_m": 40.0,
+        "duration_s": 40.0,
+        "transitions": [],
+        "stairs_transitions": 0,
+        "non_step_free_edges": 0,
+        "clearance_violations": 0,
+        "edges_matched": 4
+      },
+      {
+        "pair": "B -> Room E (same floor)",
+        "profile": "STANDARD",
+        "http": 200,
+        "distance_m": 10.0,
+        "duration_s": 7.692307692307692,
+        "transitions": [],
+        "stairs_transitions": 0,
+        "non_step_free_edges": 0,
+        "clearance_violations": 1,
+        "edges_matched": 1
+      },
+      {
+        "pair": "B -> Room E (same floor)",
+        "profile": "STEP_FREE",
+        "http": 200,
+        "distance_m": 30.0,
+        "duration_s": 30.0,
+        "transitions": [],
+        "stairs_transitions": 0,
+        "non_step_free_edges": 0,
+        "clearance_violations": 0,
+        "edges_matched": 3
+      },
+      {
+        "pair": "A -> Cafe (level 1)",
+        "profile": "STANDARD",
+        "http": 200,
+        "distance_m": 22.071067811865476,
+        "duration_s": 36.977744470665755,
+        "transitions": [
+          "STAIRS"
+        ],
+        "stairs_transitions": 1,
+        "non_step_free_edges": 0,
+        "clearance_violations": 0,
+        "edges_matched": 3
+      },
+      {
+        "pair": "A -> Cafe (level 1)",
+        "profile": "STEP_FREE",
+        "http": 200,
+        "distance_m": 32.071067811865476,
+        "duration_s": 77.07106781186548,
+        "transitions": [
+          "ELEVATOR"
+        ],
+        "stairs_transitions": 0,
+        "non_step_free_edges": 0,
+        "clearance_violations": 0,
+        "edges_matched": 4
+      }
+    ]
+  }
+}

@@ -19,6 +19,7 @@ import org.springframework.context.annotation.Primary;
 public class TestEmbeddingConfig {
 
     public static final AtomicBoolean UNAVAILABLE = new AtomicBoolean(false);
+    public static final String MODEL = "test-embedding";
 
     public static float[] embedFor(String text) {
         Random rng = new Random(text.strip().toLowerCase(Locale.ROOT).hashCode());
@@ -51,7 +52,7 @@ public class TestEmbeddingConfig {
             if (UNAVAILABLE.get()) {
                 throw new EmbeddingUnavailableException("vision service is down (test)");
             }
-            return embedFor(text);
+            return new TextEmbeddingClient.Embedding(embedFor(text), MODEL);
         };
     }
 }

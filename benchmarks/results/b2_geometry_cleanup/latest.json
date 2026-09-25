@@ -1,0 +1,462 @@
+{
+  "benchmark": "b2_geometry_cleanup",
+  "title": "Geometry cleanup: baseline vs opacity vs outlier vs semantic-aware",
+  "started": "2026-09-24T14:51:37+00:00",
+  "finished": "2026-09-24T14:52:06+00:00",
+  "git": {
+    "commit": "",
+    "dirty_files": 0
+  },
+  "environment": {
+    "python": "3.12.14",
+    "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.36",
+    "cpus": 18,
+    "open3d": "0.19.0",
+    "numpy": "2.5.3"
+  },
+  "inputs": {
+    "splat": {
+      "file": "point_cloud.ply",
+      "sha256": "c6fddedf6c7b412d078bbbaa1826e7a1b258f75f862c5190dc50a646243d7d9e",
+      "gaussians": 1916379
+    },
+    "sfm_points": {
+      "file": "points3D.txt",
+      "sha256": "a9307503d0fd7fe6f4d6a0e6a95672ceae38dcfbffc57bb900ca52abdab7acf2",
+      "points": 8911
+    }
+  },
+  "metrics": [
+    {
+      "metric": "Gaussians in the input splat",
+      "value": 1916379,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "trained splat: playroom",
+      "source": "chaya_worker.ply.read_ply",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "median nearest-neighbour distance",
+      "value": 0.008238,
+      "unit": "scene units",
+      "kind": "measured",
+      "condition": "trained splat: playroom",
+      "source": "scipy cKDTree, 20k sample",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "opacity threshold",
+      "value": 0.05,
+      "unit": "sigmoid(opacity)",
+      "kind": "configuration",
+      "condition": "trained splat: playroom",
+      "source": "Settings.cleanup_opacity_threshold",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "statistical filter",
+      "value": "20 neighbours, std ratio 2.0",
+      "unit": "",
+      "kind": "configuration",
+      "condition": "trained splat: playroom",
+      "source": "Settings.cleanup_stat_*",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "radius filter (production)",
+      "value": "8 points within 0.05",
+      "unit": "scene units",
+      "kind": "configuration",
+      "condition": "trained splat: playroom",
+      "source": "Settings.cleanup_radius*",
+      "note": "metric in production; this splat's unit is arbitrary",
+      "command": null
+    },
+    {
+      "metric": "radius filter (scale-relative)",
+      "value": "8 points within 3.0 x median NN = 0.02472",
+      "unit": "scene units",
+      "kind": "configuration",
+      "condition": "trained splat: playroom",
+      "source": "this benchmark",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "Gaussians removed",
+      "value": 544615,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "trained splat: playroom | opacity_filtering",
+      "source": "chaya_worker.geometry_cleanup",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "Gaussians removed",
+      "value": 28.419,
+      "unit": "%",
+      "kind": "measured",
+      "condition": "trained splat: playroom | opacity_filtering",
+      "source": "chaya_worker.geometry_cleanup",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "runtime",
+      "value": 0.004,
+      "unit": "s",
+      "kind": "measured",
+      "condition": "trained splat: playroom | opacity_filtering",
+      "source": "wall clock, this host's CPU",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "Gaussians removed",
+      "value": 38260,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "trained splat: playroom | outlier_filtering (statistical)",
+      "source": "chaya_worker.geometry_cleanup",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "Gaussians removed",
+      "value": 1.996,
+      "unit": "%",
+      "kind": "measured",
+      "condition": "trained splat: playroom | outlier_filtering (statistical)",
+      "source": "chaya_worker.geometry_cleanup",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "runtime",
+      "value": 5.237,
+      "unit": "s",
+      "kind": "measured",
+      "condition": "trained splat: playroom | outlier_filtering (statistical)",
+      "source": "wall clock, this host's CPU",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "Gaussians removed",
+      "value": 234063,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "trained splat: playroom | outlier_filtering (radius, production 0.05)",
+      "source": "chaya_worker.geometry_cleanup",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "Gaussians removed",
+      "value": 12.214,
+      "unit": "%",
+      "kind": "measured",
+      "condition": "trained splat: playroom | outlier_filtering (radius, production 0.05)",
+      "source": "chaya_worker.geometry_cleanup",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "runtime",
+      "value": 7.475,
+      "unit": "s",
+      "kind": "measured",
+      "condition": "trained splat: playroom | outlier_filtering (radius, production 0.05)",
+      "source": "wall clock, this host's CPU",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "Gaussians removed",
+      "value": 743919,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "trained splat: playroom | outlier_filtering (radius, scale-relative)",
+      "source": "chaya_worker.geometry_cleanup",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "Gaussians removed",
+      "value": 38.819,
+      "unit": "%",
+      "kind": "measured",
+      "condition": "trained splat: playroom | outlier_filtering (radius, scale-relative)",
+      "source": "chaya_worker.geometry_cleanup",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "runtime",
+      "value": 4.413,
+      "unit": "s",
+      "kind": "measured",
+      "condition": "trained splat: playroom | outlier_filtering (radius, scale-relative)",
+      "source": "wall clock, this host's CPU",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "median opacity of removed Gaussians",
+      "value": 0.0249,
+      "unit": "sigmoid",
+      "kind": "measured",
+      "condition": "trained splat: playroom | opacity_filtering",
+      "source": "descriptive",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "median opacity of removed Gaussians",
+      "value": 0.1009,
+      "unit": "sigmoid",
+      "kind": "measured",
+      "condition": "trained splat: playroom | outlier_filtering (statistical)",
+      "source": "descriptive",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "median opacity of removed Gaussians",
+      "value": 0.1446,
+      "unit": "sigmoid",
+      "kind": "measured",
+      "condition": "trained splat: playroom | outlier_filtering (radius, production 0.05)",
+      "source": "descriptive",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "median opacity of removed Gaussians",
+      "value": 0.152,
+      "unit": "sigmoid",
+      "kind": "measured",
+      "condition": "trained splat: playroom | outlier_filtering (radius, scale-relative)",
+      "source": "descriptive",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "Gaussians removed",
+      "value": null,
+      "unit": "count",
+      "kind": "unavailable",
+      "condition": "trained splat: playroom | semantic_aware",
+      "source": "",
+      "note": "no SEMANTIC_SEGMENTATION labels exist for this splat: producing them needs the scene's frames, poses and the segmentation model (a GPU pipeline run)",
+      "command": "python benchmarks/b2_geometry_cleanup/run.py --ply <splat> --labels <semantic-labels.json from the run's SEMANTIC_SEGMENTATION artifact>"
+    },
+    {
+      "metric": "PSNR at held-out views",
+      "value": null,
+      "unit": "dB",
+      "kind": "unavailable",
+      "condition": "trained splat: playroom | every method",
+      "source": "",
+      "note": "re-rendering the cleaned splat needs torch + gsplat + a CUDA GPU and the scene's training frames and poses; this host has no CUDA device",
+      "command": "python -m chaya_worker.benchmarks.cleanup_benchmark --ply <splat> --poses poses.json --sparse-model <sparse> --frames <frames dir> --sample-cameras 8 --out report.json   (on a GPU host)"
+    },
+    {
+      "metric": "SSIM at held-out views",
+      "value": null,
+      "unit": "",
+      "kind": "unavailable",
+      "condition": "trained splat: playroom | every method",
+      "source": "",
+      "note": "re-rendering the cleaned splat needs torch + gsplat + a CUDA GPU and the scene's training frames and poses; this host has no CUDA device",
+      "command": "python -m chaya_worker.benchmarks.cleanup_benchmark --ply <splat> --poses poses.json --sparse-model <sparse> --frames <frames dir> --sample-cameras 8 --out report.json   (on a GPU host)"
+    },
+    {
+      "metric": "SfM points",
+      "value": 8911,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "real SfM cloud (proxy): castle-sfm",
+      "source": "COLMAP points3D.txt",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "weakly supported points (track <= 2 or error > p90)",
+      "value": 14.14,
+      "unit": "%",
+      "kind": "measured",
+      "condition": "real SfM cloud (proxy): castle-sfm",
+      "source": "COLMAP per-point track length and reprojection error",
+      "note": "p90 reprojection error = 0.748 px",
+      "command": null
+    },
+    {
+      "metric": "weak-point definition",
+      "value": "track length <= 2 OR reprojection error > the cloud's 90th percentile",
+      "unit": "",
+      "kind": "assumption",
+      "condition": "real SfM cloud (proxy): castle-sfm",
+      "source": "this benchmark",
+      "note": "COLMAP's own evidence of a poorly constrained point; not ground truth",
+      "command": null
+    },
+    {
+      "metric": "points removed",
+      "value": 0.77,
+      "unit": "%",
+      "kind": "measured",
+      "condition": "real SfM cloud (proxy): castle-sfm | outlier_filtering (statistical)",
+      "source": "chaya_worker.geometry_cleanup",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "runtime",
+      "value": 0.012,
+      "unit": "s",
+      "kind": "measured",
+      "condition": "real SfM cloud (proxy): castle-sfm | outlier_filtering (statistical)",
+      "source": "wall clock",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "weak points among removed (precision)",
+      "value": 92.75,
+      "unit": "%",
+      "kind": "measured",
+      "condition": "real SfM cloud (proxy): castle-sfm | outlier_filtering (statistical)",
+      "source": "vs COLMAP evidence",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "enrichment over base rate",
+      "value": 6.56,
+      "unit": "x",
+      "kind": "measured",
+      "condition": "real SfM cloud (proxy): castle-sfm | outlier_filtering (statistical)",
+      "source": "precision / base rate",
+      "note": "1.0 = no better than removing points at random",
+      "command": null
+    },
+    {
+      "metric": "share of all weak points removed (recall)",
+      "value": 5.08,
+      "unit": "%",
+      "kind": "measured",
+      "condition": "real SfM cloud (proxy): castle-sfm | outlier_filtering (statistical)",
+      "source": "vs COLMAP evidence",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "median reprojection error removed / kept",
+      "value": "0.901 / 0.321",
+      "unit": "px",
+      "kind": "measured",
+      "condition": "real SfM cloud (proxy): castle-sfm | outlier_filtering (statistical)",
+      "source": "COLMAP",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "points removed",
+      "value": 55.7,
+      "unit": "%",
+      "kind": "measured",
+      "condition": "real SfM cloud (proxy): castle-sfm | outlier_filtering (radius, scale-relative)",
+      "source": "chaya_worker.geometry_cleanup",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "runtime",
+      "value": 0.012,
+      "unit": "s",
+      "kind": "measured",
+      "condition": "real SfM cloud (proxy): castle-sfm | outlier_filtering (radius, scale-relative)",
+      "source": "wall clock",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "weak points among removed (precision)",
+      "value": 18.68,
+      "unit": "%",
+      "kind": "measured",
+      "condition": "real SfM cloud (proxy): castle-sfm | outlier_filtering (radius, scale-relative)",
+      "source": "vs COLMAP evidence",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "enrichment over base rate",
+      "value": 1.321,
+      "unit": "x",
+      "kind": "measured",
+      "condition": "real SfM cloud (proxy): castle-sfm | outlier_filtering (radius, scale-relative)",
+      "source": "precision / base rate",
+      "note": "1.0 = no better than removing points at random",
+      "command": null
+    },
+    {
+      "metric": "share of all weak points removed (recall)",
+      "value": 73.57,
+      "unit": "%",
+      "kind": "measured",
+      "condition": "real SfM cloud (proxy): castle-sfm | outlier_filtering (radius, scale-relative)",
+      "source": "vs COLMAP evidence",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "median reprojection error removed / kept",
+      "value": "0.339 / 0.304",
+      "unit": "px",
+      "kind": "measured",
+      "condition": "real SfM cloud (proxy): castle-sfm | outlier_filtering (radius, scale-relative)",
+      "source": "COLMAP",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "points removed",
+      "value": null,
+      "unit": "%",
+      "kind": "unavailable",
+      "condition": "real SfM cloud (proxy): castle-sfm | opacity_filtering",
+      "source": "",
+      "note": "SfM points carry no opacity or semantic label; this method needs a trained splat",
+      "command": "python benchmarks/b2_geometry_cleanup/run.py --ply <trained splat> [--labels <labels.json>]"
+    },
+    {
+      "metric": "points removed",
+      "value": null,
+      "unit": "%",
+      "kind": "unavailable",
+      "condition": "real SfM cloud (proxy): castle-sfm | semantic_aware",
+      "source": "",
+      "note": "SfM points carry no opacity or semantic label; this method needs a trained splat and SEMANTIC_SEGMENTATION labels",
+      "command": "python benchmarks/b2_geometry_cleanup/run.py --ply <trained splat> [--labels <labels.json>]"
+    }
+  ],
+  "details": {
+    "removed_set_jaccard": {
+      "opacity_filtering vs outlier_filtering (statistical)": 0.0208,
+      "opacity_filtering vs outlier_filtering (radius, production 0.05)": 0.0686,
+      "opacity_filtering vs outlier_filtering (radius, scale-relative)": 0.1309,
+      "outlier_filtering (statistical) vs outlier_filtering (radius, production 0.05)": 0.1635,
+      "outlier_filtering (statistical) vs outlier_filtering (radius, scale-relative)": 0.0514,
+      "outlier_filtering (radius, production 0.05) vs outlier_filtering (radius, scale-relative)": 0.3146
+    },
+    "median_opacity_all": 0.1136
+  }
+}

@@ -30,7 +30,13 @@ import org.testcontainers.utility.DockerImageName;
     // Shared context: many tests call from one address and must not trip the limiter (RateLimiterTest covers it),
     // and health must be recomputed per request (HealthServiceTest covers the cache).
     "chaya.rate-limit.enabled=false",
-    "chaya.health.cache-ttl=PT0S"
+    "chaya.health.cache-ttl=PT0S",
+    // The POI embedding backfill must not race assertions; PoiEmbeddingServiceTest drives it directly.
+    "chaya.search.embedding-backfill-initial-delay=PT24H",
+    "chaya.search.embedding-backfill-interval=PT24H",
+    // The production relevance margin (0.078) is calibrated for CLIP. The test embeddings are random unit vectors
+    // (TestEmbeddingConfig), whose unrelated pairs sit near cosine 0 +- 0.04: 0.3 separates them unambiguously.
+    "chaya.search.relevance-min-margin=0.3"
 })
 @AutoConfigureMockMvc
 @Import({TestJwtConfig.class, TestScannerConfig.class, TestEmbeddingConfig.class})

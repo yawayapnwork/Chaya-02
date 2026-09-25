@@ -122,6 +122,61 @@ class SemanticSearchServiceTest extends AbstractIntegrationTest {
         assertThat(response.results()).isEmpty();
     }
 
+    // ---- relevance (chaya.search.relevance-min-margin = 0.3 in tests: see AbstractIntegrationTest) -----------------
+
+    private static final String[] VENUE = {"Reception desk", "Cafe", "Cloakroom", "Elevator", "Stairs", "Restroom",
+        "Auditorium", "Cash machine"};
+
+    private void furnish(Fixtures.Tree t) {
+        for (int i = 0; i < VENUE.length; i++) {
+            insertPoi(t.org(), t.venue(), t.floor(), VENUE[i], i, 0, 0, TestEmbeddingConfig.embedFor(VENUE[i]));
+        }
+    }
+
+    @Test
+    void aQueryForSomethingTheVenueDoesNotHaveReturnsNoResultsButTheClosestCandidates() {
+        var t = fx.tree();
+        furnish(t);
+
+        SearchResponse response = search.search(actorFor(t.org(), t.venue()), t.venue(), "swimming pool", null, null, null);
+
+        assertThat(response.matchType()).isEqualTo("embedding");
+        assertThat(response.relevance()).isEqualTo("FILTERED");
+        assertThat(response.results()).as("nothing stands out from the rest of the venue").isEmpty();
+        assertThat(response.closestMatches()).hasSize(3);
+        assertThat(response.closestMatches()).allSatisfy(r -> assertThat(r.relevanceMargin()).isLessThan(0.3));
+        assertThat(response.closestMatches().get(0).similarity()).isGreaterThanOrEqualTo(response.closestMatches().get(1).similarity());
+        Integer logged = jdbc.sql("SELECT result_count FROM search_query WHERE venue_id = :v ORDER BY created_at DESC LIMIT 1")
+            .param("v", t.venue()).query(Integer.class).single();
+        assertThat(logged).as("counted as a zero-result query in search analytics").isZero();
+    }
+
+    @Test
+    void aRealMatchStandsOutFromTheVenueAndIsTheOnlyResult() {
+        var t = fx.tree();
+        furnish(t);
+
+        SearchResponse response = search.search(actorFor(t.org(), t.venue()), t.venue(), "cafe", null, null, null);
+
+        assertThat(response.relevance()).isEqualTo("FILTERED");
+        assertThat(response.results()).extracting(r -> r.label()).containsExactly("Cafe");
+        assertThat(response.results().get(0).relevanceMargin()).isGreaterThan(0.3);
+        assertThat(response.closestMatches()).as("only given when nothing matched").isEmpty();
+    }
+
+    @Test
+    void withTooFewPoisToCompareAgainstResultsAreNotFiltered() {
+        var t = fx.tree();
+        insertPoi(t.org(), t.venue(), t.floor(), "Cafe", 0, 0, 0, TestEmbeddingConfig.embedFor("Cafe"));
+        insertPoi(t.org(), t.venue(), t.floor(), "Cloakroom", 1, 0, 0, TestEmbeddingConfig.embedFor("Cloakroom"));
+
+        SearchResponse response = search.search(actorFor(t.org(), t.venue()), t.venue(), "swimming pool", null, null, null);
+
+        assertThat(response.relevance()).isEqualTo("UNFILTERED");
+        assertThat(response.results()).hasSize(2);
+        assertThat(response.closestMatches()).isEmpty();
+    }
+
     // ---- unavailable embedding model ------------------------------------------------------------------
 
     @Test

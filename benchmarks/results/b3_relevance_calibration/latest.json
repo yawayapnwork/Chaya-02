@@ -1,0 +1,333 @@
+{
+  "benchmark": "b3_relevance_calibration",
+  "title": "Semantic search relevance threshold: chosen on calibration, reported on test",
+  "started": "2026-09-24T15:08:51+00:00",
+  "finished": "2026-09-24T15:08:52+00:00",
+  "git": {
+    "commit": "998e1bc8383b0fc08ef48bdc70a028744e286eb1",
+    "dirty_files": 13
+  },
+  "environment": {
+    "python": "3.12.10",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "cpus": 18,
+    "vision_model": "open_clip:ViT-B-32:openai"
+  },
+  "inputs": {
+    "calibration": {
+      "sha256": "e272080076ec7034abfe96d6a84b23aaed9877d5f4d810f8d757baa1b7f2716f",
+      "pois": 30,
+      "queries": 45
+    },
+    "test": {
+      "sha256": "a12792c1bcbf37eb486b56223bbabda15205ddeb0216c4bd0f304bea138cec0e",
+      "pois": 30,
+      "queries": 59
+    }
+  },
+  "metrics": [
+    {
+      "metric": "calibration venue",
+      "value": "author-constructed hospital floor, 30 POIs / 45 queries",
+      "unit": "",
+      "kind": "assumption",
+      "condition": "calibration",
+      "source": "calibration.json",
+      "note": "different venue type from the test set; the test set is never used to choose",
+      "command": null
+    },
+    {
+      "metric": "threshold chosen on calibration",
+      "value": 0.8752,
+      "unit": "raw",
+      "kind": "measured",
+      "condition": "score = raw",
+      "source": "calibrate.choose",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "answerable queries still answered correctly (top-1 kept)",
+      "value": 0.6333,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "score = raw | calibration",
+      "source": "offline, same model and cosine as pgvector",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "zero-result queries left empty",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "score = raw | calibration",
+      "source": "offline",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "balanced accuracy",
+      "value": 0.8167,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "score = raw | calibration",
+      "source": "offline",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "answerable queries still answered correctly (top-1 kept)",
+      "value": 0.6136,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "score = raw | test (held out)",
+      "source": "offline, same model and cosine as pgvector",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "zero-result queries left empty",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "score = raw | test (held out)",
+      "source": "offline",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "balanced accuracy",
+      "value": 0.8068,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "score = raw | test (held out)",
+      "source": "offline",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "threshold chosen on calibration",
+      "value": 0.0784,
+      "unit": "margin",
+      "kind": "measured",
+      "condition": "score = margin",
+      "source": "calibrate.choose",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "answerable queries still answered correctly (top-1 kept)",
+      "value": 0.7,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "score = margin | calibration",
+      "source": "offline, same model and cosine as pgvector",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "zero-result queries left empty",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "score = margin | calibration",
+      "source": "offline",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "balanced accuracy",
+      "value": 0.85,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "score = margin | calibration",
+      "source": "offline",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "answerable queries still answered correctly (top-1 kept)",
+      "value": 0.7045,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "score = margin | test (held out)",
+      "source": "offline, same model and cosine as pgvector",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "zero-result queries left empty",
+      "value": 0.8667,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "score = margin | test (held out)",
+      "source": "offline",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "balanced accuracy",
+      "value": 0.7856,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "score = margin | test (held out)",
+      "source": "offline",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "threshold chosen on calibration",
+      "value": 2.1836,
+      "unit": "z",
+      "kind": "measured",
+      "condition": "score = z",
+      "source": "calibrate.choose",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "answerable queries still answered correctly (top-1 kept)",
+      "value": 0.6667,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "score = z | calibration",
+      "source": "offline, same model and cosine as pgvector",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "zero-result queries left empty",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "score = z | calibration",
+      "source": "offline",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "balanced accuracy",
+      "value": 0.8333,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "score = z | calibration",
+      "source": "offline",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "answerable queries still answered correctly (top-1 kept)",
+      "value": 0.7273,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "score = z | test (held out)",
+      "source": "offline, same model and cosine as pgvector",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "zero-result queries left empty",
+      "value": 0.6667,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "score = z | test (held out)",
+      "source": "offline",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "balanced accuracy",
+      "value": 0.697,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "score = z | test (held out)",
+      "source": "offline",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "answerable top-1 / zero-result empty, no threshold",
+      "value": "0.7955 / 0.0000",
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "no filter | test (held out)",
+      "source": "offline",
+      "note": null,
+      "command": null
+    }
+  ],
+  "details": {
+    "chosen": {
+      "raw": {
+        "threshold": 0.8752423063165834,
+        "calibration": {
+          "answerable_top1_kept": 0.6333333333333333,
+          "zero_rejected": 1.0,
+          "balanced": 0.8166666666666667,
+          "by_type_top1": {
+            "exact": 1.0,
+            "synonym": 0.3333333333333333,
+            "ambiguous": 0.625
+          }
+        },
+        "test": {
+          "answerable_top1_kept": 0.6136363636363636,
+          "zero_rejected": 1.0,
+          "balanced": 0.8068181818181819,
+          "by_type_top1": {
+            "exact": 1.0,
+            "synonym": 0.17647058823529413,
+            "ambiguous": 0.75
+          }
+        }
+      },
+      "margin": {
+        "threshold": 0.07839879714223963,
+        "calibration": {
+          "answerable_top1_kept": 0.7,
+          "zero_rejected": 1.0,
+          "balanced": 0.85,
+          "by_type_top1": {
+            "exact": 1.0,
+            "synonym": 0.4166666666666667,
+            "ambiguous": 0.75
+          }
+        },
+        "test": {
+          "answerable_top1_kept": 0.7045454545454546,
+          "zero_rejected": 0.8666666666666667,
+          "balanced": 0.7856060606060606,
+          "by_type_top1": {
+            "exact": 1.0,
+            "synonym": 0.47058823529411764,
+            "ambiguous": 0.6666666666666666
+          }
+        }
+      },
+      "z": {
+        "threshold": 2.183630280833753,
+        "calibration": {
+          "answerable_top1_kept": 0.6666666666666666,
+          "zero_rejected": 1.0,
+          "balanced": 0.8333333333333333,
+          "by_type_top1": {
+            "exact": 1.0,
+            "synonym": 0.4166666666666667,
+            "ambiguous": 0.625
+          }
+        },
+        "test": {
+          "answerable_top1_kept": 0.7272727272727273,
+          "zero_rejected": 0.6666666666666666,
+          "balanced": 0.696969696969697,
+          "by_type_top1": {
+            "exact": 1.0,
+            "synonym": 0.47058823529411764,
+            "ambiguous": 0.75
+          }
+        }
+      }
+    }
+  }
+}

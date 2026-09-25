@@ -17,6 +17,8 @@ export interface SearchResult {
   detectionConfidence: number | null;
   source: "MANUAL" | "AUTO_DETECTED";
   boundingBox: Record<string, unknown> | null;
+  /** Similarity minus the query's mean similarity to the venue's POIs of the same source; null when not judged. */
+  relevanceMargin?: number | null;
 }
 
 /** Mirrors dev.chaya.api.search.SearchDtos.SearchResponse. matchType: "embedding" is real CLIP cosine
@@ -25,7 +27,11 @@ export interface SearchResult {
 export interface SearchResponse {
   query: string;
   matchType: "embedding" | "lexical_fallback";
+  /** What the venue has for the query; empty means nothing relevant was found. */
   results: SearchResult[];
+  /** Only when results is empty: the nearest candidates, which did NOT clear the relevance threshold. */
+  closestMatches?: SearchResult[];
+  relevance?: "FILTERED" | "UNFILTERED" | "LEXICAL";
 }
 
 export interface SearchOptions {

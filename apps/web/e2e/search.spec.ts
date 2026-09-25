@@ -60,3 +60,26 @@ test("an empty search result set is shown honestly, not as an error", async ({ p
 
   await expect(page.getByTestId("search-results")).toContainText("No matches.");
 });
+
+test("when nothing is relevant, the closest candidates are offered as such, never as matches", async ({ page }) => {
+  const expiresAt = new Date(Date.now() + 60_000).toISOString();
+  const closest = { poiId: "p-1", floorId: FLOOR_ID, label: "Water fountain", category: "drinks", tags: [], x: 1, y: 0, z: 2,
+    similarity: 0.79, detectionConfidence: null, source: "MANUAL", boundingBox: null, relevanceMargin: 0.02 };
+  await mockJson(page, "**/mock-api/api/v1/public/viewer-token", { token: "cvt_test", expiresAt, venueId: VENUE_ID });
+  await mockJson(page, `**/mock-api/api/v1/venues/${VENUE_ID}/floors`, [{ id: FLOOR_ID, level: 0, name: "Ground Floor" }]);
+  await mockJson(page, `**/mock-api/api/v1/venues/${VENUE_ID}/floors/${FLOOR_ID}/reconstructions`, []);
+  await mockJson(page, `**/mock-api/api/v1/venues/${VENUE_ID}/pois`, []);
+  await mockJson(page, `**/mock-api/api/v1/venues/${VENUE_ID}/search**`, {
+    query: "swimming pool", matchType: "embedding", results: [], closestMatches: [closest], relevance: "FILTERED" });
+
+  await page.goto("/viewer?link=good-secret");
+  await page.getByLabel("Search query").fill("swimming pool");
+  await page.getByRole("button", { name: "Go" }).click();
+
+  const panel = page.getByTestId("search-closest");
+  await expect(panel).toContainText("Nothing matching “swimming pool” here. Closest:");
+  await expect(panel).toContainText("Water fountain");
+  await expect(panel).not.toContainText("% match");
+  await expect(page.getByTestId("search-results")).not.toContainText("Water fountain");
+  await expect(page.getByTestId("search-results")).not.toContainText("No matches.");
+});

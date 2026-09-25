@@ -135,8 +135,25 @@ export default function SemanticSearchPanel({ venueId, floorId, onSelectResult }
                 </button>
               </li>
             ))}
-            {response.results.length === 0 && <li className="text-xs text-zinc-500">No matches.</li>}
+            {response.results.length === 0 && (response.closestMatches ?? []).length === 0 && (
+              <li className="text-xs text-zinc-500">No matches.</li>
+            )}
           </ul>
+          {response.results.length === 0 && (response.closestMatches ?? []).length > 0 && (
+            <div className="mt-2" data-testid="search-closest">
+              <p className="text-xs text-zinc-600">Nothing matching &ldquo;{response.query}&rdquo; here. Closest:</p>
+              <ul className="mt-1 space-y-1">
+                {(response.closestMatches ?? []).map((r) => (
+                  <li key={r.poiId}>
+                    <button className="w-full rounded border border-dashed px-2 py-1 text-left text-sm text-zinc-600 hover:bg-zinc-50"
+                      onClick={() => onSelectResult(r)}>
+                      {r.label}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </>
       )}
     </section>

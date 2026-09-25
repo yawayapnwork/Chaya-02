@@ -81,6 +81,15 @@ chaya:
     vision-timeout: PT5S
     default-top-k: 10
     max-top-k: 50
+    # POI versions without an embedding are embedded by PoiEmbeddingBackfill this often, this many per pass.
+    embedding-backfill-interval: PT5S
+    embedding-backfill-batch: 50
+    # Vision circuit breaker: after a failed call, searches fall back at once and a probe checks this often.
+    vision-probe-interval: PT5S
+    # Relevance (SemanticSearchService): margin over the venue mean, calibrated in benchmarks/b3_semantic_search.
+    relevance-min-margin: 0.078
+    relevance-min-pois: 8
+    closest-matches: 3
   navigation:
     standard-walking-speed-mps: 1.3
     accessible-walking-speed-mps: 1.0

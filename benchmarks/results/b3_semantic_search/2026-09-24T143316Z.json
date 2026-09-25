@@ -1,0 +1,1892 @@
+{
+  "benchmark": "b3_semantic_search",
+  "title": "Semantic search: CLIP embeddings vs lexical fallback",
+  "started": "2026-09-24T14:33:16+00:00",
+  "finished": "2026-09-24T14:46:00+00:00",
+  "git": {
+    "commit": "998e1bc8383b0fc08ef48bdc70a028744e286eb1",
+    "dirty_files": 10
+  },
+  "environment": {
+    "python": "3.12.10",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "cpus": 18,
+    "api_image": "sha256:430abc86b4a6b515dae4309b38c9d120b3e69df731a6c0b2b71a4ed716682739",
+    "vision_image": "sha256:c63205569108b26774f10a3d1b1d3d15fbc55af7ec8de36c966d59f3a02ceb43",
+    "vision_model": "open_clip:ViT-B-32:openai"
+  },
+  "inputs": {
+    "dataset": "benchmarks\\b3_semantic_search\\dataset.json",
+    "dataset_sha256": "a12792c1bcbf37eb486b56223bbabda15205ddeb0216c4bd0f304bea138cec0e",
+    "pois": 30,
+    "queries": {
+      "exact": 15,
+      "synonym": 17,
+      "ambiguous": 12,
+      "zero_result": 15
+    }
+  },
+  "metrics": [
+    {
+      "metric": "time until all new POIs searchable by meaning",
+      "value": 7.92,
+      "unit": "s",
+      "kind": "measured",
+      "condition": "embedding job",
+      "source": "poll of poi_version.embedding after the last POI was created",
+      "note": "30 POIs; job interval chaya.search.embedding-backfill-interval",
+      "command": null
+    },
+    {
+      "metric": "embedding backfill interval",
+      "value": 5,
+      "unit": "s",
+      "kind": "configuration",
+      "condition": "embedding job",
+      "source": "application.yml",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "search rate limit",
+      "value": 60,
+      "unit": "requests/min/user",
+      "kind": "configuration",
+      "condition": "all",
+      "source": "chaya.rate-limit.search-per-minute",
+      "note": "the runner paces requests below it; pacing does not affect per-request latency",
+      "command": null
+    },
+    {
+      "metric": "top-k requested",
+      "value": 10,
+      "unit": "results",
+      "kind": "configuration",
+      "condition": "all",
+      "source": "runner",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [exact]",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "semantic (CLIP)",
+      "source": "API /search",
+      "note": "n=15",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [exact]",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "semantic (CLIP)",
+      "source": "API /search",
+      "note": "n=15",
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [synonym]",
+      "value": 0.5882,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "semantic (CLIP)",
+      "source": "API /search",
+      "note": "n=17",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [synonym]",
+      "value": 0.8824,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "semantic (CLIP)",
+      "source": "API /search",
+      "note": "n=17",
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [ambiguous]",
+      "value": 0.8333,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "semantic (CLIP)",
+      "source": "API /search",
+      "note": "n=12",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [ambiguous]",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "semantic (CLIP)",
+      "source": "API /search",
+      "note": "n=12",
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [all_answerable]",
+      "value": 0.7955,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "semantic (CLIP)",
+      "source": "API /search",
+      "note": "n=44",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [all_answerable]",
+      "value": 0.9545,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "semantic (CLIP)",
+      "source": "API /search",
+      "note": "n=44",
+      "command": null
+    },
+    {
+      "metric": "zero-result queries correctly returning no results",
+      "value": 0.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "semantic (CLIP)",
+      "source": "API /search",
+      "note": "n=15",
+      "command": null
+    },
+    {
+      "metric": "client latency p50",
+      "value": 154.1,
+      "unit": "ms",
+      "kind": "measured",
+      "condition": "semantic (CLIP)",
+      "source": "HTTP round trip from the benchmark host",
+      "note": "177 requests",
+      "command": null
+    },
+    {
+      "metric": "client latency p95",
+      "value": 564.4,
+      "unit": "ms",
+      "kind": "measured",
+      "condition": "semantic (CLIP)",
+      "source": "HTTP round trip from the benchmark host",
+      "note": "177 requests",
+      "command": null
+    },
+    {
+      "metric": "server latency p50",
+      "value": 116.0,
+      "unit": "ms",
+      "kind": "measured",
+      "condition": "semantic (CLIP)",
+      "source": "search_query.latency_ms",
+      "note": "236 requests",
+      "command": null
+    },
+    {
+      "metric": "server latency p95",
+      "value": 225.25,
+      "unit": "ms",
+      "kind": "measured",
+      "condition": "semantic (CLIP)",
+      "source": "search_query.latency_ms",
+      "note": "236 requests",
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [exact]",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "lexical fallback (pg_trgm)",
+      "source": "API /search",
+      "note": "n=15",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [exact]",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "lexical fallback (pg_trgm)",
+      "source": "API /search",
+      "note": "n=15",
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [synonym]",
+      "value": 0.0588,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "lexical fallback (pg_trgm)",
+      "source": "API /search",
+      "note": "n=17",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [synonym]",
+      "value": 0.0588,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "lexical fallback (pg_trgm)",
+      "source": "API /search",
+      "note": "n=17",
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [ambiguous]",
+      "value": 0.6667,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "lexical fallback (pg_trgm)",
+      "source": "API /search",
+      "note": "n=12",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [ambiguous]",
+      "value": 0.6667,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "lexical fallback (pg_trgm)",
+      "source": "API /search",
+      "note": "n=12",
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [all_answerable]",
+      "value": 0.5455,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "lexical fallback (pg_trgm)",
+      "source": "API /search",
+      "note": "n=44",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [all_answerable]",
+      "value": 0.5455,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "lexical fallback (pg_trgm)",
+      "source": "API /search",
+      "note": "n=44",
+      "command": null
+    },
+    {
+      "metric": "zero-result queries correctly returning no results",
+      "value": 0.8,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "lexical fallback (pg_trgm)",
+      "source": "API /search",
+      "note": "n=15",
+      "command": null
+    },
+    {
+      "metric": "client latency p50",
+      "value": 26.3,
+      "unit": "ms",
+      "kind": "measured",
+      "condition": "lexical fallback (pg_trgm)",
+      "source": "HTTP round trip from the benchmark host",
+      "note": "177 requests",
+      "command": null
+    },
+    {
+      "metric": "client latency p95",
+      "value": 3744.8,
+      "unit": "ms",
+      "kind": "measured",
+      "condition": "lexical fallback (pg_trgm)",
+      "source": "HTTP round trip from the benchmark host",
+      "note": "177 requests",
+      "command": null
+    },
+    {
+      "metric": "server latency p50",
+      "value": 2.0,
+      "unit": "ms",
+      "kind": "measured",
+      "condition": "lexical fallback (pg_trgm)",
+      "source": "search_query.latency_ms",
+      "note": "236 requests",
+      "command": null
+    },
+    {
+      "metric": "server latency p95",
+      "value": 3800.25,
+      "unit": "ms",
+      "kind": "measured",
+      "condition": "lexical fallback (pg_trgm)",
+      "source": "search_query.latency_ms",
+      "note": "236 requests",
+      "command": null
+    },
+    {
+      "metric": "top-1 similarity, correctly answered queries (min / median)",
+      "value": "0.804 / 0.919",
+      "unit": "cosine",
+      "kind": "measured",
+      "condition": "semantic (CLIP)",
+      "source": "API /search",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "top-1 similarity, zero-result queries (median / max)",
+      "value": "0.836 / 0.868",
+      "unit": "cosine",
+      "kind": "measured",
+      "condition": "semantic (CLIP)",
+      "source": "API /search",
+      "note": "if max(zero) >= min(correct), no single similarity cut-off separates them on this dataset",
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [exact]",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "ablation: label_only",
+      "source": "vision /v1/embed-text + cosine (offline)",
+      "note": "n=15",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [exact]",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "ablation: label_only",
+      "source": "vision /v1/embed-text + cosine (offline)",
+      "note": "n=15",
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [synonym]",
+      "value": 0.5294,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "ablation: label_only",
+      "source": "vision /v1/embed-text + cosine (offline)",
+      "note": "n=17",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [synonym]",
+      "value": 0.8235,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "ablation: label_only",
+      "source": "vision /v1/embed-text + cosine (offline)",
+      "note": "n=17",
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [ambiguous]",
+      "value": 0.8333,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "ablation: label_only",
+      "source": "vision /v1/embed-text + cosine (offline)",
+      "note": "n=12",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [ambiguous]",
+      "value": 0.9167,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "ablation: label_only",
+      "source": "vision /v1/embed-text + cosine (offline)",
+      "note": "n=12",
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [all_answerable]",
+      "value": 0.7727,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "ablation: label_only",
+      "source": "vision /v1/embed-text + cosine (offline)",
+      "note": "n=44",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [all_answerable]",
+      "value": 0.9091,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "ablation: label_only",
+      "source": "vision /v1/embed-text + cosine (offline)",
+      "note": "n=44",
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [exact]",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "ablation: label_category_tags",
+      "source": "vision /v1/embed-text + cosine (offline)",
+      "note": "n=15",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [exact]",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "ablation: label_category_tags",
+      "source": "vision /v1/embed-text + cosine (offline)",
+      "note": "n=15",
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [synonym]",
+      "value": 0.5882,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "ablation: label_category_tags",
+      "source": "vision /v1/embed-text + cosine (offline)",
+      "note": "n=17",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [synonym]",
+      "value": 0.8824,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "ablation: label_category_tags",
+      "source": "vision /v1/embed-text + cosine (offline)",
+      "note": "n=17",
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [ambiguous]",
+      "value": 0.8333,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "ablation: label_category_tags",
+      "source": "vision /v1/embed-text + cosine (offline)",
+      "note": "n=12",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [ambiguous]",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "ablation: label_category_tags",
+      "source": "vision /v1/embed-text + cosine (offline)",
+      "note": "n=12",
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [all_answerable]",
+      "value": 0.7955,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "ablation: label_category_tags",
+      "source": "vision /v1/embed-text + cosine (offline)",
+      "note": "n=44",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [all_answerable]",
+      "value": 0.9545,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "ablation: label_category_tags",
+      "source": "vision /v1/embed-text + cosine (offline)",
+      "note": "n=44",
+      "command": null
+    },
+    {
+      "metric": "offline ablation reproduces the API's top-5 (label_category_tags)",
+      "value": "59/59",
+      "unit": "queries",
+      "kind": "measured",
+      "condition": "consistency check",
+      "source": "offline ranking vs API ranking",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [exact]",
+      "value": 0.0333,
+      "unit": "fraction",
+      "kind": "reference",
+      "condition": "random ranking",
+      "source": "analytic: m/N",
+      "note": "N=30 POIs",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [exact]",
+      "value": 0.1667,
+      "unit": "fraction",
+      "kind": "reference",
+      "condition": "random ranking",
+      "source": "analytic: 1 - C(N-m,5)/C(N,5)",
+      "note": "N=30 POIs",
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [synonym]",
+      "value": 0.0451,
+      "unit": "fraction",
+      "kind": "reference",
+      "condition": "random ranking",
+      "source": "analytic: m/N",
+      "note": "N=30 POIs",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [synonym]",
+      "value": 0.215,
+      "unit": "fraction",
+      "kind": "reference",
+      "condition": "random ranking",
+      "source": "analytic: 1 - C(N-m,5)/C(N,5)",
+      "note": "N=30 POIs",
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [ambiguous]",
+      "value": 0.1,
+      "unit": "fraction",
+      "kind": "reference",
+      "condition": "random ranking",
+      "source": "analytic: m/N",
+      "note": "N=30 POIs",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [ambiguous]",
+      "value": 0.4096,
+      "unit": "fraction",
+      "kind": "reference",
+      "condition": "random ranking",
+      "source": "analytic: 1 - C(N-m,5)/C(N,5)",
+      "note": "N=30 POIs",
+      "command": null
+    },
+    {
+      "metric": "dataset",
+      "value": "author-constructed, 30 POIs / 59 queries",
+      "unit": "",
+      "kind": "assumption",
+      "condition": "all",
+      "source": "dataset.json",
+      "note": "stands in for real venue metadata and real user queries, which do not exist yet",
+      "command": null
+    }
+  ],
+  "details": {
+    "setup": {
+      "org": "022524be-9c09-46d8-8508-d0395eaafddf",
+      "venue": "cf62e583-54f5-41d3-9eb2-4bf4d9f52e10",
+      "create_seconds": 0.8359072208404541,
+      "embedded_all_after_seconds": 7.9229817390441895,
+      "pending_left": 0,
+      "embedding_models": [
+        "open_clip:ViT-B-32:openai"
+      ]
+    },
+    "semantic (CLIP)": {
+      "scores": {
+        "exact": {
+          "n": 15,
+          "top1": 1.0,
+          "top5": 1.0
+        },
+        "synonym": {
+          "n": 17,
+          "top1": 0.5882352941176471,
+          "top5": 0.8823529411764706
+        },
+        "ambiguous": {
+          "n": 12,
+          "top1": 0.8333333333333334,
+          "top5": 1.0
+        },
+        "zero_result": {
+          "n": 15,
+          "correct_rejection": 0.0
+        },
+        "all_answerable": {
+          "n": 44,
+          "top1": 0.7954545454545454,
+          "top5": 0.9545454545454546
+        }
+      },
+      "ranked_top5": {
+        "reception desk": [
+          "Reception desk",
+          "Information kiosk",
+          "Lost and found",
+          "Auditorium",
+          "Charging station"
+        ],
+        "cafe": [
+          "Cafe",
+          "Lost and found",
+          "ATM",
+          "Taxi stand",
+          "Luggage storage"
+        ],
+        "atm": [
+          "ATM",
+          "Lost and found",
+          "Cafe",
+          "Luggage storage",
+          "Vending machines"
+        ],
+        "auditorium": [
+          "Auditorium",
+          "Meeting room 2",
+          "Meeting room 1",
+          "Main entrance",
+          "Prayer room"
+        ],
+        "cloakroom": [
+          "Cloakroom",
+          "Lost and found",
+          "Luggage storage",
+          "Men's restroom",
+          "Women's restroom"
+        ],
+        "water fountain": [
+          "Water fountain",
+          "Lost and found",
+          "Men's restroom",
+          "Women's restroom",
+          "Reception desk"
+        ],
+        "charging station": [
+          "Charging station",
+          "Reception desk",
+          "Lost and found",
+          "Luggage storage",
+          "Taxi stand"
+        ],
+        "information kiosk": [
+          "Information kiosk",
+          "Main entrance",
+          "Auditorium",
+          "Reception desk",
+          "Charging station"
+        ],
+        "taxi stand": [
+          "Taxi stand",
+          "Luggage storage",
+          "Cafe",
+          "Lost and found",
+          "ATM"
+        ],
+        "prayer room": [
+          "Prayer room",
+          "Meeting room 1",
+          "Meeting room 2",
+          "Auditorium",
+          "Lost and found"
+        ],
+        "first aid station": [
+          "First aid station",
+          "Lost and found",
+          "AED defibrillator",
+          "Luggage storage",
+          "Cafe"
+        ],
+        "luggage storage": [
+          "Luggage storage",
+          "Lost and found",
+          "Taxi stand",
+          "ATM",
+          "Main entrance"
+        ],
+        "bicycle parking": [
+          "Bicycle parking",
+          "Taxi stand",
+          "Luggage storage",
+          "Main entrance",
+          "Cafe"
+        ],
+        "main staircase": [
+          "Main staircase",
+          "Auditorium",
+          "Main entrance",
+          "Luggage storage",
+          "Reception desk"
+        ],
+        "fire extinguisher": [
+          "Fire extinguisher",
+          "Emergency exit south",
+          "Emergency exit north",
+          "Lost and found",
+          "Water fountain"
+        ],
+        "loo": [
+          "Lost and found",
+          "Cafe",
+          "ATM",
+          "Luggage storage",
+          "Elevator B"
+        ],
+        "lavatory": [
+          "Men's restroom",
+          "Women's restroom",
+          "Accessible restroom",
+          "Elevator B",
+          "Luggage storage"
+        ],
+        "espresso": [
+          "Cafe",
+          "Lost and found",
+          "ATM",
+          "Elevator B",
+          "Luggage storage"
+        ],
+        "withdraw money": [
+          "ATM",
+          "Lost and found",
+          "Cafe",
+          "Luggage storage",
+          "Vending machines"
+        ],
+        "stairway": [
+          "Main staircase",
+          "Elevator B",
+          "Main entrance",
+          "Emergency exit south",
+          "Luggage storage"
+        ],
+        "evacuation route": [
+          "Lost and found",
+          "Cafe",
+          "Taxi stand",
+          "Emergency exit south",
+          "Main entrance"
+        ],
+        "heart attack": [
+          "Cafe",
+          "Lost and found",
+          "ATM",
+          "Luggage storage",
+          "Elevator B"
+        ],
+        "jacket drop-off": [
+          "Luggage storage",
+          "Lost and found",
+          "Cloakroom",
+          "Cafe",
+          "Reception desk"
+        ],
+        "breastfeeding": [
+          "Baby changing room",
+          "Lost and found",
+          "Cafe",
+          "Luggage storage",
+          "ATM"
+        ],
+        "photocopy": [
+          "Printer and copier",
+          "ATM",
+          "Lost and found",
+          "Cafe",
+          "Luggage storage"
+        ],
+        "plenary session": [
+          "Cafe",
+          "Reception desk",
+          "Lost and found",
+          "Auditorium",
+          "ATM"
+        ],
+        "misplaced wallet": [
+          "Lost and found",
+          "Luggage storage",
+          "Cafe",
+          "ATM",
+          "Vending machines"
+        ],
+        "suitcase": [
+          "Luggage storage",
+          "Lost and found",
+          "Taxi stand",
+          "ATM",
+          "Cafe"
+        ],
+        "plug in my laptop": [
+          "Luggage storage",
+          "Lost and found",
+          "Charging station",
+          "ATM",
+          "Cafe"
+        ],
+        "cycle storage": [
+          "Luggage storage",
+          "Bicycle parking",
+          "Taxi stand",
+          "Lost and found",
+          "Charging station"
+        ],
+        "chapel": [
+          "Prayer room",
+          "Auditorium",
+          "Lost and found",
+          "Luggage storage",
+          "Cafe"
+        ],
+        "doorway to the street": [
+          "Main entrance",
+          "Luggage storage",
+          "Information kiosk",
+          "Auditorium",
+          "Men's restroom"
+        ],
+        "restroom": [
+          "Men's restroom",
+          "Women's restroom",
+          "Accessible restroom",
+          "Baby changing room",
+          "Meeting room 2"
+        ],
+        "exit": [
+          "Emergency exit south",
+          "Emergency exit north",
+          "Elevator B",
+          "Main entrance",
+          "Cafe"
+        ],
+        "meeting room": [
+          "Meeting room 2",
+          "Meeting room 1",
+          "Prayer room",
+          "Auditorium",
+          "Cafe"
+        ],
+        "food": [
+          "Cafe",
+          "Lost and found",
+          "Vending machines",
+          "ATM",
+          "Luggage storage"
+        ],
+        "elevator": [
+          "Elevator B",
+          "Elevator A",
+          "Main entrance",
+          "Men's restroom",
+          "Women's restroom"
+        ],
+        "desk": [
+          "Reception desk",
+          "Lost and found",
+          "Cafe",
+          "Printer and copier",
+          "ATM"
+        ],
+        "water": [
+          "Water fountain",
+          "Lost and found",
+          "Cafe",
+          "ATM",
+          "Luggage storage"
+        ],
+        "emergency": [
+          "Lost and found",
+          "Emergency exit south",
+          "Emergency exit north",
+          "Luggage storage",
+          "Fire extinguisher"
+        ],
+        "room": [
+          "Meeting room 2",
+          "Meeting room 1",
+          "Prayer room",
+          "Auditorium",
+          "Cafe"
+        ],
+        "help": [
+          "Lost and found",
+          "Cafe",
+          "ATM",
+          "Luggage storage",
+          "Reception desk"
+        ],
+        "snacks": [
+          "Cafe",
+          "Vending machines",
+          "Lost and found",
+          "Luggage storage",
+          "ATM"
+        ],
+        "transport": [
+          "Taxi stand",
+          "Lost and found",
+          "Luggage storage",
+          "Cafe",
+          "ATM"
+        ],
+        "swimming pool": [
+          "Water fountain",
+          "Meeting room 2",
+          "Meeting room 1",
+          "Lost and found",
+          "Auditorium"
+        ],
+        "hotel rooms": [
+          "Meeting room 2",
+          "Prayer room",
+          "Meeting room 1",
+          "Luggage storage",
+          "Men's restroom"
+        ],
+        "pharmacy": [
+          "Cafe",
+          "Lost and found",
+          "ATM",
+          "Vending machines",
+          "Luggage storage"
+        ],
+        "gym": [
+          "Auditorium",
+          "Meeting room 2",
+          "Meeting room 1",
+          "Lost and found",
+          "Cafe"
+        ],
+        "car rental": [
+          "Taxi stand",
+          "Lost and found",
+          "Luggage storage",
+          "Cafe",
+          "ATM"
+        ],
+        "cinema": [
+          "Auditorium",
+          "Cafe",
+          "Lost and found",
+          "ATM",
+          "Elevator B"
+        ],
+        "petrol station": [
+          "Taxi stand",
+          "Luggage storage",
+          "Cafe",
+          "Lost and found",
+          "ATM"
+        ],
+        "library": [
+          "Lost and found",
+          "Cafe",
+          "Auditorium",
+          "Luggage storage",
+          "Main entrance"
+        ],
+        "playground": [
+          "Lost and found",
+          "Cafe",
+          "ATM",
+          "Taxi stand",
+          "Elevator B"
+        ],
+        "sauna": [
+          "Lost and found",
+          "Elevator B",
+          "Luggage storage",
+          "Auditorium",
+          "ATM"
+        ],
+        "casino": [
+          "Lost and found",
+          "ATM",
+          "Cafe",
+          "Auditorium",
+          "Luggage storage"
+        ],
+        "dentist": [
+          "Lost and found",
+          "Cafe",
+          "ATM",
+          "Luggage storage",
+          "Reception desk"
+        ],
+        "rooftop bar": [
+          "Cafe",
+          "Lost and found",
+          "Reception desk",
+          "Water fountain",
+          "Luggage storage"
+        ],
+        "bowling alley": [
+          "Lost and found",
+          "Cafe",
+          "Luggage storage",
+          "Meeting room 2",
+          "Meeting room 1"
+        ],
+        "petting zoo": [
+          "Lost and found",
+          "Cafe",
+          "ATM",
+          "Taxi stand",
+          "Vending machines"
+        ]
+      },
+      "similarities_top5": {
+        "reception desk": [
+          0.9395,
+          0.8064,
+          0.7781,
+          0.7738,
+          0.7737
+        ],
+        "cafe": [
+          0.9413,
+          0.8458,
+          0.8409,
+          0.8281,
+          0.8237
+        ],
+        "atm": [
+          0.9295,
+          0.8563,
+          0.8486,
+          0.8291,
+          0.8231
+        ],
+        "auditorium": [
+          0.9635,
+          0.8382,
+          0.8366,
+          0.8171,
+          0.7901
+        ],
+        "cloakroom": [
+          0.9192,
+          0.8228,
+          0.8148,
+          0.8128,
+          0.8101
+        ],
+        "water fountain": [
+          0.9314,
+          0.7964,
+          0.7901,
+          0.7869,
+          0.7854
+        ],
+        "charging station": [
+          0.9641,
+          0.8152,
+          0.8106,
+          0.8097,
+          0.8078
+        ],
+        "information kiosk": [
+          0.9195,
+          0.802,
+          0.7944,
+          0.7913,
+          0.7737
+        ],
+        "taxi stand": [
+          0.9737,
+          0.8267,
+          0.8194,
+          0.8155,
+          0.8062
+        ],
+        "prayer room": [
+          0.9372,
+          0.8571,
+          0.857,
+          0.827,
+          0.8219
+        ],
+        "first aid station": [
+          0.965,
+          0.8389,
+          0.8323,
+          0.8214,
+          0.8153
+        ],
+        "luggage storage": [
+          0.9539,
+          0.8274,
+          0.8174,
+          0.8032,
+          0.8024
+        ],
+        "bicycle parking": [
+          0.9709,
+          0.7812,
+          0.7651,
+          0.7441,
+          0.7299
+        ],
+        "main staircase": [
+          0.9855,
+          0.8352,
+          0.833,
+          0.7861,
+          0.784
+        ],
+        "fire extinguisher": [
+          0.9748,
+          0.8368,
+          0.8291,
+          0.7697,
+          0.7635
+        ],
+        "loo": [
+          0.8916,
+          0.8699,
+          0.8661,
+          0.8598,
+          0.8405
+        ],
+        "lavatory": [
+          0.8744,
+          0.8688,
+          0.8505,
+          0.824,
+          0.8106
+        ],
+        "espresso": [
+          0.8129,
+          0.7579,
+          0.755,
+          0.7493,
+          0.7476
+        ],
+        "withdraw money": [
+          0.8766,
+          0.8546,
+          0.8532,
+          0.8396,
+          0.8348
+        ],
+        "stairway": [
+          0.9232,
+          0.8096,
+          0.7984,
+          0.7876,
+          0.7874
+        ],
+        "evacuation route": [
+          0.8234,
+          0.8148,
+          0.8137,
+          0.8122,
+          0.8072
+        ],
+        "heart attack": [
+          0.8416,
+          0.8402,
+          0.8305,
+          0.8098,
+          0.8028
+        ],
+        "jacket drop-off": [
+          0.8467,
+          0.8419,
+          0.8377,
+          0.8144,
+          0.8063
+        ],
+        "breastfeeding": [
+          0.8042,
+          0.8003,
+          0.7899,
+          0.7779,
+          0.7666
+        ],
+        "photocopy": [
+          0.8729,
+          0.8609,
+          0.8498,
+          0.8298,
+          0.8208
+        ],
+        "plenary session": [
+          0.8477,
+          0.8463,
+          0.8455,
+          0.8417,
+          0.8415
+        ],
+        "misplaced wallet": [
+          0.8656,
+          0.8426,
+          0.8247,
+          0.8135,
+          0.8002
+        ],
+        "suitcase": [
+          0.8723,
+          0.8125,
+          0.7867,
+          0.785,
+          0.7811
+        ],
+        "plug in my laptop": [
+          0.8446,
+          0.8357,
+          0.8353,
+          0.8254,
+          0.8253
+        ],
+        "cycle storage": [
+          0.8595,
+          0.8464,
+          0.7991,
+          0.7852,
+          0.7839
+        ],
+        "chapel": [
+          0.8455,
+          0.844,
+          0.8405,
+          0.8198,
+          0.8197
+        ],
+        "doorway to the street": [
+          0.9103,
+          0.7907,
+          0.7878,
+          0.785,
+          0.7823
+        ],
+        "restroom": [
+          0.9477,
+          0.9474,
+          0.9193,
+          0.8175,
+          0.8151
+        ],
+        "exit": [
+          0.8891,
+          0.881,
+          0.8504,
+          0.8473,
+          0.8446
+        ],
+        "meeting room": [
+          0.961,
+          0.9597,
+          0.8636,
+          0.8613,
+          0.8456
+        ],
+        "food": [
+          0.9134,
+          0.8771,
+          0.8603,
+          0.847,
+          0.8422
+        ],
+        "elevator": [
+          0.942,
+          0.9172,
+          0.7839,
+          0.7776,
+          0.7713
+        ],
+        "desk": [
+          0.8789,
+          0.8368,
+          0.8298,
+          0.8275,
+          0.8242
+        ],
+        "water": [
+          0.9011,
+          0.8435,
+          0.8392,
+          0.8286,
+          0.826
+        ],
+        "emergency": [
+          0.8796,
+          0.8642,
+          0.8584,
+          0.8556,
+          0.855
+        ],
+        "room": [
+          0.8748,
+          0.8742,
+          0.866,
+          0.843,
+          0.8389
+        ],
+        "help": [
+          0.8954,
+          0.8649,
+          0.8578,
+          0.8523,
+          0.8341
+        ],
+        "snacks": [
+          0.9088,
+          0.8799,
+          0.8529,
+          0.8451,
+          0.8319
+        ],
+        "transport": [
+          0.887,
+          0.8772,
+          0.8719,
+          0.8533,
+          0.834
+        ],
+        "swimming pool": [
+          0.7919,
+          0.7823,
+          0.7811,
+          0.7711,
+          0.7693
+        ],
+        "hotel rooms": [
+          0.8417,
+          0.841,
+          0.8403,
+          0.8307,
+          0.8242
+        ],
+        "pharmacy": [
+          0.8497,
+          0.8424,
+          0.8327,
+          0.8298,
+          0.8268
+        ],
+        "gym": [
+          0.836,
+          0.8187,
+          0.8179,
+          0.8166,
+          0.8145
+        ],
+        "car rental": [
+          0.8678,
+          0.8545,
+          0.8405,
+          0.835,
+          0.8251
+        ],
+        "cinema": [
+          0.8445,
+          0.8218,
+          0.8157,
+          0.8072,
+          0.7997
+        ],
+        "petrol station": [
+          0.8556,
+          0.8249,
+          0.8233,
+          0.8175,
+          0.8079
+        ],
+        "library": [
+          0.8616,
+          0.855,
+          0.8479,
+          0.8421,
+          0.8368
+        ],
+        "playground": [
+          0.8571,
+          0.8269,
+          0.8185,
+          0.8137,
+          0.8118
+        ],
+        "sauna": [
+          0.7447,
+          0.7421,
+          0.7325,
+          0.7288,
+          0.7277
+        ],
+        "casino": [
+          0.8235,
+          0.816,
+          0.8139,
+          0.7999,
+          0.7973
+        ],
+        "dentist": [
+          0.821,
+          0.8115,
+          0.8079,
+          0.7926,
+          0.791
+        ],
+        "rooftop bar": [
+          0.8028,
+          0.7764,
+          0.7724,
+          0.7687,
+          0.7683
+        ],
+        "bowling alley": [
+          0.7914,
+          0.7871,
+          0.781,
+          0.7654,
+          0.7654
+        ],
+        "petting zoo": [
+          0.7973,
+          0.7839,
+          0.7712,
+          0.7701,
+          0.769
+        ]
+      }
+    },
+    "lexical fallback (pg_trgm)": {
+      "scores": {
+        "exact": {
+          "n": 15,
+          "top1": 1.0,
+          "top5": 1.0
+        },
+        "synonym": {
+          "n": 17,
+          "top1": 0.058823529411764705,
+          "top5": 0.058823529411764705
+        },
+        "ambiguous": {
+          "n": 12,
+          "top1": 0.6666666666666666,
+          "top5": 0.6666666666666666
+        },
+        "zero_result": {
+          "n": 15,
+          "correct_rejection": 0.8
+        },
+        "all_answerable": {
+          "n": 44,
+          "top1": 0.5454545454545454,
+          "top5": 0.5454545454545454
+        }
+      },
+      "ranked_top5": {
+        "reception desk": [
+          "Reception desk"
+        ],
+        "cafe": [
+          "Cafe"
+        ],
+        "atm": [
+          "ATM"
+        ],
+        "auditorium": [
+          "Auditorium"
+        ],
+        "cloakroom": [
+          "Cloakroom"
+        ],
+        "water fountain": [
+          "Water fountain"
+        ],
+        "charging station": [
+          "Charging station",
+          "First aid station",
+          "Baby changing room"
+        ],
+        "information kiosk": [
+          "Information kiosk"
+        ],
+        "taxi stand": [
+          "Taxi stand"
+        ],
+        "prayer room": [
+          "Prayer room",
+          "Meeting room 1",
+          "Meeting room 2"
+        ],
+        "first aid station": [
+          "First aid station",
+          "Charging station"
+        ],
+        "luggage storage": [
+          "Luggage storage"
+        ],
+        "bicycle parking": [
+          "Bicycle parking"
+        ],
+        "main staircase": [
+          "Main staircase",
+          "Main entrance"
+        ],
+        "fire extinguisher": [
+          "Fire extinguisher"
+        ],
+        "loo": [],
+        "lavatory": [],
+        "espresso": [],
+        "withdraw money": [],
+        "stairway": [
+          "Main staircase"
+        ],
+        "evacuation route": [],
+        "heart attack": [],
+        "jacket drop-off": [],
+        "breastfeeding": [],
+        "photocopy": [],
+        "plenary session": [],
+        "misplaced wallet": [],
+        "suitcase": [
+          "Main staircase"
+        ],
+        "plug in my laptop": [],
+        "cycle storage": [
+          "Luggage storage"
+        ],
+        "chapel": [],
+        "doorway to the street": [],
+        "restroom": [
+          "Men's restroom",
+          "Women's restroom",
+          "Accessible restroom",
+          "Prayer room",
+          "Meeting room 1"
+        ],
+        "exit": [
+          "Emergency exit north",
+          "Emergency exit south"
+        ],
+        "meeting room": [
+          "Meeting room 1",
+          "Meeting room 2",
+          "Baby changing room",
+          "Men's restroom",
+          "Prayer room"
+        ],
+        "food": [],
+        "elevator": [
+          "Elevator A",
+          "Elevator B"
+        ],
+        "desk": [
+          "Reception desk"
+        ],
+        "water": [
+          "Water fountain"
+        ],
+        "emergency": [
+          "Emergency exit north",
+          "Emergency exit south"
+        ],
+        "room": [
+          "Prayer room",
+          "Meeting room 1",
+          "Meeting room 2",
+          "Baby changing room",
+          "Cloakroom"
+        ],
+        "help": [],
+        "snacks": [],
+        "transport": [],
+        "swimming pool": [],
+        "hotel rooms": [
+          "Prayer room"
+        ],
+        "pharmacy": [],
+        "gym": [],
+        "car rental": [],
+        "cinema": [],
+        "petrol station": [
+          "Charging station",
+          "First aid station"
+        ],
+        "library": [],
+        "playground": [],
+        "sauna": [],
+        "casino": [
+          "Cafe"
+        ],
+        "dentist": [],
+        "rooftop bar": [],
+        "bowling alley": [],
+        "petting zoo": []
+      },
+      "similarities_top5": {
+        "reception desk": [
+          1.0
+        ],
+        "cafe": [
+          1.0
+        ],
+        "atm": [
+          1.0
+        ],
+        "auditorium": [
+          1.0
+        ],
+        "cloakroom": [
+          1.0
+        ],
+        "water fountain": [
+          1.0
+        ],
+        "charging station": [
+          1.0,
+          0.2963,
+          0.2
+        ],
+        "information kiosk": [
+          1.0
+        ],
+        "taxi stand": [
+          1.0
+        ],
+        "prayer room": [
+          1.0,
+          0.2273,
+          0.2273
+        ],
+        "first aid station": [
+          1.0,
+          0.2963
+        ],
+        "luggage storage": [
+          1.0
+        ],
+        "bicycle parking": [
+          1.0
+        ],
+        "main staircase": [
+          1.0,
+          0.2083
+        ],
+        "fire extinguisher": [
+          1.0
+        ],
+        "loo": [],
+        "lavatory": [],
+        "espresso": [],
+        "withdraw money": [],
+        "stairway": [
+          0.2632
+        ],
+        "evacuation route": [],
+        "heart attack": [],
+        "jacket drop-off": [],
+        "breastfeeding": [],
+        "photocopy": [],
+        "plenary session": [],
+        "misplaced wallet": [],
+        "suitcase": [
+          0.2
+        ],
+        "plug in my laptop": [],
+        "cycle storage": [
+          0.4
+        ],
+        "chapel": [],
+        "doorway to the street": [],
+        "restroom": [
+          0.6,
+          0.5294,
+          0.45,
+          0.2353,
+          0.2
+        ],
+        "exit": [
+          0.25,
+          0.25
+        ],
+        "meeting room": [
+          0.8667,
+          0.8667,
+          0.28,
+          0.2727,
+          0.25
+        ],
+        "food": [],
+        "elevator": [
+          0.8182,
+          0.8182
+        ],
+        "desk": [
+          0.3333
+        ],
+        "water": [
+          0.4
+        ],
+        "emergency": [
+          0.5,
+          0.5
+        ],
+        "room": [
+          0.4167,
+          0.3333,
+          0.3333,
+          0.2632,
+          0.25
+        ],
+        "help": [],
+        "snacks": [],
+        "transport": [],
+        "swimming pool": [],
+        "hotel rooms": [
+          0.2
+        ],
+        "pharmacy": [],
+        "gym": [],
+        "car rental": [],
+        "cinema": [],
+        "petrol station": [
+          0.3333,
+          0.32
+        ],
+        "library": [],
+        "playground": [],
+        "sauna": [],
+        "casino": [
+          0.2
+        ],
+        "dentist": [],
+        "rooftop bar": [],
+        "bowling alley": [],
+        "petting zoo": []
+      }
+    },
+    "ablation label_only": {
+      "scores": {
+        "exact": {
+          "n": 15,
+          "top1": 1.0,
+          "top5": 1.0
+        },
+        "synonym": {
+          "n": 17,
+          "top1": 0.5294117647058824,
+          "top5": 0.8235294117647058
+        },
+        "ambiguous": {
+          "n": 12,
+          "top1": 0.8333333333333334,
+          "top5": 0.9166666666666666
+        },
+        "zero_result": {
+          "n": 15,
+          "correct_rejection": 0.0
+        },
+        "all_answerable": {
+          "n": 44,
+          "top1": 0.7727272727272727,
+          "top5": 0.9090909090909091
+        }
+      },
+      "texts": [
+        "Main entrance",
+        "Reception desk",
+        "Cloakroom",
+        "Accessible restroom",
+        "Men's restroom",
+        "Women's restroom",
+        "Baby changing room",
+        "Elevator A",
+        "Elevator B",
+        "Main staircase",
+        "Emergency exit north",
+        "Emergency exit south",
+        "Fire extinguisher",
+        "First aid station",
+        "AED defibrillator",
+        "Cafe",
+        "Water fountain",
+        "Vending machines",
+        "ATM",
+        "Auditorium",
+        "Meeting room 1",
+        "Meeting room 2",
+        "Prayer room",
+        "Lost and found",
+        "Luggage storage",
+        "Charging station",
+        "Printer and copier",
+        "Information kiosk",
+        "Taxi stand",
+        "Bicycle parking"
+      ]
+    },
+    "ablation label_category_tags": {
+      "scores": {
+        "exact": {
+          "n": 15,
+          "top1": 1.0,
+          "top5": 1.0
+        },
+        "synonym": {
+          "n": 17,
+          "top1": 0.5882352941176471,
+          "top5": 0.8823529411764706
+        },
+        "ambiguous": {
+          "n": 12,
+          "top1": 0.8333333333333334,
+          "top5": 1.0
+        },
+        "zero_result": {
+          "n": 15,
+          "correct_rejection": 0.0
+        },
+        "all_answerable": {
+          "n": 44,
+          "top1": 0.7954545454545454,
+          "top5": 0.9545454545454546
+        }
+      },
+      "texts": [
+        "Main entrance, entrance, front door",
+        "Reception desk, service, front desk, check-in",
+        "Cloakroom, service, coat check",
+        "Accessible restroom, restroom, toilet, wc",
+        "Men's restroom, restroom, toilet",
+        "Women's restroom, restroom, toilet",
+        "Baby changing room, family, nursing",
+        "Elevator A, elevator, lift",
+        "Elevator B, elevator, lift",
+        "Main staircase, stairs",
+        "Emergency exit north, exit, fire exit",
+        "Emergency exit south, exit, fire exit",
+        "Fire extinguisher, safety",
+        "First aid station, medical, first aid kit",
+        "AED defibrillator, medical, defibrillator",
+        "Cafe, food, coffee, snacks",
+        "Water fountain, drinks, drinking water",
+        "Vending machines, food, snacks, drinks",
+        "ATM, finance, cash machine",
+        "Auditorium, venue, main hall",
+        "Meeting room 1, meeting room",
+        "Meeting room 2, meeting room",
+        "Prayer room, quiet room, multi-faith room",
+        "Lost and found, service",
+        "Luggage storage, service, bag drop",
+        "Charging station, power, phone charging",
+        "Printer and copier, office, printing",
+        "Information kiosk, information, map, directory",
+        "Taxi stand, transport, cab",
+        "Bicycle parking, transport, bike rack"
+      ]
+    },
+    "rate_limited_retries": 0
+  }
+}

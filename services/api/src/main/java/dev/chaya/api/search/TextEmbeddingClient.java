@@ -6,6 +6,14 @@ package dev.chaya.api.search;
  * semantically related text and images land near each other, not a hardcoded synonym table. */
 public interface TextEmbeddingClient {
 
+    /** A vector and the exact model that produced it (recorded as poi_version.embedding_model). */
+    record Embedding(float[] vector, String model) {}
+
     /** @throws EmbeddingUnavailableException if no real embedding could be produced. */
-    float[] embed(String text);
+    Embedding embedWithModel(String text);
+
+    /** @throws EmbeddingUnavailableException if no real embedding could be produced. */
+    default float[] embed(String text) {
+        return embedWithModel(text).vector();
+    }
 }

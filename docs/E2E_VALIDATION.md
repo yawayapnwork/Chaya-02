@@ -403,6 +403,10 @@ The first run of this validation had a third FAIL: step 22, admin audit log, HTT
 
 - **F1: manually created POIs are never embedded, so semantic search cannot find them.** This causes the 3 FAILs
   (14.1, 15, B2).
+  - **Update, same day, after this validation:** the missing embedder was built (`PoiEmbeddingService` /
+    `PoiEmbeddingBackfill`, docs/search.md "Manual POIs"). It was verified by the API test suite and by
+    docs/BENCHMARKS.md Benchmark 3, where 30 new manual POIs were searchable by meaning within 7.9 s.
+  - **This E2E run was not repeated** with it: the FAILs above are what this run observed.
   - `PoiService` writes `poi_version` without an embedding; only `SEMANTIC_INDEXING` sets one.
   - The schema expects an asynchronous embedder that does not exist:
     - V5 says the embedding "happens asynchronously after creation";
