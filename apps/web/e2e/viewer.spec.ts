@@ -2,8 +2,8 @@ import { test, expect, type Page } from "@playwright/test";
 
 // Smoke coverage for the digital twin viewer's app-level states. These mock only the backend HTTP
 // contract (lib/reconstruction-api.ts, lib/capture-api.ts, lib/poi-api.ts) -- never the 3D scene itself.
-// Loading a real .ksplat through WebGL is out of scope for a browser smoke test; that path is exercised
-// manually and by the SplatViewerCanvas/ksplat round-trip unit tests instead.
+// Loading a real .ksplat is covered separately: e2e/ksplat-viewer.spec.ts serves the production encoder's bytes to the
+// real GaussianSplats3D viewer, and lib/ksplat-compat.test.ts checks every field with the pinned KSplatLoader.
 
 const VENUE_ID = "11111111-1111-1111-1111-111111111111";
 const FLOOR_ID = "22222222-2222-2222-2222-222222222222";

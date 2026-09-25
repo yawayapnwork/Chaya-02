@@ -1,8 +1,10 @@
 """Stage 10: generates the deliverable artifacts -- the .ksplat the web viewer loads and the manifest that
 records exactly how every artifact in the run was produced.
 
-Conversion to .ksplat (chaya_worker.ksplat) only runs, and only publishes a file, when the source Gaussian
-cloud actually decoded; there is no code path that writes an empty or placeholder .ksplat. The manifest
+Conversion to .ksplat (chaya_worker.ksplat: the level-0 KSplat layout of the pinned viewer library,
+@mkkellogg/gaussian-splats-3d 0.4.7, proven by apps/web/lib/ksplat-compat.test.ts) only runs, and only publishes a
+file, when the source Gaussian cloud actually decoded; there is no code path that writes an empty or placeholder
+.ksplat. The manifest
 (chaya_worker.manifest) covers both this stage's own outputs and the upstream artifacts it consumed, each
 with its checksum, artifact/worker version, source scan version and the processing configuration used.
 """

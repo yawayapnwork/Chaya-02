@@ -1,12 +1,14 @@
 # Web app: lint, unit tests, typecheck, production build, browser e2e (mocked backend).
+# Also triggered by the worker's .ksplat encoder and the shared fixtures: lib/ksplat-compat.test.ts (unit tests) and
+# e2e/ksplat-viewer.spec.ts load the production .ksplat fixture with the pinned GaussianSplats3D.
 name: frontend
 
 on:
   pull_request:
-    paths: ["apps/web/**", ".github/workflows/frontend.yml"]
+    paths: ["apps/web/**", "packages/contracts/fixtures/**", "services/reconstruction/chaya_worker/ksplat.py", ".github/workflows/frontend.yml"]
   push:
     branches: [main]
-    paths: ["apps/web/**", ".github/workflows/frontend.yml"]
+    paths: ["apps/web/**", "packages/contracts/fixtures/**", "services/reconstruction/chaya_worker/ksplat.py", ".github/workflows/frontend.yml"]
   workflow_dispatch:
 
 permissions:

@@ -64,22 +64,38 @@ def test_ply_rejects_a_non_ply_file(tmp_path):
 
 # ---- ksplat.py ----------------------------------------------------------------------------------
 
-def test_ksplat_round_trips_within_quantisation_precision(tmp_path):
+# Viewer compatibility is NOT proven here: apps/web/lib/ksplat-compat.test.ts loads these files with the pinned
+# GaussianSplats3D KSplatLoader. These tests pin the byte layout that loader was verified against, and the
+# diagnostic decoder, so an accidental layout change fails fast in the worker's own suite as well.
+
+def test_ksplat_headers_match_the_pinned_viewer_layout():
+    blob = encode(_random_cloud(10))
+    assert len(blob) == 4096 + 1024 + 10 * 44
+    header = np.frombuffer(blob, dtype=np.uint8, count=4096)
+    assert (header[0], header[1]) == (0, 1)  # KSplatLoader.checkVersion: 0.>=1
+    assert header.view("<u4")[1:5].tolist() == [1, 1, 10, 10]  # max sections, sections, max splats, splats
+    assert header.view("<u2")[10] == 0  # compression level
+    section = np.frombuffer(blob, dtype=np.uint8, count=1024, offset=4096)
+    assert section.view("<u4")[[0, 1, 7]].tolist() == [10, 10, 440]
+    assert section.view("<u2")[20] == 0  # spherical-harmonics degree
+
+
+def test_ksplat_records_hold_linear_scale_wxyz_rotation_and_library_colour_bytes():
     cloud = _random_cloud(64)
-    blob = encode(cloud)
-    back = decode(blob)
-    assert len(back) == 64
-    assert np.allclose(cloud.positions, back.positions, atol=1e-4)
-    assert np.allclose(cloud.scales(), back.scales(), atol=1e-4)
-    # rotation/colour/opacity are uint8-quantised: coarse but bounded error, not exact
-    assert np.abs(cloud.rotations_normalized() - back.rotations_wxyz / np.linalg.norm(back.rotations_wxyz, axis=1, keepdims=True)).max() < 0.05
-    assert np.abs(cloud.opacities() - back.opacities()).max() < 0.01
+    stored = decode(encode(cloud))  # diagnostic read-back of the stored values, not a compatibility check
+    np.testing.assert_array_equal(stored["centers"], cloud.positions.astype(np.float32))
+    np.testing.assert_allclose(stored["scales"], np.exp(cloud.scales_log.astype(np.float64)), rtol=1e-6)
+    np.testing.assert_allclose(stored["rotations_wxyz"], cloud.rotations_normalized(), atol=1e-6)
+    expected_rgb = np.clip(np.floor((0.5 + 0.28209479177387814 * cloud.colors_dc.astype(np.float64)) * 255), 0, 255)
+    np.testing.assert_array_equal(stored["rgba"][:, :3], expected_rgb)
+    np.testing.assert_array_equal(stored["rgba"][:, 3], np.floor(cloud.opacities().astype(np.float64) * 255))
 
 
-def test_ksplat_file_size_matches_the_documented_layout(tmp_path):
-    cloud = _random_cloud(10)
-    blob = encode(cloud)
-    assert len(blob) == 32 + 1024 + 10 * 44
+def test_ksplat_refuses_a_zero_quaternion():
+    cloud = _random_cloud(3)
+    cloud.rotations_wxyz[1] = 0
+    with pytest.raises(ValueError, match="quaternion"):
+        encode(cloud)
 
 
 def test_ksplat_refuses_unimplemented_compression_levels():

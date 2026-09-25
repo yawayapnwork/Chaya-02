@@ -146,7 +146,7 @@ export default function SplatViewerCanvas({
       })
       .then(() => {
         if (disposed || !viewer) return;
-        onLoaded(viewer.getSplatCount());
+        onLoaded(viewer.getSplatMesh().getSplatCount()); // 0.4.7: the count lives on the SplatMesh, not the Viewer
         const loop = () => {
           if (disposed || !viewer || !cssRenderer) return;
           viewer.update();

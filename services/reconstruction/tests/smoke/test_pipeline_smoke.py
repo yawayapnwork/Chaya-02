@@ -178,10 +178,11 @@ def test_capture_to_processing_to_artifact_generation(tmp_path, face_video, meta
         assert not a["containsPii"]
 
     ksplat_file = storage.root / DERIVED_BUCKET / kinds["KSPLAT"]["key"]
+    # Diagnostic read-back only: viewer compatibility of this layout is proven by apps/web/lib/ksplat-compat.test.ts.
     decoded = ksplat.decode(ksplat_file.read_bytes())
     source = read_ply(splat_path)
-    assert len(decoded) == len(source)
-    assert np.allclose(decoded.positions, source.positions, atol=1e-6), "the .ksplat encodes the input splat's positions"
+    assert len(decoded["centers"]) == len(source)
+    assert np.allclose(decoded["centers"], source.positions, atol=1e-6), "the .ksplat encodes the input splat's positions"
 
     manifest = json.loads((storage.root / DERIVED_BUCKET / kinds["ARTIFACT_MANIFEST"]["key"]).read_text(encoding="utf-8"))
     manifest_text = json.dumps(manifest)

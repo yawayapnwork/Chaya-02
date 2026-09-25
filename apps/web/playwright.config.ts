@@ -1,8 +1,8 @@
 import { defineConfig, devices } from "@playwright/test";
 
-// Smoke tests only: no real backend/Keycloak is required. Every test mocks the exact API responses it
-// needs via page.route(); nothing here asserts against a fabricated 3D scene -- the ksplat-loading tests
-// intentionally stop at "download started" rather than faking a real GaussianSplats3D render.
+// Smoke tests only: no real backend/Keycloak is required. Every test mocks the exact JSON API responses it
+// needs via page.route(); nothing here asserts against a fabricated 3D scene. The one scene that is loaded
+// (e2e/ksplat-viewer.spec.ts) is the production encoder's real .ksplat, rendered by the real GaussianSplats3D.
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: true,

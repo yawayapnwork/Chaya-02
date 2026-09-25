@@ -45,7 +45,7 @@ belongs to the artifact-generation milestone, and a `PARTIAL` result must be fin
 | 7 | `SEMANTIC_SEGMENTATION` | per-frame SegFormer (or any configured HF model) segmentation, projected onto the splat and bucketed into floor/wall/furniture/clutter | implemented; **needs torch + transformers + the model cached locally + COLMAP**; fails with `DEPENDENCY_UNAVAILABLE` here |
 | 8 | `GEOMETRIC_CLEANUP` | Open3D statistical + radius outlier removal (radius a multiple of the cloud's own median nearest-neighbour spacing: scale-invariant, not metres), then semantic class-aware filtering (never opacity alone) | implemented; **needs Open3D**; fails with `DEPENDENCY_UNAVAILABLE` here |
 | 9 | `PLANE_FITTING` | iterative Open3D RANSAC plane extraction (spacing-relative inlier distance); floor/ceiling/wall classification against the calibrated frame's up or this reconstruction's `GRAVITY_ESTIMATE` (floor plane oriented by the cameras; [coordinate-frames.md](coordinate-frames.md)) | implemented; **needs Open3D**; fails with `DEPENDENCY_UNAVAILABLE` here |
-| 10 | `ARTIFACT_GENERATION` | `.ksplat` conversion (compression level 0), the artifact manifest, the compressed viewer bundle | implemented; only needs the cleaned splat as input |
+| 10 | `ARTIFACT_GENERATION` | `.ksplat` conversion (the level-0 KSplat layout of the pinned viewer, @mkkellogg/gaussian-splats-3d 0.4.7; see "Viewer asset format" below), the artifact manifest, the compressed viewer bundle | implemented; only needs the cleaned splat as input |
 | 11 | `SEMANTIC_INDEXING` | Grounding DINO open-vocabulary detection (stock checkpoint, not fine-tuned) + 3D localisation against the splat + real CLIP embeddings, positions in canonical metres; see [docs/search.md](docs/search.md) | implemented; **needs a calibrated coordinate frame** (else `NOT_CALIBRATED`) **and torch + transformers + open_clip + Pillow + the Grounding DINO checkpoint cached locally + COLMAP** |
 | 12 | `NAVIGATION_BAKING` | walkable surface from the floor plane + wall/furniture obstacles in canonical metres, Recast (`recast-cli`) polygon navmesh through the single Recast axis boundary, STANDARD/STEP_FREE routing graphs from real per-polygon slope against canonical +Z; see [docs/navigation.md](docs/navigation.md) | implemented; **needs a calibrated coordinate frame** (else `NOT_CALIBRATED`) **and `recast-cli`** |
 
@@ -70,6 +70,30 @@ SEMANTIC_INDEXING, NAVIGATION_BAKING, REGION_ALIGNMENT, REGION_SPLICE -- read th
 order and fail with `NOT_CALIBRATED` (retryable) when there is none; they are never run on reconstruction units
 presented as metres. A full run therefore stops at SEMANTIC_INDEXING until an operator calibrates the reconstruction
 (`POST /venues/{v}/reconstructions/{runId}/coordinate-frames`) and retries the run.
+
+Viewer asset format: `chaya_worker.ksplat` writes the KSplat layout that the pinned viewer library
+(@mkkellogg/gaussian-splats-3d **0.4.7**, `apps/web/package-lock.json`) reads, with values read from that version's own
+source, not from memory: a 4096-byte file header (version 0.1, one section, compression level 0), a 1024-byte section
+header, then 44-byte records (float32 position, float32 linear scale, float32 rotation **w, x, y, z**, uint8 RGBA with
+colour `floor((0.5 + SH_C0·f_dc)·255)` and alpha `floor(sigmoid(opacity)·255)`). Only level 0, SH degree 0. The earlier
+hand-made layout (32-byte header, uint8 rotations) could not be loaded by that library at all (`RangeError: Invalid
+typed array length: 4096`); it was replaced.
+
+What proves compatibility, and nothing else does:
+
+- `apps/web/lib/ksplat-compat.test.ts` (`npm test`) loads the committed production output
+  `packages/contracts/fixtures/ksplat/scene.ksplat` with the pinned library's own `KSplatLoader` (its ES module build),
+  and checks every splat's count, position, scale, rotation, colour and alpha against values derived from the input
+  cloud (`cloud.json`) in the test itself. It also cross-checks against the library's own route for the same cloud as a
+  standard 3DGS PLY (`PlyLoader`).
+- `apps/web/e2e/ksplat-viewer.spec.ts` (Playwright) serves those bytes as the artifact download to the real Next.js
+  viewer, which loads them with GaussianSplats3D in Chromium and reports all 3 splats.
+- `services/reconstruction/tests/unit/test_ksplat_fixture.py` fails unless the committed fixture is byte-identical to what
+  the production encoder and PLY writer produce now (regenerate with
+  `packages/contracts/fixtures/ksplat/generate_ksplat_fixture.py`, then re-run the two tests above).
+
+`chaya_worker.ksplat.decode` is a diagnostic reader of the same layout; a round trip through it is not evidence of viewer
+compatibility.
 
 The cleanup benchmark harness (`python -m chaya_worker.benchmarks.cleanup_benchmark`) compares no-cleanup,
 opacity-threshold, statistical-outlier, density/radius-outlier and semantic-aware cleanup on a trained

@@ -8,10 +8,15 @@ implementation. It does not list strengths.
 Where a finding depends on an external library's behaviour that I could not run here, it says **needs verification** and
 names the test that would settle it.
 
-> **Status update (coordinate-frame correction).** The findings below remain as written against `cf92005`. Since then the
-> coordinate-frame model in [coordinate-frames.md](coordinate-frames.md) has been implemented. What follows is what
-> it changes. "Addressed" means implemented and tested with synthetic mathematical fixtures. **None of it has been
-> validated on a real capture.**
+> **Status update (coordinate-frame correction; `.ksplat` format).** The findings below remain as written against
+> `cf92005`. Since then two things have been implemented: the coordinate-frame model in
+> [coordinate-frames.md](coordinate-frames.md), and a `.ksplat` encoder verified against the pinned viewer library.
+> The table says what each changes.
+>
+> - "Addressed" means implemented and tested with synthetic mathematical fixtures. **None of the coordinate work has
+>   been validated on a real capture.**
+> - The `.ksplat` result is proven with a tiny fixture cloud. It has not been exercised with a real reconstruction's
+>   splat.
 >
 > | Finding | State |
 > |---|---|
@@ -24,7 +29,9 @@ names the test that would settle it.
 > | N-5 multi-floor in unrelated frames | Addressed. Both floors must be registered to one surveyed venue datum, otherwise `FLOORS_NOT_REGISTERED`. Connectors are still matched by proximity within that datum. |
 > | AR-3 relocalization | Partially. One anchor gives `residualMeters: null`; observations are capped and must be distinct; a gravity-tilt check is added. `physicalPose` is still unused. |
 > | AR-4 anchors never invalidated | Addressed. Anchors are bound to the floor's current frame and become STALE when a different reconstruction becomes current. |
-> | Everything else (R-1 `.ksplat` format, N-1 `recast-cli`, N-2, N-3, AR-1, AR-2, security, ops, …) | Unchanged. |
+> | R-1 `.ksplat` layout (**confirmed**: the pinned library could not load the old files, `RangeError: Invalid typed array length: 4096`) | Fixed. The encoder writes the level-0 layout of @mkkellogg/gaussian-splats-3d 0.4.7. This is proven by `apps/web/lib/ksplat-compat.test.ts`, which uses the real `KSplatLoader` plus a cross-check against the library's own PLY loader, and by `apps/web/e2e/ksplat-viewer.spec.ts`, where the real viewer in Chromium loads the production bytes. See docs/pipeline.md, "Viewer asset format". |
+> | T-2 viewer test never delivers bytes | Fixed by `e2e/ksplat-viewer.spec.ts`. It exposed a second defect on the same path: the viewer called `Viewer.getSplatCount()`, which 0.4.7 does not have, so no scene could ever reach "loaded". It now uses `getSplatMesh().getSplatCount()`. |
+> | Everything else (N-1 `recast-cli`, N-2, N-3, AR-1, AR-2, security, ops, …) | Unchanged. |
 
 Severity scale:
 

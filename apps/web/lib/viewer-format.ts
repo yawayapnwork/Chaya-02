@@ -17,8 +17,8 @@ export function formatDate(iso: string): string {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
 }
 
-/** Euclidean distance between two POIs in the reconstruction's own scene coordinates. The pipeline has no
- * metric calibration step, so this is deliberately "scene units", never labelled as metres. */
+/** Euclidean distance between two points given in the same frame. POI coordinates are canonical metres only when
+ * both POIs are CURRENT in the same calibrated frame (docs/coordinate-frames.md); otherwise the result has no unit. */
 export function straightLineDistance(a: Pick<Poi, "x" | "y" | "z">, b: Pick<Poi, "x" | "y" | "z">): number {
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 }
