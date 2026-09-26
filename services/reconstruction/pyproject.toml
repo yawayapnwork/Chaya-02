@@ -60,3 +60,4 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S108"]  # assert is how pytest checks; temp paths in fixtures
+"tests/splat/test_*.py" = ["S101", "S108", "E402"]  # torch-dependent imports follow pytest.importorskip("torch")

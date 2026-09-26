@@ -41,7 +41,7 @@ belongs to the artifact-generation milestone, and a `PARTIAL` result must be fin
 | 3 | `FRAME_QUALITY_FILTER` | drops blurred (Laplacian variance), under/over-exposed and near-duplicate frames, with reasons | **executes** |
 | 4 | `PRIVACY_PREPROCESS` | face and screen/document detection, blurring, verification pass; fails closed | **executes** |
 | 5 | `POSE_ESTIMATION` | COLMAP feature extraction + matching, GLOMAP mapper, COLMAP mapper fallback, poses.json | implemented; **needs COLMAP** (GLOMAP optional); fails with `DEPENDENCY_UNAVAILABLE` here |
-| 6 | `SPLAT_RECONSTRUCTION` | gsplat training (Adam, L1+D-SSIM) seeded from the SfM point cloud; periodic keyframe renders | implemented; **needs torch + gsplat + CUDA + COLMAP**; fails with `DEPENDENCY_UNAVAILABLE` here |
+| 6 | `SPLAT_RECONSTRUCTION` | gsplat training (Adam, L1+D-SSIM) seeded from the SfM point cloud, with adaptive density control (clone/split/prune, capped), a time-boxed loop, resumable checkpoints and one colour convention to the viewer; see "Splat training" below | implemented; **needs torch + gsplat + CUDA + COLMAP**; fails with `DEPENDENCY_UNAVAILABLE` here. Training mechanics validated on CPU with a test renderer; **gsplat training has never run** |
 | 7 | `SEMANTIC_SEGMENTATION` | per-frame SegFormer (or any configured HF model) segmentation, projected onto the splat and bucketed into floor/wall/furniture/clutter | implemented; **needs torch + transformers + the model cached locally + COLMAP**; fails with `DEPENDENCY_UNAVAILABLE` here |
 | 8 | `GEOMETRIC_CLEANUP` | Open3D statistical + radius outlier removal (radius a multiple of the cloud's own median nearest-neighbour spacing: scale-invariant, not metres), then semantic class-aware filtering (never opacity alone) | implemented; **needs Open3D**; fails with `DEPENDENCY_UNAVAILABLE` here |
 | 9 | `PLANE_FITTING` | iterative Open3D RANSAC plane extraction (spacing-relative inlier distance); floor/ceiling/wall classification against the calibrated frame's up or this reconstruction's `GRAVITY_ESTIMATE` (floor plane oriented by the cameras; [coordinate-frames.md](coordinate-frames.md)) | implemented; **needs Open3D**; fails with `DEPENDENCY_UNAVAILABLE` here |
@@ -151,7 +151,8 @@ expired run. When the budget is spent:
 - after a reconstruction (`SPLAT`) artifact exists: run `PARTIAL`, quality `PARTIAL`, message states it is not finalized;
 - otherwise: run `FAILED`, `TIME_LIMIT_EXCEEDED`.
 A worker may also report a stage that hit the limit while holding a checkpoint (`failed` + `TIME_LIMIT_EXCEEDED`
-+ an artifact with `partial=true`); only then is the run `PARTIAL`. The UI shows PARTIAL with its own badge and the
++ an artifact with `partial=true`); only then is the run `PARTIAL`. SPLAT_RECONSTRUCTION does exactly this when its
+training loop stops for the budget (see "Splat training"). The UI shows PARTIAL with its own badge and the
 words "not finalized"; a success without `FINAL` quality is flagged as inconsistent.
 
 ## Privacy boundary
@@ -187,10 +188,94 @@ or `docker compose --env-file .env -f infra/docker/docker-compose.yml --profile 
 and OpenCV only. A GPU worker image needs COLMAP, GLOMAP, PyTorch/CUDA and gsplat on a CUDA base; set `COLMAP_BIN` /
 `GLOMAP_BIN` if they are not on PATH.
 
+## Splat training
+
+`chaya_worker.stages.splat_reconstruction` runs the loop in `chaya_worker.splat_training` with gsplat's CUDA rasteriser.
+
+**Representation.** N Gaussians, float32, optimised in unconstrained space and written to the PLY as stored:
+
+| Parameter | Shape | Stored as | Rasteriser receives |
+|---|---|---|---|
+| position | (N, 3) | `means` (PLY x, y, z) | as is |
+| scale | (N, 3) | log standard deviation (`scale_0..2`) | `exp()` |
+| rotation | (N, 4) | wxyz quaternion, unnormalised (`rot_0..3`) | normalised |
+| opacity | (N,) | logit (`opacity`) | `sigmoid()` |
+| colour | (N, 3) | degree-0 SH `f_dc` (`f_dc_0..2`) | `SH_C0 * f_dc + 0.5`, clamped at 0 |
+
+**Colour.** `chaya_worker.splat_color` is the single convention. Values are sRGB-encoded from start to finish and are
+never linearised. The chain:
+
+- frame pixel / 255;
+- COLMAP point RGB → `f_dc = (rgb/255 − 0.5) / SH_C0`;
+- training renders `SH_C0 · f_dc + 0.5`;
+- the PLY stores `f_dc`;
+- the ksplat byte is `floor((SH_C0 · f_dc + 0.5) · 255)`;
+- the viewer shows byte / 255.
+
+This fixes review R-3: training used to render `sigmoid(f_dc)`, so 0.8 was shown as ≈0.89. Documented tolerances:
+
+- RGB → f_dc → rendered colour: < 1e-6.
+- PLY: bit-exact.
+- Viewer byte: equal to the input byte, or 1 below it, never above.
+- A converged single-colour fit: the viewer-decoded render is within 0.02 of the target.
+
+**Adaptive density control**, as in the 3DGS paper and gsplat's DefaultStrategy:
+
+- The screen-space position gradient is accumulated per Gaussian (normalised to NDC).
+- Every `GSPLAT_DENSIFY_EVERY` steps in `[GSPLAT_DENSIFY_START, GSPLAT_DENSIFY_STOP)`, Gaussians above
+  `GSPLAT_DENSIFY_GRAD_THRESHOLD` are cloned if small and split in two (scale / 1.6) if large.
+- Gaussians are pruned below `GSPLAT_PRUNE_OPACITY`, and, after the first opacity reset, when larger than
+  `GSPLAT_PRUNE_SCALE_FRACTION` × the scene extent.
+- Opacities are reset every `GSPLAT_OPACITY_RESET_EVERY` steps.
+- Growth never exceeds `GSPLAT_MAX_GAUSSIANS`. When there are more candidates than room, the highest-gradient ones win.
+- Adam moments follow their Gaussians: new Gaussians start at zero, and removed ones are dropped.
+- Every event (before, cloned, split, pruned, capped, after) is in the training report.
+- Not implemented from the reference: position learning-rate decay, higher SH degrees, and screen-size pruning.
+
+**Time budget and status.** Before each iteration the loop checks the work order's deadline. It stops when the time
+left is below `GSPLAT_STOP_MARGIN_SECONDS` (time reserved for writing and uploading outputs) plus the slowest iteration
+so far.
+
+- **COMPLETED**, all `GSPLAT_ITERATIONS` ran: the stage SUCCEEDS with `SPLAT`.
+- **PARTIAL**, stopped early: the stage FAILS with `TIME_LIMIT_EXCEEDED`, `SPLAT_PARTIAL` (`partial=true`), and error
+  details carrying the completed and target iterations and the Gaussian count. The run becomes PARTIAL (above).
+- If zero iterations ran, no splat is published.
+
+In both cases `splat-training-report.json` records the status, stop reason, completed and target iterations, initial
+and final Gaussian count, densification events, loss history, and provenance: the input identity, the splat and
+checkpoint SHA-256, and the torch/gsplat/CUDA versions.
+
+**Checkpoints** (`SPLAT_CHECKPOINT`, `splat-checkpoint.pt`) are written every `GSPLAT_CHECKPOINT_EVERY` iterations and
+always at the end, atomically. They hold:
+
+- the iteration;
+- all parameters;
+- the Adam state (moments and step counts) for each parameter;
+- the density-control accumulators and history;
+- the configuration;
+- the source identity: the run, scan, scan version, and the input artifacts with their SHA-256, plus a digest.
+
+A SPLAT_RECONSTRUCTION job given a `SPLAT_CHECKPOINT` input resumes from it. Only the iteration target and checkpoint
+cadence may differ; different inputs or other settings are refused with `CHECKPOINT_MISMATCH`. Randomness is derived
+from (seed, iteration), so a resumed run takes the same steps an uninterrupted one would have. The test asserts the
+parameters are bit-identical on CPU.
+
+**Not done yet:** the control plane does not offer a previous job's checkpoint to a new job, and a PARTIAL run cannot
+be retried. So in production a checkpoint is recorded, but nothing resumes it automatically.
+
+**What has been validated, at three levels:**
+
+| Level | Status |
+|---|---|
+| Pipeline implemented | Yes: the loop, density control, checkpoints, budget, PARTIAL reporting and colour convention are in the stage. |
+| Local fixture validated | **Mechanics only, on CPU.** `tests/splat` runs the real training loop with a small CPU test renderer (`tests/splat/renderer.py`: isotropic, not gsplat). It checks colour round trip through the viewer bytes, Gaussian count changes, clone/split/prune/cap, bit-exact resume, deadline stop, PARTIAL status, artifacts and provenance, and the report the control plane receives through the orchestrator. `tests/unit/test_splat_color.py` checks the colour chain without training. **gsplat's CUDA rasteriser has not been executed**: no NVIDIA GPU was available, and gsplat has no CPU path (its PyTorch reference still calls CUDA kernels). The GPU-marked test (`tests/gpu`, now also asserting that densification changed the count) was skipped. |
+| Real venue reconstruction validated | **No.** No capture has been reconstructed end to end (docs/E2E_VALIDATION.md). |
+
 ## Tests (three separate tiers)
 | Tier | Where | Needs | Run |
 |---|---|---|---|
 | unit | `tests/unit` | nothing | `pytest tests/unit` |
+| splat training mechanics | `tests/splat` | CPU PyTorch (skipped without it; CI installs it and fails on a skip) | `pytest tests/splat` |
 | orchestration | `tests/orchestration` | tiny real files (FFmpeg-encoded video, a real face photo from scikit-image, JSON); test doubles only for the HTTP client and object storage | `pytest -m orchestration` |
 | integration | `tests/integration` | real MinIO; the real stack (API, Postgres, MinIO, ClamAV, Keycloak) | `pytest -m integration -rs` with `CHAYA_IT_*` set |
 | GPU / toolchain | `tests/gpu` | COLMAP, GLOMAP, gsplat+CUDA, a real photo folder (`CHAYA_TEST_IMAGE_SEQUENCE`) | `pytest -m gpu -rs` |
@@ -200,6 +285,7 @@ the tool. The Java side (`mvn verify`) tests the control plane against real Post
 
 ## Not verified here
 COLMAP/GLOMAP command lines are unit-tested for construction only; they were not executed (not installed). COLMAP flag
-names follow the 3.9/3.10 CLI. gsplat and every stage after pose estimation are unimplemented. The worker Docker image
+names follow the 3.9/3.10 CLI. Every stage after pose estimation is implemented, but none has run on a real capture; gsplat training has not run
+at all (see "Splat training"). The worker Docker image
 was built but not run against the stack. MinIO credentials are shared between the API and the worker (per-service
 service accounts are a later hardening step).

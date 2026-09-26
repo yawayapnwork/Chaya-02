@@ -17,6 +17,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .splat_color import sh0_to_rgb
+
 GAUSSIAN_PROPERTIES = [
     "x", "y", "z", "nx", "ny", "nz", "f_dc_0", "f_dc_1", "f_dc_2", "opacity",
     "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3",
@@ -65,9 +67,8 @@ class GaussianCloud:
         return self.rotations_wxyz / norm
 
     def colors_rgb01(self) -> np.ndarray:
-        """SH degree-0 coefficient to [0, 1] display colour (the standard 3DGS constant C0 = 0.28209479177387814)."""
-        c0 = 0.28209479177387814
-        return np.clip(self.colors_dc * c0 + 0.5, 0.0, 1.0)
+        """SH degree-0 coefficient to [0, 1] display colour (chaya_worker.splat_color)."""
+        return np.clip(sh0_to_rgb(self.colors_dc), 0.0, 1.0)
 
 
 def write_ply(cloud: GaussianCloud, path: Path) -> Path:

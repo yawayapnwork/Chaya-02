@@ -9,6 +9,7 @@ passed test: nothing here can "succeed" on a machine that cannot run the tool.
 
 from __future__ import annotations
 
+import json
 import os
 import tarfile
 from pathlib import Path
@@ -85,7 +86,8 @@ def test_splat_reconstruction_trains_a_real_gaussian_splat_from_a_posed_dataset(
     real, non-empty Gaussian cloud trained against the actual registered frames -- never a placeholder."""
     from chaya_worker.ply import read_ply
 
-    h = Harness(tmp_path, gsplat_iterations=50, gsplat_keyframe_every=25)
+    h = Harness(tmp_path, gsplat_iterations=50, gsplat_keyframe_every=25, gsplat_densify_start=10, gsplat_densify_stop=40,
+                gsplat_densify_every=10)
     pose_report = h.run(h.order("POSE_ESTIMATION", [_anon_archive(h, tmp_path)]))
     assert pose_report["status"] == "SUCCEEDED", pose_report["errorMessage"]
 
@@ -95,10 +97,15 @@ def test_splat_reconstruction_trains_a_real_gaussian_splat_from_a_posed_dataset(
     report = h.run(h.order("SPLAT_RECONSTRUCTION", inputs))
     assert report["status"] == "SUCCEEDED", report["errorMessage"]
     kinds = {a["kind"] for a in report["artifacts"]}
-    assert kinds == {"SPLAT", "KEYFRAME_RENDERS", "SPLAT_TRAINING_REPORT"}
+    assert kinds == {"SPLAT", "SPLAT_CHECKPOINT", "KEYFRAME_RENDERS", "SPLAT_TRAINING_REPORT"}
     ply_artifact = next(a for a in report["artifacts"] if a["kind"] == "SPLAT")
     cloud = read_ply(h.storage.root / DERIVED_BUCKET / ply_artifact["key"])
     assert len(cloud) > 0
+    training = json.loads((h.storage.root / DERIVED_BUCKET / next(a for a in report["artifacts"]
+                                                                  if a["kind"] == "SPLAT_TRAINING_REPORT")["key"]).read_text())
+    assert training["status"] == "COMPLETED" and training["completed_iterations"] == 50
+    assert training["densification"], "density control ran"
+    assert training["gaussian_count"] == len(cloud) != training["initial_gaussian_count"], "densification changed the count"
 
 
 @needs_open3d

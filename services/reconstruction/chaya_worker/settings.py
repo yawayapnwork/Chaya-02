@@ -51,11 +51,31 @@ class Settings:
     # to fit the worker's memory limit. GPU hosts extract on the GPU and do not need this.
     colmap_num_threads: int = -1
     privacy_screen_detector: str = "heuristic-quad"
-    # SPLAT_RECONSTRUCTION (gsplat)
-    gsplat_iterations: int = 7000
+    # SPLAT_RECONSTRUCTION (gsplat; chaya_worker.splat_training). Learning rates are the 3D Gaussian Splatting paper's
+    # (position is scaled by the scene extent). Iteration counts are 1-based step numbers.
+    gsplat_iterations: int = 7000  # the configured training target; stopping earlier is PARTIAL, never COMPLETED
     gsplat_lr_position: float = 1.6e-4
-    gsplat_lr_other: float = 5e-3
+    gsplat_lr_scale: float = 5e-3
+    gsplat_lr_rotation: float = 1e-3
+    gsplat_lr_opacity: float = 5e-2
+    gsplat_lr_color: float = 2.5e-3
     gsplat_ssim_weight: float = 0.2
+    # Adaptive density control (splat_training.DensityControl): clone/split on screen-space gradient, prune by opacity
+    # and size, periodic opacity reset, and a hard cap on the Gaussian count.
+    gsplat_densify_start: int = 500
+    gsplat_densify_stop: int = 3500
+    gsplat_densify_every: int = 100
+    gsplat_densify_grad_threshold: float = 2e-4  # NDC units, as in 3DGS/gsplat
+    gsplat_percent_dense: float = 0.01  # clone below, split above, this fraction of the scene extent
+    gsplat_prune_opacity: float = 0.005
+    gsplat_prune_scale_fraction: float = 0.1
+    gsplat_opacity_reset_every: int = 3000
+    gsplat_max_gaussians: int = 3_000_000
+    gsplat_checkpoint_every: int = 1000
+    gsplat_seed: int = 0
+    # Time reserved at the end of the run's budget to write the checkpoint and splat and upload them. Training stops
+    # when less than this plus one iteration's time is left.
+    gsplat_stop_margin_seconds: float = 120.0
     gsplat_keyframe_every: int = 500
     gsplat_min_compute_capability: float = 7.0
     # SEMANTIC_SEGMENTATION
@@ -172,7 +192,22 @@ class Settings:
             privacy_screen_detector=e.get("PRIVACY_SCREEN_DETECTOR", d.privacy_screen_detector),
             gsplat_iterations=_int(e, "GSPLAT_ITERATIONS", d.gsplat_iterations),
             gsplat_lr_position=_float(e, "GSPLAT_LR_POSITION", d.gsplat_lr_position),
-            gsplat_lr_other=_float(e, "GSPLAT_LR_OTHER", d.gsplat_lr_other),
+            gsplat_lr_scale=_float(e, "GSPLAT_LR_SCALE", d.gsplat_lr_scale),
+            gsplat_lr_rotation=_float(e, "GSPLAT_LR_ROTATION", d.gsplat_lr_rotation),
+            gsplat_lr_opacity=_float(e, "GSPLAT_LR_OPACITY", d.gsplat_lr_opacity),
+            gsplat_lr_color=_float(e, "GSPLAT_LR_COLOR", d.gsplat_lr_color),
+            gsplat_densify_start=_int(e, "GSPLAT_DENSIFY_START", d.gsplat_densify_start),
+            gsplat_densify_stop=_int(e, "GSPLAT_DENSIFY_STOP", d.gsplat_densify_stop),
+            gsplat_densify_every=_int(e, "GSPLAT_DENSIFY_EVERY", d.gsplat_densify_every),
+            gsplat_densify_grad_threshold=_float(e, "GSPLAT_DENSIFY_GRAD_THRESHOLD", d.gsplat_densify_grad_threshold),
+            gsplat_percent_dense=_float(e, "GSPLAT_PERCENT_DENSE", d.gsplat_percent_dense),
+            gsplat_prune_opacity=_float(e, "GSPLAT_PRUNE_OPACITY", d.gsplat_prune_opacity),
+            gsplat_prune_scale_fraction=_float(e, "GSPLAT_PRUNE_SCALE_FRACTION", d.gsplat_prune_scale_fraction),
+            gsplat_opacity_reset_every=_int(e, "GSPLAT_OPACITY_RESET_EVERY", d.gsplat_opacity_reset_every),
+            gsplat_max_gaussians=_int(e, "GSPLAT_MAX_GAUSSIANS", d.gsplat_max_gaussians),
+            gsplat_checkpoint_every=_int(e, "GSPLAT_CHECKPOINT_EVERY", d.gsplat_checkpoint_every),
+            gsplat_seed=_int(e, "GSPLAT_SEED", d.gsplat_seed),
+            gsplat_stop_margin_seconds=_float(e, "GSPLAT_STOP_MARGIN_SECONDS", d.gsplat_stop_margin_seconds),
             gsplat_ssim_weight=_float(e, "GSPLAT_SSIM_WEIGHT", d.gsplat_ssim_weight),
             gsplat_keyframe_every=_int(e, "GSPLAT_KEYFRAME_EVERY", d.gsplat_keyframe_every),
             gsplat_min_compute_capability=_float(e, "GSPLAT_MIN_COMPUTE_CAPABILITY", d.gsplat_min_compute_capability),
@@ -247,7 +282,16 @@ class Settings:
             "min_registered_ratio": self.min_registered_ratio, "colmap_num_threads": self.colmap_num_threads,
             "privacy_screen_detector": self.privacy_screen_detector,
             "gsplat_iterations": self.gsplat_iterations, "gsplat_lr_position": self.gsplat_lr_position,
-            "gsplat_lr_other": self.gsplat_lr_other, "gsplat_ssim_weight": self.gsplat_ssim_weight,
+            "gsplat_lr_scale": self.gsplat_lr_scale, "gsplat_lr_rotation": self.gsplat_lr_rotation,
+            "gsplat_lr_opacity": self.gsplat_lr_opacity, "gsplat_lr_color": self.gsplat_lr_color,
+            "gsplat_ssim_weight": self.gsplat_ssim_weight,
+            "gsplat_densify_start": self.gsplat_densify_start, "gsplat_densify_stop": self.gsplat_densify_stop,
+            "gsplat_densify_every": self.gsplat_densify_every, "gsplat_densify_grad_threshold": self.gsplat_densify_grad_threshold,
+            "gsplat_percent_dense": self.gsplat_percent_dense, "gsplat_prune_opacity": self.gsplat_prune_opacity,
+            "gsplat_prune_scale_fraction": self.gsplat_prune_scale_fraction,
+            "gsplat_opacity_reset_every": self.gsplat_opacity_reset_every, "gsplat_max_gaussians": self.gsplat_max_gaussians,
+            "gsplat_checkpoint_every": self.gsplat_checkpoint_every, "gsplat_seed": self.gsplat_seed,
+            "gsplat_stop_margin_seconds": self.gsplat_stop_margin_seconds,
             "gsplat_keyframe_every": self.gsplat_keyframe_every,
             "gsplat_min_compute_capability": self.gsplat_min_compute_capability,
             "semantic_confidence_min": self.semantic_confidence_min, "semantic_sample_every": self.semantic_sample_every,
