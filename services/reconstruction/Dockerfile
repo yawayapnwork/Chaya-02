@@ -17,7 +17,7 @@ RUN apt-get update  && apt-get install -y --no-install-recommends ca-certificate
 COPY native/chaya-navmesh /src/chaya-navmesh
 RUN cmake -S /src/chaya-navmesh -B /build -DCMAKE_BUILD_TYPE=Release  && cmake --build /build -j"$(nproc)"  && /build/chaya-navmesh --version
 
-FROM python:3.12-slim-bookworm AS build
+FROM python:3.14-slim-bookworm AS build
 # Longer timeout and more retries than pip's defaults (15 s, 5): a stalled download should not fail a release build.
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_TIMEOUT=60 PIP_RETRIES=10
 RUN python -m venv /opt/venv
@@ -27,7 +27,7 @@ COPY pyproject.toml ./
 COPY chaya_worker ./chaya_worker
 RUN pip install .
 
-FROM python:3.12-slim-bookworm
+FROM python:3.14-slim-bookworm
 # ffmpeg/ffprobe are the only system packages the CPU stages execute.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg \
