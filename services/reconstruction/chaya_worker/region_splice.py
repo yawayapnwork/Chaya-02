@@ -1,21 +1,37 @@
-"""Replacing the changed region of a venue-wide GaussianCloud with a newly captured, aligned one -- the
-splice step of an incremental re-scan (see docs/rescan.md). Real geometric operations only: a
-similarity-transform application to the new region's cloud, a point-in-polygon crop of both clouds, then
-concatenation. Never a full re-reconstruction, and the region's Gaussians are never merely translated --
-their own orientation quaternions are rotated, and their scales multiplied, by the alignment transform, so
-splat shape stays correct in the merged frame. Pure numpy; no optional dependency needed.
+"""Replacing the changed region of a venue-wide GaussianCloud with a newly captured, aligned one: the splice step of an
+incremental re-scan (docs/rescan.md, "SPLICE"). Pure numpy + scipy.
 
-The region polygon is in the canonical venue frame (metres, +Z up; chaya_worker.frames): its (x, y) are
-horizontal coordinates only there. The clouds themselves stay in the parent reconstruction's frame, so the
-polygon test is done on their canonical positions, through the parent's calibrated frame.
+Everything is decided in canonical metres (chaya_worker.frames), through the parent reconstruction's calibrated frame.
+The clouds themselves stay in the parent reconstruction's frame. What is replaced is a **volume**: the region polygon
+(canonical x, y) times the height range of the newly captured region's own geometry, grown by `z_margin_m`.
+
+  * Venue Gaussians inside that volume are removed. Venue Gaussians inside the polygon but above or below it (a ceiling
+    the re-capture never saw, a mezzanine) are unrelated geometry and are kept. So is everything outside the polygon,
+    unchanged and in order.
+  * Region Gaussians inside that volume are added. Region Gaussians captured outside it are discarded, so the venue
+    never gains a second, overlapping copy of geometry it already had.
+  * The seam is measured, not assumed. For region Gaussians within `seam_band_m` inside the edge, the step to the kept
+    venue surface just across the edge is the median point-to-plane distance to their nearest kept Gaussians. A step
+    above `max_seam_step_m` is a visible seam, and the splice is refused (SpliceRejected).
+
+The result records exactly what was replaced: the index sets (removed venue Gaussians, added region Gaussians, both as
+indices into their input clouds) and the volume.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
+from scipy.spatial import cKDTree
 
 from .frames import Similarity
 from .ply import GaussianCloud
+from .similarity_registration import surface_normals
+
+
+class SpliceRejected(ValueError):
+    """The splice would damage the venue: nothing to add, or a visible seam."""
 
 
 def point_in_polygon(points_xy: np.ndarray, polygon_xy: np.ndarray) -> np.ndarray:
@@ -37,6 +53,17 @@ def point_in_polygon(points_xy: np.ndarray, polygon_xy: np.ndarray) -> np.ndarra
         inside ^= intersects
         j = i
     return inside
+
+
+def distance_to_polygon_edge(points_xy: np.ndarray, polygon_xy: np.ndarray) -> np.ndarray:
+    """Horizontal distance from each point to the nearest polygon edge (inside or outside)."""
+    p = np.asarray(points_xy, dtype=np.float64)[:, None, :]
+    a = np.asarray(polygon_xy, dtype=np.float64)
+    b = np.roll(a, -1, axis=0)
+    ab = (b - a)[None]
+    t = np.clip(((p - a[None]) * ab).sum(-1) / np.maximum((ab**2).sum(-1), 1e-30), 0.0, 1.0)
+    closest = a[None] + t[..., None] * ab
+    return np.linalg.norm(p - closest, axis=-1).min(axis=1)
 
 
 def polygon_area(polygon_xy: np.ndarray) -> float:
@@ -62,35 +89,80 @@ def transform_gaussians(cloud: GaussianCloud, transform: Similarity | np.ndarray
                          cloud.opacity_logit.copy(), cloud.colors_dc.copy())
 
 
-def splice_region(global_cloud: GaussianCloud, aligned_region_cloud: GaussianCloud, polygon_xy: np.ndarray,
-                  to_canonical: Similarity) -> tuple[GaussianCloud, dict]:
-    """Removes every Gaussian of `global_cloud` whose canonical (x, y) falls inside `polygon_xy` and replaces
-    them with the Gaussians of `aligned_region_cloud` (already in the global cloud's frame, see
-    chaya_worker.stages.region_alignment) whose canonical (x, y) also fall inside it. Region Gaussians the
-    operator captured outside the polygon are dropped, not appended: outside the polygon the venue keeps its
-    existing geometry, byte for byte, instead of gaining a second, overlapping copy.
+def _concat(a: GaussianCloud, b: GaussianCloud) -> GaussianCloud:
+    return GaussianCloud(np.concatenate([a.positions, b.positions]), np.concatenate([a.scales_log, b.scales_log]),
+                         np.concatenate([a.rotations_wxyz, b.rotations_wxyz]), np.concatenate([a.opacity_logit, b.opacity_logit]),
+                         np.concatenate([a.colors_dc, b.colors_dc]))
 
-    `to_canonical` is the parent reconstruction's calibrated frame (reconstruction -> canonical metres)."""
+
+@dataclass
+class SpliceResult:
+    merged: GaussianCloud
+    removed_global_indices: np.ndarray  # into the venue cloud
+    added_region_indices: np.ndarray  # into the aligned region cloud
+    report: dict
+
+
+def seam_step(added_canonical: np.ndarray, kept_canonical: np.ndarray, polygon_xy: np.ndarray, band_m: float,
+              k: int = 8) -> dict:
+    """The step across the seam: for added Gaussians within `band_m` inside the edge, the median distance to the plane of
+    the kept venue surface just across it (the normal from the kept Gaussians' k-neighbourhood). About the sampling noise
+    when the new geometry continues the old surface. The size of the offset when it does not."""
+    in_band = distance_to_polygon_edge(added_canonical[:, :2], polygon_xy) < band_m
+    kept_band = distance_to_polygon_edge(kept_canonical[:, :2], polygon_xy) < 2 * band_m
+    if in_band.sum() < 3 or kept_band.sum() < k:
+        return {"band_points": int(in_band.sum()), "kept_points_across": int(kept_band.sum()), "step_m": None}
+    kept = kept_canonical[kept_band]
+    tree = cKDTree(kept)
+    normals = surface_normals(kept, k, tree)
+    d, j = tree.query(added_canonical[in_band], distance_upper_bound=2 * band_m)
+    ok = np.isfinite(d)
+    if ok.sum() < 3:
+        return {"band_points": int(in_band.sum()), "kept_points_across": int(kept_band.sum()), "step_m": None}
+    diff = added_canonical[in_band][ok] - kept[j[ok]]
+    step = np.abs(np.einsum("ij,ij->i", diff, normals[j[ok]]))
+    return {"band_points": int(in_band.sum()), "kept_points_across": int(kept_band.sum()), "matched": int(ok.sum()),
+            "step_m": float(np.median(step))}
+
+
+def splice_region(global_cloud: GaussianCloud, aligned_region_cloud: GaussianCloud, polygon_xy: np.ndarray,
+                  to_canonical: Similarity, *, z_margin_m: float, seam_band_m: float, max_seam_step_m: float) -> SpliceResult:
+    """Replaces the venue's geometry in the region volume with the aligned region's (see the module docstring).
+    `to_canonical` is the parent reconstruction's calibrated frame. Raises SpliceRejected when there is nothing to add or
+    the seam is visible."""
     if len(aligned_region_cloud) == 0:
-        raise ValueError("the aligned region cloud is empty; refusing to splice nothing into the venue")
+        raise SpliceRejected("the aligned region cloud is empty; refusing to splice nothing into the venue")
     polygon_xy = np.asarray(polygon_xy, dtype=np.float64)
-    keep_mask = ~point_in_polygon(to_canonical.apply(global_cloud.positions)[:, :2], polygon_xy)
-    region_inside = point_in_polygon(to_canonical.apply(aligned_region_cloud.positions)[:, :2], polygon_xy)
-    if not region_inside.any():
-        raise ValueError("no Gaussian of the aligned region falls inside the selected polygon; refusing to splice")
-    kept = global_cloud.subset(keep_mask)
-    added = aligned_region_cloud.subset(region_inside)
-    merged = GaussianCloud(
-        positions=np.concatenate([kept.positions, added.positions]),
-        scales_log=np.concatenate([kept.scales_log, added.scales_log]),
-        rotations_wxyz=np.concatenate([kept.rotations_wxyz, added.rotations_wxyz]),
-        opacity_logit=np.concatenate([kept.opacity_logit, added.opacity_logit]),
-        colors_dc=np.concatenate([kept.colors_dc, added.colors_dc]))
+    g = to_canonical.apply(global_cloud.positions)
+    r = to_canonical.apply(aligned_region_cloud.positions)
+    r_in_polygon = point_in_polygon(r[:, :2], polygon_xy)
+    if not r_in_polygon.any():
+        raise SpliceRejected("no Gaussian of the aligned region falls inside the selected polygon; refusing to splice")
+    z_lo, z_hi = np.percentile(r[r_in_polygon, 2], [0.5, 99.5])
+    z_lo, z_hi = float(z_lo - z_margin_m), float(z_hi + z_margin_m)
+
+    g_in_polygon = point_in_polygon(g[:, :2], polygon_xy)
+    replaced = g_in_polygon & (g[:, 2] >= z_lo) & (g[:, 2] <= z_hi)
+    added = r_in_polygon & (r[:, 2] >= z_lo) & (r[:, 2] <= z_hi)
+
+    seam = seam_step(r[added], g[~replaced], polygon_xy, seam_band_m)
+    seam["max_step_m"] = max_seam_step_m
+    if seam["step_m"] is not None and seam["step_m"] > max_seam_step_m:
+        raise SpliceRejected(f"the new geometry meets the kept geometry with a median step of {seam['step_m']:.3f} m at the "
+                             f"region edge (limit {max_seam_step_m} m); refusing to splice a visible seam")
+
+    removed_idx = np.flatnonzero(replaced)
+    added_idx = np.flatnonzero(added)
+    merged = _concat(global_cloud.subset(~replaced), aligned_region_cloud.subset(added))
     report = {
-        "removed_from_global": int((~keep_mask).sum()),
-        "kept_from_global": int(keep_mask.sum()),
-        "added_from_region": int(region_inside.sum()),
-        "discarded_from_region_outside_polygon": int((~region_inside).sum()),
+        "volume": {"polygon_xy": polygon_xy.tolist(), "z_min_m": z_lo, "z_max_m": z_hi, "z_margin_m": z_margin_m},
+        "removed_from_global": int(replaced.sum()),
+        "kept_from_global": int((~replaced).sum()),
+        "kept_inside_polygon_outside_volume": int((g_in_polygon & ~replaced).sum()),
+        "added_from_region": int(added.sum()),
+        "discarded_from_region_outside_polygon": int((~r_in_polygon).sum()),
+        "discarded_from_region_outside_volume": int((r_in_polygon & ~added).sum()),
         "total_after": len(merged),
+        "seam": seam,
     }
-    return merged, report
+    return SpliceResult(merged, removed_idx, added_idx, report)

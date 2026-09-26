@@ -121,12 +121,12 @@ public class RescanService {
 
         UUID scanVersionId = jdbc.sql("""
                 INSERT INTO scan_version (organization_id, venue_id, scan_id, floor_id, version_number,
-                    parent_version_id, status, region_geometry, processing_config)
-                VALUES (:o, :v, :s, :f, :n, :parent, 'DRAFT', CAST(:region AS jsonb), CAST(:config AS jsonb)) RETURNING id
+                    parent_version_id, status, region_geometry, processing_config, created_by)
+                VALUES (:o, :v, :s, :f, :n, :parent, 'DRAFT', CAST(:region AS jsonb), CAST(:config AS jsonb), :by) RETURNING id
                 """)
             .param("o", actor.organizationId()).param("v", venueId).param("s", scanId).param("f", floorId)
             .param("n", parent.versionNumber() + 1).param("parent", parent.id())
-            .param("region", toJson(regionGeometry)).param("config", toJson(processingConfig))
+            .param("region", toJson(regionGeometry)).param("config", toJson(processingConfig)).param("by", actor.subject())
             .query(UUID.class).single();
 
         List<JobStage> plan = PipelineDefinition.incrementalPlan(privacyEnabled == null || privacyEnabled, navigationRebuildRequired);
@@ -159,7 +159,7 @@ public class RescanService {
         return jdbc.sql("""
                 SELECT id, floor_id, scan_id, version_number, parent_version_id, status, region_geometry,
                        alignment_method, alignment_confidence, alignment_residual_m, changed_artifact_kinds,
-                       processing_config, finalized_at, created_at
+                       processing_config, finalized_at, created_at, alignment_report, splice_report, created_by, rejected_at
                   FROM scan_version WHERE venue_id = :v AND floor_id = :f ORDER BY version_number DESC
                 """)
             .param("v", venueId).param("f", floorId).query(this::mapVersion).list();
@@ -170,11 +170,14 @@ public class RescanService {
         Double confidence = rs.getObject("alignment_confidence") == null ? null : rs.getDouble("alignment_confidence");
         Double residual = rs.getObject("alignment_residual_m") == null ? null : rs.getDouble("alignment_residual_m");
         Timestamp finalizedAt = rs.getTimestamp("finalized_at");
+        Timestamp rejectedAt = rs.getTimestamp("rejected_at");
         return new RescanDtos.ScanVersionView(rs.getObject("id", UUID.class), rs.getObject("floor_id", UUID.class),
             rs.getObject("scan_id", UUID.class), rs.getInt("version_number"), rs.getObject("parent_version_id", UUID.class),
             rs.getString("status"), readJson(rs.getString("region_geometry")), rs.getString("alignment_method"), confidence,
             residual, List.of(kinds), readJson(rs.getString("processing_config")),
-            finalizedAt == null ? null : finalizedAt.toInstant(), rs.getTimestamp("created_at").toInstant());
+            finalizedAt == null ? null : finalizedAt.toInstant(), rs.getTimestamp("created_at").toInstant(),
+            readJson(rs.getString("alignment_report")), readJson(rs.getString("splice_report")), rs.getString("created_by"),
+            rejectedAt == null ? null : rejectedAt.toInstant());
     }
 
     @SuppressWarnings("unchecked")

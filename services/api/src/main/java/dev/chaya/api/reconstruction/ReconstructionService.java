@@ -77,6 +77,10 @@ public class ReconstructionService {
                   JOIN capture_session cs ON cs.id = r.capture_session_id
                  WHERE sr.stage = 'ARTIFACT_GENERATION' AND sr.status = 'SUCCEEDED'
                    AND cs.floor_id = :floor AND r.venue_id = :venue AND r.organization_id = :org
+                   -- a re-scan's merged model is listed only once its version is FINALIZED: a re-scan that later failed or
+                   -- was rejected never replaces what viewers see (docs/rescan.md)
+                   AND (r.scan_version_id IS NULL
+                        OR EXISTS (SELECT 1 FROM scan_version v WHERE v.id = r.scan_version_id AND v.status = 'FINALIZED'))
                  ORDER BY sr.finished_at DESC
                  LIMIT 50
                 """)

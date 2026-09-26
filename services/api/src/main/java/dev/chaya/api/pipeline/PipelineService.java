@@ -176,6 +176,11 @@ public class PipelineService {
             if (!run.status().equals("FAILED")) {
                 throw new ApiException(HttpStatus.CONFLICT, "RUN_NOT_RETRYABLE", "the pipeline run is " + run.status() + "; only a FAILED run can be retried");
             }
+            if (run.scanVersionId() != null && "ALIGNMENT_REJECTED".equals(jdbc.sql("SELECT status FROM scan_version WHERE id = :v")
+                    .param("v", run.scanVersionId()).query(String.class).single())) {
+                throw new ApiException(HttpStatus.CONFLICT, "RUN_NOT_RETRYABLE", "this re-scan's alignment was rejected and its "
+                    + "version is final; start a new re-scan (and re-capture or re-calibrate the region) instead");
+            }
             JobStage stage = JobStage.valueOf(run.failureStage());
             Optional<JobRow> last = latestJob(run.id(), stage);
             if (last.isPresent() && last.get().status().equals("FAILED")) {
@@ -298,20 +303,22 @@ public class PipelineService {
     }
 
     /**
-     * The venue's existing reconstruction to align the new region against and splice into: the most
-     * recent successful GEOMETRIC_CLEANUP/REGION_SPLICE output (kind SPLAT_MERGED, else SPLAT_CLEAN) of
-     * the selected parent ScanVersion's own scan. Never the current (still-building) run's own output --
-     * that would be aligning the region against itself. Returned as kind GLOBAL_CLOUD so
-     * chaya_worker.stages.region_alignment/region_splice can tell it apart from this run's own SPLAT_CLEAN.
+     * The venue's existing reconstruction to align the new region against and splice into: the SPLAT_MERGED (else
+     * SPLAT_CLEAN) of exactly the run the parent ScanVersion records in its provenance -- the reconstruction that version
+     * finalized, not whatever other run of the same scan produced a cloud (review V-8). Never the current (still-building)
+     * run's own output -- that would be aligning the region against itself. Returned as kind GLOBAL_CLOUD so
+     * chaya_worker.stages.region_alignment/region_splice can tell it apart from this run's own SPLAT_CLEAN. The parent's
+     * artifact is only ever read: the splice writes a new SPLAT_MERGED under this run.
      */
     private Optional<InputRef> globalCloudInput(UUID incrementalScanVersionId) {
         return jdbc.sql("""
                 SELECT a.id, a.bucket, a.object_key, a.checksum_sha256, a.content_type, a.size_bytes
                   FROM scan_version incoming
                   JOIN scan_version parent ON parent.id = incoming.parent_version_id
-                  JOIN processing_artifact a ON a.scan_id = parent.scan_id
-                  JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id
-                 WHERE incoming.id = :v AND sr.status = 'SUCCEEDED' AND a.kind IN ('SPLAT_MERGED', 'SPLAT_CLEAN')
+                  JOIN pipeline_stage_run sr ON sr.run_id = CAST(parent.provenance ->> 'runId' AS uuid)
+                  JOIN processing_artifact a ON a.stage_run_id = sr.id
+                 WHERE incoming.id = :v AND parent.status = 'FINALIZED' AND sr.status = 'SUCCEEDED'
+                   AND a.kind IN ('SPLAT_MERGED', 'SPLAT_CLEAN')
                  ORDER BY CASE a.kind WHEN 'SPLAT_MERGED' THEN 0 ELSE 1 END, a.created_at DESC
                  LIMIT 1
                 """)
@@ -404,15 +411,27 @@ public class PipelineService {
 
         String failCode = r.errorCode();
         String failMessage = r.errorMessage();
-        if (ok && job.stage() == JobStage.REGION_ALIGNMENT && run.scanVersionId() != null) {
-            String rejection = recordAlignmentAndCheckGate(run, r.command());
-            if (rejection != null) {
-                ok = false;
-                failCode = "ALIGNMENT_CONFIDENCE_BELOW_THRESHOLD";
-                failMessage = rejection;
+        if (job.stage() == JobStage.REGION_ALIGNMENT && run.scanVersionId() != null) {
+            if (ok) {
+                String rejection = recordAlignmentAndCheckGate(run, r.command());
+                if (rejection != null) {
+                    ok = false;
+                    failCode = ALIGNMENT_REJECTED;
+                    failMessage = rejection;
+                    rejectVersion(run, rejection);
+                }
+            } else if (ALIGNMENT_REJECTED.equals(failCode)) {
+                recordAlignment(run, r.errorDetails());
+                rejectVersion(run, failMessage);
             }
         }
         if (ok && job.stage() == JobStage.REGION_SPLICE && run.scanVersionId() != null) {
+            Map<String, Object> config = asMap(r.command() == null ? null : r.command().get("config"));
+            Map<String, Object> splice = asMap(config == null ? null : config.get("splice"));
+            if (splice != null) {
+                jdbc.sql("UPDATE scan_version SET splice_report = CAST(:s AS jsonb) WHERE id = :v")
+                    .param("s", json(splice)).param("v", run.scanVersionId()).update();
+            }
             appendChangedArtifactKind(run.scanVersionId(), "SPLAT_MERGED");
         }
         if (ok && job.stage() == JobStage.SEMANTIC_INDEXING) {
@@ -440,13 +459,20 @@ public class PipelineService {
         };
     }
 
+    static final String ALIGNMENT_REJECTED = "ALIGNMENT_REJECTED";
+    private static final Set<String> ALIGNMENT_METHODS = Set.of("FEATURE_RANSAC_ICP", "DIRECT_CANONICAL_ICP", "FEATURE_SIMILARITY_ICP");
+
     /**
-     * REGION_ALIGNMENT's own report already carries the real, measured numbers (see
-     * chaya_worker.stages.region_alignment); this records them on the ScanVersion being built regardless
-     * of outcome (docs/rescan.md "VERSIONING": a version records its alignment method and confidence even
-     * when the run goes on to fail) and independently re-checks confidence against
-     * {@link RescanProperties#minAlignmentConfidence()} -- the control plane's own threshold, not merely
-     * trusting the worker's. Returns null when the gate passes, or a rejection message when it does not.
+     * REGION_ALIGNMENT's report carries the measured numbers: mode, every gate with its value and threshold, and the
+     * metrics (chaya_worker.stages.region_alignment). This records the report on the ScanVersion whatever the outcome
+     * (docs/rescan.md "VERSIONING") and then re-checks it with the control plane's own thresholds, never trusting only
+     * the worker's:
+     * <ul>
+     *   <li>the worker's own gates all passed ({@code gates_passed});</li>
+     *   <li>confidence is at least {@link RescanProperties#minAlignmentConfidence()};</li>
+     *   <li>the scale correction is within {@link RescanProperties#maxScaleCorrection()}.</li>
+     * </ul>
+     * Returns null when the alignment is acceptable, or the rejection reason.
      */
     private String recordAlignmentAndCheckGate(RunRow run, Map<String, Object> command) {
         Map<String, Object> config = asMap(command == null ? null : command.get("config"));
@@ -454,16 +480,50 @@ public class PipelineService {
         if (alignment == null || !(alignment.get("confidence") instanceof Number confidenceNumber)) {
             return "REGION_ALIGNMENT reported success without a usable alignment report";
         }
+        recordAlignment(run, alignment);
         double confidence = confidenceNumber.doubleValue();
-        String method = alignment.get("method") == null ? null : String.valueOf(alignment.get("method"));
-        Double residual = alignment.get("inlier_rmse_m") instanceof Number n ? n.doubleValue() : null;
-        jdbc.sql("UPDATE scan_version SET alignment_method = :m, alignment_confidence = :c, alignment_residual_m = :r WHERE id = :v")
-            .param("m", method).param("c", confidence).param("r", residual).param("v", run.scanVersionId()).update();
+        if (!Boolean.TRUE.equals(alignment.get("gates_passed"))) {
+            return "REGION_ALIGNMENT reported success but its own quality gates did not all pass: " + alignment.get("failed_gates");
+        }
         if (confidence < rescanProps.minAlignmentConfidence()) {
             return "alignment confidence " + confidence + " is below the configured threshold "
                 + rescanProps.minAlignmentConfidence() + "; refusing to splice a badly aligned region";
         }
+        if (!(alignment.get("scale_correction") instanceof Number scale)
+                || Math.abs(scale.doubleValue() - 1.0) > rescanProps.maxScaleCorrection()) {
+            return "alignment scale correction " + alignment.get("scale_correction") + " is outside 1 +/- "
+                + rescanProps.maxScaleCorrection() + "; the re-scan's metric calibration and the venue's disagree";
+        }
         return null;
+    }
+
+    /** Writes whatever alignment report exists onto the DRAFT version: method, confidence, residual and the whole report. */
+    private void recordAlignment(RunRow run, Map<String, Object> alignment) {
+        if (alignment == null) {
+            return;
+        }
+        String method = alignment.get("method") == null ? null : String.valueOf(alignment.get("method"));
+        Double confidence = alignment.get("confidence") instanceof Number c ? c.doubleValue() : null;
+        if (method == null || !ALIGNMENT_METHODS.contains(method) || confidence == null) {
+            method = null; // V15: method and confidence are recorded together or not at all
+            confidence = null;
+        }
+        Double residual = alignment.get("inlier_rmse_m") instanceof Number n ? n.doubleValue() : null;
+        jdbc.sql("UPDATE scan_version SET alignment_method = :m, alignment_confidence = :c, alignment_residual_m = :r, "
+                + "alignment_report = CAST(:rep AS jsonb) WHERE id = :v AND status = 'DRAFT'")
+            .param("m", method).param("c", confidence).param("r", residual).param("rep", json(alignment))
+            .param("v", run.scanVersionId()).update();
+    }
+
+    /** ALIGNMENT_REJECTED: terminal and immutable (V19). The parent version and its artifacts were only ever read. */
+    private void rejectVersion(RunRow run, String reason) {
+        Map<String, Object> provenance = new LinkedHashMap<>();
+        provenance.put("runId", run.id().toString());
+        provenance.put("rejected", true);
+        provenance.put("reason", reason == null ? ALIGNMENT_REJECTED : reason);
+        jdbc.sql("UPDATE scan_version SET status = 'ALIGNMENT_REJECTED', rejected_at = now(), provenance = CAST(:p AS jsonb) "
+                + "WHERE id = :v AND status = 'DRAFT'")
+            .param("p", json(provenance)).param("v", run.scanVersionId()).update();
     }
 
     @SuppressWarnings("unchecked")
@@ -559,12 +619,63 @@ public class PipelineService {
         }
         audit.successInOrganization(actor, run.orgId(), run.venueId(), "rescan.outcome", "scan_version", run.scanVersionId(), meta);
         if ("SUCCEEDED".equals(status)) {
+            int graphsActivated = activateRescanGraphs(run);
+            int[] pois = applyRescanDetections(run);
+            audit.successInOrganization(actor, run.orgId(), run.venueId(), "rescan.downstream_applied", "scan_version", run.scanVersionId(),
+                Map.of("navigationGraphsActivated", graphsActivated, "poisSuperseded", pois[0], "poisCreated", pois[1]));
             Map<String, Object> provenance = Map.of("runId", run.id().toString(), "stages",
                 run.stages().stream().map(Enum::name).toList());
             jdbc.sql("UPDATE scan_version SET status = 'FINALIZED', finalized_at = now(), provenance = CAST(:p AS jsonb) "
                     + "WHERE id = :v AND status = 'DRAFT'")
                 .param("p", json(provenance)).param("v", run.scanVersionId()).update();
         }
+    }
+
+    /** The re-scan run's navigation graphs were ingested as DRAFT; the version finalizing is what makes them live. */
+    private int activateRescanGraphs(RunRow run) {
+        record Draft(UUID id, UUID floorId, String profile) {}
+        List<Draft> drafts = jdbc.sql("SELECT id, floor_id, profile FROM navigation_graph WHERE pipeline_run_id = :r AND status = 'DRAFT'")
+            .param("r", run.id()).query((rs, i) -> new Draft(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class), rs.getString(3))).list();
+        for (Draft d : drafts) {
+            activateGraph(run.venueId(), d.floorId(), d.profile(), d.id());
+        }
+        return drafts.size();
+    }
+
+    /** The re-scan run's DETECTED_OBJECTS, applied now that its version finalizes: supersede the region's AUTO_DETECTED
+     * POIs, insert the new detections. Returns {superseded, created}. */
+    private int[] applyRescanDetections(RunRow run) {
+        String key = jdbc.sql("""
+                SELECT a.object_key FROM processing_artifact a JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id
+                 WHERE sr.run_id = :r AND sr.status = 'SUCCEEDED' AND a.kind = 'DETECTED_OBJECTS' ORDER BY a.created_at DESC LIMIT 1
+                """).param("r", run.id()).query(String.class).optional().orElse(null);
+        UUID floorId = jdbc.sql("SELECT floor_id FROM capture_session WHERE id = :c").param("c", run.captureId())
+            .query(UUID.class).optional().orElse(null);
+        if (key == null || floorId == null) {
+            return new int[]{0, 0};
+        }
+        Map<String, Object> doc;
+        try (InputStream in = derived.open(key)) {
+            doc = mapper.readValue(in, MAP);
+        } catch (IOException | StorageException e) {
+            log.error("could not read DETECTED_OBJECTS artifact {} at finalization: {}", key, e.getMessage());
+            return new int[]{0, 0};
+        }
+        UUID frameId = requireCanonicalArtifactFrame(run, JobStage.SEMANTIC_INDEXING, doc, "DETECTED_OBJECTS");
+        int superseded = supersedePoisInRegion(run, floorId);
+        String embeddingModel = (String) doc.get("embedding_model");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> objects = (List<Map<String, Object>>) doc.getOrDefault("objects", List.of());
+        int created = 0;
+        for (Map<String, Object> obj : objects) {
+            if (insertDetectedPoi("run " + run.id(), run, floorId, obj, embeddingModel, frameId)) {
+                created++;
+            }
+        }
+        if (created > 0) {
+            appendChangedArtifactKind(run.scanVersionId(), "DETECTED_OBJECTS");
+        }
+        return new int[]{superseded, created};
     }
 
     // =========================================================================================
@@ -690,20 +801,19 @@ public class PipelineService {
             log.warn("run {} has no floor on its capture session; skipping AUTO_DETECTED POI ingestion", run.id());
             return;
         }
-        int superseded = 0;
         if (run.scanVersionId() != null) {
-            // Incremental re-scan: SEMANTIC_INDEXING only ever saw the captured region (the worker has no
-            // way to detect objects outside frames it was never given), so only that region's POIs are
-            // stale. Everything outside it is left completely untouched -- "only affected semantic objects
-            // need re-indexing" (docs/rescan.md "SEARCH") is a direct consequence of that, not extra logic.
-            superseded = supersedePoisInRegion(run, floorId);
+            // Incremental re-scan: nothing changes yet. The detections are applied in recordRescanOutcome, and only if
+            // the version finalizes; a re-scan that later fails or is rejected never touches a POI.
+            log.info("run {} is a re-scan: its detections are applied only when its version finalizes", run.id());
+            return;
         }
+        int superseded = 0;
         String embeddingModel = (String) doc.get("embedding_model");
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> objects = (List<Map<String, Object>>) doc.getOrDefault("objects", List.of());
         int inserted = 0;
         for (Map<String, Object> obj : objects) {
-            if (insertDetectedPoi(job, run, floorId, obj, embeddingModel, frameId)) {
+            if (insertDetectedPoi(job.id().toString(), run, floorId, obj, embeddingModel, frameId)) {
                 inserted++;
             }
         }
@@ -716,9 +826,9 @@ public class PipelineService {
             Map.of("objectsDetected", objects.size(), "poisCreated", inserted, "poisSuperseded", superseded));
     }
 
-    /** Soft-deletes every non-deleted POI on this floor whose latest position falls inside the ScanVersion's
-     * region_geometry polygon -- the "affected" set that SEMANTIC_INDEXING's fresh region-only detections
-     * are about to replace. A POI outside the polygon is never touched. */
+    /** Soft-deletes the AUTO_DETECTED POIs on this floor whose latest position falls inside the ScanVersion's
+     * region_geometry polygon: the set that SEMANTIC_INDEXING's fresh region-only detections replace. MANUAL POIs are
+     * never touched (staff placed them; a re-scan has no say over them), and neither is anything outside the polygon. */
     @SuppressWarnings("unchecked")
     private int supersedePoisInRegion(RunRow run, UUID floorId) {
         Map<String, Object> geometry = regionGeometryOf(run.scanVersionId());
@@ -730,7 +840,7 @@ public class PipelineService {
         }
         List<Map<String, Object>> candidates = jdbc.sql("""
                 SELECT p.id, v.x, v.y FROM poi p JOIN poi_version v ON v.poi_id = p.id
-                 WHERE p.venue_id = :venue AND p.floor_id = :floor AND p.deleted_at IS NULL
+                 WHERE p.venue_id = :venue AND p.floor_id = :floor AND p.deleted_at IS NULL AND v.source = 'AUTO_DETECTED'
                    AND v.version_number = (SELECT max(version_number) FROM poi_version WHERE poi_id = p.id)
                 """).param("venue", run.venueId()).param("floor", floorId).query().listOfRows();
         int superseded = 0;
@@ -746,12 +856,12 @@ public class PipelineService {
     }
 
     @SuppressWarnings("unchecked")
-    private boolean insertDetectedPoi(JobRow job, RunRow run, UUID floorId, Map<String, Object> obj, String embeddingModel,
+    private boolean insertDetectedPoi(String source, RunRow run, UUID floorId, Map<String, Object> obj, String embeddingModel,
                                       UUID frameId) {
         List<Number> position = obj.get("position") instanceof List<?> p ? (List<Number>) p : null;
         List<Number> embedding = obj.get("embedding") instanceof List<?> e ? (List<Number>) e : null;
         if (position == null || position.size() != 3 || embedding == null || embedding.isEmpty()) {
-            log.warn("job {}: skipping a detected object with a malformed position/embedding", job.id());
+            log.warn("{}: skipping a detected object with a malformed position/embedding", source);
             return false;
         }
         String label = String.valueOf(obj.getOrDefault("label", "object"));
@@ -827,7 +937,8 @@ public class PipelineService {
         int ingested = 0;
         for (String profile : List.of("STANDARD", "STEP_FREE")) {
             Object graphRaw = graphs.get(profile);
-            if (graphRaw instanceof Map<?, ?> graph && ingestOneNavigationGraph(run, floorId, profile, graph, frameId, navmesh)) {
+            if (graphRaw instanceof Map<?, ?> graph
+                    && ingestOneNavigationGraph(run, floorId, profile, graph, frameId, navmesh, run.scanVersionId() == null)) {
                 ingested++;
             }
         }
@@ -872,19 +983,13 @@ public class PipelineService {
 
     @SuppressWarnings("unchecked")
     private boolean ingestOneNavigationGraph(RunRow run, UUID floorId, String profile, Map<?, ?> graph, UUID frameId,
-                                             NavmeshBinding navmesh) {
+                                             NavmeshBinding navmesh, boolean activate) {
         Object nodesRaw = graph.get("nodes");
         Object edgesRaw = graph.get("edges");
         List<Map<String, Object>> nodesDoc = nodesRaw instanceof List<?> l ? (List<Map<String, Object>>) l : List.of();
         List<Map<String, Object>> edgesDoc = edgesRaw instanceof List<?> l ? (List<Map<String, Object>>) l : List.of();
         if (nodesDoc.isEmpty()) {
             return false;
-        }
-
-        UUID previousActive = jdbc.sql("SELECT id FROM navigation_graph WHERE venue_id = :v AND floor_id = :f AND profile = :p AND status = 'ACTIVE'")
-            .param("v", run.venueId()).param("f", floorId).param("p", profile).query(UUID.class).optional().orElse(null);
-        if (previousActive != null) {
-            jdbc.sql("UPDATE navigation_graph SET status = 'RETIRED' WHERE id = :g").param("g", previousActive).update();
         }
 
         UUID graphId = jdbc.sql("INSERT INTO navigation_graph (organization_id, venue_id, floor_id, profile, status, coordinate_frame_id, "
@@ -925,8 +1030,17 @@ public class PipelineService {
                 .param("o", run.orgId()).param("v", run.venueId()).param("g", graphId).param("from", from).param("to", to)
                 .param("len", lengthNumber.doubleValue()).param("sf", stepFree).param("clear", clearance).update();
         }
-        jdbc.sql("UPDATE navigation_graph SET status = 'ACTIVE' WHERE id = :g").param("g", graphId).update();
+        if (activate) {
+            activateGraph(run.venueId(), floorId, profile, graphId);
+        }
         return true;
+    }
+
+    /** Retires whatever graph is ACTIVE for the venue/floor/profile, then activates `graphId`. */
+    private void activateGraph(UUID venueId, UUID floorId, String profile, UUID graphId) {
+        jdbc.sql("UPDATE navigation_graph SET status = 'RETIRED' WHERE venue_id = :v AND floor_id = :f AND profile = :p AND status = 'ACTIVE'")
+            .param("v", venueId).param("f", floorId).param("p", profile).update();
+        jdbc.sql("UPDATE navigation_graph SET status = 'ACTIVE' WHERE id = :g").param("g", graphId).update();
     }
 
     /**

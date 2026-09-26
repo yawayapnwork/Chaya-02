@@ -41,7 +41,7 @@ rescan timings. What *was* measured used:
 | 2 | Geometry cleanup | Statistical outlier removal targets weak points **6.6×** better than chance on real SfM evidence. The radius filter barely beats chance (1.3×) and removes over half the cloud. | Real data, proxy metric. Rendering quality, and semantic-aware cleanup: **unavailable**. |
 | 3 | Semantic search (CLIP + embedding job + relevance filter) | Yes for synonyms: top-1 **58.8% vs 5.9%** lexical without the filter. With the relevance filter (calibrated on a separate venue), **86.7%** of nonsense queries now correctly return nothing (was 0%), at a cost: answerable top-1 **79.5% → 70.5%**. With vision down, fallback p95 is now **5 ms** (was 3.8 s). | Real system, small author-built datasets. |
 | 4 | Accessible routing | The router's rules hold on a self-test graph (stairs, a narrow passage and a floor change avoided). | Synthetic self-test. Real venue: **unavailable**. |
-| 5 | Incremental rescan | Alignment recovers known misalignments to ~0.02° when noise-free. The confidence gate rejected every failed alignment at the default setting (**73/73**). The gate is sensitive to voxel size. | Real geometry, controlled misalignment. Real rescan timings: **unavailable**. |
+| 5 | Incremental rescan | Similarity alignment recovers known misalignments, **including a ×1.08 scale error**, to ~0.005° when noise-free, up to 30°. The quality gates rejected every failed alignment (**138/138**, 0 false accepts) and 18/118 correct ones. Noisy trials need a larger FPFH voxel. | Real geometry, controlled misalignment. Real rescan timings: **unavailable**. |
 
 ---
 
@@ -416,57 +416,77 @@ docker run ... chaya-bench-open3d python benchmarks/b5_incremental_rescan/run.py
 
 ### 5a. Alignment accuracy (measured: real geometry, controlled misalignment)
 
+Result file: `benchmarks/results/b5_incremental_rescan/2026-09-26T100618Z.json`. The same input (SHA-256 `a9307503…`) as
+the earlier rigid-alignment run (`2026-09-24T144951Z.json`), whose numbers are superseded below.
+
 **Method.** The "existing reconstruction" is the real COLMAP castle cloud. Each trial simulates a rescan:
 
 - crop a region (30% or 15% of the points);
 - keep 80% of them (a different sampling);
 - optionally add noise σ = h;
-- apply a **known** rotation (2–90° about a random axis) plus a translation of 5% of D;
-- ask the pipeline's own `align_region` (FPFH + RANSAC + point-to-plane ICP) to recover the transform.
+- apply a **known similarity**: a rotation of 2–90° about a random axis, a translation of 5% of D, and a scale of ×1 or
+  **×1.08** (the error a re-scan's own metric calibration may leave; the scale prior is ±10%);
+- ask the pipeline's own `align_region` to recover it in **FEATURE_SIMILARITY** mode: FPFH matches (Open3D), RANSAC
+  similarity and similarity ICP (numpy), then the production quality gates.
 
-Because the truth is known, the error is exact.
+The truth is known, so the error is exact. A trial passes only if **every** gate passes, as in production.
 
 **Assumptions and configuration:**
 
-- 8 seeds per condition;
+- 8 seeds per condition, 256 trials in the main grid;
 - lengths relative to the cloud (**D** = bounding-box diagonal = 68.04 units; **h** = median nearest-neighbour
-  spacing = 0.031 units);
-- registration voxel 2h (production uses 0.05 m on metric splats);
-- success = rotation error < 2° **and** translation error < 1% of D;
-- production confidence gate 0.6 (`min_alignment_confidence`).
+  spacing = 0.031 units). SfM units are arbitrary, so the production gates' metre thresholds are applied in multiples
+  of h, with the production defaults' own ratios to their ICP voxel:
+  - ICP voxel 1h;
+  - ICP schedule 40/20/10/5h;
+  - ICP residual ≤ 2.5h;
+  - translation residual ≤ 1.5h;
+  - every other gate at its production default;
+- FPFH voxel 2h in the main grid, swept separately;
+- success = rotation error < 2°, translation error < 1% of D **and** scale error < 1%.
 
-| Condition (region 30% / 15%) | Success | Median rotation error | Median translation error | Median confidence |
+| Condition (both region sizes, 16 trials each) | Success | Passed the gates | Median rotation error | Median scale error |
 |---|---|---|---|---|
-| no noise, 2°, 10°, 30° | 8/8 at every angle, both sizes | 0.016–0.036° | 0.003–0.006% D | 0.79 |
-| no noise, 90° | 4/8 (30%), 3/8 (15%) | 41.6° / 74.0° | 2.5% / 5.0% D | 0.39 / 0.05 |
-| noise 1h, any angle, voxel 2h | 0/8 at every angle, both sizes | 8.7–137.5° | 5.0–13.4% D | 0.00 |
+| no noise, 2° or 10°, ×1 or ×1.08 | 16/16 each | 16/16 (one ×1.08 case 15/16) | 0.004–0.006° | 0.002–0.003% |
+| no noise, 30°, ×1 / ×1.08 | 16/16 / 14/16 | 16/16 / 12/16 | 0.005° | 0.003% |
+| no noise, 90°, ×1 / ×1.08 | 11/16 / 7/16 | 6/16 / 3/16 | 0.008° / 65° | 0.005% / 8% |
+| noise 1h, FPFH voxel 2h, any angle or scale | 0–3/16 | **0/16** | 59–173° | 62–85% |
 
-**Voxel sensitivity** (30% region, noise 1h, 10° rotation), added after the noisy failures, to tell the algorithm
-apart from the voxel choice:
+**FPFH voxel sensitivity** (30% region, noise 1h, 10°, ×1):
 
-| Voxel | Success | Median rotation error | Median confidence | Gate decisions correct |
-|---|---|---|---|---|
-| 2h | 0/8 | 11.7° | 0.00 | 8/8 (all failures rejected) |
-| 4h | **8/8** | 0.13° | 0.535 | **0/8: every good alignment rejected** |
-| 8h | **8/8** | 0.31° | 0.642 | 8/8 |
-| 16h | 4/8 | 1.8° | 0.633 | 5/8. 3 near-misses (2.08–2.22° error) passed; the one gross failure (178°) was rejected |
+| FPFH voxel | Success | Passed the gates | Wrong alignments accepted |
+|---|---|---|---|
+| 2h | 0/8 | 0/8 | 0 |
+| 4h | **8/8** | **8/8** | 0 |
+| 8h | 8/8 | 7/8 | 0 |
+| 16h | 7/8 | 1/8 | 0 |
 
-**Confidence gate over the main grid** (128 trials): 55 successful alignments, 73 failed.
+**Quality gates over the main grid** (256 trials): 118 successful alignments, 138 failed.
 
-- The gate rejected **73/73 failed** alignments, and **0/55 successful** ones.
-- A negative control (a mirrored crop that exists nowhere in the venue) was rejected **8/8**.
+- The gates rejected **138/138 failed** alignments. No wrong alignment passed them, in the main grid or in the sweep.
+- They also rejected **18/118 successful** ones. Every one of those was the `ransac_inliers ≥ 20` gate: on this sparse
+  cloud, a correct estimate sometimes has fewer than 20 supporting matches. A false rejection costs a re-capture, not a
+  wrong splice.
+- A negative control (a mirrored crop that exists nowhere in the venue) was rejected **8/8**, mainly by the scale and
+  residual gates.
 
 **What it shows:**
 
-- **Alignment is accurate** when the rescan overlaps the venue and the voxel suits the noise: 0.016–0.036°
-  noise-free, about 0.1–0.3° with noise at 4–8h. It fails for large rotations (90°), as FPFH + RANSAC is known to.
-- **The gate stops wrong splices at the default setting.** No failed alignment passed it in the main grid.
-- **The gate's calibration depends on the voxel.** The confidence formula, fitness × (1 − RMSE / voxel), moves with
-  the voxel size. At 4h every accurate alignment was rejected; at 16h, near-misses passed. Production uses a fixed
-  0.05 m voxel. **Whether that is calibrated to real splat noise is unmeasured**, and it is the first thing to
-  check on real rescans.
-- **Caveats:** open3d's multithreaded RANSAC is not bit-for-bit reproducible despite seeding. A repeat of the main
-  grid gave 56 successes instead of 55. SfM points are much sparser than a splat.
+- **Scale is recovered.** With the ×1.08 calibration error a rigid method cannot represent, noise-free alignments up to
+  30° are as accurate as without it: median 0.005° and 0.003% scale error.
+- **Wrong alignments are not merged.** 0 false accepts over 256 + 32 trials. The gates are conservative instead: 18
+  false rejections, all on RANSAC support.
+- **Large rotations still fail** in FPFH/RANSAC's known way. At 90°, 7–11 of 16 succeed, and the gates reject most of
+  the failures and some of the successes.
+- **The FPFH voxel matters.** At 2h, noise σ = h defeats the descriptors, and every such trial is rejected. At 4–8h the
+  same trials succeed. Production uses a **0.10 m** FPFH voxel, raised from 0.05 m after synthetic tests. Whether that
+  suits real splat noise is **unmeasured**.
+- **Caveats:**
+  - SfM points are much sparser and noisier than a splat.
+  - The thresholds here are scaled to h, not metres.
+  - This measures FEATURE_SIMILARITY only. DIRECT_CANONICAL (surveyed re-scans) is exercised by the worker's
+    synthetic tests, not here.
+  - Unlike the earlier Open3D RANSAC, this run is deterministic: a repeat gave identical results.
 
 ### 5b. Scope (configuration, read from the code)
 
@@ -475,8 +495,9 @@ apart from the voxel choice:
 | Stages | 12 (`PipelineDefinition.STAGES`) | 13 if navigation is affected, 12 if not (`INCREMENTAL_STAGES`) |
 | Only in this plan | `SEMANTIC_SEGMENTATION` | `REGION_ALIGNMENT`, `REGION_SPLICE` |
 | Frames processed | the whole venue's capture | only the region's own capture |
-| Navigation rebuild | always | only if an ACTIVE routing-graph node lies in the region; then the **whole floor** is re-baked (no per-tile bake) |
-| Semantic re-index | whole venue | POIs whose latest position lies in the region polygon, plus new detections |
+| Navigation rebuild | always | only if an ACTIVE routing-graph node lies in the region; then the **whole floor** is re-baked (no per-tile bake), and the new graph goes live only when the version finalizes |
+| Semantic re-index | whole venue | AUTO_DETECTED POIs in the region polygon plus new detections, applied only when the version finalizes; MANUAL POIs never |
+| Planes, viewer asset | whole venue | **whole floor** (refitted / regenerated from the merged cloud): not selective |
 
 Note that **a regional rescan has no `SEMANTIC_SEGMENTATION` stage**, so its `GEOMETRIC_CLEANUP` runs without
 semantic labels, even where the full run had them.
@@ -489,9 +510,9 @@ needs `SPLAT_RECONSTRUCTION` (CUDA):
 | Processing time, full vs regional | `SELECT r.id, s.stage, extract(epoch FROM s.finished_at - s.started_at) FROM pipeline_stage_run s JOIN pipeline_run r ON r.id = s.run_id WHERE r.id IN ('<full>', '<regional>')` |
 | Artifacts produced | `SELECT s.run_id, count(*) FROM processing_artifact a JOIN pipeline_stage_run s ON s.id = a.stage_run_id WHERE s.run_id IN ('<full>', '<regional>') GROUP BY 1` |
 | Changed-area percentage | `scan_version.region_geometry` area ÷ floor area (`GET /venues/{v}/floors/{f}/scan-versions`) |
-| Alignment error on a real re-capture | `scan_version.alignment_residual_m` (Open3D inlier RMSE); absolute error additionally needs surveyed control points |
+| Alignment error on a real re-capture | `scan_version.alignment_report` (gates, residuals); absolute error additionally needs surveyed control points |
 | Navigation rebuild scope | `navigation_node` counts of the ACTIVE graph before and after |
-| Semantic re-index scope | POIs soft-deleted by the regional run (`supersedePoisInRegion`) + AUTO_DETECTED rows it inserted |
+| Semantic re-index scope | `audit_log` `rescan.downstream_applied` of the regional run: `poisSuperseded`, `poisCreated` |
 
 ## 6. Datasets that would turn "unavailable" into "measured"
 
@@ -502,7 +523,7 @@ needs `SPLAT_RECONSTRUCTION` (CUDA):
 | The same venues' training frames and poses | B2 PSNR/SSIM; semantic-aware cleanup | produced by the pipeline runs above |
 | Real POI lists and real search logs with judged answers | B3 on real queries; auto-detected vs manual ranking | from the first pilot venues |
 | Baked navigation graphs of real multi-floor venues + origin-destination pairs | B4 on real venues | from the same pipeline runs |
-| A real venue changed physically, then rescanned regionally, plus a full re-reconstruction as reference, with surveyed control points | B5 timings, scope, real alignment error, gate calibration of the 0.05 m voxel | one pilot venue |
+| A real venue changed physically, then rescanned regionally, plus a full re-reconstruction as reference, with surveyed control points | B5 timings, scope, real alignment error, calibration of the gates and the 0.10 m FPFH voxel on real splats | one pilot venue |
 
 ## 7. Reproducing
 

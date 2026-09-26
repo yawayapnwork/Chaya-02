@@ -150,15 +150,56 @@ class Settings:
     # A plane counts as horizontal (a floor candidate) within this angle of canonical +Z.
     navmesh_floor_max_tilt_deg: float = 10.0
     # REGION_ALIGNMENT / REGION_SPLICE (incremental re-scan; see docs/rescan.md). Registration runs in canonical
-    # metres: the region is pre-scaled by its own metric calibration, the venue by the parent's frame.
-    alignment_voxel_size_m: float = 0.05
+    # metres: the region is made metric by its own calibration, the venue by the parent's frame. Every threshold is in
+    # the unit its name says (chaya_worker.similarity_registration.AlignmentGates).
+    # FPFH feature scale (FEATURE_SIMILARITY mode); descriptors span 5x this. 0.05 m (the old value) was too local on
+    # plane-heavy interiors: a synthetic room's 75-degree case got too few matches and was rejected, while 0.10 m recovered
+    # every case (tests/gpu/test_region_alignment.py, Open3D). Chosen from synthetic data and B5, not from real splats.
+    alignment_voxel_size_m: float = 0.10
+    alignment_icp_voxel_m: float = 0.02  # both clouds are downsampled to this before ICP; metrics are taken at it
+    alignment_icp_schedule_m: str = "1.0,0.5,0.25,0.1"  # coarse-to-fine ICP correspondence distances; the last one measures
+    alignment_crop_margin_m: float = 1.0  # venue context kept around the region polygon's bounding box
     # Registration may refine the region's scale (its calibration is measured, not exact) but a correction beyond
-    # this fraction means the region's calibration and the venue's disagree; the stage fails instead of merging.
+    # this fraction means the region's calibration and the venue's disagree; the alignment is rejected.
     alignment_max_scale_correction: float = 0.1
+    alignment_min_correspondences: int = 200
+    alignment_min_inlier_ratio: float = 0.5
+    alignment_max_rotation_residual_deg: float = 1.0
+    alignment_max_translation_residual_m: float = 0.03
+    alignment_max_icp_residual_m: float = 0.05
+    alignment_max_direct_rotation_correction_deg: float = 5.0
+    alignment_max_direct_translation_correction_m: float = 0.5
+    alignment_min_ransac_inliers: int = 20
+    alignment_max_tilt_deg: float = 5.0
     # The control plane independently re-checks this against chaya.rescan.min-alignment-confidence
     # (RescanProperties) before ever finalizing a ScanVersion -- this is the worker's own gate so a bad
     # splice is refused even before the report reaches the server. Never merge below this line.
     min_alignment_confidence: float = 0.6
+    # REGION_SPLICE (chaya_worker.region_splice): the replaced volume is the polygon x the region's own height range
+    # grown by splice_z_margin_m. The seam is measured over splice_seam_band_m either side of the polygon edge; a
+    # median step across it above splice_max_seam_step_m is a visible seam and the splice is refused.
+    splice_z_margin_m: float = 0.2
+    splice_seam_band_m: float = 0.15
+    splice_max_seam_step_m: float = 0.03
+
+    def alignment_gates(self):
+        from .similarity_registration import AlignmentGates  # noqa: PLC0415 - avoid a settings -> scipy import at load
+
+        return AlignmentGates(
+            min_correspondences=self.alignment_min_correspondences, min_inlier_ratio=self.alignment_min_inlier_ratio,
+            max_scale_correction=self.alignment_max_scale_correction,
+            max_rotation_residual_deg=self.alignment_max_rotation_residual_deg,
+            max_translation_residual_m=self.alignment_max_translation_residual_m,
+            max_icp_residual_m=self.alignment_max_icp_residual_m, min_confidence=self.min_alignment_confidence,
+            max_direct_rotation_correction_deg=self.alignment_max_direct_rotation_correction_deg,
+            max_direct_translation_correction_m=self.alignment_max_direct_translation_correction_m,
+            min_ransac_inliers=self.alignment_min_ransac_inliers, max_tilt_deg=self.alignment_max_tilt_deg)
+
+    def alignment_schedule(self) -> list[float]:
+        schedule = [float(v) for v in self.alignment_icp_schedule_m.split(",") if v.strip()]
+        if not schedule or any(v <= 0 for v in schedule):
+            raise ValueError("ALIGNMENT_ICP_SCHEDULE_M must be a comma-separated list of positive distances in metres")
+        return sorted(schedule, reverse=True)
 
     @staticmethod
     def from_env(env: Mapping[str, str] | None = None) -> Settings:
@@ -262,6 +303,23 @@ class Settings:
             alignment_voxel_size_m=_float(e, "ALIGNMENT_VOXEL_SIZE_M", d.alignment_voxel_size_m),
             alignment_max_scale_correction=_float(e, "ALIGNMENT_MAX_SCALE_CORRECTION", d.alignment_max_scale_correction),
             min_alignment_confidence=_float(e, "MIN_ALIGNMENT_CONFIDENCE", d.min_alignment_confidence),
+            alignment_icp_voxel_m=_float(e, "ALIGNMENT_ICP_VOXEL_M", d.alignment_icp_voxel_m),
+            alignment_icp_schedule_m=e.get("ALIGNMENT_ICP_SCHEDULE_M", d.alignment_icp_schedule_m),
+            alignment_crop_margin_m=_float(e, "ALIGNMENT_CROP_MARGIN_M", d.alignment_crop_margin_m),
+            alignment_min_correspondences=_int(e, "ALIGNMENT_MIN_CORRESPONDENCES", d.alignment_min_correspondences),
+            alignment_min_inlier_ratio=_float(e, "ALIGNMENT_MIN_INLIER_RATIO", d.alignment_min_inlier_ratio),
+            alignment_max_rotation_residual_deg=_float(e, "ALIGNMENT_MAX_ROTATION_RESIDUAL_DEG", d.alignment_max_rotation_residual_deg),
+            alignment_max_translation_residual_m=_float(e, "ALIGNMENT_MAX_TRANSLATION_RESIDUAL_M", d.alignment_max_translation_residual_m),
+            alignment_max_icp_residual_m=_float(e, "ALIGNMENT_MAX_ICP_RESIDUAL_M", d.alignment_max_icp_residual_m),
+            alignment_max_direct_rotation_correction_deg=_float(e, "ALIGNMENT_MAX_DIRECT_ROTATION_CORRECTION_DEG",
+                                                                d.alignment_max_direct_rotation_correction_deg),
+            alignment_max_direct_translation_correction_m=_float(e, "ALIGNMENT_MAX_DIRECT_TRANSLATION_CORRECTION_M",
+                                                                 d.alignment_max_direct_translation_correction_m),
+            alignment_min_ransac_inliers=_int(e, "ALIGNMENT_MIN_RANSAC_INLIERS", d.alignment_min_ransac_inliers),
+            alignment_max_tilt_deg=_float(e, "ALIGNMENT_MAX_TILT_DEG", d.alignment_max_tilt_deg),
+            splice_z_margin_m=_float(e, "SPLICE_Z_MARGIN_M", d.splice_z_margin_m),
+            splice_seam_band_m=_float(e, "SPLICE_SEAM_BAND_M", d.splice_seam_band_m),
+            splice_max_seam_step_m=_float(e, "SPLICE_MAX_SEAM_STEP_M", d.splice_max_seam_step_m),
         )
 
     def require_service_config(self) -> None:
@@ -328,4 +386,9 @@ class Settings:
             "alignment_voxel_size_m": self.alignment_voxel_size_m,
             "alignment_max_scale_correction": self.alignment_max_scale_correction,
             "min_alignment_confidence": self.min_alignment_confidence,
+            "alignment_icp_voxel_m": self.alignment_icp_voxel_m, "alignment_icp_schedule_m": self.alignment_icp_schedule_m,
+            "alignment_crop_margin_m": self.alignment_crop_margin_m,
+            "alignment_gates": self.alignment_gates().__dict__,
+            "splice_z_margin_m": self.splice_z_margin_m, "splice_seam_band_m": self.splice_seam_band_m,
+            "splice_max_seam_step_m": self.splice_max_seam_step_m,
         }

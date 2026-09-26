@@ -34,5 +34,7 @@ public final class RescanDtos {
     public record ScanVersionView(UUID id, UUID floorId, UUID scanId, int versionNumber, UUID parentVersionId,
                                   String status, Map<String, Object> regionGeometry, String alignmentMethod,
                                   Double alignmentConfidence, Double alignmentResidualM, List<String> changedArtifactKinds,
-                                  Map<String, Object> processingConfig, Instant finalizedAt, Instant createdAt) {}
+                                  Map<String, Object> processingConfig, Instant finalizedAt, Instant createdAt,
+                                  Map<String, Object> alignmentReport, Map<String, Object> spliceReport, String createdBy,
+                                  Instant rejectedAt) {}
 }

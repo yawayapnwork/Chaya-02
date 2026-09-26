@@ -29,9 +29,8 @@ pipeline run, not a separate system.
    to `RescanService#startIncrementalProcessing`, which creates the DRAFT `scan_version` and starts
    `PipelineDefinition.INCREMENTAL_STAGES` instead of the full-venue plan.
 5. **Align it with the existing global reconstruction** -- `REGION_ALIGNMENT` (see "ALIGNMENT" below).
-6. **Replace only the changed region** -- `REGION_SPLICE` (see "ALIGNMENT" below).
-7. **Rebuild affected navigation data** -- see "NAVIGATION".
-8. **Update affected semantic objects** -- see "SEARCH".
+6. **Replace only the changed region** -- `REGION_SPLICE` (see "SPLICE" below).
+7. **Rebuild affected navigation data** and 8. **update affected semantic objects** -- see "Downstream rebuilds".
 9. **A new immutable ScanVersion** -- only once the run truly `SUCCEEDED` (see "VERSIONING").
 
 ## The incremental pipeline plan
@@ -52,153 +51,189 @@ just the part that changed (`chaya_worker` stages prefer `SPLAT_MERGED` over `SP
 present -- see `plane_fitting.py`, `artifact_generation.py`, `semantic_indexing.py`, `navigation_baking.py`).
 
 `NAVIGATION_BAKING` is in brackets because whether it is in the plan **at all** is decided once, at step 4,
-before the run is even created -- see "NAVIGATION".
+before the run is even created -- see "Downstream rebuilds".
 
 ## ALIGNMENT
 
-### Frames
+### Never rigid-only; always in the canonical frame
 
-Two independent SfM reconstructions differ by an arbitrary similarity **including scale**, so a rigid registration
-between them cannot be right. Registration therefore runs in canonical metres, and both sides must be calibrated
-([coordinate-frames.md](coordinate-frames.md)):
+Two independent SfM reconstructions differ by an arbitrary similarity: scale, rotation and translation. A rigid fit
+between them cannot be right, and neither reconstruction's own frame means anything to the other. So registration never
+happens between reconstruction frames. It happens in the **canonical venue frame** (metres, +Z up;
+[coordinate-frames.md](coordinate-frames.md)), and both sides must be calibrated:
 
-- the parent reconstruction's canonical frame (work order `parentCoordinateFrame`): moves `GLOBAL_CLOUD` into metres,
-  +Z up, where the region polygon crops it;
-- the re-scan capture's own calibration (work order `coordinateFrame`): only its metric scale is required -- the
-  operator calibrates this run's reconstruction with at least two measured distances once it stops with
-  `NOT_CALIBRATED` at REGION_ALIGNMENT, then retries. Its rotation, if unknown, is found by registration.
+- the parent reconstruction's canonical frame (work order `parentCoordinateFrame`): moves `GLOBAL_CLOUD` into canonical
+  metres, where the region polygon crops it;
+- the re-scan capture's own calibration (work order `coordinateFrame`): it must at least be **metric**. An uncalibrated
+  re-scan stops at REGION_ALIGNMENT with `NOT_CALIBRATED` and is never merged. The operator calibrates this run's
+  reconstruction (at least two measured distances, or control points) and retries.
 
-Registration is allowed to refine scale (the region's calibration is a measurement, not exact); a correction beyond
-`alignment_max_scale_correction` (10 %) means the two calibrations disagree and the stage fails
-(`ALIGNMENT_SCALE_INCONSISTENT`). The aligned region is written in the **parent reconstruction's** frame, so the merged
-cloud, and every stage after REGION_SPLICE, stays in that one calibrated frame. `ALIGNMENT_REPORT` records the
-region->canonical and region->parent-reconstruction similarities; SEMANTIC_INDEXING uses the latter to move this
-capture's cameras into the merged cloud's frame before projecting detections.
+### Two modes (`chaya_worker.stages.region_alignment.choose_mode`)
 
-### Registration
+| Mode | When | What is estimated |
+|---|---|---|
+| `DIRECT_CANONICAL` | The re-scan and the parent are both canonical **and** both surveyed to the same venue control points (`VENUE_CONTROL_POINTS`). | Nothing new. The re-scan's calibration places it directly in the canonical frame. Similarity ICP only verifies and refines, and the correction it applies is itself gated: two surveyed calibrations must agree. |
+| `FEATURE_SIMILARITY` | Anything else: a `FLOOR_LOCAL` calibration has its own origin and heading, and a scale-only one has no orientation. | A full similarity: **scale + rotation + translation**, by robust correspondence estimation. |
 
-`REGION_ALIGNMENT` (`chaya_worker.stages.region_alignment`, math in `chaya_worker.region_alignment`) aligns
-the region's own `GEOMETRIC_CLEANUP` output (`SPLAT_CLEAN`, pre-scaled to metres by its calibration) onto
-`GLOBAL_CLOUD` -- the selected parent version's own cleaned/merged
-reconstruction, supplied by the control plane (`PipelineService#globalCloudInput`; **never** the current
-run's own output, which would be aligning the region against itself). Real, two-stage registration, never
-a hardcoded translation:
+FEATURE_SIMILARITY (`chaya_worker.region_alignment`, maths in `chaya_worker.similarity_registration`):
 
-1. **Feature matching**: FPFH descriptors + RANSAC correspondence matching (Open3D
-   `registration_ransac_based_on_feature_matching`, point-to-point estimation with scaling) -- coarse global
-   registration, no initial guess needed. FPFH radii are multiples of `alignment_voxel_size_m`, which is metres
-   because both clouds are.
-2. **ICP**: point-to-point `registration_icp` with scaling, refined from step 1's result.
+1. **Putative correspondences**: FPFH descriptors (Open3D) on both clouds, at `alignment_voxel_size_m`, matched as mutual
+   nearest neighbours in descriptor space. Many will be wrong.
+2. **RANSAC similarity**: minimal 3-point Umeyama hypotheses. A hypothesis whose scale falls outside `1 ± alignment_max_scale_correction`
+   is discarded before scoring: the re-scan is already metric, so a large scale can only come from wrong matches or a
+   wrong calibration. The best hypothesis is refitted on its consensus set.
+3. **Similarity ICP**, coarse to fine over `alignment_icp_schedule_m` (default 1.0 / 0.5 / 0.25 / 0.1 m), on clouds
+   downsampled to `alignment_icp_voxel_m` (0.02 m).
+4. If the re-scan is gravity-aligned (a canonical `FLOOR_LOCAL` frame), it starts from its canonical pose, and the
+   correction may not tilt it (`tilt_deg`).
 
-`alignment_confidence(fitness, inlier_rmse, voxel_size)` turns Open3D's own registration-quality numbers
-into the single score everything gates on: `fitness` (a real correspondence-coverage fraction) scaled down
-the closer `inlier_rmse` gets to the voxel size (an RMSE near the voxel size means the "inliers" barely
-qualify). This is never a constant and never independent of what the registration actually found.
+Only step 1 needs Open3D. RANSAC, ICP, the metrics and the gates are numpy/scipy, and are tested in CI without Open3D.
+DIRECT_CANONICAL needs no Open3D at all.
 
-`REGION_SPLICE` (`chaya_worker.region_splice`) then does the actual replacement, testing the polygon on canonical
-(x, y) through the parent's frame: every Gaussian of `GLOBAL_CLOUD` inside the region polygon is removed
-(`point_in_polygon`, ray casting), and the aligned region's Gaussians **inside the polygon** are added in their place
-(`transform_gaussians` applied the full similarity: position, the Gaussian's own orientation quaternion, and its
-scale). Region Gaussians captured outside the polygon are discarded, not appended, so the venue does not gain a
-second, overlapping copy of geometry it already had. Everything outside the polygon is untouched, byte for byte.
+The aligned region is written in the **parent reconstruction's** frame, so the merged cloud, and every stage after
+REGION_SPLICE, stays in that one calibrated frame. `ALIGNMENT_REPORT` records the correction and the
+region->canonical and region->parent-reconstruction similarities. SEMANTIC_INDEXING uses the latter to move this
+capture's cameras into the merged cloud's frame.
 
 ## QUALITY GATES
 
-**The splice must fail if alignment confidence is below the configured threshold, and this is enforced
-twice, independently:**
+Every alignment is measured on its final transform (`similarity_registration.alignment_metrics`), in physical units,
+and must pass **every** gate. Thresholds are worker settings; the defaults are shown.
 
-1. The worker itself refuses to publish `SPLAT_ALIGNED` when
-   `confidence < settings.min_alignment_confidence` (`ALIGNMENT_CONFIDENCE_BELOW_THRESHOLD`,
-   `chaya_worker/stages/region_alignment.py`).
-2. The control plane **never trusts the worker's own threshold**: when `REGION_ALIGNMENT`'s report reaches
-   `PipelineService#applyReport`, `recordAlignmentAndCheckGate` writes the reported method/confidence/
-   residual onto the `scan_version` regardless of outcome, then independently compares confidence against
-   `chaya.rescan.min-alignment-confidence` (`RescanProperties`, a control-plane-owned setting). Below it,
-   the stage is treated as failed (`ALIGNMENT_CONFIDENCE_BELOW_THRESHOLD`) even if the worker itself
-   reported success -- `REGION_SPLICE` is never queued, and the run fails.
+| Gate | Measures | Default |
+|---|---|---|
+| `correspondence_count` | re-scan points (inside the venue crop) with a venue point within the final ICP distance | ≥ 200 |
+| `inlier_ratio` | that count / the re-scan points inside the venue crop | ≥ 0.5 |
+| `scale_correction` | \|scale − 1\|: how far the re-scan's metric calibration was off | ≤ 0.10 |
+| `rotation_residual_deg` | \|ω\| of the residual rigid motion between the surfaces (below) | ≤ 1° |
+| `translation_residual_m` | \|δ\| of the residual rigid motion between the surfaces | ≤ 0.03 m |
+| `icp_residual_m` | RMS point-to-point distance at the correspondences (noise, plus about half the sample spacing) | ≤ 0.05 m |
+| `confidence` | `inlier_ratio × (1 − translation_residual_m / 0.03)` | ≥ 0.6 |
+| `direct_rotation_correction_deg` / `direct_translation_correction_m` | DIRECT only: how far ICP moved the surveyed pose | ≤ 5° / 0.5 m |
+| `ransac_inliers` | FEATURE only: consensus size behind the estimate | ≥ 20 |
+| `tilt_deg` | FEATURE, gravity-aligned re-scan only: tilt the correction introduces | ≤ 5° |
 
-A failed or rejected alignment leaves its `scan_version` **DRAFT forever** -- it is never finalized, never
-promoted, never silently merged. `RescanControlPlaneTest#lowAlignmentConfidenceFailsTheRunAndNeverFinalizesTheVersion`
-proves this against the real HTTP worker protocol, not a mock.
+**Residual rigid motion** (`residual_rigid_motion`): the rotation ω and translation δ that would still move the aligned
+re-scan onto the venue's surfaces. It is the Huber-weighted least-squares solution of the linearised point-to-plane system
+at the correspondences. This is deliberately not a median distance. Each surface only observes offsets along its own
+normal, so a median over mixed surfaces misses a 6 cm vertical offset: the walls slide along themselves and outnumber
+the floor. The joint solve sees it. The confidence uses δ, not the point-to-point RMS, so it does not move with the
+sampling density. That was the flaw the earlier score had (docs/BENCHMARKS.md, B5).
 
-Never claim centimeter accuracy without measurement: the residual recorded (`alignment_residual_m`) is
-Open3D's own measured inlier RMSE, never an assumed or advertised bound.
+A failed gate is **`ALIGNMENT_REJECTED`**, enforced twice:
+
+1. The worker publishes nothing: no SPLAT_ALIGNED, so REGION_SPLICE cannot run. Its error details carry the full
+   report: mode, every gate with its value and threshold, the metrics, the transforms and the exact input artifacts.
+2. The control plane never trusts the worker alone. `PipelineService#recordAlignmentAndCheckGate` records the report
+   on the ScanVersion, then independently requires three things:
+   - `gates_passed`;
+   - confidence ≥ `chaya.rescan.min-alignment-confidence`;
+   - |scale − 1| ≤ `chaya.rescan.max-scale-correction`.
+
+   A "successful" report that fails any of them is rejected too.
+
+Either way:
+
+- the run fails with `ALIGNMENT_REJECTED`;
+- the ScanVersion becomes `ALIGNMENT_REJECTED`. That status is terminal and immutable like FINALIZED (V19), and it
+  records `rejected_at` and the reason in its provenance;
+- the run cannot be retried (`409 RUN_NOT_RETRYABLE`). A new re-scan starts a new version.
+
+The parent version is never touched. Its cloud is only read; every output is a new artifact under the re-scan's own run;
+and the parent row is unchanged. `RescanControlPlaneTest` checks the parent row field by field.
+
+Never claim centimetre accuracy without measurement. The recorded residuals are what registration measured against the
+venue's own reconstruction, not absolute accuracy, which needs surveyed control points.
+
+## SPLICE
+
+`REGION_SPLICE` (`chaya_worker.region_splice`) replaces a **volume**, not a column: the region polygon (canonical x, y)
+times the height range of the aligned re-scan's own geometry inside it (0.5–99.5 percentile), grown by
+`splice_z_margin_m` (0.2 m).
+
+- **Replaced**: venue Gaussians inside that volume.
+- **Kept, unchanged and in order**: everything outside the polygon; also venue geometry inside the polygon but above or
+  below the volume (a ceiling or mezzanine the re-scan never captured). None of this is unrelated geometry the splice
+  may delete.
+- **Added**: re-scan Gaussians inside the volume. Re-scan Gaussians outside it are discarded, so nothing the venue
+  already had is duplicated (review V-2).
+- **Seam**: measured, not assumed. For added Gaussians within `splice_seam_band_m` (0.15 m) of the polygon edge, the
+  step is the median point-to-plane distance to the kept venue surface just across the edge. A step above
+  `splice_max_seam_step_m` (0.03 m) is a visible seam, and the splice fails with `SPLICE_REJECTED`.
+
+What was replaced is recorded exactly:
+
+- `SPLICE_INDEX` (`splice-index.npz`) holds the indices of every removed venue Gaussian and every added re-scan
+  Gaussian;
+- `SPLICE_REPORT` holds the volume, the counts, the seam measurement, and the input and output artifacts by id and
+  SHA-256;
+- the control plane copies the report onto the ScanVersion (`splice_report`).
+
+A no-op re-scan (the venue's own Gaussians, perfectly calibrated) returns the venue unchanged. The worker tests check
+this.
+
+## Downstream rebuilds: what is selective and what is not
+
+| Artifact | Rebuilt | When it goes live |
+|---|---|---|
+| Merged cloud (`SPLAT_MERGED`) | Only the region's volume is replaced (above). | With the version (new artifact under the re-scan's run). |
+| Planes (`PLANE_FITTING`) | **Whole floor**: refitted over the merged cloud. Not selective. | With the version. |
+| Viewer asset (`.ksplat`) | **Whole floor**: regenerated from the merged cloud. It is one file. Not selective. | Viewers list a re-scan's model only once its version is FINALIZED (`ReconstructionService#listForFloor`). A failed or rejected re-scan never replaces what they see. |
+| Navigation | **Skipped entirely** when no node of the floor's ACTIVE graph lies in the region (`RescanService#navigationIntersectsRegion`, decided before the run exists). **Otherwise the whole floor** is re-baked: Recast has no per-tile partial bake here. | The new graphs are ingested as DRAFT and activated only when the version finalizes (`activateRescanGraphs`). |
+| Semantic index / POIs | Only the region: SEMANTIC_INDEXING sees only the re-scan's frames, and only AUTO_DETECTED POIs inside the polygon are superseded. **MANUAL POIs are never touched.** | Only when the version finalizes (`applyRescanDetections`). A re-scan that fails or is rejected changes no POI (review V-6). |
 
 ## VERSIONING
 
-Old `scan_version` rows are immutable (`scan_version_guard`, unchanged from before this feature: a
-`FINALIZED` row can never be updated or deleted). A new version, once it exists, records:
+Old `scan_version` rows are immutable (`scan_version_guard`): a `FINALIZED` or `ALIGNMENT_REJECTED` row can never be
+updated or deleted. A re-scan's version records:
 
 | Field | Column | Written |
 |---|---|---|
 | parent version | `parent_version_id` | at creation (`startIncrementalProcessing`) |
 | changed region | `region_geometry` | at creation |
-| alignment method | `alignment_method` | when `REGION_ALIGNMENT` reports (any outcome) |
-| alignment confidence | `alignment_confidence` | when `REGION_ALIGNMENT` reports (any outcome) |
-| alignment residual | `alignment_residual_m` | when `REGION_ALIGNMENT` reports (any outcome) |
-| changed artifacts | `changed_artifact_kinds` | appended as each relevant stage succeeds (`SPLAT_MERGED`, `NAVIGATION_GRAPH`, `DETECTED_OBJECTS`) |
+| operator | `created_by` | at creation |
 | processing configuration | `processing_config` | at creation (`navigationRebuildRequired`, `privacyEnabled`, `timeBudgetSeconds`) |
-| timestamp | `created_at` / `finalized_at` | at creation / on success |
+| alignment method / confidence / residual | `alignment_method`, `alignment_confidence`, `alignment_residual_m` | when REGION_ALIGNMENT reports, any outcome |
+| full alignment report | `alignment_report` | when REGION_ALIGNMENT reports, any outcome |
+| what was replaced | `splice_report` | when REGION_SPLICE succeeds |
+| changed artifacts | `changed_artifact_kinds` | as they change (`SPLAT_MERGED`, `NAVIGATION_GRAPH`, `DETECTED_OBJECTS`) |
+| timestamps | `created_at`, `finalized_at` / `rejected_at` | at creation / on success / on rejection |
+| provenance | `provenance` | on success (`runId`, stages) or rejection (`runId`, reason) |
 
-`status` moves `DRAFT -> FINALIZED` only when the run's very last stage succeeds
-(`PipelineService#recordRescanOutcome`, called from `finishRun`). `PARTIAL`, `FAILED` and `CANCELLED` all
-leave it `DRAFT` -- an abandoned attempt, indistinguishable in the database from one nobody ever retried,
-which is the correct level of trust for it.
+`status` is `DRAFT → FINALIZED` only when the run's last stage succeeds, and `DRAFT → ALIGNMENT_REJECTED` when the
+alignment is rejected. A run that fails for any other reason (or is PARTIAL or CANCELLED) leaves the version DRAFT.
 
-## NAVIGATION
+The parent's cloud (`GLOBAL_CLOUD`) is the SPLAT_MERGED, else SPLAT_CLEAN, of exactly the run the parent's provenance
+names, not any cloud of the same scan (review V-8).
 
-"Only affected regions should require navigation updates where technically possible" is decided **once**,
-before the run is even created, because the region is already known at step 4 (`RescanService`'s
-`navigationIntersectsRegion`): it queries the floor's current `ACTIVE` `STANDARD` `navigation_graph`'s
-nodes and tests each against the region polygon (`PolygonGeometry.pointInPolygon`). If none fall inside it,
-`NAVIGATION_BAKING` is **left out of the plan entirely** -- not run and skipped, genuinely never queued --
-and the floor's existing routing graph keeps serving `RouteService` unchanged, because nothing about it is
-stale. If the region does intersect it, `NAVIGATION_BAKING` runs (on the spliced, venue-wide geometry, per
-the existing full-floor Recast bake this codebase has -- see docs/navigation.md; true per-tile partial
-re-baking is a Recast capability this codebase does not build on and is out of scope here).
-
-## SEARCH
-
-"Only affected semantic objects should need re-indexing" falls directly out of what the worker can
-possibly see: `SEMANTIC_INDEXING` only ever processes the captured region's own frames, so it can only ever
-detect objects inside that region. `PipelineService#ingestDetectedObjects`, for an incremental run, first
-soft-deletes every existing POI on the floor whose latest position falls inside the region polygon
-(`supersedePoisInRegion`) and only then inserts the fresh detections -- exactly the set that changed.
-Everything outside the polygon is never touched, so it never needs re-embedding or re-indexing.
+Not addressed here (review V-4): version numbers are still `parent + 1` with no per-floor uniqueness, and there is no
+"current version" pointer on the floor.
 
 ## AUDIT
-
-Every step is recorded on the real `audit_log` (`dev.chaya.api.audit.AuditService`), keyed so a full
-history can always be reconstructed:
 
 | Action | Who | Metadata |
 |---|---|---|
 | `rescan.initiate` | the operator | `floorId`, `sourceVersionId`, `regionAreaSquareMeters`, `navigationRebuildRequired` |
 | `rescan.processing_started` | the operator | `sourceVersionId`, `runId`, `navigationRebuildRequired` |
-| `rescan.outcome` | the run's actor | `sourceVersionId`, `resultingVersionId`, `outcome` (`SUCCEEDED`/`PARTIAL`/`FAILED`/`CANCELLED`), `failureCode` when applicable |
+| `rescan.downstream_applied` | the run's actor | `navigationGraphsActivated`, `poisSuperseded`, `poisCreated` (only on finalization) |
+| `rescan.outcome` | the run's actor | `sourceVersionId`, `resultingVersionId`, `outcome`, `failureCode` when applicable |
 | `rescan.version_bootstrapped` | the operator | `floorId`, `runId` (only for `finalizeCurrent`) |
-
-`rescan.outcome` is written for every terminal run state, not only success, so a rejected alignment or any
-other failure is exactly as auditable as a successful splice.
 
 ## TESTS
 
-Three separated tiers, matching the rest of the pipeline's testing story (docs/pipeline.md):
+All geometry tests use **synthetic** point clouds (`tests/rescan_scene.py`: a small room). They are mathematical tests,
+not venue data.
 
-| Tier | Where | Needs |
+| What | Where | Needs |
 |---|---|---|
-| Anchor-free geometry (polygon crop, quaternion transform) | `tests/unit/test_region_splice.py` | nothing -- pure numpy |
-| Real feature-matching + ICP alignment, with known-transform fixtures (rigid, and a 4 % scale error recovered with scaling) | `tests/gpu/test_region_alignment.py` | Open3D (skipped, not failed, without it) |
-| Frame gates (NOT_CALIBRATED), camera re-expression in the parent frame | `tests/unit/test_calibration_gates.py` | nothing |
-| Control-plane orchestration, gating and versioning | `RescanServiceTest`, `RescanControlPlaneTest` | Testcontainers Postgres + MinIO (skipped, not failed, without Docker) |
+| Umeyama, RANSAC, ICP, residuals, confidence, gates: scale / rotation / translation / combined recovery, reflections, degenerate input, outliers, a scale outside the prior, no overlap, offsets only some surfaces observe, confidence independent of sampling | `tests/unit/test_similarity_registration.py` | nothing |
+| Both modes end to end: similarity recovery, too few correspondences, too little overlap, bad scale, high residual, tilt, surveyed calibrations that disagree | `tests/unit/test_region_alignment.py` (a stand-in supplies FEATURE mode's matches) | nothing |
+| Splice: overlapping-geometry replacement, re-scan beyond the polygon, unrelated geometry kept, no-op, visible seam refused, canonical-frame volume, exact index sets | `tests/unit/test_region_splice.py` | nothing |
+| Both stages through the orchestrator, in non-identity frames: successful merge, rejected merge (nothing published), no-op re-scan, Open3D requirement, uncalibrated re-scan | `tests/orchestration/test_rescan_stages.py` | nothing |
+| Real FPFH matching feeding the estimator | `tests/gpu/test_region_alignment.py` | Open3D (skipped without it; run in the `chaya-bench-open3d` image) |
+| Control plane: worker rejection, control-plane rejection, parent untouched, rejected version immutable and not retryable, full lineage on success, POIs and viewer only on finalization, MANUAL POIs survive | `RescanControlPlaneTest`, `RescanServiceTest`, `ScanVersionImmutabilityTest` | Testcontainers |
 
-`test_region_alignment.py`'s known-transform fixture (`_room_corner` + a known rotation/translation) is
-exactly what "do not claim successful incremental reconstruction unless the alignment pipeline actually
-ran" requires a test to do: it applies a **known** rigid transform to build the "captured" cloud, runs the
-real registration, and asserts the recovered transform's **translation error**, **rotation error** (both
-measured against that known ground truth) and **residual** (Open3D's own inlier RMSE) are all small --
-never asserting merely that *some* transform came back. A second fixture (two non-overlapping clouds)
-proves the confidence score is genuinely low when there is nothing real to align, not a value that always
-passes. `RescanControlPlaneTest` proves the same discipline one level up: it drives the real HTTP worker
-protocol through a low-confidence `REGION_ALIGNMENT` report and asserts the run fails and the version is
-never finalized, then repeats with a high-confidence report and asserts it is.
+B5 (docs/BENCHMARKS.md) measures the FEATURE_SIMILARITY path on a real COLMAP cloud with known similarity misalignments.
+
+**Not validated:** no real venue has been re-scanned and merged. Every number above is from synthetic clouds, or from a
+real SfM cloud with simulated misalignment.
