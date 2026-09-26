@@ -83,8 +83,12 @@ abstract class PipelineTestSupport extends CaptureTestSupport {
 
     /** Writes a real object into the derived bucket and returns the artifact report entry for it. */
     protected Map<String, Object> artifact(JsonNode order, String name, String kind, boolean pii, boolean partial, String content) {
+        return artifact(order, name, kind, pii, partial, content.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** As above, for binary outputs (a Detour navmesh tile, say). */
+    protected Map<String, Object> artifact(JsonNode order, String name, String kind, boolean pii, boolean partial, byte[] data) {
         String key = order.get("outputPrefix").asText() + (pii ? "pii/" : "") + name;
-        byte[] data = content.getBytes(StandardCharsets.UTF_8);
         String uploadId = derived.beginMultipart(key, "application/octet-stream");
         String etag = derived.uploadPart(key, uploadId, 1, data);
         derived.completeMultipart(key, uploadId, List.of(new ObjectStore.PartEtag(1, etag)));

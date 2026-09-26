@@ -38,8 +38,20 @@ jobs:
       - name: System tools the worker's CPU stages execute
         if: matrix.service == 'reconstruction'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Build chaya-navmesh (real Recast/Detour; recastnavigation pinned by SHA-256 in its CMakeLists.txt)
+        if: matrix.service == 'reconstruction'
+        run: |
+          cmake -S native/chaya-navmesh -B native/chaya-navmesh/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build native/chaya-navmesh/build -j "$(nproc)"
+          native/chaya-navmesh/build/chaya-navmesh --version
       - run: pip install -e ".[dev]"
       - name: Lint
         run: ruff check .
       - name: Tests
         run: python -m pytest -q -ra
+      - name: The real navmesh fixture tests ran (a skip here means the tool was not found, and fails the job)
+        if: matrix.service == 'reconstruction'
+        run: |
+          python -m pytest -q -rs -m navmesh | tee navmesh.txt
+          if grep -q "SKIPPED" navmesh.txt; then echo "::error::navmesh tests skipped"; exit 1; fi
+          grep -Eq "[0-9]+ passed" navmesh.txt

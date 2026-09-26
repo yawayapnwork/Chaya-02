@@ -32,8 +32,8 @@ STAGE_ORDER = [
 ]
 # SEMANTIC_INDEXING runs before NAVIGATION_BAKING (not the order the two were originally planned in):
 # neither stage depends on the other's output, and a stage failure stops the run from advancing (see
-# dev.chaya.api.pipeline.PipelineService#advance). recast-cli (NAVIGATION_BAKING's hard dependency) is a
-# much rarer thing to have installed than the reconstruction toolchain SEMANTIC_INDEXING needs, so putting
+# dev.chaya.api.pipeline.PipelineService#advance). chaya-navmesh (NAVIGATION_BAKING's hard dependency, the
+# Recast/Detour tool in services/reconstruction/native/chaya-navmesh) is a separately built binary a worker may not have, so putting
 # it last means a worker without it still gets a fully searchable reconstruction -- only routing is
 # unavailable, not search too.
 PRIVACY_STAGE = "PRIVACY_PREPROCESS"

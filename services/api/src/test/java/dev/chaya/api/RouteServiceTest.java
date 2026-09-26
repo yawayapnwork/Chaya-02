@@ -17,12 +17,19 @@ import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.context.TestPropertySource;
 
 /**
  * Real Dijkstra routing over navigation_graph/navigation_node/navigation_edge, exercised with hand-built
  * fixture graphs (the shape dev.chaya.api.pipeline.PipelineService#ingestNavigationGraph would have
  * written from a real NAVIGATION_BAKING artifact). Skipped, not failed, without Docker.
+ *
+ * <p>These graphs are SYNTHETIC (V18: not derived from a Recast navmesh), which production refuses with
+ * NAVMESH_NOT_READY; this class alone opts in with chaya.navigation.accept-synthetic-graphs to unit-test the routing
+ * rules. The navmesh-only gate, and routing on a graph ingested from real Recast output, are tested in
+ * PipelineControlPlaneTest with the production default.
  */
+@TestPropertySource(properties = "chaya.navigation.accept-synthetic-graphs=true")
 class RouteServiceTest extends AbstractIntegrationTest {
 
     @Autowired
@@ -51,8 +58,8 @@ class RouteServiceTest extends AbstractIntegrationTest {
 
     /** Graphs and POIs are written in the floor's current coordinate frame, as ingestion and PoiService do. */
     private UUID insertGraph(UUID org, UUID venue, UUID floor, String profile) {
-        return jdbc.sql("INSERT INTO navigation_graph (organization_id, venue_id, floor_id, profile, status, coordinate_frame_id) "
-                + "VALUES (:o, :v, :f, :p, 'DRAFT', (SELECT current_coordinate_frame_id FROM floor WHERE id = :f)) RETURNING id")
+        return jdbc.sql("INSERT INTO navigation_graph (organization_id, venue_id, floor_id, profile, status, coordinate_frame_id, source) "
+                + "VALUES (:o, :v, :f, :p, 'DRAFT', (SELECT current_coordinate_frame_id FROM floor WHERE id = :f), 'SYNTHETIC') RETURNING id")
             .param("o", org).param("v", venue).param("f", floor).param("p", profile).query(UUID.class).single();
     }
 
@@ -108,19 +115,24 @@ class RouteServiceTest extends AbstractIntegrationTest {
         assertThat(response.distanceMeters()).isCloseTo(5.0, within(0.01));
         assertThat(response.estimatedDurationSeconds()).isGreaterThan(0);
         assertThat(response.floorTransitions()).isEmpty();
+        assertThat(response.routingSources()).singleElement().satisfies(src -> {
+            assertThat(src.graphId()).isEqualTo(graph);
+            assertThat(src.source()).as("a hand-built graph is reported as what it is").isEqualTo("SYNTHETIC");
+            assertThat(src.navmeshSha256()).isNull();
+        });
     }
 
     // ---- route unavailable ------------------------------------------------------------------------------
 
     @Test
-    void routeUnavailableWhenNoActiveGraphExistsForTheFloor() {
+    void navmeshNotReadyWhenNoActiveGraphExistsForTheFloor() {
         var t = calibratedTree();
         UUID destination = insertPoi(t.org(), t.venue(), t.floor(), "Somewhere", null, 5, 0, 0);
 
         assertThatThrownBy(() -> routeService.route(actorFor(t.org(), t.venue()),
             request(t.venue(), t.floor(), new double[]{0, 0, 0}, destination, null, null)))
             .isInstanceOf(ApiException.class)
-            .satisfies(e -> assertThat(((ApiException) e).code()).isEqualTo("ROUTE_UNAVAILABLE"));
+            .satisfies(e -> assertThat(((ApiException) e).code()).isEqualTo("NAVMESH_NOT_READY"));
     }
 
     @Test

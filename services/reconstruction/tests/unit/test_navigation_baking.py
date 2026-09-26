@@ -1,5 +1,7 @@
-"""Pure unit tests for chaya_worker.navmesh: the walkable-surface geometry NAVIGATION_BAKING prepares for
-Recast, and the routing-graph construction from Recast's own polygon output. No external tools."""
+"""Pure unit tests for chaya_worker.navmesh: the canonical-frame geometry NAVIGATION_BAKING hands to Recast, and the
+routing graphs built from the Detour navmesh's polygons. No external tools: the real Recast build over real geometry is
+tests/navmesh/test_recast_fixture.py. The graphs here are hand-made polygon sets -- synthetic unit inputs, never
+presented as navmesh output."""
 
 from __future__ import annotations
 
@@ -7,29 +9,39 @@ import numpy as np
 import pytest
 
 from chaya_worker.navmesh import (
+    INVALID_GEOMETRY,
     CanonicalPlane,
+    Link,
+    NavGeometry,
+    NavmeshError,
     Polygon,
-    build_recast_argv,
     build_routing_graphs,
-    carve_obstacles,
+    geometry_from_reconstruction,
     obstacle_band_mask,
-    parse_recast_polygons,
+    point_in_polygon_xy,
     polygon_centroid,
     polygon_slope_degrees,
+    portal_width,
+    read_obj,
     select_floor_plane,
-    shared_edge_length,
-    triangulate_walkable_area,
-    write_walkable_obj,
+    write_obj,
 )
-
-
-def _flat_floor_grid(n: int = 8, extent: float = 4.0) -> np.ndarray:
-    xs, ys = np.meshgrid(np.linspace(0, extent, n), np.linspace(0, extent, n))
-    return np.stack([xs.ravel(), ys.ravel(), np.zeros(xs.size)], axis=1)
 
 
 def _plane(normal, height, inliers):
     return CanonicalPlane(np.array(normal, dtype=float) / np.linalg.norm(normal), height, np.arange(inliers))
+
+
+def _grid(x0, x1, y0, y1, step=0.05, z=0.0):
+    xs, ys = np.meshgrid(np.arange(x0, x1, step) + step / 2, np.arange(y0, y1, step) + step / 2)
+    return np.stack([xs.ravel(), ys.ravel(), np.full(xs.size, z)], axis=1)
+
+
+def _link(neighbor, a, b):
+    return Link(neighbor, (tuple(float(c) for c in a), tuple(float(c) for c in b)))
+
+
+# ---- floor and obstacles --------------------------------------------------------------------------------------------
 
 
 def test_select_floor_plane_takes_the_lowest_well_supported_horizontal_plane():
@@ -52,109 +64,109 @@ def test_obstacle_band_keeps_only_heights_that_block_a_walking_agent():
     assert mask.tolist() == [False, True, True, False]
 
 
-def test_triangulate_walkable_area_needs_at_least_four_points():
-    with pytest.raises(ValueError):
-        triangulate_walkable_area(np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]))
+# ---- Recast input geometry from reconstructed points ------------------------------------------------------------------
 
 
-def test_triangulate_and_carve_real_floor_geometry():
-    floor = _flat_floor_grid()
-    uv = floor[:, :2]  # canonical horizontal coordinates
-    triangles = triangulate_walkable_area(uv)
-    assert len(triangles) > 0
-
-    obstacle = np.array([[2.0, 2.0]])
-    mask = carve_obstacles(uv, triangles, obstacle, agent_radius=1.0)
-    assert mask.sum() < len(triangles), "some triangles near the obstacle must be carved out"
-    assert mask.sum() > 0, "most of the floor must remain walkable"
-
-
-def test_carve_obstacles_keeps_everything_walkable_when_there_are_no_obstacles():
-    floor = _flat_floor_grid()
-    uv = floor[:, :2]  # canonical horizontal coordinates
-    triangles = triangulate_walkable_area(uv)
-    mask = carve_obstacles(uv, triangles, np.zeros((0, 2)), agent_radius=0.5)
-    assert mask.all()
+def test_geometry_covers_only_observed_floor_cells_never_the_convex_hull():
+    """An L-shaped floor (review finding N-2): the missing quadrant has no floor points, so it gets no geometry, even
+    though a convex hull / Delaunay triangulation of the same points would cover it."""
+    floor = np.vstack([_grid(0, 6, 0, 3), _grid(0, 3, 3, 6)])
+    g = geometry_from_reconstruction(floor, np.zeros((0, 3)), 0.0, cell_m=0.2, min_points_per_cell=3, obstacle_min_height_m=1.0)
+    assert not g.obstacle.any()
+    centroids = g.vertices[g.triangles].mean(axis=1)
+    assert len(centroids) > 0
+    assert not ((centroids[:, 0] > 3.0) & (centroids[:, 1] > 3.0)).any(), "no floor geometry in the unscanned quadrant"
+    area = 0.5 * np.linalg.norm(np.cross(*(g.vertices[g.triangles[:, k]] - g.vertices[g.triangles[:, 0]] for k in (1, 2))), axis=1).sum()
+    assert area == pytest.approx(27.0, rel=0.02)  # 6x3 + 3x3 m^2
 
 
-def test_write_walkable_obj_only_includes_walkable_triangles(tmp_path):
-    floor = _flat_floor_grid(n=4)
-    uv = floor[:, :2]  # canonical horizontal coordinates
-    triangles = triangulate_walkable_area(uv)
-    mask = np.zeros(len(triangles), dtype=bool)
-    mask[0] = True  # keep exactly one triangle
-    path = tmp_path / "walkable.obj"
-    count = write_walkable_obj(path, floor, triangles, mask)
-    assert count == 1
-    text = path.read_text()
-    assert text.count("\nf ") + (1 if text.startswith("f ") else 0) == 1
-    assert text.count("\nv ") + (1 if text.startswith("v ") else 0) == 3  # one triangle has 3 unique vertices
+def test_geometry_floor_faces_point_up_in_the_canonical_frame():
+    g = geometry_from_reconstruction(_grid(0, 1, 0, 1), np.zeros((0, 3)), 0.0, cell_m=0.2, min_points_per_cell=1, obstacle_min_height_m=1.0)
+    v = g.vertices[g.triangles]
+    normals = np.cross(v[:, 1] - v[:, 0], v[:, 2] - v[:, 0])
+    assert (normals[:, 2] > 0).all() and np.allclose(normals[:, :2], 0)
 
 
-def test_build_recast_argv_rejects_unknown_config_keys(tmp_path):
-    with pytest.raises(ValueError, match="unknown Recast config"):
-        build_recast_argv("recast-cli", tmp_path / "in.obj", tmp_path / "out.json", notARealFlag=1.0)
+def test_geometry_needs_enough_real_points_per_cell():
+    sparse = np.array([[0.05, 0.05, 0.0], [1.05, 1.05, 0.0], [1.07, 1.07, 0.0], [1.09, 1.09, 0.0]])
+    g = geometry_from_reconstruction(sparse, np.zeros((0, 3)), 0.0, cell_m=0.2, min_points_per_cell=3, obstacle_min_height_m=1.0)
+    assert len(g.triangles) == 2, "only the one cell with three points becomes floor"
 
 
-def test_build_recast_argv_is_a_real_flag_per_config_value(tmp_path):
-    argv = build_recast_argv("recast-cli", tmp_path / "in.obj", tmp_path / "out.json", cellSize=0.3, agentRadius=0.4)
-    assert argv[0] == "recast-cli"
-    assert "--cellSize" in argv and "0.3" in argv
-    assert "--agentRadius" in argv and "0.4" in argv
+def test_geometry_turns_obstacle_points_into_blocked_boxes_from_the_floor_up():
+    floor = _grid(0, 4, 0, 4)
+    furniture = _grid(1.0, 2.0, 1.0, 2.0, step=0.1, z=0.6)
+    g = geometry_from_reconstruction(floor, furniture, 0.0, cell_m=0.2, min_points_per_cell=3, obstacle_min_height_m=1.0)
+    blocked = g.vertices[np.unique(g.triangles[g.obstacle])]
+    assert g.obstacle.sum() == 12 * 25  # 5x5 cells, a closed 12-triangle box each
+    assert blocked[:, 2].min() == 0.0 and blocked[:, 2].max() == pytest.approx(1.0), "raised to the minimum obstacle height"
+    assert blocked[:, 0].min() == pytest.approx(1.0) and blocked[:, 0].max() == pytest.approx(2.0)
 
 
-def test_parse_recast_polygons_rejects_a_degenerate_polygon():
-    with pytest.raises(ValueError):
-        parse_recast_polygons({"polygons": [{"id": 0, "vertices": [[0, 0, 0], [1, 0, 0]]}]})
+def test_nav_geometry_validation_is_invalid_geometry():
+    with pytest.raises(NavmeshError) as exc:
+        NavGeometry(np.array([[0, 0, 0], [1, 0, np.nan], [0, 1, 0]]), np.array([[0, 1, 2]])).validate()
+    assert exc.value.code == INVALID_GEOMETRY
+    with pytest.raises(NavmeshError):
+        NavGeometry(np.zeros((3, 3)), np.array([[0, 1, 5]])).validate()
+    with pytest.raises(NavmeshError):
+        NavGeometry(np.zeros((0, 3)), np.zeros((0, 3), dtype=int)).validate()
+    with pytest.raises(NavmeshError, match="horizontal extent"):  # a wall seen edge-on: no footprint at all
+        NavGeometry(np.array([[0, 0, 0], [0, 0, 1], [0, 0, 2]]), np.array([[0, 1, 2]])).validate()
 
 
-def test_parse_recast_polygons_round_trip():
-    doc = {"polygons": [{"id": 0, "vertices": [[0, 0, 0], [1, 0, 0], [1, 1, 0]], "neighbors": [1]},
-                        {"id": 1, "vertices": [[1, 0, 0], [2, 0, 0], [1, 1, 0]], "neighbors": [0]}]}
-    polys = parse_recast_polygons(doc)
-    assert len(polys) == 2
-    assert polys[0].neighbors == [1]
+def test_obj_round_trip_keeps_blocked_geometry(tmp_path):
+    g = NavGeometry(np.array([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 1]], dtype=float),
+                    np.array([[0, 1, 2], [0, 2, 3], [0, 1, 4]]), np.array([False, False, True]))
+    write_obj(tmp_path / "g.obj", g, header="test")
+    back = read_obj(tmp_path / "g.obj")
+    np.testing.assert_allclose(back.vertices, g.vertices)
+    assert back.obstacle.tolist() == [False, False, True]
+    assert sorted(map(tuple, back.triangles.tolist())) == sorted(map(tuple, g.triangles.tolist()))
 
 
-def test_polygon_slope_degrees_flat_vs_vertical():
-    flat = Polygon(id=0, vertices=[(0, 0, 0), (1, 0, 0), (1, 1, 0)], neighbors=[])
-    vertical = Polygon(id=1, vertices=[(0, 0, 0), (0, 0, 1), (1, 0, 1)], neighbors=[])
+# ---- polygons and routing graphs (hand-made polygons: unit inputs only) ------------------------------------------------
+
+
+def test_polygon_slope_degrees_flat_vertical_and_ramp():
+    flat = Polygon(0, [(0, 0, 0), (1, 0, 0), (1, 1, 0)])
+    vertical = Polygon(1, [(0, 0, 0), (0, 0, 1), (1, 0, 1)])
+    ramp = Polygon(2, [(0, 0, 0), (1, 0, 0), (1, 1, 0.5), (0, 1, 0.5)])
     assert polygon_slope_degrees(flat) == pytest.approx(0.0, abs=1e-6)
     assert polygon_slope_degrees(vertical) == pytest.approx(90.0, abs=1e-6)
+    assert polygon_slope_degrees(ramp) == pytest.approx(np.degrees(np.arctan(0.5)), abs=1e-6)
 
 
-def test_shared_edge_length_is_the_real_portal_width():
-    a = Polygon(id=0, vertices=[(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)], neighbors=[1])
-    b = Polygon(id=1, vertices=[(1, 0, 0), (2, 0, 0), (2, 1, 0), (1, 1, 0)], neighbors=[0])
-    assert shared_edge_length(a, b) == pytest.approx(1.0, abs=1e-4)
+def test_portal_width_is_the_detour_portal_length():
+    assert portal_width(_link(1, (1, 0, 0), (1, 0.8, 0))) == pytest.approx(0.8)
 
 
-def test_shared_edge_length_is_zero_for_non_adjacent_polygons():
-    a = Polygon(id=0, vertices=[(0, 0, 0), (1, 0, 0), (1, 1, 0)], neighbors=[])
-    b = Polygon(id=1, vertices=[(10, 10, 0), (11, 10, 0), (11, 11, 0)], neighbors=[])
-    assert shared_edge_length(a, b) == 0.0
+def test_point_in_polygon_xy():
+    square = Polygon(0, [(0, 0, 0), (2, 0, 0), (2, 2, 0), (0, 2, 0)])
+    assert point_in_polygon_xy(np.array([1.0, 1.0, 5.0]), square)
+    assert not point_in_polygon_xy(np.array([2.5, 1.0, 0.0]), square)
 
 
 def test_build_routing_graphs_excludes_stairs_from_step_free_but_not_standard():
-    flat_a = Polygon(id=0, vertices=[(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)], neighbors=[1])
-    flat_b = Polygon(id=1, vertices=[(1, 0, 0), (2, 0, 0), (2, 1, 0), (1, 1, 0)], neighbors=[0, 2])
-    stairs = Polygon(id=2, vertices=[(2, 0, 0), (3, 0, 3), (3, 1, 3), (2, 1, 0)], neighbors=[1])
+    flat_a = Polygon(0, [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)], [_link(1, (1, 0, 0), (1, 1, 0))])
+    flat_b = Polygon(1, [(1, 0, 0), (2, 0, 0), (2, 1, 0), (1, 1, 0)],
+                     [_link(0, (1, 1, 0), (1, 0, 0)), _link(2, (2, 0, 0), (2, 1, 0))])
+    stairs = Polygon(2, [(2, 0, 0), (3, 0, 3), (3, 1, 3), (2, 1, 0)], [_link(1, (2, 1, 0), (2, 0, 0))])
 
     graphs = build_routing_graphs([flat_a, flat_b, stairs], max_ramp_slope_deg=5.0)
-    assert len(graphs["STANDARD"]["edges"]) == 2  # a-b and b-stairs
+    assert len(graphs["STANDARD"]["edges"]) == 2  # a-b and b-stairs, each once although both sides link
     assert len(graphs["STEP_FREE"]["edges"]) == 1  # only a-b
     assert len(graphs["STANDARD"]["nodes"]) == len(graphs["STEP_FREE"]["nodes"]) == 3
+    assert all(e["min_clearance_m"] == pytest.approx(1.0) for e in graphs["STANDARD"]["edges"])
 
 
 def test_build_routing_graphs_keeps_a_gentle_ramp_in_step_free():
-    # A very slight incline (well under the ADA-inspired 5 degree default threshold).
-    flat = Polygon(id=0, vertices=[(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)], neighbors=[1])
-    gentle_ramp = Polygon(id=1, vertices=[(1, 0, 0), (2, 0, 0.05), (2, 1, 0.05), (1, 1, 0)], neighbors=[0])
+    flat = Polygon(0, [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)], [_link(1, (1, 0, 0), (1, 1, 0))])
+    gentle_ramp = Polygon(1, [(1, 0, 0), (2, 0, 0.05), (2, 1, 0.05), (1, 1, 0)], [_link(0, (1, 1, 0), (1, 0, 0))])
     graphs = build_routing_graphs([flat, gentle_ramp], max_ramp_slope_deg=5.0)
     assert len(graphs["STEP_FREE"]["edges"]) == 1
 
 
 def test_polygon_centroid_is_the_real_vertex_average():
-    poly = Polygon(id=0, vertices=[(0, 0, 0), (2, 0, 0), (1, 3, 0)], neighbors=[])
-    centroid = polygon_centroid(poly)
+    centroid = polygon_centroid(Polygon(0, [(0, 0, 0), (2, 0, 0), (1, 3, 0)]))
     assert np.allclose(centroid, [1.0, 1.0, 0.0])

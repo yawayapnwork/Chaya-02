@@ -1,177 +1,132 @@
-"""Navigation-mesh geometry: prepares a walkable surface for Recast (exe:recast-cli, a real external
-toolchain dependency like colmap/glomap -- see chaya_worker.toolchain) from real reconstructed geometry,
-and turns Recast's own polygon output back into the routing graph shape dev.chaya.api.navigation ingests.
-This module never reimplements Recast's voxelization/region/contour pipeline; it only prepares its input
-and interprets its output. See chaya_worker.stages.navigation_baking for how it is used end to end.
+"""Navigation geometry in the Chaya canonical frame (chaya_worker.frames: metres, right-handed, +Z up).
+
+This module prepares what the real Recast build consumes and interprets what the real Detour navmesh contains. It never
+voxelises, builds regions, contours or polygons itself -- that is Recast's job, run by the chaya-navmesh tool
+(services/reconstruction/native/chaya-navmesh, driven by chaya_worker.recast). It also never converts axes: every coordinate in and out of this
+module is canonical, and only chaya_worker.recast crosses into Recast's +Y-up frame, through chaya_worker.recast_boundary.
+
+Pieces:
+  * NavGeometry: a triangle soup (walkable candidates + blocked geometry), read/written as a canonical-frame OBJ.
+  * geometry_from_reconstruction: the NavGeometry for a reconstructed floor, built from cleaned splat geometry.
+  * Polygon / build_routing_graphs: the routing graphs dev.chaya.api.navigation.RouteService pathfinds over, taken from
+    the polygons and links of the Detour navmesh Recast built.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from .errors import DependencyError, StageError
 from .frames import CANONICAL_UP
-from .recast_boundary import canonical_to_recast, recast_to_canonical
 
-# ---- input side: walkable surface from real geometry -------------------------------------------------
-#
-# Every coordinate in this module is in the Chaya canonical frame (chaya_worker.frames: metres, +Z up), except
-# inside the two functions that cross the Recast boundary (write_walkable_obj, parse_recast_polygons), which
-# convert through chaya_worker.recast_boundary and nowhere else.
+# ---- failure states -------------------------------------------------------------------------------------------------
+# The structured error codes NAVIGATION_BAKING and route queries fail with. NAVMESH_NOT_READY is the API's (a floor
+# with no navmesh-backed graph, dev.chaya.api.navigation.RouteService); it is listed here so the set is in one place.
 
-
-def triangulate_walkable_area(floor_points_2d: np.ndarray) -> np.ndarray:
-    """Pure: Delaunay triangulation of the floor footprint, given as canonical horizontal (x, y) metres.
-    Returns (M, 3) vertex indices."""
-    from scipy.spatial import Delaunay  # noqa: PLC0415
-
-    if len(floor_points_2d) < 4:
-        raise ValueError("need at least 4 floor points to triangulate a walkable area")
-    return Delaunay(floor_points_2d).simplices
+NAVMESH_TOOL_UNAVAILABLE = "NAVMESH_TOOL_UNAVAILABLE"
+INVALID_GEOMETRY = "INVALID_GEOMETRY"
+NO_WALKABLE_SURFACE = "NO_WALKABLE_SURFACE"
+NAVMESH_BUILD_FAILED = "NAVMESH_BUILD_FAILED"
+NAVMESH_NOT_READY = "NAVMESH_NOT_READY"
+ROUTE_UNAVAILABLE = "ROUTE_UNAVAILABLE"
 
 
-def carve_obstacles(vertices_2d: np.ndarray, triangles: np.ndarray, obstacle_points_2d: np.ndarray,
-                    agent_radius: float) -> np.ndarray:
-    """Pure: a boolean walkable mask per triangle -- False where its centroid is within `agent_radius` of
-    a real wall/furniture point, i.e. an agent of that radius could not actually stand there."""
-    if len(obstacle_points_2d) == 0:
-        return np.ones(len(triangles), dtype=bool)
-    from scipy.spatial import cKDTree  # noqa: PLC0415
-
-    tree = cKDTree(obstacle_points_2d)
-    centroids = vertices_2d[triangles].mean(axis=1)
-    dist, _ = tree.query(centroids, k=1)
-    return dist >= agent_radius
+class NavmeshError(StageError):
+    """A navmesh build or query failed in one of the ways above; `code` says which."""
 
 
-def write_walkable_obj(path: Path, vertices_canonical: np.ndarray, triangles: np.ndarray, walkable_mask: np.ndarray) -> int:
-    """Writes only the walkable triangles as a Wavefront OBJ (Recast's standard input format), converting the
-    canonical vertices to Recast's +Y-up axes at the boundary. Returns the number of triangles written."""
-    kept = triangles[walkable_mask]
-    used = sorted(set(int(i) for i in kept.flatten().tolist()))
-    remap = {old: i + 1 for i, old in enumerate(used)}  # OBJ vertex indices are 1-based
-    recast_vertices = canonical_to_recast(np.asarray(vertices_canonical, dtype=np.float64)[used]) if used else np.zeros((0, 3))
-    lines = [f"v {v[0]:.6f} {v[1]:.6f} {v[2]:.6f}" for v in recast_vertices]
-    for tri in kept:
-        lines.append(f"f {remap[int(tri[0])]} {remap[int(tri[1])]} {remap[int(tri[2])]}")
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return len(kept)
+class NavmeshToolUnavailable(DependencyError):
+    """The chaya-navmesh tool (real Recast/Detour) is not installed on this worker. Never worked around."""
+
+    code = NAVMESH_TOOL_UNAVAILABLE
 
 
-# ---- Recast invocation ----------------------------------------------------------------------------
-
-# The real rcConfig fields Recast's own build pipeline takes (see Recast's Config.h); this project's
-# recast-cli is expected to accept each as a `--flagName value` argument and to build a standard
-# solo-mesh navmesh, emitting its polygons as JSON (see parse_recast_polygons for the expected shape).
-RECAST_CONFIG_FLAGS = (
-    "cellSize", "cellHeight", "agentHeight", "agentRadius", "agentMaxClimb", "agentMaxSlope",
-    "regionMinSize", "regionMergeSize", "edgeMaxLen", "edgeMaxError", "vertsPerPoly",
-    "detailSampleDist", "detailSampleMaxError",
-)
-
-
-def build_recast_argv(recast_cli: str, input_obj: Path, output_json: Path, **config: float) -> list[str]:
-    """Pure: the recast-cli command line. An unknown key in `config` is a programming error (a typo would
-    otherwise silently build a wrong navmesh), so it raises rather than being dropped."""
-    unknown = set(config) - set(RECAST_CONFIG_FLAGS)
-    if unknown:
-        raise ValueError(f"unknown Recast config keys: {sorted(unknown)}")
-    argv = [recast_cli, "--input", str(input_obj), "--output", str(output_json)]
-    for key, value in config.items():
-        argv += [f"--{key}", str(value)]
-    return argv
-
-
-# ---- output side: Recast polygons to the routing graph -----------------------------------------------
+# ---- geometry -------------------------------------------------------------------------------------------------------
 
 
 @dataclass
-class Polygon:
-    id: int
-    vertices: list[tuple[float, float, float]]
-    neighbors: list[int]
+class NavGeometry:
+    """Canonical-frame triangles. `obstacle[i]` marks triangle i as blocked geometry: Recast rasterises it as solid but
+    never walkable. Every other triangle is walkable only if Recast's own slope/height/clearance tests pass."""
+
+    vertices: np.ndarray  # (N, 3) float64, canonical metres
+    triangles: np.ndarray  # (M, 3) int
+    obstacle: np.ndarray = field(default=None)  # (M,) bool
+
+    def __post_init__(self) -> None:
+        self.vertices = np.asarray(self.vertices, dtype=np.float64).reshape(-1, 3)
+        self.triangles = np.asarray(self.triangles, dtype=np.int64).reshape(-1, 3)
+        self.obstacle = (np.zeros(len(self.triangles), dtype=bool) if self.obstacle is None
+                         else np.asarray(self.obstacle, dtype=bool).reshape(-1))
+
+    def validate(self) -> None:
+        """Raises INVALID_GEOMETRY for anything Recast should never be handed."""
+        problems = []
+        if len(self.triangles) == 0:
+            problems.append("no triangles")
+        if len(self.obstacle) != len(self.triangles):
+            problems.append("obstacle mask length differs from the triangle count")
+        if not np.isfinite(self.vertices).all():
+            problems.append("non-finite vertex coordinates")
+        if len(self.triangles) and (self.triangles.min() < 0 or self.triangles.max() >= len(self.vertices)):
+            problems.append("triangle indices out of range")
+        if not problems and len(self.vertices):
+            extent = self.vertices[:, :2].max(axis=0) - self.vertices[:, :2].min(axis=0)
+            if (extent <= 0).any():
+                problems.append("no horizontal extent")
+        if problems:
+            raise NavmeshError("navigation geometry is invalid: " + "; ".join(problems), code=INVALID_GEOMETRY,
+                               details={"problems": problems, "vertices": len(self.vertices), "triangles": len(self.triangles)})
+
+    @property
+    def walkable_candidate_count(self) -> int:
+        return int((~self.obstacle).sum())
 
 
-def parse_recast_polygons(doc: dict[str, Any]) -> list[Polygon]:
-    """Pure: validates and parses recast-cli's polygon JSON output, converting its +Y-up vertices back to the
-    canonical frame at the boundary. Every Polygon this returns is in canonical metres, +Z up."""
-    polygons = []
-    for raw in doc.get("polygons", []):
-        recast_vertices = np.array([[float(c) for c in v] for v in raw["vertices"]], dtype=np.float64).reshape(-1, 3)
-        vertices = [tuple(float(c) for c in v) for v in recast_to_canonical(recast_vertices)]
-        if len(vertices) < 3:
-            raise ValueError(f"polygon {raw.get('id')} has fewer than 3 vertices")
-        polygons.append(Polygon(id=int(raw["id"]), vertices=vertices, neighbors=[int(n) for n in raw.get("neighbors", [])]))
-    return polygons
+def write_obj(path: Path, geometry: NavGeometry, *, header: str = "") -> None:
+    """Writes canonical-frame geometry as OBJ, blocked triangles under `g obstacle`. No axis conversion: this is the
+    human-inspectable NAVMESH_INPUT_GEOMETRY artifact, in the same frame as every other canonical artifact."""
+    lines = [f"# {ln}" for ln in header.splitlines()]
+    lines += [f"v {v[0]:.6f} {v[1]:.6f} {v[2]:.6f}" for v in geometry.vertices]
+    for group, mask in (("walkable_candidates", ~geometry.obstacle), ("obstacle", geometry.obstacle)):
+        if mask.any():
+            lines.append(f"g {group}")
+            lines += [f"f {t[0] + 1} {t[1] + 1} {t[2] + 1}" for t in geometry.triangles[mask]]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def polygon_centroid(poly: Polygon) -> np.ndarray:
-    return np.mean(np.array(poly.vertices), axis=0)
+def read_obj(path: Path) -> NavGeometry:
+    """Reads a canonical-frame OBJ (as write_obj writes, or a hand-made fixture). Faces under a group/object whose name
+    starts with "obstacle" are blocked geometry. Polygons are fan-triangulated."""
+    vertices: list[list[float]] = []
+    triangles: list[list[int]] = []
+    obstacle: list[bool] = []
+    in_obstacle = False
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        parts = raw.split()
+        if not parts or parts[0].startswith("#"):
+            continue
+        if parts[0] in ("g", "o"):
+            in_obstacle = len(parts) > 1 and parts[1].startswith("obstacle")
+        elif parts[0] == "v":
+            vertices.append([float(c) for c in parts[1:4]])
+        elif parts[0] == "f":
+            idx = []
+            for token in parts[1:]:
+                i = int(token.split("/")[0])
+                idx.append(i - 1 if i > 0 else len(vertices) + i)
+            for k in range(2, len(idx)):
+                triangles.append([idx[0], idx[k - 1], idx[k]])
+                obstacle.append(in_obstacle)
+    return NavGeometry(np.array(vertices, dtype=np.float64).reshape(-1, 3), np.array(triangles, dtype=np.int64).reshape(-1, 3),
+                       np.array(obstacle, dtype=bool))
 
 
-def polygon_slope_degrees(poly: Polygon) -> float:
-    """Pure: angle between the polygon's own face normal and the canonical vertical (+Z), in degrees. 0 = flat.
-    Meaningful only because the polygon is in the canonical frame, where +Z really is opposite to gravity."""
-    v = np.array(poly.vertices[:3])
-    normal = np.cross(v[1] - v[0], v[2] - v[0])
-    norm = np.linalg.norm(normal)
-    if norm < 1e-9:
-        return 0.0
-    normal = normal / norm
-    cos_angle = abs(float(np.dot(normal, CANONICAL_UP)))
-    return float(np.degrees(np.arccos(np.clip(cos_angle, 0.0, 1.0))))
-
-
-def shared_edge_length(a: Polygon, b: Polygon) -> float:
-    """Pure: length of the portal (shared boundary) between two adjacent polygons -- the real corridor
-    width at that passage, used as min_clearance_m. 0.0 if fewer than two vertices coincide (defensive:
-    the neighbor list came from recast-cli's own output and is trusted for adjacency, but not blindly)."""
-    va = {tuple(round(c, 4) for c in v) for v in a.vertices}
-    vb = {tuple(round(c, 4) for c in v) for v in b.vertices}
-    shared = list(va & vb)
-    if len(shared) < 2:
-        return 0.0
-    return float(np.linalg.norm(np.array(shared[0]) - np.array(shared[1])))
-
-
-def build_routing_graphs(polygons: list[Polygon], *, max_ramp_slope_deg: float) -> dict[str, dict[str, list]]:
-    """Pure: turns Recast's polygon adjacency into the two profile graphs
-    dev.chaya.api.navigation.RouteService pathfinds over. STEP_FREE keeps only the edges between two
-    polygons that are BOTH within `max_ramp_slope_deg` of level -- a real per-polygon slope computation,
-    excluding stairs and anything steeper than an accessible ramp. It is never a renamed copy of STANDARD:
-    with any stairs present, STEP_FREE strictly has fewer edges.
-    """
-    by_id = {p.id: p for p in polygons}
-    slopes = {p.id: polygon_slope_degrees(p) for p in polygons}
-    centroids = {p.id: polygon_centroid(p) for p in polygons}
-    nodes = [{"local_id": f"p{p.id}", "kind": "WAYPOINT", "x": float(centroids[p.id][0]),
-             "y": float(centroids[p.id][1]), "z": float(centroids[p.id][2]), "connector_type": None} for p in polygons]
-
-    seen: set[tuple[int, int]] = set()
-    standard_edges: list[dict[str, Any]] = []
-    step_free_edges: list[dict[str, Any]] = []
-    for p in polygons:
-        for n in p.neighbors:
-            other = by_id.get(n)
-            if other is None or (n, p.id) in seen:
-                continue
-            seen.add((p.id, n))
-            length = float(np.linalg.norm(centroids[p.id] - centroids[other.id]))
-            clearance = shared_edge_length(p, other)
-            step_free = slopes[p.id] <= max_ramp_slope_deg and slopes[other.id] <= max_ramp_slope_deg
-            edge = {"from": f"p{p.id}", "to": f"p{other.id}", "length_m": length, "step_free": step_free,
-                   "min_clearance_m": clearance}
-            standard_edges.append(edge)
-            if step_free:
-                step_free_edges.append(edge)
-
-    return {"STANDARD": {"nodes": nodes, "edges": standard_edges}, "STEP_FREE": {"nodes": nodes, "edges": step_free_edges}}
-
-
-# ---- floor and obstacles in the canonical frame ------------------------------------------------------
+# ---- geometry from a reconstruction ---------------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -202,3 +157,174 @@ def obstacle_band_mask(points_canonical: np.ndarray, floor_height: float, *, age
     height, measured along canonical +Z from the floor. Ceiling and floor-level geometry never block."""
     z = np.asarray(points_canonical, dtype=np.float64)[:, 2] - floor_height
     return (z > agent_max_climb) & (z < agent_height)
+
+
+def _cell_keys(xy: np.ndarray, origin: np.ndarray, cell_m: float) -> np.ndarray:
+    return np.floor((xy - origin) / cell_m).astype(np.int64)
+
+
+def geometry_from_reconstruction(floor_points: np.ndarray, obstacle_points: np.ndarray, floor_height: float, *, cell_m: float,
+                                 min_points_per_cell: int, obstacle_min_height_m: float) -> NavGeometry:
+    """Pure: the triangle soup Recast bakes for one reconstructed floor, from cleaned canonical-frame points.
+
+    Floor: an occupancy grid of `cell_m` squares over the floor plane's inliers. Only cells holding at least
+    `min_points_per_cell` real floor points become geometry (a quad at the median height of those points), so unscanned
+    gaps, courtyards and the outside of an L-shaped room stay holes -- never the convex hull of the floor.
+
+    Obstacles: every cell holding wall/furniture points (already filtered to the band an agent collides with, see
+    obstacle_band_mask) becomes a closed box from the floor up to the highest such point (at least
+    `obstacle_min_height_m`), marked blocked. Recast rasterises it as solid, so the floor under and around it is cut
+    out and eroded by the agent radius exactly as for any other solid geometry.
+    """
+    floor_points = np.asarray(floor_points, dtype=np.float64).reshape(-1, 3)
+    obstacle_points = np.asarray(obstacle_points, dtype=np.float64).reshape(-1, 3)
+    if cell_m <= 0 or min_points_per_cell < 1:
+        raise ValueError("cell_m must be positive and min_points_per_cell at least 1")
+    if len(floor_points) == 0:
+        return NavGeometry(np.zeros((0, 3)), np.zeros((0, 3), dtype=np.int64))
+    origin = np.floor(np.vstack([floor_points[:, :2], obstacle_points[:, :2]]).min(axis=0) / cell_m) * cell_m
+
+    verts: list[np.ndarray] = []
+    tris: list[np.ndarray] = []
+    blocked: list[np.ndarray] = []
+    offset = 0
+
+    keys = _cell_keys(floor_points[:, :2], origin, cell_m)
+    uniq, inverse, counts = np.unique(keys, axis=0, return_inverse=True, return_counts=True)
+    inverse = inverse.reshape(-1)
+    order = np.argsort(inverse, kind="stable")
+    splits = np.split(floor_points[order, 2], np.cumsum(counts)[:-1])
+    occupied = counts >= min_points_per_cell
+    if occupied.any():
+        cells = uniq[occupied]
+        heights = np.array([float(np.median(z)) for z, ok in zip(splits, occupied, strict=True) if ok])
+        x0 = origin[0] + cells[:, 0] * cell_m
+        y0 = origin[1] + cells[:, 1] * cell_m
+        quad = np.stack([np.stack([x0, y0, heights], 1), np.stack([x0 + cell_m, y0, heights], 1),
+                         np.stack([x0 + cell_m, y0 + cell_m, heights], 1), np.stack([x0, y0 + cell_m, heights], 1)], 1)
+        n = len(cells)
+        verts.append(quad.reshape(-1, 3))
+        base = offset + 4 * np.arange(n)[:, None]
+        # Counter-clockwise seen from +Z: the face normal points up, as Recast's slope test expects after the boundary.
+        tris.append(np.concatenate([base + [0, 1, 2], base + [0, 2, 3]]))
+        blocked.append(np.zeros(2 * n, dtype=bool))
+        offset += 4 * n
+
+    if len(obstacle_points):
+        okeys = _cell_keys(obstacle_points[:, :2], origin, cell_m)
+        ouniq, oinv = np.unique(okeys, axis=0, return_inverse=True)
+        oinv = oinv.reshape(-1)
+        tops = np.full(len(ouniq), -np.inf)
+        np.maximum.at(tops, oinv, obstacle_points[:, 2])
+        tops = np.maximum(tops, floor_height + obstacle_min_height_m)
+        x0 = origin[0] + ouniq[:, 0] * cell_m
+        y0 = origin[1] + ouniq[:, 1] * cell_m
+        zb = np.full(len(ouniq), floor_height)
+        corners = []
+        for z in (zb, tops):
+            corners += [np.stack([x0, y0, z], 1), np.stack([x0 + cell_m, y0, z], 1),
+                        np.stack([x0 + cell_m, y0 + cell_m, z], 1), np.stack([x0, y0 + cell_m, z], 1)]
+        n = len(ouniq)
+        verts.append(np.stack(corners, 1).reshape(-1, 3))
+        box = np.array([[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4],
+                        [1, 2, 6], [1, 6, 5], [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]])
+        tris.append((offset + 8 * np.arange(n)[:, None, None] + box[None]).reshape(-1, 3))
+        blocked.append(np.ones(12 * n, dtype=bool))
+
+    if not verts:
+        return NavGeometry(np.zeros((0, 3)), np.zeros((0, 3), dtype=np.int64))
+    return NavGeometry(np.vstack(verts), np.vstack(tris), np.concatenate(blocked))
+
+
+# ---- the baked navmesh's polygons, and routing graphs from them ------------------------------------------------------
+
+
+@dataclass
+class Link:
+    """A Detour link from one polygon to a neighbour, with the portal edge (two canonical points) it crosses."""
+
+    neighbor: int
+    portal: tuple[tuple[float, float, float], tuple[float, float, float]]
+
+
+@dataclass
+class Polygon:
+    id: int
+    vertices: list[tuple[float, float, float]]
+    links: list[Link] = field(default_factory=list)
+
+    @property
+    def neighbors(self) -> list[int]:
+        return [link.neighbor for link in self.links]
+
+
+def polygon_centroid(poly: Polygon) -> np.ndarray:
+    return np.mean(np.array(poly.vertices), axis=0)
+
+
+def polygon_slope_degrees(poly: Polygon) -> float:
+    """Pure: angle between the polygon's own face normal and the canonical vertical (+Z), in degrees. 0 = flat.
+    Meaningful only because the polygon is in the canonical frame, where +Z really is opposite to gravity."""
+    v = np.array(poly.vertices, dtype=np.float64)
+    normal = np.zeros(3)
+    for i in range(1, len(v) - 1):  # Newell-style sum over the fan: robust to a degenerate first triangle
+        normal += np.cross(v[i] - v[0], v[i + 1] - v[0])
+    norm = np.linalg.norm(normal)
+    if norm < 1e-12:
+        return 0.0
+    cos_angle = abs(float(np.dot(normal / norm, CANONICAL_UP)))
+    return float(np.degrees(np.arccos(np.clip(cos_angle, 0.0, 1.0))))
+
+
+def portal_width(link: Link) -> float:
+    """Pure: the length of the portal edge Detour links two polygons through. Because Recast already eroded the walkable
+    area by the agent radius, this is the free width left for the agent's centre, not the wall-to-wall corridor width
+    (review finding N-3)."""
+    a, b = (np.array(p, dtype=np.float64) for p in link.portal)
+    return float(np.linalg.norm(a - b))
+
+
+def point_in_polygon_xy(point: np.ndarray, poly: Polygon) -> bool:
+    """Pure: whether a canonical point's horizontal (x, y) position lies inside the polygon's horizontal footprint."""
+    x, y = float(point[0]), float(point[1])
+    v = np.array(poly.vertices)[:, :2]
+    inside = False
+    j = len(v) - 1
+    for i in range(len(v)):
+        if (v[i, 1] > y) != (v[j, 1] > y) and x < (v[j, 0] - v[i, 0]) * (y - v[i, 1]) / (v[j, 1] - v[i, 1]) + v[i, 0]:
+            inside = not inside
+        j = i
+    return inside
+
+
+def build_routing_graphs(polygons: list[Polygon], *, max_ramp_slope_deg: float) -> dict[str, dict[str, list]]:
+    """Pure: turns the Detour navmesh's polygon links into the two profile graphs dev.chaya.api.navigation.RouteService
+    pathfinds over. Nodes are polygon centroids; an edge is a Detour link, weighted by centroid-to-centroid distance, with
+    the portal it crosses recorded as `min_clearance_m` (see portal_width). STEP_FREE keeps only the edges between two
+    polygons that are BOTH within `max_ramp_slope_deg` of level -- a real per-polygon slope computation, excluding stairs
+    and anything steeper than an accessible ramp, never a renamed copy of STANDARD.
+    """
+    by_id = {p.id: p for p in polygons}
+    slopes = {p.id: polygon_slope_degrees(p) for p in polygons}
+    centroids = {p.id: polygon_centroid(p) for p in polygons}
+    nodes = [{"local_id": f"p{p.id}", "kind": "WAYPOINT", "x": float(centroids[p.id][0]),
+             "y": float(centroids[p.id][1]), "z": float(centroids[p.id][2]), "connector_type": None} for p in polygons]
+
+    seen: set[tuple[int, int]] = set()
+    standard_edges: list[dict[str, Any]] = []
+    step_free_edges: list[dict[str, Any]] = []
+    for p in polygons:
+        for link in p.links:
+            other = by_id.get(link.neighbor)
+            if other is None or (other.id, p.id) in seen or other.id == p.id:
+                continue
+            seen.add((p.id, other.id))
+            length = float(np.linalg.norm(centroids[p.id] - centroids[other.id]))
+            step_free = slopes[p.id] <= max_ramp_slope_deg and slopes[other.id] <= max_ramp_slope_deg
+            edge = {"from": f"p{p.id}", "to": f"p{other.id}", "length_m": length, "step_free": step_free,
+                    "min_clearance_m": portal_width(link)}
+            standard_edges.append(edge)
+            if step_free:
+                step_free_edges.append(edge)
+
+    return {"STANDARD": {"nodes": nodes, "edges": standard_edges}, "STEP_FREE": {"nodes": nodes, "edges": step_free_edges}}

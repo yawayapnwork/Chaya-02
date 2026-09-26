@@ -90,6 +90,12 @@ Model weights are downloaded at runtime and have their own licenses, separate fr
 | CLIP ViT-B/32 "openai" (`open_clip`) | search embeddings | Check the terms of the specific pretrained checkpoint. |
 | OpenCV Haar cascades | privacy stage | Shipped inside `opencv-python-headless` (Intel License Agreement, BSD-style). |
 
+## Native code built from source (not scanned)
+
+| Project | Version | License | Used by | Note |
+|---|---|---|---|---|
+| [recastnavigation](https://github.com/recastnavigation/recastnavigation) (Recast, Detour) | 1.6.0 | zlib | chaya-navmesh (`services/reconstruction/native/chaya-navmesh`), NAVIGATION_BAKING | Downloaded and statically linked at build time, pinned by SHA-256 in `CMakeLists.txt`. It ships in the worker image. zlib is permissive: keep the copyright notice with source distributions, and do not misrepresent the origin. |
+
 ## Container base images
 
 `python:3.12-slim` (Debian), `pgvector/pgvector`, `quay.io/minio/minio` (AGPL-3.0: used unmodified, as a separate

@@ -31,9 +31,8 @@ import org.springframework.transaction.annotation.Transactional;
 public class ReconstructionService {
 
     /** Kinds ARTIFACT_GENERATION and PLANE_FITTING publish that are safe and meaningful to hand to a viewer.
-     * NAVMESH is included for forward compatibility with NAVIGATION_BAKING (chaya_worker.stages.unimplemented):
-     * that stage does not exist yet, so no run today can ever produce one, but nothing else needs to change
-     * once it does. */
+     * NAVMESH is the Detour navmesh tile NAVIGATION_BAKING publishes (chaya_worker.stages.navigation_baking, built by
+     * the real Recast/Detour library; docs/navigation.md), served as opaque bytes. */
     private static final Set<String> VIEWER_ARTIFACT_KINDS = Set.of("KSPLAT", "ARTIFACT_MANIFEST", "PLANE_MODEL", "NAVMESH");
 
     /** The content type each viewer kind is SERVED as. Fixed here rather than taken from the worker's report: the

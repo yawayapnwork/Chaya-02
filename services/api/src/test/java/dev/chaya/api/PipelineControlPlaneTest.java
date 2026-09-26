@@ -1,14 +1,25 @@
 package dev.chaya.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import dev.chaya.api.pipeline.PipelineDefinition;
+import dev.chaya.api.navigation.NavigationDtos.RouteRequest;
+import dev.chaya.api.navigation.NavigationDtos.RouteResponse;
+import dev.chaya.api.navigation.RouteService;
 import dev.chaya.api.pipeline.PipelineService;
+import dev.chaya.api.security.Actor;
+import dev.chaya.api.security.Role;
+import dev.chaya.api.web.ApiException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -20,6 +31,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 class PipelineControlPlaneTest extends PipelineTestSupport {
 
     @Autowired PipelineService pipeline;
+    @Autowired RouteService routes;
 
     // ---- success only when every stage succeeded --------------------------------------------
 
@@ -458,5 +470,127 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
         UUID storedFrame = jdbc.sql("SELECT v.coordinate_frame_id FROM poi p JOIN poi_version v ON v.poi_id = p.id "
                 + "WHERE p.venue_id = :v AND v.source = 'AUTO_DETECTED'").param("v", s.c().venue()).query(UUID.class).single();
         assertThat(storedFrame).as("the POI's coordinates are canonical metres in that frame").isEqualTo(UUID.fromString(frameId));
+    }
+
+    // ---- NAVIGATION_BAKING ingestion (real Recast output -> navigation_graph rows -> routing) -------------
+
+    /** The real output of the chaya-navmesh tool (recastnavigation 1.6.0) for the fixture room with a doorway:
+     * packages/contracts/fixtures/navmesh (see its generate_navmesh_fixture.py). Fixture geometry, not a venue. */
+    private static final Path NAVMESH_FIXTURE = Path.of("../../packages/contracts/fixtures/navmesh");
+
+    private UUID insertPoiInCurrentFrame(Started s, UUID floor, double x, double y, double z) {
+        UUID poi = jdbc.sql("INSERT INTO poi (organization_id, venue_id, floor_id) VALUES (:o, :v, :f) RETURNING id")
+            .param("o", s.c().org()).param("v", s.c().venue()).param("f", floor).query(UUID.class).single();
+        jdbc.sql("""
+                INSERT INTO poi_version (organization_id, venue_id, poi_id, version_number, label, category, tags, x, y, z,
+                    coordinate_frame_id, created_by)
+                VALUES (:o, :v, :p, 1, 'Far room', null, '{}', :x, :y, :z, (SELECT current_coordinate_frame_id FROM floor WHERE id = :f), 'test')
+                """)
+            .param("o", s.c().org()).param("v", s.c().venue()).param("p", poi).param("f", floor)
+            .param("x", x).param("y", y).param("z", z).update();
+        return poi;
+    }
+
+    private UUID insertNode(Started s, UUID graph, UUID floor, double x) {
+        return jdbc.sql("INSERT INTO navigation_node (organization_id, venue_id, graph_id, floor_id, x, y, z) "
+                + "VALUES (:o, :v, :g, :f, :x, 0, 0) RETURNING id")
+            .param("o", s.c().org()).param("v", s.c().venue()).param("g", graph).param("f", floor).param("x", x)
+            .query(UUID.class).single();
+    }
+
+    @Test
+    void aRealRecastNavmeshIsIngestedBoundToItsChecksumAndIsWhatRoutesRunOn() throws Exception {
+        byte[] navmesh = Files.readAllBytes(NAVMESH_FIXTURE.resolve("navmesh.bin"));
+        String manifest = Files.readString(NAVMESH_FIXTURE.resolve("navmesh-manifest.json"), StandardCharsets.UTF_8);
+        String graphTemplate = Files.readString(NAVMESH_FIXTURE.resolve("navigation-graph.json"), StandardCharsets.UTF_8);
+        String navmeshSha = sha256(navmesh);
+        assertThat(mapper.readTree(graphTemplate).get("navmesh").get("sha256").asText())
+            .as("the committed fixture graph is bound to the committed navmesh").isEqualTo(navmeshSha);
+
+        var s = startRun();
+        String frameId = null;
+        for (var stage : PipelineDefinition.STAGES) {
+            if (stage.name().equals("NAVIGATION_BAKING")) {
+                frameId = calibrateOk(s, controlPointCalibration(0)).get("id").asText();
+            }
+            JsonNode order = claimExpecting(stage.name());
+            if (!stage.name().equals("NAVIGATION_BAKING")) {
+                succeed(order);
+                continue;
+            }
+            String graph = graphTemplate.replace("FIXTURE_FRAME_ID", frameId);
+            var nav = artifact(order, "navmesh.bin", "NAVMESH", false, false, navmesh);
+            var man = artifact(order, "navmesh-manifest.json", "NAVMESH_MANIFEST", false, false, manifest);
+            // A graph that names some other navmesh is refused, not ingested as routable.
+            var unbound = artifact(order, "navigation-graph-unbound.json", "NAVIGATION_GRAPH", false, false,
+                graph.replace(navmeshSha, "0".repeat(64)));
+            send(order, report("SUCCEEDED", List.of(nav, man, unbound), null, null), svc).andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("NAVMESH_BINDING_INVALID"));
+            // So is a graph published without the NAVMESH artifact itself.
+            var graphOnly = artifact(order, "navigation-graph.json", "NAVIGATION_GRAPH", false, false, graph);
+            send(order, report("SUCCEEDED", List.of(graphOnly), null, null), svc).andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("NAVMESH_BINDING_INVALID"));
+            send(order, report("SUCCEEDED", List.of(nav, man, graphOnly), null, null), svc).andExpect(status().isOk());
+        }
+
+        record Row(String profile, String status, String source, String sha, String recast, UUID run, UUID artifact, UUID frame) {}
+        List<Row> rows = jdbc.sql("SELECT profile, status, source, navmesh_sha256, recastnavigation_version, pipeline_run_id, "
+                + "navmesh_artifact_id, coordinate_frame_id FROM navigation_graph WHERE venue_id = :v ORDER BY profile")
+            .param("v", s.c().venue())
+            .query((rs, i) -> new Row(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5),
+                rs.getObject(6, UUID.class), rs.getObject(7, UUID.class), rs.getObject(8, UUID.class))).list();
+        assertThat(rows).extracting(Row::profile).containsExactly("STANDARD", "STEP_FREE");
+        for (Row row : rows) {
+            assertThat(row.status()).isEqualTo("ACTIVE");
+            assertThat(row.source()).isEqualTo("RECAST_NAVMESH");
+            assertThat(row.sha()).isEqualTo(navmeshSha);
+            assertThat(row.recast()).isEqualTo("1.6.0");
+            assertThat(row.run()).isEqualTo(s.run());
+            assertThat(row.frame()).isEqualTo(UUID.fromString(frameId));
+            String artifactKind = jdbc.sql("SELECT kind || ':' || checksum_sha256 FROM processing_artifact WHERE id = :a")
+                .param("a", row.artifact()).query(String.class).single();
+            assertThat(artifactKind).isEqualTo("NAVMESH:" + navmeshSha);
+        }
+        Integer polygons = jdbc.sql("SELECT count(*) FROM navigation_node n JOIN navigation_graph g ON g.id = n.graph_id "
+                + "WHERE g.venue_id = :v AND g.profile = 'STANDARD'").param("v", s.c().venue()).query(Integer.class).single();
+        assertThat(polygons).as("one node per Detour polygon").isEqualTo(mapper.readTree(graphTemplate).get("polygon_count").asInt());
+
+        // Route across the wall, from the left room to the right one, on the ingested navmesh graph.
+        Actor viewer = new Actor(Actor.Kind.USER, "viewer", s.c().org(), Set.of(s.c().venue()), Set.of(Role.VIEWER));
+        UUID farRoom = insertPoiInCurrentFrame(s, s.c().floor(), 6.0, 3.0, 0.05);
+        RouteResponse route = routes.route(viewer, new RouteRequest(s.c().venue(), s.c().floor(), List.of(1.0, 3.0, 0.05), farRoom, null, null));
+        assertThat(route.routingSources()).singleElement().satisfies(src -> {
+            assertThat(src.source()).isEqualTo("RECAST_NAVMESH");
+            assertThat(src.navmeshSha256()).isEqualTo(navmeshSha);
+            assertThat(src.recastnavigationVersion()).isEqualTo("1.6.0");
+        });
+        assertThat(route.distanceMeters()).isBetween(5.0, 10.0);
+        assertThat(route.waypoints()).allSatisfy(w -> {
+            assertThat(w.z()).as("canonical z-up floor height").isBetween(-0.2, 0.2);
+            boolean inWall = w.x() > 3.9 && w.x() < 4.1 && w.y() < 2.6;
+            boolean inFurniture = w.x() > 1.5 && w.x() < 2.5 && w.y() > 1.0 && w.y() < 2.0;
+            assertThat(inWall || inFurniture).as("no waypoint inside blocked geometry: " + w).isFalse();
+        });
+
+        // A floor whose only graph was hand-inserted is never routed on: NAVMESH_NOT_READY, not a fallback.
+        UUID floor2 = fx.floor(s.c().org(), s.c().venue(), 7);
+        fx.calibratedFloor(s.c().org(), s.c().venue(), floor2, "VENUE_CONTROL_POINTS");
+        UUID synthetic = jdbc.sql("INSERT INTO navigation_graph (organization_id, venue_id, floor_id, profile, status, coordinate_frame_id) "
+                + "VALUES (:o, :v, :f, 'STANDARD', 'DRAFT', (SELECT current_coordinate_frame_id FROM floor WHERE id = :f)) RETURNING id")
+            .param("o", s.c().org()).param("v", s.c().venue()).param("f", floor2).query(UUID.class).single();
+        UUID n1 = insertNode(s, synthetic, floor2, 0);
+        UUID n2 = insertNode(s, synthetic, floor2, 5);
+        jdbc.sql("INSERT INTO navigation_edge (organization_id, venue_id, graph_id, from_node_id, to_node_id, length_m) "
+                + "VALUES (:o, :v, :g, :a, :b, 5)")
+            .param("o", s.c().org()).param("v", s.c().venue()).param("g", synthetic).param("a", n1).param("b", n2).update();
+        jdbc.sql("UPDATE navigation_graph SET status = 'ACTIVE' WHERE id = :g").param("g", synthetic).update();
+        assertThat(jdbc.sql("SELECT source FROM navigation_graph WHERE id = :g").param("g", synthetic).query(String.class).single())
+            .as("anything not ingested from a navmesh is SYNTHETIC by default").isEqualTo("SYNTHETIC");
+        UUID floor2Poi = insertPoiInCurrentFrame(s, floor2, 5, 0, 0);
+        assertThatThrownBy(() -> routes.route(viewer, new RouteRequest(s.c().venue(), floor2, List.of(0.0, 0.0, 0.0), floor2Poi, null, null)))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.code()).isEqualTo("NAVMESH_NOT_READY"));
+        // and a graph cannot be relabelled as navmesh-backed without the navmesh it would have to name
+        assertThatThrownBy(() -> jdbc.sql("UPDATE navigation_graph SET source = 'RECAST_NAVMESH' WHERE id = :g").param("g", synthetic).update())
+            .hasMessageContaining("navigation_graph_navmesh_provenance");
     }
 }

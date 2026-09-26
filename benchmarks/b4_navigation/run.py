@@ -14,10 +14,12 @@ navigation_edge (step_free, min_clearance_m) -- the same rows the router used.
 Two modes:
 
     --venue <id> --pairs pairs.json   a real venue whose graphs NAVIGATION_BAKING produced (none exists yet: baking needs
-                                      a reconstruction, i.e. a CUDA GPU, plus recast-cli)
+                                      a reconstruction, i.e. a CUDA GPU, plus chaya-navmesh)
     --synthetic                       a SELF-TEST on a hand-made two-floor graph inserted through the same DRAFT -> ACTIVE
                                       path the pipeline uses. It validates this benchmark and the router's rules; it says
-                                      nothing about real venues.
+                                      nothing about real venues. Those graphs are SYNTHETIC (not baked from a navmesh), which
+                                      the API refuses with NAVMESH_NOT_READY unless it was started with
+                                      CHAYA_NAVIGATION_ACCEPTSYNTHETICGRAPHS=true -- a self-test setting, never production.
 
     python benchmarks/b4_navigation/run.py --env-file <stack env> --synthetic
 """
@@ -137,8 +139,8 @@ def seed_synthetic(stack: Stack) -> tuple[Nav, list[dict]]:
     for lvl, spec in layout.items():
         f = floors[lvl]
         for profile in ("STANDARD", "STEP_FREE"):
-            g = s.psql(f"INSERT INTO navigation_graph (organization_id, venue_id, floor_id, profile, status, coordinate_frame_id) "
-                       f"VALUES ('{org}', '{venue}', '{f}', '{profile}', 'DRAFT', '{frame[lvl]}') RETURNING id")
+            g = s.psql(f"INSERT INTO navigation_graph (organization_id, venue_id, floor_id, profile, status, coordinate_frame_id, source) "
+                       f"VALUES ('{org}', '{venue}', '{f}', '{profile}', 'DRAFT', '{frame[lvl]}', 'SYNTHETIC') RETURNING id")
             ids = {k: s.psql(f"INSERT INTO navigation_node (organization_id, venue_id, graph_id, floor_id, kind, x, y, z) "
                              f"VALUES ('{org}', '{venue}', '{g}', '{f}', 'WAYPOINT', {x}, {hy}, {height[lvl]}) RETURNING id")
                    for k, (x, hy) in spec["nodes"].items()}
@@ -214,7 +216,7 @@ def main() -> None:
                     Metric("clearance violations avoided", std["clearance_violations"] - acc["clearance_violations"], "count", "measured", c,
                            "difference"))
     why = ("no venue has navigation graphs: NAVIGATION_BAKING needs a reconstruction (SPLAT_RECONSTRUCTION, CUDA GPU), plane "
-           "fitting (Open3D) and recast-cli")
+           "fitting (Open3D) and the chaya-navmesh Recast/Detour tool")
     cmd = "python benchmarks/b4_navigation/run.py --env-file <env> --venue <venue id> --pairs <pairs.json> --user <user>"
     for metric, unit in (("distance, standard vs accessible", "m"), ("floor transitions", "count"), ("stairs avoided", "count"),
                          ("clearance violations", "count")):

@@ -8,3 +8,4 @@ work
 *.egg-info
 .env
 .env.*
+native/*/build

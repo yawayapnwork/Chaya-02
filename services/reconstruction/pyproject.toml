@@ -41,6 +41,7 @@ markers = [
   "orchestration: pipeline orchestration with tiny real fixture files (no GPU, no external services)",
   "smoke: CI smoke test -- capture -> worker claim loop -> artifact generation with real CPU executables (no GPU)",
   "integration: needs real external services (MinIO, the Spring Boot API); skipped when they are not configured",
+  "navmesh: runs the real Recast/Detour tool (services/reconstruction/native/chaya-navmesh); skipped when it is not built, and CI fails if any skip",
   "gpu: needs a GPU and the reconstruction toolchain (COLMAP/GLOMAP/gsplat); skipped, never passed, when unavailable",
 ]
 

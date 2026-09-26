@@ -47,11 +47,11 @@ belongs to the artifact-generation milestone, and a `PARTIAL` result must be fin
 | 9 | `PLANE_FITTING` | iterative Open3D RANSAC plane extraction (spacing-relative inlier distance); floor/ceiling/wall classification against the calibrated frame's up or this reconstruction's `GRAVITY_ESTIMATE` (floor plane oriented by the cameras; [coordinate-frames.md](coordinate-frames.md)) | implemented; **needs Open3D**; fails with `DEPENDENCY_UNAVAILABLE` here |
 | 10 | `ARTIFACT_GENERATION` | `.ksplat` conversion (the level-0 KSplat layout of the pinned viewer, @mkkellogg/gaussian-splats-3d 0.4.7; see "Viewer asset format" below), the artifact manifest, the compressed viewer bundle | implemented; only needs the cleaned splat as input |
 | 11 | `SEMANTIC_INDEXING` | Grounding DINO open-vocabulary detection (stock checkpoint, not fine-tuned) + 3D localisation against the splat + real CLIP embeddings, positions in canonical metres; see [docs/search.md](docs/search.md) | implemented; **needs a calibrated coordinate frame** (else `NOT_CALIBRATED`) **and torch + transformers + open_clip + Pillow + the Grounding DINO checkpoint cached locally + COLMAP** |
-| 12 | `NAVIGATION_BAKING` | walkable surface from the floor plane + wall/furniture obstacles in canonical metres, Recast (`recast-cli`) polygon navmesh through the single Recast axis boundary, STANDARD/STEP_FREE routing graphs from real per-polygon slope against canonical +Z; see [docs/navigation.md](docs/navigation.md) | implemented; **needs a calibrated coordinate frame** (else `NOT_CALIBRATED`) **and `recast-cli`** |
+| 12 | `NAVIGATION_BAKING` | observed-floor occupancy grid + wall/furniture obstacle boxes in canonical metres, a Detour navmesh baked by the real Recast/Detour library (chaya-navmesh, recastnavigation 1.6.0) through the single Recast axis boundary, NAVMESH + NAVMESH_MANIFEST provenance, STANDARD/STEP_FREE routing graphs from the Detour polygon links; see [docs/navigation.md](docs/navigation.md) | implemented; **needs a calibrated coordinate frame** (else `NOT_CALIBRATED`) **and chaya-navmesh** (else `NAVMESH_TOOL_UNAVAILABLE`; the CPU worker image includes it) |
 
 Stage order runs SEMANTIC_INDEXING before NAVIGATION_BAKING (not their original numbering): neither
-depends on the other's output, and `recast-cli` is a much rarer thing to have installed than the
-reconstruction toolchain SEMANTIC_INDEXING needs, so a worker without it still produces a fully
+depends on the other's output, and chaya-navmesh is a separately built binary a worker may not have
+(unlike the reconstruction toolchain SEMANTIC_INDEXING needs), so a worker without it still produces a fully
 searchable reconstruction -- only routing is unavailable, not search too (a stage failure stops the run
 from advancing; see `PipelineService#advance`).
 
@@ -59,10 +59,10 @@ There is no code path that produces a `.ply`/`.ksplat`/mesh/detection/navmesh wi
 behind it: stages 6-12 run real gsplat/Open3D/transformers/Grounding-DINO/CLIP/Recast code, each gated by
 `chaya_worker.toolchain` dependency checks -- a missing dependency is `DEPENDENCY_UNAVAILABLE`, structured
 and actionable, never a simulated result.
-On a worker with only FFmpeg/OpenCV/COLMAP (no CUDA, gsplat, Open3D, transformers or recast-cli) a run
+On a worker with only FFmpeg/OpenCV/COLMAP (no CUDA, gsplat, Open3D, transformers or chaya-navmesh) a run
 still ends `FAILED` at `SPLAT_RECONSTRUCTION`, which is the intended honest behaviour; the reconstruction
 toolchain (`pip install chaya-worker[reconstruction]`) and a CUDA GPU are needed to get past it, and
-`recast-cli` specifically is needed only for `NAVIGATION_BAKING` (the run's last stage) to reach
+chaya-navmesh specifically is needed only for `NAVIGATION_BAKING` (the run's last stage) to reach
 `SUCCEEDED` end to end.
 Coordinate frames ([coordinate-frames.md](coordinate-frames.md)): every stage up to ARTIFACT_GENERATION works in the
 reconstruction's own arbitrary frame, with scale-invariant thresholds. The stages whose output is metric --

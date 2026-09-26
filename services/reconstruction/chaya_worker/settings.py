@@ -100,22 +100,30 @@ class Settings:
     clip_pretrained: str = "openai"  # 512-d, matches poi_version.embedding vector(512)
     semantic_indexing_sample_every: int = 3
     object_cluster_distance_m: float = 0.75  # canonical metres (SEMANTIC_INDEXING requires a calibrated frame)
-    # NAVIGATION_BAKING (Recast). Names/defaults match Recast's own rcConfig fields. All lengths are canonical metres
-    # and all heights are along canonical +Z (Recast's +Y after chaya_worker.recast_boundary); the stage refuses to
-    # run without a calibrated frame, so these numbers are never applied to arbitrary reconstruction units.
-    navmesh_cell_size: float = 0.3
-    navmesh_cell_height: float = 0.2
-    navmesh_agent_height: float = 1.8
-    navmesh_agent_radius: float = 0.35
-    navmesh_agent_max_climb: float = 0.4
-    navmesh_agent_max_slope_deg: float = 45.0
-    navmesh_region_min_size: float = 8.0
-    navmesh_region_merge_size: float = 20.0
-    navmesh_edge_max_len: float = 12.0
-    navmesh_edge_max_error: float = 1.3
-    navmesh_verts_per_poly: float = 6.0
-    navmesh_detail_sample_dist: float = 6.0
-    navmesh_detail_sample_max_error: float = 1.0
+    # NAVIGATION_BAKING (Recast/Detour via services/reconstruction/native/chaya-navmesh; see chaya_worker.recast). Every value is in canonical
+    # physical units, named by its unit: lengths in metres, heights along canonical +Z (Recast's +Y after
+    # chaya_worker.recast_boundary), areas in square metres, slopes in degrees. The tool converts them to Recast's voxel
+    # units itself and records both. The stage refuses to run without a calibrated frame, so these numbers are never
+    # applied to arbitrary reconstruction units.
+    navmesh_cell_size_m: float = 0.1  # horizontal voxel size
+    navmesh_cell_height_m: float = 0.05  # vertical voxel size
+    navmesh_agent_height_m: float = 1.8  # head clearance an agent needs
+    navmesh_agent_radius_m: float = 0.35  # walkable area is eroded by this much from every wall and edge
+    navmesh_agent_max_climb_m: float = 0.4  # highest step an agent walks up (a stair riser ~0.18 m; a curb ~0.15 m)
+    navmesh_agent_max_slope_deg: float = 45.0  # steepest walkable surface
+    navmesh_region_min_area_m2: float = 0.64  # isolated walkable islands smaller than this (0.8 m x 0.8 m) are dropped
+    navmesh_region_merge_area_m2: float = 4.0  # regions smaller than this are merged into a neighbour
+    navmesh_edge_max_len_m: float = 6.0  # longest polygon border edge
+    navmesh_edge_max_error_m: float = 0.13  # how far a simplified border may deviate from the voxelised one
+    navmesh_verts_per_poly: int = 6  # a count, not a length; Detour's maximum is 6
+    navmesh_detail_sample_dist_m: float = 0.6  # height-detail sampling spacing
+    navmesh_detail_sample_max_error_m: float = 0.05  # how far the detail mesh may deviate from the heightfield
+    # Recast's input geometry from a reconstruction (chaya_worker.navmesh.geometry_from_reconstruction): floor
+    # occupancy-grid cell size, how many floor-plane inliers make a cell observed floor, and the least height an
+    # obstacle box is given above the floor (so a detected wall/furniture cell always blocks).
+    navmesh_floor_grid_m: float = 0.2
+    navmesh_floor_min_points_per_cell: int = 3
+    navmesh_obstacle_min_height_m: float = 1.0
     # ADA-inspired accessible-ramp threshold (1:12 rise:run ~= 4.8 degrees); a polygon steeper than this
     # is excluded from the STEP_FREE routing graph regardless of whether Recast still considers it walkable.
     navmesh_max_ramp_slope_deg: float = 5.0
@@ -198,19 +206,22 @@ class Settings:
             clip_pretrained=e.get("CLIP_PRETRAINED", d.clip_pretrained),
             semantic_indexing_sample_every=_int(e, "SEMANTIC_INDEXING_SAMPLE_EVERY", d.semantic_indexing_sample_every),
             object_cluster_distance_m=_float(e, "OBJECT_CLUSTER_DISTANCE_M", d.object_cluster_distance_m),
-            navmesh_cell_size=_float(e, "NAVMESH_CELL_SIZE", d.navmesh_cell_size),
-            navmesh_cell_height=_float(e, "NAVMESH_CELL_HEIGHT", d.navmesh_cell_height),
-            navmesh_agent_height=_float(e, "NAVMESH_AGENT_HEIGHT", d.navmesh_agent_height),
-            navmesh_agent_radius=_float(e, "NAVMESH_AGENT_RADIUS", d.navmesh_agent_radius),
-            navmesh_agent_max_climb=_float(e, "NAVMESH_AGENT_MAX_CLIMB", d.navmesh_agent_max_climb),
+            navmesh_cell_size_m=_float(e, "NAVMESH_CELL_SIZE_M", d.navmesh_cell_size_m),
+            navmesh_cell_height_m=_float(e, "NAVMESH_CELL_HEIGHT_M", d.navmesh_cell_height_m),
+            navmesh_agent_height_m=_float(e, "NAVMESH_AGENT_HEIGHT_M", d.navmesh_agent_height_m),
+            navmesh_agent_radius_m=_float(e, "NAVMESH_AGENT_RADIUS_M", d.navmesh_agent_radius_m),
+            navmesh_agent_max_climb_m=_float(e, "NAVMESH_AGENT_MAX_CLIMB_M", d.navmesh_agent_max_climb_m),
             navmesh_agent_max_slope_deg=_float(e, "NAVMESH_AGENT_MAX_SLOPE_DEG", d.navmesh_agent_max_slope_deg),
-            navmesh_region_min_size=_float(e, "NAVMESH_REGION_MIN_SIZE", d.navmesh_region_min_size),
-            navmesh_region_merge_size=_float(e, "NAVMESH_REGION_MERGE_SIZE", d.navmesh_region_merge_size),
-            navmesh_edge_max_len=_float(e, "NAVMESH_EDGE_MAX_LEN", d.navmesh_edge_max_len),
-            navmesh_edge_max_error=_float(e, "NAVMESH_EDGE_MAX_ERROR", d.navmesh_edge_max_error),
-            navmesh_verts_per_poly=_float(e, "NAVMESH_VERTS_PER_POLY", d.navmesh_verts_per_poly),
-            navmesh_detail_sample_dist=_float(e, "NAVMESH_DETAIL_SAMPLE_DIST", d.navmesh_detail_sample_dist),
-            navmesh_detail_sample_max_error=_float(e, "NAVMESH_DETAIL_SAMPLE_MAX_ERROR", d.navmesh_detail_sample_max_error),
+            navmesh_region_min_area_m2=_float(e, "NAVMESH_REGION_MIN_AREA_M2", d.navmesh_region_min_area_m2),
+            navmesh_region_merge_area_m2=_float(e, "NAVMESH_REGION_MERGE_AREA_M2", d.navmesh_region_merge_area_m2),
+            navmesh_edge_max_len_m=_float(e, "NAVMESH_EDGE_MAX_LEN_M", d.navmesh_edge_max_len_m),
+            navmesh_edge_max_error_m=_float(e, "NAVMESH_EDGE_MAX_ERROR_M", d.navmesh_edge_max_error_m),
+            navmesh_verts_per_poly=_int(e, "NAVMESH_VERTS_PER_POLY", d.navmesh_verts_per_poly),
+            navmesh_detail_sample_dist_m=_float(e, "NAVMESH_DETAIL_SAMPLE_DIST_M", d.navmesh_detail_sample_dist_m),
+            navmesh_detail_sample_max_error_m=_float(e, "NAVMESH_DETAIL_SAMPLE_MAX_ERROR_M", d.navmesh_detail_sample_max_error_m),
+            navmesh_floor_grid_m=_float(e, "NAVMESH_FLOOR_GRID_M", d.navmesh_floor_grid_m),
+            navmesh_floor_min_points_per_cell=_int(e, "NAVMESH_FLOOR_MIN_POINTS_PER_CELL", d.navmesh_floor_min_points_per_cell),
+            navmesh_obstacle_min_height_m=_float(e, "NAVMESH_OBSTACLE_MIN_HEIGHT_M", d.navmesh_obstacle_min_height_m),
             navmesh_max_ramp_slope_deg=_float(e, "NAVMESH_MAX_RAMP_SLOPE_DEG", d.navmesh_max_ramp_slope_deg),
             navmesh_floor_max_tilt_deg=_float(e, "NAVMESH_FLOOR_MAX_TILT_DEG", d.navmesh_floor_max_tilt_deg),
             alignment_voxel_size_m=_float(e, "ALIGNMENT_VOXEL_SIZE_M", d.alignment_voxel_size_m),
@@ -260,13 +271,14 @@ class Settings:
             "clip_model_name": self.clip_model_name, "clip_pretrained": self.clip_pretrained,
             "semantic_indexing_sample_every": self.semantic_indexing_sample_every,
             "object_cluster_distance_m": self.object_cluster_distance_m,
-            "navmesh_cell_size": self.navmesh_cell_size, "navmesh_cell_height": self.navmesh_cell_height,
-            "navmesh_agent_height": self.navmesh_agent_height, "navmesh_agent_radius": self.navmesh_agent_radius,
-            "navmesh_agent_max_climb": self.navmesh_agent_max_climb, "navmesh_agent_max_slope_deg": self.navmesh_agent_max_slope_deg,
-            "navmesh_region_min_size": self.navmesh_region_min_size, "navmesh_region_merge_size": self.navmesh_region_merge_size,
-            "navmesh_edge_max_len": self.navmesh_edge_max_len, "navmesh_edge_max_error": self.navmesh_edge_max_error,
-            "navmesh_verts_per_poly": self.navmesh_verts_per_poly, "navmesh_detail_sample_dist": self.navmesh_detail_sample_dist,
-            "navmesh_detail_sample_max_error": self.navmesh_detail_sample_max_error,
+            "navmesh_cell_size_m": self.navmesh_cell_size_m, "navmesh_cell_height_m": self.navmesh_cell_height_m,
+            "navmesh_agent_height_m": self.navmesh_agent_height_m, "navmesh_agent_radius_m": self.navmesh_agent_radius_m,
+            "navmesh_agent_max_climb_m": self.navmesh_agent_max_climb_m, "navmesh_agent_max_slope_deg": self.navmesh_agent_max_slope_deg,
+            "navmesh_region_min_area_m2": self.navmesh_region_min_area_m2, "navmesh_region_merge_area_m2": self.navmesh_region_merge_area_m2,
+            "navmesh_edge_max_len_m": self.navmesh_edge_max_len_m, "navmesh_edge_max_error_m": self.navmesh_edge_max_error_m,
+            "navmesh_verts_per_poly": self.navmesh_verts_per_poly, "navmesh_detail_sample_dist_m": self.navmesh_detail_sample_dist_m,
+            "navmesh_detail_sample_max_error_m": self.navmesh_detail_sample_max_error_m, "navmesh_floor_grid_m": self.navmesh_floor_grid_m,
+            "navmesh_floor_min_points_per_cell": self.navmesh_floor_min_points_per_cell, "navmesh_obstacle_min_height_m": self.navmesh_obstacle_min_height_m,
             "navmesh_max_ramp_slope_deg": self.navmesh_max_ramp_slope_deg,
             "navmesh_floor_max_tilt_deg": self.navmesh_floor_max_tilt_deg,
             "alignment_voxel_size_m": self.alignment_voxel_size_m,

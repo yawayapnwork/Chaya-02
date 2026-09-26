@@ -25,7 +25,12 @@ public final class NavigationDtos {
 
     public record FloorTransition(UUID fromFloorId, UUID toFloorId, String connectorType, UUID poiId) {}
 
+    /** What one floor's leg was routed on: the navigation graph, and the navmesh it was derived from (source
+     * RECAST_NAVMESH, with that navmesh's SHA-256 and the recastnavigation version that built it). SYNTHETIC only ever
+     * appears when chaya.navigation.accept-synthetic-graphs is set (tests). */
+    public record RoutingSource(UUID floorId, UUID graphId, String source, String navmeshSha256, String recastnavigationVersion) {}
+
     public record RouteResponse(List<Waypoint> waypoints, double distanceMeters, double estimatedDurationSeconds,
                                 List<FloorTransition> floorTransitions, String accessibilityProfile,
-                                List<String> accessibilityConstraintsApplied) {}
+                                List<String> accessibilityConstraintsApplied, List<RoutingSource> routingSources) {}
 }

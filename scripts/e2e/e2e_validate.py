@@ -559,7 +559,7 @@ def step16_17_navigation() -> None:
     else:
         record("16", "Request a navigation route", "route over the NAVIGATION_BAKING graph",
                f"{short(r, 250)}; navigation_graph rows for venue: {graphs}", "BLOCKED" if r.status_code in (404, 409, 422) else "FAIL",
-               blocked="NAVIGATION_BAKING (needs plane fitting output + recast-cli) never ran; no navigation graph exists")
+               blocked="NAVIGATION_BAKING (needs plane fitting output + chaya-navmesh) never ran; no navigation graph exists")
     record("17", "Display the route in the viewer", "route polyline over the splat", "no route and no reconstruction to draw it on",
            "BLOCKED", blocked="steps 13 and 16")
 

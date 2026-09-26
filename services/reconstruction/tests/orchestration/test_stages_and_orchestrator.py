@@ -271,7 +271,9 @@ def test_implemented_reconstruction_stages_refuse_to_run_without_their_real_depe
     if stage in METRIC_STAGES:
         order["coordinateFrame"] = CANONICAL_FRAME
     report = harness.run(order, toolchain=NO_TOOLS)
-    assert report["status"] == "FAILED" and report["errorCode"] == "DEPENDENCY_UNAVAILABLE"
+    # NAVIGATION_BAKING names its one dependency (the chaya-navmesh Recast/Detour tool) in its own failure state.
+    expected = "NAVMESH_TOOL_UNAVAILABLE" if stage == "NAVIGATION_BAKING" else "DEPENDENCY_UNAVAILABLE"
+    assert report["status"] == "FAILED" and report["errorCode"] == expected
     assert report["artifacts"] == [] and report["errorDetails"]["missing"]
     assert not [k for k in harness.storage.keys(DERIVED_BUCKET) if k.endswith((".ply", ".ksplat"))]
 

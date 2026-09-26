@@ -1,0 +1,2 @@
+# navmesh.bin is a Detour tile whose SHA-256 is recorded in navigation-graph.json: never let line-ending conversion touch it.
+*.bin binary

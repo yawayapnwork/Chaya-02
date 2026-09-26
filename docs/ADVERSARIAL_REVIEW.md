@@ -31,7 +31,10 @@ names the test that would settle it.
 > | AR-4 anchors never invalidated | Addressed. Anchors are bound to the floor's current frame and become STALE when a different reconstruction becomes current. |
 > | R-1 `.ksplat` layout (**confirmed**: the pinned library could not load the old files, `RangeError: Invalid typed array length: 4096`) | Fixed. The encoder writes the level-0 layout of @mkkellogg/gaussian-splats-3d 0.4.7. This is proven by `apps/web/lib/ksplat-compat.test.ts`, which uses the real `KSplatLoader` plus a cross-check against the library's own PLY loader, and by `apps/web/e2e/ksplat-viewer.spec.ts`, where the real viewer in Chromium loads the production bytes. See docs/pipeline.md, "Viewer asset format". |
 > | T-2 viewer test never delivers bytes | Fixed by `e2e/ksplat-viewer.spec.ts`. It exposed a second defect on the same path: the viewer called `Viewer.getSplatCount()`, which 0.4.7 does not have, so no scene could ever reach "loaded". It now uses `getSplatMesh().getSplatCount()`. |
-> | Everything else (N-1 `recast-cli`, N-2, N-3, AR-1, AR-2, security, ops, …) | Unchanged. |
+> | N-1 `recast-cli` is fictional | Fixed. `recast-cli` is gone. NAVIGATION_BAKING now runs chaya-navmesh (`services/reconstruction/native/chaya-navmesh`), a CLI linked against the real recastnavigation 1.6.0 (pinned by SHA-256 in CMake) that runs Recast's full solo-mesh build and Detour's path query. The worker image and the `python` CI job build it, and CI fails if the real-tool tests skip. A tiny real mesh fixture is baked and routed on by the real library (Windows and Linux), and the API ingests and routes on the real output. Routes need a navmesh-backed graph (`NAVMESH_NOT_READY` otherwise). **No real reconstructed venue has been baked.** See docs/navigation.md. |
+> | N-2 convex-hull walkable surface | Partially. The floor is an occupancy grid of observed floor cells, and obstacles are solid boxes Recast erodes around. Tested with a synthetic L-shaped floor. The single-floor-plane input remains, so ramps and stairs are still absent from the input. |
+> | N-3 clearance | Partially. Clearance is now Detour's own portal length rather than vertex matching, so it is never an unknown 0. It is still the radius-eroded portal, not the corridor width. |
+> | Everything else (AR-1, AR-2, security, ops, …) | Unchanged. |
 
 Severity scale:
 

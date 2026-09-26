@@ -1,0 +1,369 @@
+{
+ "coordinate_frame": {
+  "id": "FIXTURE_FRAME_ID",
+  "source_run_id": null,
+  "version": 1,
+  "horizontal_datum": "FLOOR_LOCAL",
+  "units": "m",
+  "up_axis": "+Z",
+  "handedness": "right"
+ },
+ "navmesh": {
+  "source": "RECAST_NAVMESH",
+  "status": "READY",
+  "manifest": "navmesh-manifest.json",
+  "artifact": "navmesh.bin",
+  "format": "detour-tile",
+  "sha256": "f5fe42dd40ed32a5ab0c529f5f3b5cbc59db9a9ccfba2cde1261755dd4b3cb01",
+  "bytes": 1784,
+  "polygon_count": 11,
+  "tool_version": "1.0.0",
+  "recastnavigation_version": "1.6.0"
+ },
+ "recast_config": {
+  "cell_size_m": 0.1,
+  "cell_height_m": 0.05,
+  "agent_height_m": 1.8,
+  "agent_radius_m": 0.35,
+  "agent_max_climb_m": 0.4,
+  "agent_max_slope_deg": 45.0,
+  "region_min_area_m2": 0.64,
+  "region_merge_area_m2": 4.0,
+  "edge_max_len_m": 6.0,
+  "edge_max_error_m": 0.13,
+  "verts_per_poly": 6,
+  "detail_sample_dist_m": 0.6,
+  "detail_sample_max_error_m": 0.05
+ },
+ "polygon_count": 11,
+ "graphs": {
+  "STANDARD": {
+   "nodes": [
+    {
+     "local_id": "p0",
+     "kind": "WAYPOINT",
+     "x": 3.033333333333333,
+     "y": 0.6333333333333333,
+     "z": 0.05000000000000001,
+     "connector_type": null
+    },
+    {
+     "local_id": "p1",
+     "kind": "WAYPOINT",
+     "x": 1.0,
+     "y": 0.6,
+     "z": 0.05000000000000001,
+     "connector_type": null
+    },
+    {
+     "local_id": "p2",
+     "kind": "WAYPOINT",
+     "x": 2.6833333333333336,
+     "y": 2.9166666666666665,
+     "z": 0.049999999999999996,
+     "connector_type": null
+    },
+    {
+     "local_id": "p3",
+     "kind": "WAYPOINT",
+     "x": 3.25,
+     "y": 1.55,
+     "z": 0.05,
+     "connector_type": null
+    },
+    {
+     "local_id": "p4",
+     "kind": "WAYPOINT",
+     "x": 1.0,
+     "y": 2.6666666666666665,
+     "z": 0.05000000000000001,
+     "connector_type": null
+    },
+    {
+     "local_id": "p5",
+     "kind": "WAYPOINT",
+     "x": 3.0666666666666664,
+     "y": 2.4,
+     "z": 0.05000000000000001,
+     "connector_type": null
+    },
+    {
+     "local_id": "p6",
+     "kind": "WAYPOINT",
+     "x": 0.8,
+     "y": 1.725,
+     "z": 0.05,
+     "connector_type": null
+    },
+    {
+     "local_id": "p7",
+     "kind": "WAYPOINT",
+     "x": 5.583333333333333,
+     "y": 2.683333333333333,
+     "z": 0.049999999999999996,
+     "connector_type": null
+    },
+    {
+     "local_id": "p8",
+     "kind": "WAYPOINT",
+     "x": 5.466666666666666,
+     "y": 0.7999999999999999,
+     "z": 0.05000000000000001,
+     "connector_type": null
+    },
+    {
+     "local_id": "p9",
+     "kind": "WAYPOINT",
+     "x": 7.433333333333334,
+     "y": 2.2333333333333334,
+     "z": 0.05000000000000001,
+     "connector_type": null
+    },
+    {
+     "local_id": "p10",
+     "kind": "WAYPOINT",
+     "x": 5.275,
+     "y": 1.575,
+     "z": 0.05,
+     "connector_type": null
+    }
+   ],
+   "edges": [
+    {
+     "from": "p0",
+     "to": "p3",
+     "length_m": 0.9419247433963195,
+     "step_free": true,
+     "min_clearance_m": 0.6403124237432849
+    },
+    {
+     "from": "p1",
+     "to": "p6",
+     "length_m": 1.1426394882026438,
+     "step_free": true,
+     "min_clearance_m": 0.670820393249937
+    },
+    {
+     "from": "p2",
+     "to": "p7",
+     "length_m": 2.909371829870572,
+     "step_free": true,
+     "min_clearance_m": 0.5
+    },
+    {
+     "from": "p2",
+     "to": "p4",
+     "length_m": 1.7017964364491753,
+     "step_free": true,
+     "min_clearance_m": 1.4212670403551895
+    },
+    {
+     "from": "p2",
+     "to": "p5",
+     "length_m": 0.643341968853959,
+     "step_free": true,
+     "min_clearance_m": 0.854400374531753
+    },
+    {
+     "from": "p3",
+     "to": "p5",
+     "length_m": 0.8695464973830387,
+     "step_free": true,
+     "min_clearance_m": 0.7810249675906655
+    },
+    {
+     "from": "p4",
+     "to": "p6",
+     "length_m": 0.9626713411705526,
+     "step_free": true,
+     "min_clearance_m": 1.5231546211727816
+    },
+    {
+     "from": "p7",
+     "to": "p10",
+     "length_m": 1.1504226276556897,
+     "step_free": true,
+     "min_clearance_m": 1.9723082923316022
+    },
+    {
+     "from": "p7",
+     "to": "p9",
+     "length_m": 1.9039432764659776,
+     "step_free": true,
+     "min_clearance_m": 1.8110770276274835
+    },
+    {
+     "from": "p8",
+     "to": "p10",
+     "length_m": 0.7983489907998323,
+     "step_free": true,
+     "min_clearance_m": 1.664331697709324
+    }
+   ]
+  },
+  "STEP_FREE": {
+   "nodes": [
+    {
+     "local_id": "p0",
+     "kind": "WAYPOINT",
+     "x": 3.033333333333333,
+     "y": 0.6333333333333333,
+     "z": 0.05000000000000001,
+     "connector_type": null
+    },
+    {
+     "local_id": "p1",
+     "kind": "WAYPOINT",
+     "x": 1.0,
+     "y": 0.6,
+     "z": 0.05000000000000001,
+     "connector_type": null
+    },
+    {
+     "local_id": "p2",
+     "kind": "WAYPOINT",
+     "x": 2.6833333333333336,
+     "y": 2.9166666666666665,
+     "z": 0.049999999999999996,
+     "connector_type": null
+    },
+    {
+     "local_id": "p3",
+     "kind": "WAYPOINT",
+     "x": 3.25,
+     "y": 1.55,
+     "z": 0.05,
+     "connector_type": null
+    },
+    {
+     "local_id": "p4",
+     "kind": "WAYPOINT",
+     "x": 1.0,
+     "y": 2.6666666666666665,
+     "z": 0.05000000000000001,
+     "connector_type": null
+    },
+    {
+     "local_id": "p5",
+     "kind": "WAYPOINT",
+     "x": 3.0666666666666664,
+     "y": 2.4,
+     "z": 0.05000000000000001,
+     "connector_type": null
+    },
+    {
+     "local_id": "p6",
+     "kind": "WAYPOINT",
+     "x": 0.8,
+     "y": 1.725,
+     "z": 0.05,
+     "connector_type": null
+    },
+    {
+     "local_id": "p7",
+     "kind": "WAYPOINT",
+     "x": 5.583333333333333,
+     "y": 2.683333333333333,
+     "z": 0.049999999999999996,
+     "connector_type": null
+    },
+    {
+     "local_id": "p8",
+     "kind": "WAYPOINT",
+     "x": 5.466666666666666,
+     "y": 0.7999999999999999,
+     "z": 0.05000000000000001,
+     "connector_type": null
+    },
+    {
+     "local_id": "p9",
+     "kind": "WAYPOINT",
+     "x": 7.433333333333334,
+     "y": 2.2333333333333334,
+     "z": 0.05000000000000001,
+     "connector_type": null
+    },
+    {
+     "local_id": "p10",
+     "kind": "WAYPOINT",
+     "x": 5.275,
+     "y": 1.575,
+     "z": 0.05,
+     "connector_type": null
+    }
+   ],
+   "edges": [
+    {
+     "from": "p0",
+     "to": "p3",
+     "length_m": 0.9419247433963195,
+     "step_free": true,
+     "min_clearance_m": 0.6403124237432849
+    },
+    {
+     "from": "p1",
+     "to": "p6",
+     "length_m": 1.1426394882026438,
+     "step_free": true,
+     "min_clearance_m": 0.670820393249937
+    },
+    {
+     "from": "p2",
+     "to": "p7",
+     "length_m": 2.909371829870572,
+     "step_free": true,
+     "min_clearance_m": 0.5
+    },
+    {
+     "from": "p2",
+     "to": "p4",
+     "length_m": 1.7017964364491753,
+     "step_free": true,
+     "min_clearance_m": 1.4212670403551895
+    },
+    {
+     "from": "p2",
+     "to": "p5",
+     "length_m": 0.643341968853959,
+     "step_free": true,
+     "min_clearance_m": 0.854400374531753
+    },
+    {
+     "from": "p3",
+     "to": "p5",
+     "length_m": 0.8695464973830387,
+     "step_free": true,
+     "min_clearance_m": 0.7810249675906655
+    },
+    {
+     "from": "p4",
+     "to": "p6",
+     "length_m": 0.9626713411705526,
+     "step_free": true,
+     "min_clearance_m": 1.5231546211727816
+    },
+    {
+     "from": "p7",
+     "to": "p10",
+     "length_m": 1.1504226276556897,
+     "step_free": true,
+     "min_clearance_m": 1.9723082923316022
+    },
+    {
+     "from": "p7",
+     "to": "p9",
+     "length_m": 1.9039432764659776,
+     "step_free": true,
+     "min_clearance_m": 1.8110770276274835
+    },
+    {
+     "from": "p8",
+     "to": "p10",
+     "length_m": 0.7983489907998323,
+     "step_free": true,
+     "min_clearance_m": 1.664331697709324
+    }
+   ]
+  }
+ }
+}

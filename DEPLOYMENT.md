@@ -299,7 +299,9 @@ Every restore should end with `verify.sh`, a green `/api/v1/health`, and a note 
 
 The CPU `worker` in this compose file claims only the stages its image can run (`WORKER_STAGES`). Pose estimation,
 splat reconstruction, segmentation, cleanup, plane fitting, semantic indexing and navigation baking need a GPU host
-with COLMAP/GLOMAP, CUDA, PyTorch, gsplat, Open3D and recast-cli (docs/pipeline.md). No GPU image is built by CI.
+with COLMAP/GLOMAP, CUDA, PyTorch, gsplat and Open3D (docs/pipeline.md). Navigation baking also needs chaya-navmesh
+(Recast/Detour; the CPU worker image builds it, and a GPU host builds it from `services/reconstruction/native/chaya-navmesh`
+or sets `CHAYA_NAVMESH_BIN`). No GPU image is built by CI.
 Building one belongs with the GPU host's provisioning, because it depends on the CUDA driver.
 
 A GPU worker needs:

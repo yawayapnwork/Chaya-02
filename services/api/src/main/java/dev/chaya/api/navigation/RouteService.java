@@ -6,6 +6,7 @@ import dev.chaya.api.navigation.NavigationDtos.BlockedRegion;
 import dev.chaya.api.navigation.NavigationDtos.FloorTransition;
 import dev.chaya.api.navigation.NavigationDtos.RouteRequest;
 import dev.chaya.api.navigation.NavigationDtos.RouteResponse;
+import dev.chaya.api.navigation.NavigationDtos.RoutingSource;
 import dev.chaya.api.navigation.NavigationDtos.Waypoint;
 import dev.chaya.api.security.Actor;
 import dev.chaya.api.security.TenantGuard;
@@ -32,9 +33,15 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Real pedestrian routing over the navigation graph NAVIGATION_BAKING produces (see
- * dev.chaya.api.pipeline.PipelineService#ingestNavigationGraph and chaya_worker.navmesh). Pathfinding is
- * plain Dijkstra over navigation_node/navigation_edge -- Recast/Detour already did the hard geometric work
- * offline; this only needs a weighted-graph shortest path, which is what those tables exist for.
+ * dev.chaya.api.pipeline.PipelineService#ingestNavigationGraph and chaya_worker.navmesh). That graph is the polygon
+ * graph of a Detour navmesh the real Recast/Detour library built from the reconstruction (nodes are navmesh polygons,
+ * edges are Detour links); pathfinding here is Dijkstra over it -- the same polygon-corridor search Detour's findPath
+ * does, without its string-pulling, so waypoints are polygon centroids rather than a smoothed path.
+ *
+ * <p>Navmesh-backed only: a floor is routed on only when its ACTIVE graph for the profile is source RECAST_NAVMESH,
+ * i.e. bound to a NAVMESH artifact by checksum at ingestion (V18). A floor with no such graph -- none at all, or only a
+ * hand-inserted/synthetic one -- is refused with 409 NAVMESH_NOT_READY; there is no fallback to any other graph. The
+ * response's routingSources names the graph and navmesh checksum every leg used.
  *
  * <p>Accessibility (`accessibility = "STEP_FREE"`) is not the same query re-labelled: it selects the
  * STEP_FREE-profile graph (baked with stairs and steep slopes already excluded by real per-polygon slope
@@ -76,7 +83,9 @@ public class RouteService {
 
     private record PathResult(List<UUID> nodeIds, double distanceMeters) {}
 
-    private record RouteLeg(List<double[]> waypoints, double distanceMeters, UUID floorId) {}
+    private record RouteLeg(List<double[]> waypoints, double distanceMeters, UUID floorId, RoutingSource source) {}
+
+    private record ActiveGraph(UUID id, UUID frameId, String source, String navmeshSha256, String recastVersion) {}
 
     private record PoiRow(UUID id, UUID floorId, double x, double y, double z, UUID frameId) {}
 
@@ -130,6 +139,11 @@ public class RouteService {
         }
         if (!blocked.isEmpty()) {
             constraints.add(blocked.size() + " reported obstacle region(s) excluded from the route");
+        }
+
+        requireNavmesh(request.venueId(), request.floorId(), profile);
+        if (destination.floorId() != null && !destination.floorId().equals(request.floorId())) {
+            requireNavmesh(request.venueId(), destination.floorId(), profile);
         }
 
         List<RouteLeg> legs = new ArrayList<>();
@@ -212,8 +226,9 @@ public class RouteService {
 
     private RouteLeg routeWithinFloor(UUID venueId, UUID floorId, double[] from, double[] to, String profile,
                                       List<BlockedRegion> blocked) {
-        GraphData graph = loadGraph(venueId, floorId, profile, blocked);
-        if (graph == null || graph.positions().isEmpty()) {
+        ActiveGraph active = requireNavmesh(venueId, floorId, profile);
+        GraphData graph = loadGraph(venueId, floorId, profile, active, blocked);
+        if (graph.positions().isEmpty()) {
             return null;
         }
         UUID startNode = nearestNode(graph, from);
@@ -237,18 +252,36 @@ public class RouteService {
         waypoints.add(to);
         double total = distance(from, graph.positions().get(path.nodeIds().get(0))) + path.distanceMeters()
             + distance(graph.positions().get(path.nodeIds().get(path.nodeIds().size() - 1)), to);
-        return new RouteLeg(waypoints, total, floorId);
+        return new RouteLeg(waypoints, total, floorId,
+            new RoutingSource(floorId, active.id(), active.source(), active.navmeshSha256(), active.recastVersion()));
     }
 
-    private GraphData loadGraph(UUID venueId, UUID floorId, String profile, List<BlockedRegion> blocked) {
-        record ActiveGraph(UUID id, UUID frameId) {}
-        ActiveGraph active = jdbc.sql("SELECT id, coordinate_frame_id FROM navigation_graph WHERE venue_id = :v AND floor_id = :f "
-                + "AND profile = :p AND status = 'ACTIVE'")
+    private ActiveGraph activeGraph(UUID venueId, UUID floorId, String profile) {
+        return jdbc.sql("SELECT id, coordinate_frame_id, source, navmesh_sha256, recastnavigation_version FROM navigation_graph "
+                + "WHERE venue_id = :v AND floor_id = :f AND profile = :p AND status = 'ACTIVE'")
             .param("v", venueId).param("f", floorId).param("p", profile)
-            .query((rs, i) -> new ActiveGraph(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class))).optional().orElse(null);
-        if (active == null) {
-            return null;
+            .query((rs, i) -> new ActiveGraph(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class), rs.getString(3),
+                rs.getString(4), rs.getString(5))).optional().orElse(null);
+    }
+
+    private boolean routable(ActiveGraph graph) {
+        return graph != null && ("RECAST_NAVMESH".equals(graph.source()) || props.acceptSyntheticGraphs());
+    }
+
+    /** The floor's ACTIVE graph for the profile, which must have been derived from a Recast navmesh; otherwise
+     * NAVMESH_NOT_READY, and nothing is routed. */
+    private ActiveGraph requireNavmesh(UUID venueId, UUID floorId, String profile) {
+        ActiveGraph graph = activeGraph(venueId, floorId, profile);
+        if (!routable(graph)) {
+            throw new ApiException(HttpStatus.CONFLICT, "NAVMESH_NOT_READY", "floor " + floorId + " has no " + profile
+                + " navigation graph baked from a Recast navmesh"
+                + (graph == null ? "" : " (its ACTIVE graph " + graph.id() + " is " + graph.source() + ", which is never routed on)")
+                + "; run NAVIGATION_BAKING on a calibrated reconstruction of this floor");
         }
+        return graph;
+    }
+
+    private GraphData loadGraph(UUID venueId, UUID floorId, String profile, ActiveGraph active, List<BlockedRegion> blocked) {
         UUID current = requireCalibratedFloor(venueId, floorId).id();
         if (!current.equals(active.frameId())) {
             throw new ApiException(HttpStatus.CONFLICT, "NAVIGATION_FRAME_STALE", "the " + profile + " navigation graph of floor "
@@ -398,9 +431,7 @@ public class RouteService {
     }
 
     private boolean hasActiveGraph(UUID venueId, UUID floorId, String profile) {
-        Integer count = jdbc.sql("SELECT count(*) FROM navigation_graph WHERE venue_id = :v AND floor_id = :f AND profile = :p AND status = 'ACTIVE'")
-            .param("v", venueId).param("f", floorId).param("p", profile).query(Integer.class).single();
-        return count > 0;
+        return routable(activeGraph(venueId, floorId, profile));
     }
 
     /** Finds the closest matching stairs (adjacent floor levels only) or elevator (any floor levels) POI
@@ -479,6 +510,7 @@ public class RouteService {
             .mapToDouble(t -> Objects.equals(t.connectorType(), "STAIRS") ? props.stairsTransitionSeconds() : props.elevatorTransitionSeconds())
             .sum();
         double durationSeconds = distanceMeters / walkingSpeed + transitionSeconds;
-        return new RouteResponse(waypoints, distanceMeters, durationSeconds, transitions, profile, constraints);
+        return new RouteResponse(waypoints, distanceMeters, durationSeconds, transitions, profile, constraints,
+            legs.stream().map(RouteLeg::source).distinct().toList());
     }
 }

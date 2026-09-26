@@ -63,7 +63,7 @@ EXCLUDED_IN_CI = {
                       "NOT_CALIBRATED"),
     "PLANE_FITTING": ("needs Open3D", "DEPENDENCY_UNAVAILABLE"),
     "SEMANTIC_INDEXING": ("needs torch + Grounding DINO + CLIP, and a calibrated frame", "NOT_CALIBRATED"),
-    "NAVIGATION_BAKING": ("needs recast-cli and a calibrated frame", "NOT_CALIBRATED"),
+    "NAVIGATION_BAKING": ("needs the chaya-navmesh Recast/Detour tool and a calibrated frame", "NOT_CALIBRATED"),
 }
 
 NO_TOOLS = Toolchain(env={}, which=lambda _n: None)

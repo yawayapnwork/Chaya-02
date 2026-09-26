@@ -787,12 +787,18 @@ public class PipelineService {
     }
 
     /**
-     * NAVIGATION_BAKING (chaya_worker.stages.navigation_baking) publishes a NAVIGATION_GRAPH artifact
-     * with two profile graphs (STANDARD, STEP_FREE -- see chaya_worker.navmesh.build_routing_graphs);
-     * this turns each into a navigation_graph/navigation_node/navigation_edge DRAFT, then promotes it to
-     * ACTIVE (retiring whichever graph was previously ACTIVE for that venue/floor/profile), so
-     * dev.chaya.api.navigation.RouteService always finds at most one ACTIVE graph to route against. A
-     * missing or unparseable artifact is logged and skipped, same as ingestDetectedObjects.
+     * NAVIGATION_BAKING (chaya_worker.stages.navigation_baking) publishes a NAVMESH (a Detour navmesh built by the real
+     * Recast/Detour library), its NAVMESH_MANIFEST, and a NAVIGATION_GRAPH artifact with two profile graphs (STANDARD,
+     * STEP_FREE -- the Detour polygon graph, see chaya_worker.navmesh.build_routing_graphs); this turns each into a
+     * navigation_graph/navigation_node/navigation_edge DRAFT, then promotes it to ACTIVE (retiring whichever graph was
+     * previously ACTIVE for that venue/floor/profile), so dev.chaya.api.navigation.RouteService always finds at most one
+     * ACTIVE graph to route against. A missing or unparseable artifact is logged and skipped, same as
+     * ingestDetectedObjects.
+     *
+     * <p>The graph must be bound to the NAVMESH reported by the same stage: its {@code navmesh} block must say it came from
+     * a READY Recast navmesh whose SHA-256 is exactly that artifact's checksum. Anything else is refused
+     * (NAVMESH_BINDING_INVALID) rather than ingested as a routable graph. The binding is stored on navigation_graph
+     * (source RECAST_NAVMESH, V18), and it is what RouteService requires before it routes.
      */
     private void ingestNavigationGraph(RunRow run, JobStage stage, List<ArtifactReport> outputs) {
         ArtifactReport artifact = outputs.stream().filter(a -> a.kind().equals("NAVIGATION_GRAPH")).findFirst().orElse(null);
@@ -807,6 +813,7 @@ public class PipelineService {
             return;
         }
         UUID frameId = requireCanonicalArtifactFrame(run, stage, doc, "NAVIGATION_GRAPH");
+        NavmeshBinding navmesh = requireNavmeshBinding(doc, outputs);
         UUID floorId = jdbc.sql("SELECT floor_id FROM capture_session WHERE id = :c")
             .param("c", run.captureId()).query(UUID.class).optional().orElse(null);
         if (floorId == null) {
@@ -820,7 +827,7 @@ public class PipelineService {
         int ingested = 0;
         for (String profile : List.of("STANDARD", "STEP_FREE")) {
             Object graphRaw = graphs.get(profile);
-            if (graphRaw instanceof Map<?, ?> graph && ingestOneNavigationGraph(run, floorId, profile, graph, frameId)) {
+            if (graphRaw instanceof Map<?, ?> graph && ingestOneNavigationGraph(run, floorId, profile, graph, frameId, navmesh)) {
                 ingested++;
             }
         }
@@ -829,11 +836,43 @@ public class PipelineService {
         }
         log.info("ingested {} navigation graph profile(s) for run {}", ingested, run.id());
         audit.successInOrganization(SYSTEM, run.orgId(), run.venueId(), "navigation_baking.ingested", "pipeline_run", run.id(),
-            Map.of("profilesIngested", ingested));
+            Map.of("profilesIngested", ingested, "navmeshSha256", navmesh.sha256(), "recastnavigationVersion", navmesh.recastVersion()));
+    }
+
+    private record NavmeshBinding(UUID navmeshArtifactId, UUID manifestArtifactId, String sha256, String toolVersion, String recastVersion) {}
+
+    /** The NAVIGATION_GRAPH's binding to the NAVMESH artifact of the same stage report (already inserted as
+     * processing_artifact rows by this point). Refused, never guessed, when anything does not match. */
+    private NavmeshBinding requireNavmeshBinding(Map<String, Object> doc, List<ArtifactReport> outputs) {
+        ArtifactReport navmesh = outputs.stream().filter(a -> a.kind().equals("NAVMESH")).findFirst().orElse(null);
+        ArtifactReport manifest = outputs.stream().filter(a -> a.kind().equals("NAVMESH_MANIFEST")).findFirst().orElse(null);
+        Map<?, ?> binding = doc.get("navmesh") instanceof Map<?, ?> m ? m : Map.of();
+        String problem = null;
+        if (navmesh == null || manifest == null) {
+            problem = "the stage published no NAVMESH and NAVMESH_MANIFEST artifacts";
+        } else if (!"RECAST_NAVMESH".equals(binding.get("source")) || !"READY".equals(binding.get("status"))) {
+            problem = "the graph does not declare a READY RECAST_NAVMESH source";
+        } else if (!navmesh.sha256().equals(binding.get("sha256"))) {
+            problem = "the graph names navmesh " + binding.get("sha256") + " but the stage published " + navmesh.sha256();
+        } else if (!(binding.get("tool_version") instanceof String) || !(binding.get("recastnavigation_version") instanceof String)) {
+            problem = "the graph does not record the navmesh tool and recastnavigation versions";
+        }
+        if (problem != null) {
+            throw new ApiException(HttpStatus.CONFLICT, "NAVMESH_BINDING_INVALID",
+                "NAVIGATION_GRAPH is not bound to this stage's navmesh: " + problem);
+        }
+        return new NavmeshBinding(artifactIdByKey(navmesh.key()), artifactIdByKey(manifest.key()), navmesh.sha256(),
+            (String) binding.get("tool_version"), (String) binding.get("recastnavigation_version"));
+    }
+
+    private UUID artifactIdByKey(String key) {
+        return jdbc.sql("SELECT id FROM processing_artifact WHERE bucket = :b AND object_key = :k")
+            .param("b", derivedBucketName).param("k", key).query(UUID.class).single();
     }
 
     @SuppressWarnings("unchecked")
-    private boolean ingestOneNavigationGraph(RunRow run, UUID floorId, String profile, Map<?, ?> graph, UUID frameId) {
+    private boolean ingestOneNavigationGraph(RunRow run, UUID floorId, String profile, Map<?, ?> graph, UUID frameId,
+                                             NavmeshBinding navmesh) {
         Object nodesRaw = graph.get("nodes");
         Object edgesRaw = graph.get("edges");
         List<Map<String, Object>> nodesDoc = nodesRaw instanceof List<?> l ? (List<Map<String, Object>>) l : List.of();
@@ -848,9 +887,13 @@ public class PipelineService {
             jdbc.sql("UPDATE navigation_graph SET status = 'RETIRED' WHERE id = :g").param("g", previousActive).update();
         }
 
-        UUID graphId = jdbc.sql("INSERT INTO navigation_graph (organization_id, venue_id, floor_id, profile, status, coordinate_frame_id) "
-                + "VALUES (:o, :v, :f, :p, 'DRAFT', :frame) RETURNING id")
+        UUID graphId = jdbc.sql("INSERT INTO navigation_graph (organization_id, venue_id, floor_id, profile, status, coordinate_frame_id, "
+                + "source, pipeline_run_id, navmesh_artifact_id, navmesh_manifest_artifact_id, navmesh_sha256, navmesh_tool_version, "
+                + "recastnavigation_version) VALUES (:o, :v, :f, :p, 'DRAFT', :frame, 'RECAST_NAVMESH', :run, :nav, :man, :sha, :tool, "
+                + ":recast) RETURNING id")
             .param("o", run.orgId()).param("v", run.venueId()).param("f", floorId).param("p", profile).param("frame", frameId)
+            .param("run", run.id()).param("nav", navmesh.navmeshArtifactId()).param("man", navmesh.manifestArtifactId())
+            .param("sha", navmesh.sha256()).param("tool", navmesh.toolVersion()).param("recast", navmesh.recastVersion())
             .query(UUID.class).single();
 
         Map<String, UUID> nodeIds = new LinkedHashMap<>();

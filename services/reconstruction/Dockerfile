@@ -2,12 +2,20 @@
 # Chaya 02 reconstruction worker (execution plane), CPU image.
 #
 # Runs the stages that need only FFmpeg, OpenCV and numpy: input validation, frame extraction, frame quality filtering,
-# privacy preprocessing, artifact generation (and region splice). It deliberately does NOT contain COLMAP, GLOMAP,
-# gsplat, PyTorch/CUDA, Open3D or Recast: a worker built from it reports DEPENDENCY_UNAVAILABLE (a structured, retryable
-# failure) for the stages that need them and never fakes their output. GPU stages run on a GPU host with the toolchain
+# privacy preprocessing, artifact generation (and region splice). It also carries chaya-navmesh (native/chaya-navmesh:
+# the real Recast/Detour library, recastnavigation pinned by SHA-256), so NAVIGATION_BAKING can bake a navmesh here once
+# its inputs exist. It deliberately does NOT contain COLMAP, GLOMAP, gsplat, PyTorch/CUDA or Open3D: a worker built from
+# it reports DEPENDENCY_UNAVAILABLE (a structured, retryable failure) for the stages that need them and never fakes their
+# output. GPU stages run on a GPU host with the toolchain
 # installed (docs/pipeline.md, DEPLOYMENT.md "GPU workers"); restrict each worker to what it can run with WORKER_STAGES.
 #
 # No secrets in the image: the service-account secret and MinIO credentials arrive as environment variables.
+
+# chaya-navmesh: CMake downloads the pinned recastnavigation release and refuses it unless its SHA-256 matches.
+FROM debian:bookworm-slim AS navmesh
+RUN apt-get update  && apt-get install -y --no-install-recommends ca-certificates cmake g++ make  && rm -rf /var/lib/apt/lists/*
+COPY native/chaya-navmesh /src/chaya-navmesh
+RUN cmake -S /src/chaya-navmesh -B /build -DCMAKE_BUILD_TYPE=Release  && cmake --build /build -j"$(nproc)"  && /build/chaya-navmesh --version
 
 FROM python:3.12-slim-bookworm AS build
 # Longer timeout and more retries than pip's defaults (15 s, 5): a stalled download should not fail a release build.
@@ -28,6 +36,7 @@ RUN apt-get update \
  && useradd -u 10001 -g worker -m -d /home/worker -s /usr/sbin/nologin worker \
  && mkdir /work && chown worker:worker /work
 COPY --from=build /opt/venv /opt/venv
+COPY --from=navmesh /build/chaya-navmesh /usr/local/bin/chaya-navmesh
 ENV PATH=/opt/venv/bin:$PATH \
     WORKER_WORKDIR=/work \
     LOG_LEVEL=INFO \

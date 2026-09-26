@@ -133,10 +133,17 @@ Recast is +Y up. Canonical is +Z up. The conversion is a proper rotation of −9
 canonical (x, y, z) -> Recast (x, z, -y)          Recast (x, y, z) -> canonical (x, -z, y)
 ```
 
-Two functions call it, and nothing else in the codebase converts axes for Recast:
-`chaya_worker.navmesh.write_walkable_obj` (input) and `parse_recast_polygons` (output). NAVIGATION_BAKING runs
-entirely in canonical metres, so Recast's `cellSize`, `agentHeight`, `agentMaxClimb` and `agentMaxSlope` are
-physical quantities.
+Only `chaya_worker.recast` imports it. That is the module that runs the Recast/Detour tool (chaya-navmesh, see
+[navigation.md](navigation.md)). Its callers are:
+
+- `write_recast_obj`: input geometry.
+- `polygons_from_report`: navmesh polygons and portals.
+- `find_path`: query points, Detour search extents and path points.
+
+`tests/unit/test_recast_boundary.py` fails if any other worker module imports the boundary. NAVIGATION_BAKING runs
+entirely in canonical metres, so every Recast setting (`RecastConfig`: cell size and height, agent height, radius,
+climb, slope, region areas, edge lengths) is a physical quantity named by its unit. The tool converts them to Recast's
+voxel units itself and records both.
 
 ### AR devices (`dev.chaya.api.ar.ArDeviceFrame`, `apps/web/lib/ar-frame-boundary.ts`)
 

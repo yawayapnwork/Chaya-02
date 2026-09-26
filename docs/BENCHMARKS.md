@@ -400,7 +400,7 @@ passage and the staircase, at a cost of 10–26 m. It validates the benchmark ha
 **Unavailable (real venue):** distance, transitions, stairs avoided and clearance violations.
 
 - **Missing:** a venue with baked `STANDARD` and `STEP_FREE` graphs. `NAVIGATION_BAKING` needs a reconstruction
-  (CUDA), plane fitting (Open3D) and `recast-cli`.
+  (CUDA), plane fitting (Open3D) and chaya-navmesh (Recast/Detour).
 - **Command:** the `--venue` form above, with origin-destination pairs sampled from the venue's POIs.
 
 ## 5. Benchmark 5: incremental rescan
