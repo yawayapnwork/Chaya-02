@@ -54,7 +54,7 @@ class AnchorServiceTest extends AbstractIntegrationTest {
     }
 
     private AnchorRequest markerAt(double x, double y, double z) {
-        return new AnchorRequest("ARUCO_MARKER", "marker-" + UUID.randomUUID(), ORIGIN, new Pose(x, y, z, 0, 0, 0, 1));
+        return new AnchorRequest("ARUCO_MARKER", "marker-" + UUID.randomUUID(), null, ORIGIN, new Pose(x, y, z, 0, 0, 0, 1));
     }
 
     @Test
@@ -192,5 +192,34 @@ class AnchorServiceTest extends AbstractIntegrationTest {
         Actor otherActor = actorFor(t.org(), otherVenue);
         assertThatThrownBy(() -> anchors.get(otherActor, otherVenue, otherFloor, created.id()))
             .isInstanceOf(NotFoundException.class);
+    }
+
+    // ---- IMAGE_TARGET: the marker a WebXR client can actually track --------------------------------------------------
+
+    @Test
+    void anImageTargetNeedsItsPrintedSizeAndGetsADeterministicTargetImage() throws Exception {
+        var t = calibratedTree();
+        Actor actor = actorFor(t.org(), t.venue());
+        AnchorRequest noSize = new AnchorRequest("IMAGE_TARGET", "entrance", null, ORIGIN, ORIGIN);
+        assertThatThrownBy(() -> anchors.create(actor, t.venue(), t.floor(), noSize))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.code()).isEqualTo("MARKER_SIZE_REQUIRED"));
+        assertThatThrownBy(() -> anchors.create(actor, t.venue(), t.floor(), new AnchorRequest("IMAGE_TARGET", "entrance", -0.2, ORIGIN, ORIGIN)))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.code()).isEqualTo("INVALID_MARKER_SIZE"));
+
+        Anchor target = anchors.create(actor, t.venue(), t.floor(), new AnchorRequest("IMAGE_TARGET", "entrance", 0.3, ORIGIN, ORIGIN));
+        assertThat(target.markerSizeMeters()).isEqualTo(0.3);
+        byte[] png = anchors.targetImage(actor, t.venue(), t.floor(), target.id());
+        assertThat(png).as("the same anchor always yields the same image: printed and tracked are identical")
+            .isEqualTo(anchors.targetImage(actor, t.venue(), t.floor(), target.id()));
+        java.awt.image.BufferedImage image = javax.imageio.ImageIO.read(new java.io.ByteArrayInputStream(png));
+        assertThat(image.getWidth()).isEqualTo(1024);
+        assertThat(image.getHeight()).isEqualTo(1024);
+
+        Anchor other = anchors.create(actor, t.venue(), t.floor(), new AnchorRequest("IMAGE_TARGET", "stairs", 0.3, ORIGIN, ORIGIN));
+        assertThat(anchors.targetImage(actor, t.venue(), t.floor(), other.id())).as("each anchor has its own image").isNotEqualTo(png);
+
+        Anchor aruco = anchors.create(actor, t.venue(), t.floor(), markerAt(1, 0, 0));
+        assertThatThrownBy(() -> anchors.targetImage(actor, t.venue(), t.floor(), aruco.id()))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.code()).isEqualTo("NOT_AN_IMAGE_TARGET"));
     }
 }

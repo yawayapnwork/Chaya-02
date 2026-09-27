@@ -40,7 +40,8 @@ names the test that would settle it.
 > | V-5 viewer ignores versions (re-scan part) | Partially. A re-scan's model is listed for viewers only once its version is FINALIZED. There is still no `floor.current_scan_version_id`. |
 > | V-6 re-scan deletes manual POIs | Fixed. Only AUTO_DETECTED POIs in the region are superseded, and only when the version finalizes; a failed or rejected re-scan changes no POI. Re-scan navigation graphs likewise go live only on finalization. |
 > | V-8 global reference cloud chosen loosely | Fixed. It is the cloud of exactly the run the parent version's provenance names. |
-> | Everything else (V-4 version numbering, AR-1, AR-2, security, ops, …) | Unchanged. |
+> | AR-1 web AR is a hit-test | Addressed in code; **not validated on a device** (none available). Hit testing is no longer used. Marker detection is WebXR image tracking of server-generated `IMAGE_TARGET` images (printed size registered). The tracked image's index maps to exactly one backend anchor id, and only `tracked` observations whose measured width matches the printed size are sent. AprilTag/ArUco/QR have no WebXR detector, so they are shown as undetectable and nothing simulates one. An `XRWebGLLayer` (three.js) draws the server route, placed by the solved transform corrected through a WebXR world anchor. Progress comes from the platform's viewer pose. Tracking loss hides and freezes the route, and only a new marker observation plus a server relocalization recovers it. Each missing capability is a named state. Image tracking needs Chrome's `webxr-incubations` flag. See docs/ar.md and the device procedure in docs/ar-android-validation.md. |
+> | Everything else (V-4 version numbering, AR-2, security, ops, …) | Unchanged. |
 
 Severity scale:
 

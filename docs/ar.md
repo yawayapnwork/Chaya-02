@@ -101,13 +101,116 @@ run captures.
 
 ## Android: WebXR
 
-`apps/web/app/ar/page.tsx` + `apps/web/components/ArWorkspace.tsx`. Capability detection
-(`apps/web/lib/webxr-support.ts`) checks the real, present browser API:
-`navigator.xr?.isSessionSupported('immersive-ar')`. When `navigator.xr` is absent (desktop Chrome, most
-current dev machines/browsers) or the promise resolves `false`, the workspace renders an explicit
-**unsupported-device state** naming the reason — it never falls back to a fake or simulated AR view.
-Hit-testing for anchor detection uses the WebXR `hit-test` feature against the platform's own plane/marker
-detection; nothing about a detected pose is synthesized client-side.
+`apps/web/app/ar/page.tsx` + `apps/web/components/ArWorkspace.tsx`. **Device validation status: NOT DONE.** No
+physical Android device was available when this client was written. Everything below that runs on a device is
+implemented against the WebXR APIs but has not been observed working. The procedure that would validate it is
+[ar-android-validation.md](ar-android-validation.md). Until it has been run and its record filled in, treat this client
+as an unvalidated integration, not a working feature.
+
+### What WebXR actually provides, and what this client uses
+
+Five different things get called "anchors" or "detection" in AR. They are kept apart here:
+
+| Concept | WebXR on Chrome for Android (ARCore devices) | Used for |
+|---|---|---|
+| **Plane hit testing** (`hit-test`) | Shipped. Casts a ray and returns the pose of a real surface it hits. | **Nothing.** A hit says there is a floor or wall under a ray. It does not say which registered marker is where, so it cannot localize anything. The earlier client treated it as a marker detection (review AR-1). That code is gone. |
+| **Image tracking** (`image-tracking`, WebXR Marker Tracking incubation) | Only behind `chrome://flags/#webxr-incubations`. Per registered image it reports the image index, the pose of the image's centre, `tracked`/`emulated`, and the measured width. | **Marker detection**, the only kind this client does. |
+| **Fiducial detection** (AprilTag, ArUco, QR) | **Not provided by any WebXR API.** | Nothing. Anchors of those types are listed as "not detectable here" (`FIDUCIAL_DETECTION_UNSUPPORTED`). No detector is simulated. A camera-access + JS-detector pipeline would be a separate project, and `camera-access` is itself unshipped on most builds. |
+| **World anchors** (`anchors`, `XRAnchor`) | Shipped. Pins a pose that the platform keeps updating as it refines its map. Identifies nothing. | After a relocalization, one is created at the observed marker's pose. It carries later map corrections into the route transform. If the platform stops tracking it, that counts as tracking loss. |
+| **Route rendering** | `XRWebGLLayer` via three.js `WebXRManager` (`lib/ar-route-renderer.ts`) | Draws the server's route (tube + waypoint spheres, next waypoint highlighted) only while localized. |
+
+`dom-overlay` is requested as optional, for the in-session status text.
+
+### Capability states
+
+Each state is explicit and named. None falls back to a simulated view (`lib/webxr-support.ts`):
+
+| State | Detected by |
+|---|---|
+| `WEBXR_UNAVAILABLE` | `navigator.xr` absent: desktop Chrome, Firefox, Safari, insecure (non-HTTPS) origins |
+| `IMMERSIVE_AR_UNSUPPORTED` | `isSessionSupported("immersive-ar")` resolves false (no ARCore / Google Play Services for AR, or desktop with a WebXR emulator) |
+| `CAPABILITY_CHECK_FAILED` | `isSessionSupported` threw |
+| `IMAGE_TRACKING_UNSUPPORTED` | `XRImageTrackingResult` not exposed (flag off), or a granted session without `getTrackedImageScores` |
+| `ANCHORS_UNSUPPORTED` | `XRAnchor` not exposed |
+| `CAMERA_PERMISSION_DENIED` | Permissions API says `camera: denied`, or `requestSession` rejects with `NotAllowedError`/`SecurityError` |
+| `REQUIRED_FEATURE_UNSUPPORTED` | `requestSession` rejects with `NotSupportedError`. The browser does not say whether `image-tracking` or `anchors` was refused. |
+| `NO_DETECTABLE_ANCHORS` | The floor has no calibrated `IMAGE_TARGET` anchor with a printed size |
+| `NO_TRACKABLE_MARKERS` | The platform scored every registered image `untrackable` |
+| `SESSION_FAILED` | Any other `requestSession` failure |
+
+### Markers: IMAGE_TARGET anchors
+
+An `IMAGE_TARGET` anchor needs `markerSizeMeters`: the printed width of its image, in metres
+(`V20__ar_image_target_size.sql`; the server returns `MARKER_SIZE_REQUIRED` without it).
+`GET .../anchors/{a}/target.png` returns the anchor's target image. It is a 1024 × 1024 PNG, generated
+deterministically from the anchor id (`dev.chaya.api.ar.ImageTarget`), so the image the operator prints and the image
+the client registers are the same bytes. The client registers one image per trackable anchor, in a fixed order, so an
+`XRImageTrackingResult.index` identifies exactly one backend anchor id (`lib/ar-marker-tracking.ts` `observeImages`).
+A result whose index is not registered is dropped.
+
+A **marker observation** (`MarkerObservation`) has the backend anchor id and marker identifier, the measured pose in
+the AR world frame, the frame timestamp, the platform tracking state and the measured width. Only a `tracked`
+observation whose measured width is within 20 % of the registered printed width can relocalize
+(`relocalizationEligibility`). `emulated` means ARCore is extrapolating an image it can no longer see, so it is not a
+measurement.
+
+#### Marker pose convention
+
+`digitalPose` of an `IMAGE_TARGET` is the pose of the **centre of the printed image** (the whole PNG, border included)
+in canonical venue metres (+Z up), with the image's own axes, the convention WebXR image tracking reports (the ARCore
+augmented-image convention):
+
+- **+X** points to the image's right, as you look at it
+- **+Y** is the normal, pointing out of the printed face toward the viewer
+- **+Z** points toward the image's bottom edge
+
+Example: an image on a wall, facing canonical −Y (a person reading it looks toward +Y), upright. Its +X is canonical
++X, its +Y is canonical −Y and its +Z is canonical −Z. That is 180° about X: `qx=1, qy=0, qz=0, qw=0`. A marker flat on
+the floor, top edge toward canonical +Y, is 90° about X: `qx=√½, qw=√½`. A wrong orientation is usually rejected by
+the server's gravity check (`RELOCALIZATION_GRAVITY_MISMATCH`). A wrong rotation about the vertical is not, and it
+shows up as a route rotated about the marker. The device procedure checks for exactly that. **This convention has not
+been confirmed on a device yet.**
+
+### Frames
+
+```
+camera/device frame --viewer pose (XRFrame.getViewerPose, per frame)--> AR world frame ("local" space, metres, +Y up)
+AR world frame --deviceToVenue (server-solved from marker observations, world-anchor corrected)--> canonical venue (+Z up)
+```
+
+- `deviceToVenue` = `digitalPose ∘ observedPose⁻¹` (server, `AnchorService#relocalize`). It absorbs the +Y-up → +Z-up
+  axis change, and the server refuses one that tilts gravity (`lib/ar-frame-boundary.ts`, `ArDeviceFrame`).
+- World-anchor correction: if the anchor was at `A0` when the transform was solved and is at `At` now,
+  the current transform is `deviceToVenue ∘ A0 ∘ At⁻¹` (`lib/ar-route.ts` `anchorCorrectedDeviceToVenue`).
+- The device's venue position is `deviceToVenue(viewerPose.position)` (`devicePositionInVenue`). Route progress
+  (`progressAlong`) projects it onto the route in the horizontal plane.
+- The route is built once in canonical coordinates. The renderer places it with `deviceToVenue⁻¹`
+  (`venueToArWorld`). three.js drives the camera from the platform's viewer pose every frame.
+
+### Session state machine (web)
+
+`lib/ar-relocalization.ts`:
+
+```
+IDLE -> SEARCHING -> RELOCALIZING -> LOCALIZED -> TRACKING_LOST -> RELOCALIZING -> LOCALIZED
+```
+
+- `SEARCHING`: no localization yet. While the platform has not reported 6-DoF tracking (ARCore initialising, or
+  `emulatedPosition`), the UI says "waiting for device tracking", not "tracking lost": there is nothing to lose yet.
+  Marker observations are ignored until device tracking is confirmed.
+- `RELOCALIZING`: an eligible observation has been sent. A world anchor is created in the same frame at the
+  observed marker's pose. The answer is applied only if that request is still pending. A tracking loss cancels it,
+  and a late answer is dropped along with its anchor.
+- `LOCALIZED`: the only state in which route progress advances (`canAdvanceRoute`) and the route is drawn.
+- `TRACKING_LOST`: entered from `LOCALIZED` on no viewer pose, emulated position, a hidden session, or the world
+  anchor no longer being tracked. The route is hidden and its progress frozen, and the UI says tracking is lost and
+  asks the user to point at a marker. **The platform reporting tracking again does not leave this state.** The AR world
+  frame may have been reset during the loss. Only a fresh eligible marker observation and a successful server
+  relocalization return to `LOCALIZED`. The new transform then replaces the old one.
+
+On the first localization the route is fetched (`POST /navigation/routes`), starting from the device's venue position
+and going to the chosen destination. Only the leg on the current floor is drawn. A floor transition is named in the
+status text.
 
 ## iOS: Swift/ARKit
 
@@ -139,7 +242,10 @@ Three separated tiers, per `apps/ios-ar/README.md` and the test files themselves
 | Coordinate transformation / anchor math | `CoordinateTransformTest.java`, `ar-anchor-math.test.ts`, `AnchorMathTests.swift` | No — pure functions, run in CI |
 | Device/canonical axis boundary, gravity-tilt check | `ArDeviceFrameTest.java`, `ar-frame-boundary.test.ts` | No — pure functions. The iOS package has **not** been updated to the boundary (no Swift toolchain here) |
 | Relocalization state machine | `ar-relocalization.test.ts`, `RelocalizationStateMachineTests.swift` | No — pure state transitions |
-| Anchor CRUD / calibration / relocalization service | `AnchorServiceTest.java` | No — Testcontainers Postgres only (skipped, not failed, without Docker) |
-| WebXR capability detection (unsupported-device branch) | `webxr-support.test.ts` | No — mocks `navigator.xr`'s presence/absence |
-| WebXR device integration (hit-test, real session) | none automated | **Yes** — a WebXR-capable Android/Chrome device; not run in CI |
+| Web camera → AR world → venue chain, world-anchor correction, route placement and progress | `ar-route.test.ts` | No — pure functions |
+| Image-tracking result → marker observation (anchor identity, eligibility) | `ar-marker-tracking.test.ts` | No — pure functions over WebXR-shaped results |
+| Anchor CRUD / calibration / relocalization service, image-target size and image | `AnchorServiceTest.java` | No — Testcontainers Postgres only (skipped, not failed, without Docker) |
+| WebXR capability detection (every unsupported state) | `webxr-support.test.ts` | No — injected `navigator`/globals |
+| `/ar` on desktop Chromium: explicit unsupported state, no start button, no canvas | `e2e/ar.spec.ts` (Playwright) | No — real Chromium; two cases replace WebXR globals to reach the image-tracking/anchors states |
+| WebXR device integration (image tracking, world anchor, rendering, tracking loss) | [ar-android-validation.md](ar-android-validation.md), manual | **Yes** — an ARCore Android device with Chrome; **not yet run** |
 | ARKit device integration (image detection, tracking-state transitions, camera) | none automated | **Yes** — a physical iOS device; the Simulator cannot run ARKit camera tracking |

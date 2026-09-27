@@ -42,7 +42,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class AnchorService {
 
     private static final String SELECT = """
-            SELECT id, venue_id, floor_id, marker_type, marker_identifier,
+            SELECT id, venue_id, floor_id, marker_type, marker_identifier, marker_size_m,
                    physical_x, physical_y, physical_z, physical_qx, physical_qy, physical_qz, physical_qw,
                    digital_x, digital_y, digital_z, digital_qx, digital_qy, digital_qz, digital_qw,
                    calibration_status, last_calibrated_at, coordinate_frame_id
@@ -75,7 +75,7 @@ public class AnchorService {
         Instant lastCalibratedAt = calibrated == null ? null : calibrated.toInstant();
         return new Anchor(rs.getObject("id", UUID.class), rs.getObject("venue_id", UUID.class),
             rs.getObject("floor_id", UUID.class), rs.getString("marker_type"), rs.getString("marker_identifier"),
-            physical, digital, rs.getString("calibration_status"), lastCalibratedAt, rs.getObject("coordinate_frame_id", UUID.class));
+            rs.getObject("marker_size_m") == null ? null : rs.getDouble("marker_size_m"), physical, digital, rs.getString("calibration_status"), lastCalibratedAt, rs.getObject("coordinate_frame_id", UUID.class));
     }
 
     @Transactional(readOnly = true)
@@ -99,16 +99,17 @@ public class AnchorService {
         guard.requireVenue(actor, venueId);
         requireFloor(venueId, floorId);
         requireMarkerType(r.markerType());
+        requireMarkerSize(r);
         UUID frame = requireCurrentFrame(venueId, floorId).id();
         UUID id = jdbc.sql("""
-                INSERT INTO ar_anchor (organization_id, venue_id, floor_id, marker_type, marker_identifier,
+                INSERT INTO ar_anchor (organization_id, venue_id, floor_id, marker_type, marker_identifier, marker_size_m,
                     physical_x, physical_y, physical_z, physical_qx, physical_qy, physical_qz, physical_qw,
                     digital_x, digital_y, digital_z, digital_qx, digital_qy, digital_qz, digital_qw, coordinate_frame_id)
-                VALUES (:o, :v, :f, :mt, :mi, :px, :py, :pz, :pqx, :pqy, :pqz, :pqw, :dx, :dy, :dz, :dqx, :dqy, :dqz, :dqw, :frame)
+                VALUES (:o, :v, :f, :mt, :mi, :size, :px, :py, :pz, :pqx, :pqy, :pqz, :pqw, :dx, :dy, :dz, :dqx, :dqy, :dqz, :dqw, :frame)
                 RETURNING id
                 """)
             .param("o", actor.organizationId()).param("v", venueId).param("f", floorId).param("frame", frame)
-            .param("mt", r.markerType()).param("mi", r.markerIdentifier())
+            .param("mt", r.markerType()).param("mi", r.markerIdentifier()).param("size", r.markerSizeMeters())
             .param("px", r.physicalPose().x()).param("py", r.physicalPose().y()).param("pz", r.physicalPose().z())
             .param("pqx", r.physicalPose().qx()).param("pqy", r.physicalPose().qy()).param("pqz", r.physicalPose().qz()).param("pqw", r.physicalPose().qw())
             .param("dx", r.digitalPose().x()).param("dy", r.digitalPose().y()).param("dz", r.digitalPose().z())
@@ -124,9 +125,10 @@ public class AnchorService {
     public Anchor update(Actor actor, UUID venueId, UUID floorId, UUID anchorId, AnchorRequest r) {
         guard.requireVenue(actor, venueId);
         requireMarkerType(r.markerType());
+        requireMarkerSize(r);
         UUID frame = requireCurrentFrame(venueId, floorId).id();
         int rows = jdbc.sql("""
-                UPDATE ar_anchor SET marker_type = :mt, marker_identifier = :mi, coordinate_frame_id = :frame,
+                UPDATE ar_anchor SET marker_type = :mt, marker_identifier = :mi, marker_size_m = :size, coordinate_frame_id = :frame,
                     physical_x = :px, physical_y = :py, physical_z = :pz,
                     physical_qx = :pqx, physical_qy = :pqy, physical_qz = :pqz, physical_qw = :pqw,
                     digital_x = :dx, digital_y = :dy, digital_z = :dz,
@@ -134,7 +136,7 @@ public class AnchorService {
                     calibration_status = 'UNCALIBRATED', last_calibrated_at = NULL
                 WHERE id = :a AND venue_id = :v AND floor_id = :f AND organization_id = :o AND deleted_at IS NULL
                 """)
-            .param("mt", r.markerType()).param("mi", r.markerIdentifier())
+            .param("mt", r.markerType()).param("mi", r.markerIdentifier()).param("size", r.markerSizeMeters())
             .param("px", r.physicalPose().x()).param("py", r.physicalPose().y()).param("pz", r.physicalPose().z())
             .param("pqx", r.physicalPose().qx()).param("pqy", r.physicalPose().qy()).param("pqz", r.physicalPose().qz()).param("pqw", r.physicalPose().qw())
             .param("dx", r.digitalPose().x()).param("dy", r.digitalPose().y()).param("dz", r.digitalPose().z())
@@ -245,6 +247,29 @@ public class AnchorService {
         if (count == 0) {
             throw new NotFoundException("floor not found");
         }
+    }
+
+    /** An IMAGE_TARGET is only trackable when its printed width is known (docs/ar.md); any given size must be physical. */
+    private static void requireMarkerSize(AnchorRequest r) {
+        Double size = r.markerSizeMeters();
+        if ("IMAGE_TARGET".equals(r.markerType()) && size == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "MARKER_SIZE_REQUIRED",
+                "an IMAGE_TARGET anchor needs markerSizeMeters: the printed width of its target image, in metres");
+        }
+        if (size != null && !(size > 0 && size <= 5)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_MARKER_SIZE", "markerSizeMeters must be in (0, 5] metres");
+        }
+    }
+
+    /** The printable, trackable target image of an IMAGE_TARGET anchor (ImageTarget). Other marker types have none. */
+    @Transactional(readOnly = true)
+    public byte[] targetImage(Actor actor, UUID venueId, UUID floorId, UUID anchorId) {
+        Anchor anchor = get(actor, venueId, floorId, anchorId);
+        if (!"IMAGE_TARGET".equals(anchor.markerType())) {
+            throw new ApiException(HttpStatus.CONFLICT, "NOT_AN_IMAGE_TARGET",
+                "anchor " + anchorId + " is a " + anchor.markerType() + "; only IMAGE_TARGET anchors have a generated target image");
+        }
+        return ImageTarget.png(anchor.id());
     }
 
     private static void requireMarkerType(String markerType) {

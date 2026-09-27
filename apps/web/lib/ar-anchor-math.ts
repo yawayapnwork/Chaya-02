@@ -56,8 +56,8 @@ export function invert(pose: Pose): Pose {
 }
 
 /** deviceToVenue = digitalPose (anchor's known venue-frame pose) composed with the inverse of
- * observedPose (the anchor's pose as this device's own tracking session currently reports it -- real
- * WebXR hit-test output, never fabricated). */
+ * observedPose (the anchor's marker pose as this device's own tracking session measured it -- on Android, a
+ * WebXR image-tracking result for that anchor's registered image; never a hit test, never fabricated). */
 export function deviceToVenueFromAnchor(digitalPose: Pose, observedPose: Pose): Pose {
   return compose(digitalPose, invert(observedPose));
 }

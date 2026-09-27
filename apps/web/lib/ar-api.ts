@@ -1,7 +1,9 @@
 "use client";
 
-import { api } from "./capture-api";
+import { ApiError, api } from "./capture-api";
 import type { Pose } from "./ar-anchor-math";
+import { publicConfig } from "./env";
+import { currentAuthHeaders } from "./session";
 
 /** Mirrors dev.chaya.api.ar.ArDtos.Anchor. */
 export interface Anchor {
@@ -10,7 +12,10 @@ export interface Anchor {
   floorId: string;
   markerType: "QR_CODE" | "ARUCO_MARKER" | "IMAGE_TARGET" | "APRILTAG";
   markerIdentifier: string;
+  /** Printed width in metres. Required for IMAGE_TARGET, the only marker type WebXR can detect (docs/ar.md). */
+  markerSizeMeters: number | null;
   physicalPose: Pose;
+  /** Canonical venue pose. For an IMAGE_TARGET: the printed image's centre, with the image's own axes (docs/ar.md). */
   digitalPose: Pose;
   calibrationStatus: "UNCALIBRATED" | "CALIBRATED" | "STALE";
   lastCalibratedAt: string | null;
@@ -21,13 +26,14 @@ export interface Anchor {
 export interface AnchorRequest {
   markerType: Anchor["markerType"];
   markerIdentifier: string;
+  markerSizeMeters: number | null;
   physicalPose: Pose;
   digitalPose: Pose;
 }
 
-/** Mirrors dev.chaya.api.ar.ArDtos.AnchorObservation: `observedPose` must be a real detection from this
- * device's own tracking session, never fabricated, in the device's own convention (metres, gravity-aligned, +Y up;
- * lib/ar-frame-boundary.ts). The server applies the device/canonical boundary. */
+/** Mirrors dev.chaya.api.ar.ArDtos.AnchorObservation: `observedPose` is the pose of that anchor's own marker, as this
+ * device's WebXR image tracking measured it in the AR world frame (metres, gravity-aligned, +Y up;
+ * lib/ar-marker-tracking.ts). Never a hit-test result, never fabricated. */
 export interface AnchorObservation {
   anchorId: string;
   observedPose: Pose;
@@ -68,3 +74,13 @@ export const relocalize = (venueId: string, floorId: string, observations: Ancho
     method: "POST",
     body: JSON.stringify({ observations }),
   });
+
+/** The IMAGE_TARGET's target image (the server generates it from the anchor id): the exact image the operator printed,
+ * handed to WebXR image tracking. */
+export async function fetchTargetImage(venueId: string, floorId: string, anchorId: string): Promise<Blob> {
+  const res = await fetch(`${publicConfig().apiBaseUrl}/api/v1/venues/${venueId}/floors/${floorId}/anchors/${anchorId}/target.png`, {
+    headers: await currentAuthHeaders(),
+  });
+  if (!res.ok) throw new ApiError(res.status, "TARGET_IMAGE_UNAVAILABLE", `target image of anchor ${anchorId}: ${res.status}`);
+  return res.blob();
+}

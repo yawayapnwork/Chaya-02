@@ -10,6 +10,8 @@ import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -48,6 +50,14 @@ public class AnchorController {
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR','VIEWER','PUBLIC_VIEWER')")
     public Anchor get(@PathVariable UUID venueId, @PathVariable UUID floorId, @PathVariable UUID anchorId) {
         return anchors.get(ActorAuthentication.currentActor(), venueId, floorId, anchorId);
+    }
+
+    /** The IMAGE_TARGET's target image: print it at markerSizeMeters wide; the WebXR client tracks this exact image. */
+    @GetMapping(value = "/{anchorId}/target.png", produces = MediaType.IMAGE_PNG_VALUE)
+    @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR','VIEWER','PUBLIC_VIEWER')")
+    public ResponseEntity<byte[]> targetImage(@PathVariable UUID venueId, @PathVariable UUID floorId, @PathVariable UUID anchorId) {
+        byte[] png = anchors.targetImage(ActorAuthentication.currentActor(), venueId, floorId, anchorId);
+        return ResponseEntity.ok().contentType(MediaType.IMAGE_PNG).header("Cache-Control", "private, max-age=86400").body(png);
     }
 
     @PostMapping

@@ -15,12 +15,15 @@ public final class ArDtos {
      * see CoordinateTransform, which normalizes defensively before using q. */
     public record Pose(double x, double y, double z, double qx, double qy, double qz, double qw) {}
 
-    public record AnchorRequest(@NotBlank String markerType, @NotBlank String markerIdentifier,
+    /** markerSizeMeters: the printed width of the marker, in metres. Required for IMAGE_TARGET (WebXR image tracking needs
+     * it, and checks the width it measures against it; docs/ar.md). */
+    public record AnchorRequest(@NotBlank String markerType, @NotBlank String markerIdentifier, Double markerSizeMeters,
                                 @NotNull Pose physicalPose, @NotNull Pose digitalPose) {}
 
     /** digitalPose is in canonical venue metres, +Z up, in coordinateFrameId (the floor's current frame when it was set;
-     * docs/coordinate-frames.md). */
-    public record Anchor(UUID id, UUID venueId, UUID floorId, String markerType, String markerIdentifier,
+     * docs/coordinate-frames.md). For an IMAGE_TARGET it is the pose of the printed image's centre, with the image's own
+     * axes (docs/ar.md, "Marker pose convention"). */
+    public record Anchor(UUID id, UUID venueId, UUID floorId, String markerType, String markerIdentifier, Double markerSizeMeters,
                          Pose physicalPose, Pose digitalPose, String calibrationStatus, Instant lastCalibratedAt,
                          UUID coordinateFrameId) {}
 
