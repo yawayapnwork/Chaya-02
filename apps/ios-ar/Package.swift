@@ -1,15 +1,17 @@
 // swift-tools-version:5.9
 import PackageDescription
 
+// The iOS AR client's libraries. The runnable app that embeds them is App/ (XcodeGen: App/project.yml); see README.md.
 let package = Package(
     name: "ChayaAR",
     platforms: [.iOS(.v16)],
     products: [
-        // Pure Swift: models, the API client, and the anchor/relocalization math. No ARKit or UIKit
-        // import, so `swift test` runs ChayaARCoreTests anywhere Swift runs (Linux CI included) -- see
-        // README.md and docs/ar.md "Testing".
+        // Pure Swift: backend models and API client, the device/canonical frame chain, marker registry (reference image
+        // -> anchor id), route geometry, and the tracking/relocalization state machine. No ARKit or UIKit import, so
+        // `swift test` runs ChayaARCoreTests anywhere Swift runs (Linux CI included).
         .library(name: "ChayaARCore", targets: ["ChayaARCore"]),
-        // The real ARKit session wrapper. iOS-only; requires a physical device with a camera to run.
+        // The ARKit integration: ARSessionManager, reference images, SceneKit route renderer. iOS-only (guarded with
+        // #if canImport(ARKit)); its behaviour with a camera needs a physical device.
         .library(name: "ChayaARKitSession", targets: ["ChayaARKitSession"]),
     ],
     targets: [

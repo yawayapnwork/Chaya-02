@@ -15,8 +15,8 @@ public final class NavigationDtos {
      * RouteService's module docstring. */
     public record BlockedRegion(@NotNull UUID floorId, double minX, double minY, double maxX, double maxY) {}
 
-    /** accessibility: "STANDARD" (default) or "STEP_FREE". start: [x, y, z] in floorId's reconstruction
-     * frame. */
+    /** accessibility: "STANDARD" (default) or "STEP_FREE". start: [x, y, z] in canonical venue metres (+Z up) on
+     * floorId, in the floor's current coordinate frame (RouteService; docs/coordinate-frames.md). */
     public record RouteRequest(@NotNull UUID venueId, @NotNull UUID floorId,
                                @NotNull @Size(min = 3, max = 3) List<Double> start, @NotNull UUID destinationPoiId,
                                String accessibility, @Valid List<BlockedRegion> blockedRegions) {}

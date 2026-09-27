@@ -1,0 +1,7 @@
+.build/
+.swiftpm/
+App/ChayaAR.xcodeproj/
+App/build/
+*.xcuserstate
+xcuserdata/
+DerivedData/

@@ -1,109 +1,233 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Thin client around the shared backend path/anchor API (docs/ar.md, docs/navigation.md, docs/security.md).
 /// It never talks to Postgres/MinIO/Redis directly and never computes its own route -- exactly the same
 /// `/api/v1` surface the web app's apps/web/lib/ar-api.ts and lib/navigation-api.ts call.
-public struct APIError: Error, Sendable {
+public struct APIError: Error, Equatable, Sendable {
     public let status: Int
     public let code: String
     public let detail: String
+
+    public init(status: Int, code: String, detail: String) {
+        self.status = status; self.code = code; self.detail = detail
+    }
 }
 
-/// Supplies the bearer token for each request. Real token acquisition (OIDC auth-code + PKCE via the
-/// system browser, per ARCHITECTURE.md #7) is an app-level concern outside this package; APIClient only
-/// needs something that can hand it a current, valid access token.
+/// Adds credentials to each request.
+public protocol RequestAuthorizer: Sendable {
+    func authorize(_ request: inout URLRequest) async throws
+}
+
+/// Supplies an OIDC bearer token (an operator's session). Token acquisition (auth-code + PKCE via the system browser,
+/// ARCHITECTURE.md #7) is outside this package.
 public protocol AccessTokenProvider: Sendable {
     func currentAccessToken() async throws -> String
 }
 
-public final class APIClient: Sendable {
+public struct BearerAuthorizer: RequestAuthorizer {
+    let tokenProvider: AccessTokenProvider
+
+    public init(tokenProvider: AccessTokenProvider) { self.tokenProvider = tokenProvider }
+
+    public func authorize(_ request: inout URLRequest) async throws {
+        request.setValue("Bearer \(try await tokenProvider.currentAccessToken())", forHTTPHeaderField: "Authorization")
+    }
+}
+
+/// A venue-bound public viewer token (POST /public/viewer-token), sent as `X-Chaya-Viewer-Token` exactly as the web
+/// viewer sends it (apps/web/lib/session.ts). It allows reading the venue's floors, POIs, anchors and target images,
+/// planning routes and relocalizing, and nothing else (docs/ar.md "Security").
+public struct ViewerTokenAuthorizer: RequestAuthorizer {
+    public let token: PublicViewerToken
+
+    public init(token: PublicViewerToken) { self.token = token }
+
+    public func authorize(_ request: inout URLRequest) async throws {
+        guard token.expiresAt > Date() else {
+            throw APIError(status: 401, code: "VIEWER_TOKEN_EXPIRED", detail: "the viewing link's token expired; open the link again")
+        }
+        request.setValue(token.token, forHTTPHeaderField: "X-Chaya-Viewer-Token")
+    }
+}
+
+/// Immutable after init; URL and URLSession are Sendable on Apple platforms but not yet annotated in Linux Foundation.
+public final class APIClient: @unchecked Sendable {
     private let baseURL: URL
-    private let tokenProvider: AccessTokenProvider
+    private let authorizer: RequestAuthorizer?
     private let session: URLSession
 
-    public init(baseURL: URL, tokenProvider: AccessTokenProvider, session: URLSession = .shared) {
+    public init(baseURL: URL, authorizer: RequestAuthorizer?, session: URLSession = .shared) {
         self.baseURL = baseURL
-        self.tokenProvider = tokenProvider
+        self.authorizer = authorizer
         self.session = session
     }
 
-    private func request<T: Decodable>(_ path: String, method: String = "GET", body: Encodable? = nil) async throws -> T {
-        var url = baseURL
-        url.append(path: "/api/v1" + path)
-        var request = URLRequest(url: url)
+    public func with(authorizer: RequestAuthorizer) -> APIClient {
+        APIClient(baseURL: baseURL, authorizer: authorizer, session: session)
+    }
+
+    func url(_ path: String) -> URL {
+        baseURL.appendingPathComponent("api/v1" + path)
+    }
+
+    private func send(_ path: String, method: String = "GET", body: Data? = nil, authorized: Bool = true) async throws -> Data {
+        var request = URLRequest(url: url(path))
         request.httpMethod = method
-        request.setValue("Bearer \(try await tokenProvider.currentAccessToken())", forHTTPHeaderField: "Authorization")
+        if authorized {
+            guard let authorizer else { throw APIError(status: 401, code: "NOT_SIGNED_IN", detail: "no credentials") }
+            try await authorizer.authorize(&request)
+        }
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try JSONEncoder.chayaAR.encode(AnyEncodable(body))
+            request.httpBody = body
         }
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await session.chayaData(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw APIError(status: 0, code: "NO_HTTP_RESPONSE", detail: "response was not an HTTP response")
         }
         guard (200..<300).contains(http.statusCode) else {
-            throw decodeError(status: http.statusCode, data: data)
+            throw Self.decodeError(status: http.statusCode, data: data)
         }
+        return data
+    }
+
+    private func request<T: Decodable>(_ path: String, method: String = "GET", body: Data? = nil, authorized: Bool = true) async throws -> T {
+        let data = try await send(path, method: method, body: body, authorized: authorized)
         if data.isEmpty {
-            // Callers only ask for Decodable results where the server always returns a body; an empty
-            // body here would be a caller bug against a void endpoint, not a runtime case to paper over.
-            throw APIError(status: http.statusCode, code: "EMPTY_BODY", detail: "expected a JSON body")
+            // Callers only ask for Decodable results where the server always returns a body.
+            throw APIError(status: 200, code: "EMPTY_BODY", detail: "expected a JSON body")
         }
         return try JSONDecoder.chayaAR.decode(T.self, from: data)
     }
 
-    private func decodeError(status: Int, data: Data) -> APIError {
-        struct Problem: Decodable { let code: String?; let detail: String? }
+    static func decodeError(status: Int, data: Data) -> APIError {
+        struct Problem: Decodable { let code: String?; let detail: String?; let message: String? }
         let problem = try? JSONDecoder().decode(Problem.self, from: data)
-        return APIError(status: status, code: problem?.code ?? "HTTP_\(status)", detail: problem?.detail ?? "HTTP \(status)")
+        return APIError(status: status, code: problem?.code ?? "HTTP_\(status)",
+                        detail: problem?.detail ?? problem?.message ?? "HTTP \(status)")
     }
 
-    // ---- anchors --------------------------------------------------------------------------------------
+    // ---- public viewer link -----------------------------------------------------------------------------
+
+    /// Unauthenticated: trades a public viewer link secret for a short-lived, venue-bound token.
+    public func exchangeViewerLink(secret: String) async throws -> PublicViewerToken {
+        try await request("/public/viewer-token", method: "POST",
+                          body: try JSONEncoder.chayaAR.encode(["secret": secret]), authorized: false)
+    }
+
+    // ---- venue ------------------------------------------------------------------------------------------
+
+    public func getVenue(venueId: UUID) async throws -> Venue {
+        try await request("/venues/\(venueId.apiString)")
+    }
+
+    public func listFloors(venueId: UUID) async throws -> [Floor] {
+        try await request("/venues/\(venueId.apiString)/floors")
+    }
+
+    public func listPois(venueId: UUID) async throws -> [Poi] {
+        try await request("/venues/\(venueId.apiString)/pois")
+    }
+
+    // ---- anchors ----------------------------------------------------------------------------------------
 
     public func listAnchors(venueId: UUID, floorId: UUID) async throws -> [Anchor] {
-        try await request("/venues/\(venueId)/floors/\(floorId)/anchors")
+        try await request("/venues/\(venueId.apiString)/floors/\(floorId.apiString)/anchors")
+    }
+
+    /// The IMAGE_TARGET's server-generated target image (PNG): the exact image the operator printed.
+    public func targetImage(venueId: UUID, floorId: UUID, anchorId: UUID) async throws -> Data {
+        try await send("/venues/\(venueId.apiString)/floors/\(floorId.apiString)/anchors/\(anchorId.apiString)/target.png")
     }
 
     public func relocalize(venueId: UUID, floorId: UUID, observations: [AnchorObservation]) async throws -> RelocalizationResponse {
+        try await request("/venues/\(venueId.apiString)/floors/\(floorId.apiString)/anchors/relocalize", method: "POST",
+                          body: try Self.relocalizeBody(observations))
+    }
+
+    static func relocalizeBody(_ observations: [AnchorObservation]) throws -> Data {
         struct Body: Encodable { let observations: [AnchorObservation] }
-        return try await request("/venues/\(venueId)/floors/\(floorId)/anchors/relocalize", method: "POST", body: Body(observations: observations))
+        return try JSONEncoder.chayaAR.encode(Body(observations: observations))
     }
 
     // ---- routing ----------------------------------------------------------------------------------------
 
-    public func planRoute(venueId: UUID, floorId: UUID, start: Pose, destinationPoiId: UUID, accessibility: String? = nil) async throws -> RouteResponse {
+    /// `start` is canonical venue metres (+Z up) on `floorId` -- the device's position as solved by relocalization.
+    public func planRoute(venueId: UUID, floorId: UUID, start: Vec3, destinationPoiId: UUID, accessibility: String? = nil) async throws -> RouteResponse {
+        try await request("/navigation/routes", method: "POST",
+                          body: try Self.routeBody(venueId: venueId, floorId: floorId, start: start,
+                                                   destinationPoiId: destinationPoiId, accessibility: accessibility))
+    }
+
+    static func routeBody(venueId: UUID, floorId: UUID, start: Vec3, destinationPoiId: UUID, accessibility: String?) throws -> Data {
         struct Body: Encodable {
-            let venueId: UUID
-            let floorId: UUID
+            let venueId: String
+            let floorId: String
             let start: [Double]
-            let destinationPoiId: UUID
+            let destinationPoiId: String
             let accessibility: String?
         }
-        let body = Body(venueId: venueId, floorId: floorId, start: [start.x, start.y, start.z],
-                         destinationPoiId: destinationPoiId, accessibility: accessibility)
-        return try await request("/navigation/routes", method: "POST", body: body)
+        return try JSONEncoder.chayaAR.encode(Body(venueId: venueId.apiString, floorId: floorId.apiString,
+                                                   start: [start.x, start.y, start.z],
+                                                   destinationPoiId: destinationPoiId.apiString, accessibility: accessibility))
     }
 }
 
+extension URLSession {
+    func chayaData(for request: URLRequest) async throws -> (Data, URLResponse) {
+        #if canImport(FoundationNetworking)
+        // Linux Foundation has no async data(for:) yet.
+        return try await withCheckedThrowingContinuation { continuation in
+            dataTask(with: request) { data, response, error in
+                if let error { continuation.resume(throwing: error) }
+                else if let response { continuation.resume(returning: (data ?? Data(), response)) }
+                else { continuation.resume(throwing: URLError(.badServerResponse)) }
+            }.resume()
+        }
+        #else
+        return try await data(for: request)
+        #endif
+    }
+}
+
+extension UUID {
+    /// Lower-case, as the server prints ids. Foundation's uuidString is upper-case; the server accepts either, but a
+    /// reference image named after an anchor must match the id the server returned byte for byte.
+    public var apiString: String { uuidString.lowercased() }
+}
+
 extension JSONDecoder {
-    static let chayaAR: JSONDecoder = {
+    /// ISO-8601 with or without fractional seconds: Java's Instant writes them whenever they are non-zero.
+    public static let chayaAR: JSONDecoder = {
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let text = try decoder.singleValueContainer().decode(String.self)
+            if let date = ChayaDates.parse(text) { return date }
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "not an ISO-8601 instant: \(text)"))
+        }
         return decoder
     }()
 }
 
 extension JSONEncoder {
-    static let chayaAR: JSONEncoder = {
+    public static let chayaAR: JSONEncoder = {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
         return encoder
     }()
 }
 
-/// Type-erasing box so `request` can accept any Encodable body without becoming generic over it too.
-private struct AnyEncodable: Encodable {
-    private let encodeFn: (Encoder) throws -> Void
-    init(_ wrapped: Encodable) { self.encodeFn = wrapped.encode }
-    func encode(to encoder: Encoder) throws { try encodeFn(encoder) }
+enum ChayaDates {
+    static func parse(_ text: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: text) { return date }
+        let whole = ISO8601DateFormatter()
+        whole.formatOptions = [.withInternetDateTime]
+        return whole.date(from: text)
+    }
 }

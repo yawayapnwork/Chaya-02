@@ -1,0 +1,66 @@
+# The Chaya AR iOS app (docs/ar.md, "iOS: Swift/ARKit"). XcodeGen spec: `xcodegen generate` in this directory writes
+# ChayaAR.xcodeproj, which is not committed. Keeping the project declarative avoids a hand-written .pbxproj.
+#
+#   brew install xcodegen
+#   cd apps/ios-ar/App && xcodegen generate
+#   open ChayaAR.xcodeproj           # set your signing team, then run on a physical iPhone
+#
+# The app embeds the local Swift package one directory up: ChayaARCore (models, API client, frames, state machine)
+# and ChayaARKitSession (ARKit session, reference images, SceneKit route renderer).
+name: ChayaAR
+options:
+  bundleIdPrefix: dev.chaya
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+packages:
+  ChayaAR:
+    path: ..
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    # Override per build: xcodebuild ... CHAYA_API_BASE_URL=https://chaya.your-venue.example
+    CHAYA_API_BASE_URL: https://chaya.example.invalid
+targets:
+  ChayaAR:
+    type: application
+    platform: iOS
+    sources:
+      - path: ChayaAR/Sources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.chaya.ar
+        INFOPLIST_FILE: ChayaAR/Info.plist
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: NO
+    dependencies:
+      - package: ChayaAR
+        product: ChayaARCore
+      - package: ChayaAR
+        product: ChayaARKitSession
+      - sdk: ARKit.framework
+      - sdk: SceneKit.framework
+  ChayaARTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: ChayaARTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: dev.chaya.ar.tests
+    # Hosted in the app: ChayaARCore/ChayaARKitSession are linked once, into the app, and the tests see them through
+    # it (linking them into the test bundle too would load two copies of each class).
+    dependencies:
+      - target: ChayaAR
+schemes:
+  ChayaAR:
+    build:
+      targets:
+        ChayaAR: all
+        ChayaARTests: [test]
+    test:
+      targets:
+        - ChayaARTests

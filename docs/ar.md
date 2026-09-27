@@ -66,25 +66,18 @@ cases: `dev.chaya.api.ar.CoordinateTransform` (`CoordinateTransformTest`), `apps
 
 ## Tracking failure
 
-Both clients implement the same state machine (`apps/web/lib/ar-relocalization.ts`,
-`ChayaARCore/RelocalizationStateMachine.swift`):
+Both clients implement the same rules, each in a pure, unit-tested reducer: `apps/web/lib/ar-relocalization.ts`
+(states in "Android: WebXR" below) and `ChayaARCore/RelocalizationStateMachine.swift` ("iOS: Swift/ARKit" below).
 
-```
-UNINITIALIZED -> DETECTING -> LOCALIZED -> TRACKING_LOST -> RELOCALIZING -> LOCALIZED
-                                  ^                                            |
-                                  +--------------------------------------------+
-```
-
-On a tracking-loss signal from the platform session (WebXR `visibilitychange`/frame loss, ARKit
-`.limited`/`.notAvailable` camera tracking state):
-
-1. **Freeze the last known route state** — the last route, waypoint index, and rendered position are
-   retained unchanged; nothing about the route is recomputed or discarded.
-2. **Show a tracking-loss state** in the UI — never silently keep rendering as if nothing happened.
-3. **Prompt for re-localization** — ask the user to re-sight a known anchor; do not guess a resumed pose.
-4. **Never silently move the user marker.** A `LOCALIZED` state is only re-entered from a fresh
-   `relocalize` call (or, for pure motion tracking recovery, the platform explicitly reporting normal
-   tracking again) — an interpolated guess is never presented as a confirmed position.
+1. **Freeze the route.** Progress along the route advances only while localized. On a loss, the last route and
+   progress are kept unchanged. Nothing is recomputed or guessed.
+2. **Show the tracking state** in the UI. The route is never silently kept rendering as if nothing happened.
+3. **Prompt for relocalization.** Ask the user to point at a registered marker.
+4. **Recover only from a new observation.** The platform reporting normal tracking again is *not* a localization:
+   the world frame may have been reset or moved during the loss. Localization is only re-entered after a fresh
+   marker observation and a successful server `relocalize`. Its transform then replaces the old one.
+5. **Startup is not a loss.** Platform initialisation before the first localization is shown as "waiting for
+   tracking", never as "tracking lost".
 
 ## Security
 
@@ -214,38 +207,102 @@ status text.
 
 ## iOS: Swift/ARKit
 
-`apps/ios-ar` is a Swift package foundation:
+`apps/ios-ar`: the `ChayaARCore` and `ChayaARKitSession` libraries, plus the SwiftUI app in `apps/ios-ar/App`
+(XcodeGen `project.yml`, `Info.plist` with `NSCameraUsageDescription`, `arkit` required). See
+[apps/ios-ar/README.md](../apps/ios-ar/README.md).
 
-- `Sources/ChayaARCore` — platform-independent: `Models.swift` (Codable mirrors of the server DTOs),
-  `APIClient.swift` (a thin `URLSession` client for the same `/api/v1` path/anchor/relocalization
-  endpoints), `AnchorMath.swift`, `RelocalizationStateMachine.swift`. No ARKit or UIKit import, so
-  `swift test` runs its tests anywhere Swift runs (Linux CI included).
-- `Sources/ChayaARKitSession` — the real ARKit integration: `ARSessionManager.swift` wraps
-  `ARSession`/`ARWorldTrackingConfiguration` with an `ARReferenceImage` set built from registered anchors'
-  `markerIdentifier`s, and maps ARKit's own `ARCamera.TrackingState` into
-  `RelocalizationStateMachine` events. It reads real `ARFrame`/`ARAnchor` data only — **it does not
-  fabricate device sensor data**; where ARKit itself hasn't detected something, that value is `nil`/absent
-  in the model, never a placeholder. This target requires iOS/ARKit to compile and only runs on a physical
-  device with a camera (the iOS Simulator does not implement ARKit camera tracking).
+**Validation status: NOT DONE.** No macOS host, Xcode or iPhone was available.
+- `ChayaARCore` is built and its tests pass on Linux Swift 5.10.
+- The ARKit layer and the app have only been syntax-checked. They have never been type-checked, built or run; the
+  `ios` CI workflow (`.github/workflows/ios.yml`) is the first place they compile.
+- The app shows a "NOT DEVICE-VALIDATED" banner (`DeviceValidation.status`) until
+  [ar-ios-validation.md](ar-ios-validation.md) has passed on a device.
 
-Turning the package into a runnable app (an `.xcodeproj`/`.xcworkspace` app target that embeds
-`ChayaARCore` + `ChayaARKitSession`, with `NSCameraUsageDescription` in `Info.plist`) is an Xcode-side step
-documented in `apps/ios-ar/README.md`, not something meaningfully representable as hand-written project
-files here.
+### Concepts on ARKit
+
+| Concept | ARKit | Used for |
+|---|---|---|
+| **Image detection/tracking** (`ARReferenceImage` → `ARImageAnchor`) | Detects and tracks the given images, reporting the image's transform, `isTracked` and `estimatedScaleFactor` | **Marker detection.** One reference image per calibrated `IMAGE_TARGET` anchor: the server's `target.png`, at `markerSizeMeters`, **named with the anchor id**. |
+| **Fiducials** (AprilTag, ArUco, QR pose) | No pose detector | Nothing. Listed as `FIDUCIAL_DETECTION_UNSUPPORTED`, never treated as detected. |
+| **Plane detection / raycasts** | Available | Not used. A surface identifies no marker. |
+| **World anchors** (`ARAnchor`) | ARKit updates anchor transforms as it refines its map | One is added at the observed marker's pose when relocalizing. It carries map corrections into the transform, and its removal is a tracking loss. |
+| **Route rendering** | `ARSCNView` + SceneKit | `RouteSceneRenderer`: tube and waypoint spheres built in canonical coordinates, placed each frame with the corrected canonical → world pose |
+
+### Identity chain
+
+```
+ARImageAnchor.referenceImage.name  (= anchor id, lower-case)
+  -> MarkerRegistry.marker(forReferenceImageName:)     registered marker: that anchor, its printed width
+  -> AnchorObservation(anchorId, ARImageAnchor.transform)
+  -> POST .../anchors/relocalize                       server: that anchor's calibrated digitalPose ∘ observedPose⁻¹
+  -> deviceToVenue (ARKit world -> canonical venue, gravity-checked, in the floor's current coordinate frame)
+```
+
+An image name the registry did not issue is not attributed to anything. A `MarkerObservation` carries the anchor id,
+ARKit's measured pose, `ARFrame.timestamp`, `isTracked`, and the estimated scale. Only a tracked observation whose
+scale is within 20 % of the printed size is eligible, with at most one per anchor.
+
+### Frames
+
+The same chain as Android ("Frames" above), in `ChayaARCore/VenueFrames.swift`. The ARKit world is
+`worldAlignment = .gravity`: metres, +Y up, the device convention the server expects.
+- camera → world: `ARFrame.camera.transform`.
+- world → canonical: the server's `deviceToVenue`, corrected by the world anchor
+  (`anchorCorrectedDeviceToVenue`).
+- The device's venue position (`devicePositionInVenue`) drives progress. The route root node is placed with
+  `venueToWorld`.
+
+No scene coordinate is made up by the app. **Marker pose convention:** ARKit's image anchor is expected to use the
+same axes as the web client (+X right, +Y out of the face, +Z toward the bottom edge). This has not been confirmed on
+a device.
+
+### Tracking states
+
+`RelocalizationStateMachine` (phases `idle → searching → solving → localized`, plus `limited`, `trackingLost`,
+`recovered` and `ended`). The UI's tracking status is normal / limited / relocalizing / lost / recovered.
+
+| ARKit signal | Before the first localization | While localized |
+|---|---|---|
+| `.normal` | Observations accepted | Route shown, progress advances |
+| `.limited(.initializing)` | "Waiting for ARKit tracking": **not a loss** (review AR-2) | Loss (the world was reset) |
+| `.limited(.excessiveMotion / .insufficientFeatures)` | Waiting | `limited`: route held, progress frozen. Back to `localized` on `.normal`. After `maxLimitedSeconds` (3 s), a loss. |
+| `.limited(.relocalizing)` (ARKit restoring its map after an interruption) | Waiting | Loss. Status shows "relocalizing". |
+| `.notAvailable`, `sessionWasInterrupted`, world anchor removed or missing | — | Loss |
+| `.normal` after a loss | — | `recovered`: route still hidden. A new marker observation and a server solve return to `localized`. |
+| `session(_:didFailWithError:)` | `ended`, with the error (`CAMERA_PERMISSION_DENIED` for `ARError.cameraUnauthorized`) | same |
+
+A server answer to a request overtaken by a loss is ignored, and its world anchor is removed.
+
+### Capability states (app)
+
+- `WORLD_TRACKING_UNSUPPORTED`: `ARWorldTrackingConfiguration.isSupported` is false (the Simulator, pre-A9).
+  AR cannot start, and no view is simulated.
+- `CAMERA_PERMISSION_DENIED`, `CAMERA_RESTRICTED`: from `AVCaptureDevice.authorizationStatus`. When the status is
+  not determined, the app asks when AR starts.
+- `NO_DETECTABLE_ANCHORS`: no calibrated image target on the floor that ARKit accepts. Each marker row says why.
+
+### Auth
+
+The app opens a public viewer link (`/viewer?link=…` or the secret) and exchanges it at
+`POST /public/viewer-token` for a venue-bound token. It sends that token as `X-Chaya-Viewer-Token`, as the web viewer
+does. The token allows floors, POIs, anchors, target images, routes and relocalization for that one venue
+(see "Security").
 
 ## Testing
 
-Three separated tiers, per `apps/ios-ar/README.md` and the test files themselves:
+Test tiers, from pure functions to physical devices:
 
 | Tier | Where | Requires a physical device? |
 |---|---|---|
 | Coordinate transformation / anchor math | `CoordinateTransformTest.java`, `ar-anchor-math.test.ts`, `AnchorMathTests.swift` | No — pure functions, run in CI |
-| Device/canonical axis boundary, gravity-tilt check | `ArDeviceFrameTest.java`, `ar-frame-boundary.test.ts` | No — pure functions. The iOS package has **not** been updated to the boundary (no Swift toolchain here) |
-| Relocalization state machine | `ar-relocalization.test.ts`, `RelocalizationStateMachineTests.swift` | No — pure state transitions |
+| Device/canonical axis boundary, gravity-tilt check | `ArDeviceFrameTest.java`, `ar-frame-boundary.test.ts`, `VenueFramesTests.swift` | No — pure functions |
+| Relocalization state machine | `ar-relocalization.test.ts`, `RelocalizationStateMachineTests.swift` (incl. AR-2's startup `initializing` case) | No — pure state transitions |
+| iOS frames, world-anchor correction, route progress; marker registry (image → anchor id); wire format (null residual, Java instants) | `VenueFramesTests.swift`, `MarkerRegistryTests.swift`, `APIClientCodingTests.swift` | No — `swift test`, Linux CI (`ios` workflow, `core` job) |
+| iOS app level: capability/permission states, ARKit tracking-state mapping, transforms, reference images, renderer placement | `App/ChayaARTests/AppLevelTests.swift` | No — iOS Simulator (`ios` workflow, `app` job). **Never run yet** (no macOS here). |
 | Web camera → AR world → venue chain, world-anchor correction, route placement and progress | `ar-route.test.ts` | No — pure functions |
 | Image-tracking result → marker observation (anchor identity, eligibility) | `ar-marker-tracking.test.ts` | No — pure functions over WebXR-shaped results |
 | Anchor CRUD / calibration / relocalization service, image-target size and image | `AnchorServiceTest.java` | No — Testcontainers Postgres only (skipped, not failed, without Docker) |
 | WebXR capability detection (every unsupported state) | `webxr-support.test.ts` | No — injected `navigator`/globals |
 | `/ar` on desktop Chromium: explicit unsupported state, no start button, no canvas | `e2e/ar.spec.ts` (Playwright) | No — real Chromium; two cases replace WebXR globals to reach the image-tracking/anchors states |
 | WebXR device integration (image tracking, world anchor, rendering, tracking loss) | [ar-android-validation.md](ar-android-validation.md), manual | **Yes** — an ARCore Android device with Chrome; **not yet run** |
-| ARKit device integration (image detection, tracking-state transitions, camera) | none automated | **Yes** — a physical iOS device; the Simulator cannot run ARKit camera tracking |
+| ARKit device integration (image detection, relocalization, route placement, tracking states) | [ar-ios-validation.md](ar-ios-validation.md), manual | **Yes** — a physical iPhone/iPad; the Simulator cannot run ARKit world tracking. **Not yet run.** |

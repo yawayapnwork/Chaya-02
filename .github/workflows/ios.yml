@@ -1,0 +1,55 @@
+# iOS AR client (apps/ios-ar; docs/ar.md "iOS: Swift/ARKit").
+#   core: ChayaARCore's pure tests (frames, marker registry, state machine, wire format) on Linux.
+#   app:  generates the Xcode project, builds the app for a real iOS device (unsigned), and runs the app-level tests in
+#         the iOS Simulator. Neither job exercises ARKit camera tracking: the Simulator has none. That is the manual
+#         procedure in docs/ar-ios-validation.md, on a physical device.
+name: ios
+
+on:
+  pull_request:
+    paths: ["apps/ios-ar/**", ".github/workflows/ios.yml"]
+  push:
+    branches: [main]
+    paths: ["apps/ios-ar/**", ".github/workflows/ios.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container: swift:5.10-jammy
+    defaults:
+      run:
+        working-directory: apps/ios-ar
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Core tests
+        run: swift test
+
+  app:
+    runs-on: macos-14
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: apps/ios-ar/App
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Generate the Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for a physical iOS device (unsigned)
+        run: >
+          xcodebuild build -project ChayaAR.xcodeproj -scheme ChayaAR -destination 'generic/platform=iOS'
+          CODE_SIGNING_ALLOWED=NO
+      - name: App-level tests (iOS Simulator)
+        run: |
+          DEVICE=$(xcrun simctl list devices available -j | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; print(next(x['name'] for k,v in d.items() if 'iOS' in k for x in v if x['name'].startswith('iPhone')))")
+          xcodebuild test -project ChayaAR.xcodeproj -scheme ChayaAR -destination "platform=iOS Simulator,name=$DEVICE" CODE_SIGNING_ALLOWED=NO
