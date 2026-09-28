@@ -8,11 +8,11 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *
  * @param visionProbeInterval      while the vision service is unavailable, how often a background probe checks
  *                                 whether it is back (HttpTextEmbeddingClient's circuit breaker)
- * @param relevanceMinMargin       an embedding match of a manually placed POI counts as a result only if its similarity
- *                                 exceeds the query's mean similarity to the venue's searched POIs by at least this.
+ * @param relevanceMinMargin       an embedding match (manual or detected POI) counts as a result if its text similarity
+ *                                 exceeds the query's mean similarity to the distinct POI texts in scope by at least this.
  *                                 0.078 was chosen on a calibration venue (benchmarks/b3_semantic_search/calibrate.py,
  *                                 docs/BENCHMARKS.md) and never tuned on the test set
- * @param relevanceMinPois         fewer comparable POIs than this and the mean is not meaningful: results are unfiltered
+ * @param relevanceMinPois         fewer distinct POI texts than this and the mean is not meaningful: results are unfiltered
  * @param closestMatches           how many below-threshold candidates to return when nothing clears it */
 @ConfigurationProperties("chaya.search")
 public record SearchProperties(String visionServiceUrl, Duration visionTimeout, int defaultTopK, int maxTopK,

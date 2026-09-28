@@ -150,6 +150,32 @@ class PoiEmbeddingServiceTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void aDetectedObjectGetsATextEmbeddingOfItsLabelAndKeepsItsImageEmbedding() {
+        var t = fx.tree();
+        UUID run = jdbc.sql("""
+                INSERT INTO pipeline_run (organization_id, venue_id, scan_id, capture_session_id, status, quality, stages,
+                    time_budget_seconds, deadline_at, finished_at, requested_by)
+                VALUES (:o, :v, :s, :cs, 'SUCCEEDED', 'FINAL', '{}', 3600, now(), now(), 'fixture') RETURNING id""")
+            .param("o", t.org()).param("v", t.venue()).param("s", t.scan()).param("cs", t.session()).query(UUID.class).single();
+        UUID poi = jdbc.sql("INSERT INTO poi (organization_id, venue_id, floor_id) VALUES (:o, :v, :f) RETURNING id")
+            .param("o", t.org()).param("v", t.venue()).param("f", t.floor()).query(UUID.class).single();
+        float[] crop = TestEmbeddingConfig.embedFor("a photo crop of a sofa");
+        jdbc.sql("INSERT INTO poi_version (organization_id, venue_id, poi_id, version_number, label, tags, x, y, z, "
+                + "image_embedding, image_embedding_model, source, pipeline_run_id, created_by) "
+                + "VALUES (:o, :v, :p, 1, 'sofa', '{}', 0, 0, 0, CAST(:e AS vector), 'clip-image', 'AUTO_DETECTED', :r, 'test')")
+            .param("o", t.org()).param("v", t.venue()).param("p", poi).param("e", TestEmbeddingConfig.vectorLiteral(crop))
+            .param("r", run).update();
+
+        embeddings.embedPending(10_000);
+
+        assertThat(embeddingIs(poi, 1, TestEmbeddingConfig.embedFor("sofa"))).as("text space: the detector label").isTrue();
+        assertThat(version(poi, 1).model()).isEqualTo(TestEmbeddingConfig.MODEL);
+        Boolean imageKept = jdbc.sql("SELECT image_embedding = CAST(:e AS vector) FROM poi_version WHERE poi_id = :p")
+            .param("e", TestEmbeddingConfig.vectorLiteral(crop)).param("p", poi).query(Boolean.class).single();
+        assertThat(imageKept).as("image space: the crop, untouched").isTrue();
+    }
+
+    @Test
     void embeddingTextIsTheUserEnteredMetadataDeduplicated() {
         assertThat(PoiEmbeddingService.embeddingText("Accessible restroom", "restroom", List.of("toilet", "WC", "Toilet")))
             .isEqualTo("Accessible restroom, restroom, toilet, WC");

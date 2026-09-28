@@ -17,8 +17,10 @@ import org.springframework.stereotype.Service;
  * and poi_version_pending_embedding_idx indexes. Without it a manually placed POI is invisible to semantic search.
  *
  * <p>Only the latest version of a live POI is embedded (search only ever reads that one). The text is the POI's own
- * user-entered metadata ({@link #embeddingText}); the vector comes from the same CLIP model as search queries
- * (TextEmbeddingClient -> services/vision) and is recorded with that model's id.
+ * metadata ({@link #embeddingText}); the vector comes from the same CLIP text tower as search queries
+ * (TextEmbeddingClient -> services/vision) and is recorded with that model's id. That includes AUTO_DETECTED POIs: their
+ * text is the detector label, and this text-space vector is what ranks them next to manual POIs. Their CLIP image vector
+ * lives separately in image_embedding (V21__search_embedding_spaces.sql).
  *
  * <p>The vision call happens outside any transaction. The write is {@code UPDATE ... WHERE embedding IS NULL}: the one
  * update the immutability trigger allows, and a no-op if another API instance got there first.
@@ -28,7 +30,7 @@ public class PoiEmbeddingService {
 
     private static final Logger log = LoggerFactory.getLogger(PoiEmbeddingService.class);
 
-    static final int EMBEDDING_DIM = 512; // poi_version.embedding is vector(512)
+    public static final int EMBEDDING_DIM = 512; // poi_version.embedding and image_embedding are vector(512)
 
     private static final String PENDING = """
             SELECT v.id, v.label, v.category, v.tags

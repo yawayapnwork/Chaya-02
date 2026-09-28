@@ -39,10 +39,11 @@ class SemanticSearchServiceTest extends AbstractIntegrationTest {
         jdbc.sql("""
                 INSERT INTO poi_version (organization_id, venue_id, poi_id, version_number, label, tags, x, y, z,
                                          embedding, embedding_model, source, created_by)
-                VALUES (:o, :v, :p, 1, :label, '{}', :x, :y, :z, CAST(:emb AS vector), 'test-model', 'MANUAL', 'test')
+                VALUES (:o, :v, :p, 1, :label, '{}', :x, :y, :z, CAST(:emb AS vector), :model, 'MANUAL', 'test')
                 """)
             .param("o", org).param("v", venue).param("p", poiId).param("label", label)
             .param("x", x).param("y", y).param("z", z).param("emb", TestEmbeddingConfig.vectorLiteral(embedding))
+            .param("model", TestEmbeddingConfig.MODEL)
             .update();
         return poiId;
     }

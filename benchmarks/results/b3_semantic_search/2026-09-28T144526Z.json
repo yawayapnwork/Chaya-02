@@ -1,0 +1,1525 @@
+{
+  "benchmark": "b3_semantic_search",
+  "title": "Semantic search: CLIP embeddings vs lexical fallback",
+  "started": "2026-09-28T14:45:26+00:00",
+  "finished": "2026-09-28T14:49:46+00:00",
+  "git": {
+    "commit": "202f8418d0042271ae94acf5096f5f2bd8e11c32",
+    "dirty_files": 21
+  },
+  "environment": {
+    "python": "3.12.10",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "cpus": 18,
+    "api_image": "sha256:075004eab253482023b6e3e9ae87795321f17a6f7494d879aa46ae1d69ec77b6",
+    "vision_image": "sha256:c63205569108b26774f10a3d1b1d3d15fbc55af7ec8de36c966d59f3a02ceb43",
+    "vision_model": "open_clip:ViT-B-32:openai"
+  },
+  "inputs": {
+    "dataset": "benchmarks\\b3_semantic_search\\dataset.json",
+    "dataset_sha256": "a12792c1bcbf37eb486b56223bbabda15205ddeb0216c4bd0f304bea138cec0e",
+    "pois": 30,
+    "queries": {
+      "exact": 15,
+      "synonym": 17,
+      "ambiguous": 12,
+      "zero_result": 15
+    },
+    "detected_objects": "benchmarks\\b3_semantic_search\\detected_objects.json",
+    "detected_objects_sha256": "261aaa4e67bfa116d3a341a5bdc2adb925eb31a76223ea37ae5890803661f6d3",
+    "detected_vectors_sha256": "937b29d11ae78eb0b86ebafe84ade367d3d6cc3f718a69582e087b8ba556cd09",
+    "detected": 15,
+    "extra_manual_pois": 2,
+    "detected_queries": {
+      "detected_exact": 5,
+      "detected_synonym": 5,
+      "visual_attribute": 7,
+      "mixed": 5
+    }
+  },
+  "metrics": [
+    {
+      "metric": "time until all new POIs searchable by meaning",
+      "value": 8.98,
+      "unit": "s",
+      "kind": "measured",
+      "condition": "embedding job",
+      "source": "poll of poi_version.embedding after the last POI was created",
+      "note": "30 POIs; job interval chaya.search.embedding-backfill-interval",
+      "command": null
+    },
+    {
+      "metric": "embedding backfill interval",
+      "value": 5,
+      "unit": "s",
+      "kind": "configuration",
+      "condition": "embedding job",
+      "source": "application.yml",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "search rate limit",
+      "value": 60,
+      "unit": "requests/min/user",
+      "kind": "configuration",
+      "condition": "all",
+      "source": "chaya.rate-limit.search-per-minute",
+      "note": "the runner paces requests below it; pacing does not affect per-request latency",
+      "command": null
+    },
+    {
+      "metric": "top-k requested",
+      "value": 10,
+      "unit": "results",
+      "kind": "configuration",
+      "condition": "all",
+      "source": "runner",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [exact]",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "mixed: manual + detected",
+      "source": "API /search",
+      "note": "n=15; manual query set",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [exact]",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "mixed: manual + detected",
+      "source": "API /search",
+      "note": "n=15; manual query set",
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [synonym]",
+      "value": 0.4706,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "mixed: manual + detected",
+      "source": "API /search",
+      "note": "n=17; manual query set",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [synonym]",
+      "value": 0.5294,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "mixed: manual + detected",
+      "source": "API /search",
+      "note": "n=17; manual query set",
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [ambiguous]",
+      "value": 0.6667,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "mixed: manual + detected",
+      "source": "API /search",
+      "note": "n=12; manual query set",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [ambiguous]",
+      "value": 0.6667,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "mixed: manual + detected",
+      "source": "API /search",
+      "note": "n=12; manual query set",
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [all_answerable]",
+      "value": 0.7045,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "mixed: manual + detected",
+      "source": "API /search",
+      "note": "n=44; manual query set",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [all_answerable]",
+      "value": 0.7273,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "mixed: manual + detected",
+      "source": "API /search",
+      "note": "n=44; manual query set",
+      "command": null
+    },
+    {
+      "metric": "zero-result queries correctly returning no results",
+      "value": 0.8667,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "mixed: manual + detected",
+      "source": "API /search",
+      "note": "n=15",
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [detected_exact]",
+      "value": 0.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "mixed: manual + detected",
+      "source": "API /search",
+      "note": "n=5",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [detected_exact]",
+      "value": 0.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "mixed: manual + detected",
+      "source": "API /search",
+      "note": "n=5",
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [detected_synonym]",
+      "value": 0.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "mixed: manual + detected",
+      "source": "API /search",
+      "note": "n=5",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [detected_synonym]",
+      "value": 0.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "mixed: manual + detected",
+      "source": "API /search",
+      "note": "n=5",
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [visual_attribute]",
+      "value": 0.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "mixed: manual + detected",
+      "source": "API /search",
+      "note": "n=7",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [visual_attribute]",
+      "value": 0.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "mixed: manual + detected",
+      "source": "API /search",
+      "note": "n=7",
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [mixed]",
+      "value": 0.6,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "mixed: manual + detected",
+      "source": "API /search",
+      "note": "n=5",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [mixed]",
+      "value": 0.6,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "mixed: manual + detected",
+      "source": "API /search",
+      "note": "n=5",
+      "command": null
+    },
+    {
+      "metric": "queries whose answer includes a detected object that return one in the top 5",
+      "value": "0/22",
+      "unit": "queries",
+      "kind": "measured",
+      "condition": "mixed: manual + detected",
+      "source": "API /search",
+      "note": "armchair, bench, benches, black bench, brown armchair, chair, couch, dinner, floral armchair, flowers, flowers in a watering can, houseplant, plant, plants, red chair, red sofa, seat, settee, sofa, somewhere to sit, table, wooden bench",
+      "command": null
+    },
+    {
+      "metric": "mixed queries with an expected manual AND an expected detected POI in the top 5",
+      "value": "0/5",
+      "unit": "queries",
+      "kind": "measured",
+      "condition": "mixed: manual + detected",
+      "source": "API /search",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "manual-set queries whose results include a detected object",
+      "value": "0/59",
+      "unit": "queries",
+      "kind": "measured",
+      "condition": "mixed: manual + detected",
+      "source": "API /search",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "results admitted by the image channel alone (matchedBy = IMAGE)",
+      "value": "0/61",
+      "unit": "results",
+      "kind": "measured",
+      "condition": "mixed: manual + detected",
+      "source": "API /search",
+      "note": "0/n on an API without matchedBy",
+      "command": null
+    },
+    {
+      "metric": "server latency p50",
+      "value": 114.0,
+      "unit": "ms",
+      "kind": "measured",
+      "condition": "mixed: manual + detected",
+      "source": "search_query.latency_ms",
+      "note": "162 requests",
+      "command": null
+    },
+    {
+      "metric": "server latency p95",
+      "value": 197.5499999999999,
+      "unit": "ms",
+      "kind": "measured",
+      "condition": "mixed: manual + detected",
+      "source": "search_query.latency_ms",
+      "note": "162 requests",
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [exact]",
+      "value": 0.0333,
+      "unit": "fraction",
+      "kind": "reference",
+      "condition": "random ranking",
+      "source": "analytic: m/N",
+      "note": "N=30 POIs",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [exact]",
+      "value": 0.1667,
+      "unit": "fraction",
+      "kind": "reference",
+      "condition": "random ranking",
+      "source": "analytic: 1 - C(N-m,5)/C(N,5)",
+      "note": "N=30 POIs",
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [synonym]",
+      "value": 0.0451,
+      "unit": "fraction",
+      "kind": "reference",
+      "condition": "random ranking",
+      "source": "analytic: m/N",
+      "note": "N=30 POIs",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [synonym]",
+      "value": 0.215,
+      "unit": "fraction",
+      "kind": "reference",
+      "condition": "random ranking",
+      "source": "analytic: 1 - C(N-m,5)/C(N,5)",
+      "note": "N=30 POIs",
+      "command": null
+    },
+    {
+      "metric": "top-1 accuracy [ambiguous]",
+      "value": 0.1,
+      "unit": "fraction",
+      "kind": "reference",
+      "condition": "random ranking",
+      "source": "analytic: m/N",
+      "note": "N=30 POIs",
+      "command": null
+    },
+    {
+      "metric": "top-5 accuracy [ambiguous]",
+      "value": 0.4096,
+      "unit": "fraction",
+      "kind": "reference",
+      "condition": "random ranking",
+      "source": "analytic: 1 - C(N-m,5)/C(N,5)",
+      "note": "N=30 POIs",
+      "command": null
+    },
+    {
+      "metric": "dataset",
+      "value": "author-constructed, 30 POIs / 59 queries",
+      "unit": "",
+      "kind": "assumption",
+      "condition": "all",
+      "source": "dataset.json",
+      "note": "stands in for real venue metadata and real user queries, which do not exist yet",
+      "command": null
+    }
+  ],
+  "details": {
+    "api_note": "BEFORE: services/api built from HEAD 202f841 (image chaya-api:search-before), one embedding column, raw-cosine mixed ranking",
+    "setup": {
+      "org": "a14f2e2f-7ecd-4bb9-a010-d66d28900c83",
+      "venue": "5007b7db-a1fa-4744-8095-1640ea17c8dd",
+      "create_seconds": 1.0641875267028809,
+      "embedded_all_after_seconds": 8.9826340675354,
+      "pending_left": 0,
+      "embedding_models": [
+        "open_clip:ViT-B-32:openai"
+      ]
+    },
+    "mixed setup": {
+      "image_embedding_column": false,
+      "detected": 15,
+      "extra_manual": 2,
+      "insert_seconds": 7.4517412185668945,
+      "embedded_all_after_seconds": 0.15728330612182617,
+      "pending_left": 0
+    },
+    "mixed: manual + detected": {
+      "scores_manual_set": {
+        "exact": {
+          "n": 15,
+          "top1": 1.0,
+          "top5": 1.0
+        },
+        "synonym": {
+          "n": 17,
+          "top1": 0.47058823529411764,
+          "top5": 0.5294117647058824
+        },
+        "ambiguous": {
+          "n": 12,
+          "top1": 0.6666666666666666,
+          "top5": 0.6666666666666666
+        },
+        "zero_result": {
+          "n": 15,
+          "correct_rejection": 0.8666666666666667
+        },
+        "all_answerable": {
+          "n": 44,
+          "top1": 0.7045454545454546,
+          "top5": 0.7272727272727273
+        }
+      },
+      "scores_detected_set": {
+        "detected_exact": {
+          "n": 5,
+          "top1": 0.0,
+          "top5": 0.0
+        },
+        "detected_synonym": {
+          "n": 5,
+          "top1": 0.0,
+          "top5": 0.0
+        },
+        "visual_attribute": {
+          "n": 7,
+          "top1": 0.0,
+          "top5": 0.0
+        },
+        "mixed": {
+          "n": 5,
+          "top1": 0.6,
+          "top5": 0.6
+        },
+        "all_answerable": {
+          "n": 22,
+          "top1": 0.13636363636363635,
+          "top5": 0.13636363636363635
+        }
+      },
+      "ranked_top5": {
+        "reception desk": [
+          "Reception desk"
+        ],
+        "cafe": [
+          "Cafe"
+        ],
+        "atm": [
+          "ATM"
+        ],
+        "auditorium": [
+          "Auditorium"
+        ],
+        "cloakroom": [
+          "Cloakroom"
+        ],
+        "water fountain": [
+          "Water fountain"
+        ],
+        "charging station": [
+          "Charging station"
+        ],
+        "information kiosk": [
+          "Information kiosk"
+        ],
+        "taxi stand": [
+          "Taxi stand"
+        ],
+        "prayer room": [
+          "Prayer room"
+        ],
+        "first aid station": [
+          "First aid station"
+        ],
+        "luggage storage": [
+          "Luggage storage"
+        ],
+        "bicycle parking": [
+          "Bicycle parking"
+        ],
+        "main staircase": [
+          "Main staircase",
+          "Auditorium",
+          "Main entrance"
+        ],
+        "fire extinguisher": [
+          "Fire extinguisher",
+          "Emergency exit south",
+          "Emergency exit north"
+        ],
+        "loo": [],
+        "lavatory": [
+          "Men's restroom",
+          "Women's restroom"
+        ],
+        "espresso": [
+          "Cafe"
+        ],
+        "withdraw money": [
+          "ATM"
+        ],
+        "stairway": [
+          "Main staircase"
+        ],
+        "evacuation route": [],
+        "heart attack": [],
+        "jacket drop-off": [
+          "Luggage storage"
+        ],
+        "breastfeeding": [],
+        "photocopy": [
+          "Printer and copier",
+          "ATM"
+        ],
+        "plenary session": [],
+        "misplaced wallet": [
+          "Lost and found"
+        ],
+        "suitcase": [
+          "Luggage storage"
+        ],
+        "plug in my laptop": [],
+        "cycle storage": [
+          "Luggage storage",
+          "Bicycle parking"
+        ],
+        "chapel": [],
+        "doorway to the street": [
+          "Main entrance"
+        ],
+        "restroom": [
+          "Men's restroom",
+          "Women's restroom",
+          "Accessible restroom"
+        ],
+        "exit": [
+          "Emergency exit south",
+          "Emergency exit north"
+        ],
+        "meeting room": [
+          "Meeting room 2",
+          "Meeting room 1"
+        ],
+        "food": [
+          "Cafe"
+        ],
+        "elevator": [
+          "Elevator B",
+          "Elevator A"
+        ],
+        "desk": [
+          "Reception desk"
+        ],
+        "water": [
+          "Water fountain"
+        ],
+        "emergency": [],
+        "room": [],
+        "help": [
+          "Lost and found"
+        ],
+        "snacks": [
+          "Cafe",
+          "Vending machines"
+        ],
+        "transport": [],
+        "swimming pool": [],
+        "hotel rooms": [],
+        "pharmacy": [],
+        "gym": [],
+        "car rental": [
+          "Taxi stand"
+        ],
+        "cinema": [],
+        "petrol station": [
+          "Taxi stand"
+        ],
+        "library": [],
+        "playground": [],
+        "sauna": [],
+        "casino": [],
+        "dentist": [],
+        "rooftop bar": [],
+        "bowling alley": [],
+        "petting zoo": [],
+        "chair": [],
+        "couch": [
+          "Lounge"
+        ],
+        "plant": [],
+        "table": [],
+        "bench": [
+          "Garden terrace"
+        ],
+        "settee": [
+          "Lounge"
+        ],
+        "houseplant": [],
+        "flowers": [],
+        "seat": [],
+        "dinner": [
+          "Cafe"
+        ],
+        "red chair": [],
+        "floral armchair": [
+          "Lounge"
+        ],
+        "brown armchair": [
+          "Lounge"
+        ],
+        "red sofa": [
+          "Lounge"
+        ],
+        "flowers in a watering can": [],
+        "wooden bench": [
+          "Garden terrace"
+        ],
+        "black bench": [
+          "Garden terrace"
+        ],
+        "sofa": [
+          "Lounge"
+        ],
+        "somewhere to sit": [],
+        "plants": [
+          "Garden terrace"
+        ],
+        "benches": [
+          "Garden terrace"
+        ],
+        "armchair": []
+      },
+      "sources_top5": {
+        "reception desk": [
+          "MANUAL"
+        ],
+        "cafe": [
+          "MANUAL"
+        ],
+        "atm": [
+          "MANUAL"
+        ],
+        "auditorium": [
+          "MANUAL"
+        ],
+        "cloakroom": [
+          "MANUAL"
+        ],
+        "water fountain": [
+          "MANUAL"
+        ],
+        "charging station": [
+          "MANUAL"
+        ],
+        "information kiosk": [
+          "MANUAL"
+        ],
+        "taxi stand": [
+          "MANUAL"
+        ],
+        "prayer room": [
+          "MANUAL"
+        ],
+        "first aid station": [
+          "MANUAL"
+        ],
+        "luggage storage": [
+          "MANUAL"
+        ],
+        "bicycle parking": [
+          "MANUAL"
+        ],
+        "main staircase": [
+          "MANUAL",
+          "MANUAL",
+          "MANUAL"
+        ],
+        "fire extinguisher": [
+          "MANUAL",
+          "MANUAL",
+          "MANUAL"
+        ],
+        "loo": [],
+        "lavatory": [
+          "MANUAL",
+          "MANUAL"
+        ],
+        "espresso": [
+          "MANUAL"
+        ],
+        "withdraw money": [
+          "MANUAL"
+        ],
+        "stairway": [
+          "MANUAL"
+        ],
+        "evacuation route": [],
+        "heart attack": [],
+        "jacket drop-off": [
+          "MANUAL"
+        ],
+        "breastfeeding": [],
+        "photocopy": [
+          "MANUAL",
+          "MANUAL"
+        ],
+        "plenary session": [],
+        "misplaced wallet": [
+          "MANUAL"
+        ],
+        "suitcase": [
+          "MANUAL"
+        ],
+        "plug in my laptop": [],
+        "cycle storage": [
+          "MANUAL",
+          "MANUAL"
+        ],
+        "chapel": [],
+        "doorway to the street": [
+          "MANUAL"
+        ],
+        "restroom": [
+          "MANUAL",
+          "MANUAL",
+          "MANUAL"
+        ],
+        "exit": [
+          "MANUAL",
+          "MANUAL"
+        ],
+        "meeting room": [
+          "MANUAL",
+          "MANUAL"
+        ],
+        "food": [
+          "MANUAL"
+        ],
+        "elevator": [
+          "MANUAL",
+          "MANUAL"
+        ],
+        "desk": [
+          "MANUAL"
+        ],
+        "water": [
+          "MANUAL"
+        ],
+        "emergency": [],
+        "room": [],
+        "help": [
+          "MANUAL"
+        ],
+        "snacks": [
+          "MANUAL",
+          "MANUAL"
+        ],
+        "transport": [],
+        "swimming pool": [],
+        "hotel rooms": [],
+        "pharmacy": [],
+        "gym": [],
+        "car rental": [
+          "MANUAL"
+        ],
+        "cinema": [],
+        "petrol station": [
+          "MANUAL"
+        ],
+        "library": [],
+        "playground": [],
+        "sauna": [],
+        "casino": [],
+        "dentist": [],
+        "rooftop bar": [],
+        "bowling alley": [],
+        "petting zoo": [],
+        "chair": [],
+        "couch": [
+          "MANUAL"
+        ],
+        "plant": [],
+        "table": [],
+        "bench": [
+          "MANUAL"
+        ],
+        "settee": [
+          "MANUAL"
+        ],
+        "houseplant": [],
+        "flowers": [],
+        "seat": [],
+        "dinner": [
+          "MANUAL"
+        ],
+        "red chair": [],
+        "floral armchair": [
+          "MANUAL"
+        ],
+        "brown armchair": [
+          "MANUAL"
+        ],
+        "red sofa": [
+          "MANUAL"
+        ],
+        "flowers in a watering can": [],
+        "wooden bench": [
+          "MANUAL"
+        ],
+        "black bench": [
+          "MANUAL"
+        ],
+        "sofa": [
+          "MANUAL"
+        ],
+        "somewhere to sit": [],
+        "plants": [
+          "MANUAL"
+        ],
+        "benches": [
+          "MANUAL"
+        ],
+        "armchair": []
+      },
+      "similarities_top5": {
+        "reception desk": [
+          0.9395
+        ],
+        "cafe": [
+          0.9413
+        ],
+        "atm": [
+          0.9295
+        ],
+        "auditorium": [
+          0.9635
+        ],
+        "cloakroom": [
+          0.9192
+        ],
+        "water fountain": [
+          0.9314
+        ],
+        "charging station": [
+          0.9641
+        ],
+        "information kiosk": [
+          0.9195
+        ],
+        "taxi stand": [
+          0.9737
+        ],
+        "prayer room": [
+          0.9372
+        ],
+        "first aid station": [
+          0.965
+        ],
+        "luggage storage": [
+          0.9539
+        ],
+        "bicycle parking": [
+          0.9709
+        ],
+        "main staircase": [
+          0.9855,
+          0.8352,
+          0.833
+        ],
+        "fire extinguisher": [
+          0.9748,
+          0.8368,
+          0.8291
+        ],
+        "loo": [],
+        "lavatory": [
+          0.8744,
+          0.8688
+        ],
+        "espresso": [
+          0.8129
+        ],
+        "withdraw money": [
+          0.8766
+        ],
+        "stairway": [
+          0.9232
+        ],
+        "evacuation route": [],
+        "heart attack": [],
+        "jacket drop-off": [
+          0.8467
+        ],
+        "breastfeeding": [],
+        "photocopy": [
+          0.8729,
+          0.8609
+        ],
+        "plenary session": [],
+        "misplaced wallet": [
+          0.8656
+        ],
+        "suitcase": [
+          0.8723
+        ],
+        "plug in my laptop": [],
+        "cycle storage": [
+          0.8595,
+          0.8464
+        ],
+        "chapel": [],
+        "doorway to the street": [
+          0.9103
+        ],
+        "restroom": [
+          0.9477,
+          0.9474,
+          0.9193
+        ],
+        "exit": [
+          0.8891,
+          0.881
+        ],
+        "meeting room": [
+          0.961,
+          0.9597
+        ],
+        "food": [
+          0.9134
+        ],
+        "elevator": [
+          0.942,
+          0.9172
+        ],
+        "desk": [
+          0.8789
+        ],
+        "water": [
+          0.9011
+        ],
+        "emergency": [],
+        "room": [],
+        "help": [
+          0.8954
+        ],
+        "snacks": [
+          0.9088,
+          0.8799
+        ],
+        "transport": [],
+        "swimming pool": [],
+        "hotel rooms": [],
+        "pharmacy": [],
+        "gym": [],
+        "car rental": [
+          0.8678
+        ],
+        "cinema": [],
+        "petrol station": [
+          0.8556
+        ],
+        "library": [],
+        "playground": [],
+        "sauna": [],
+        "casino": [],
+        "dentist": [],
+        "rooftop bar": [],
+        "bowling alley": [],
+        "petting zoo": [],
+        "chair": [],
+        "couch": [
+          0.8632
+        ],
+        "plant": [],
+        "table": [],
+        "bench": [
+          0.8252
+        ],
+        "settee": [
+          0.8564
+        ],
+        "houseplant": [],
+        "flowers": [],
+        "seat": [],
+        "dinner": [
+          0.8802
+        ],
+        "red chair": [],
+        "floral armchair": [
+          0.7856
+        ],
+        "brown armchair": [
+          0.8189
+        ],
+        "red sofa": [
+          0.8058
+        ],
+        "flowers in a watering can": [],
+        "wooden bench": [
+          0.7849
+        ],
+        "black bench": [
+          0.8049
+        ],
+        "sofa": [
+          0.8283
+        ],
+        "somewhere to sit": [],
+        "plants": [
+          0.8537
+        ],
+        "benches": [
+          0.8483
+        ],
+        "armchair": []
+      },
+      "matched_by_top5": {
+        "reception desk": [
+          null
+        ],
+        "cafe": [
+          null
+        ],
+        "atm": [
+          null
+        ],
+        "auditorium": [
+          null
+        ],
+        "cloakroom": [
+          null
+        ],
+        "water fountain": [
+          null
+        ],
+        "charging station": [
+          null
+        ],
+        "information kiosk": [
+          null
+        ],
+        "taxi stand": [
+          null
+        ],
+        "prayer room": [
+          null
+        ],
+        "first aid station": [
+          null
+        ],
+        "luggage storage": [
+          null
+        ],
+        "bicycle parking": [
+          null
+        ],
+        "main staircase": [
+          null,
+          null,
+          null
+        ],
+        "fire extinguisher": [
+          null,
+          null,
+          null
+        ],
+        "loo": [],
+        "lavatory": [
+          null,
+          null
+        ],
+        "espresso": [
+          null
+        ],
+        "withdraw money": [
+          null
+        ],
+        "stairway": [
+          null
+        ],
+        "evacuation route": [],
+        "heart attack": [],
+        "jacket drop-off": [
+          null
+        ],
+        "breastfeeding": [],
+        "photocopy": [
+          null,
+          null
+        ],
+        "plenary session": [],
+        "misplaced wallet": [
+          null
+        ],
+        "suitcase": [
+          null
+        ],
+        "plug in my laptop": [],
+        "cycle storage": [
+          null,
+          null
+        ],
+        "chapel": [],
+        "doorway to the street": [
+          null
+        ],
+        "restroom": [
+          null,
+          null,
+          null
+        ],
+        "exit": [
+          null,
+          null
+        ],
+        "meeting room": [
+          null,
+          null
+        ],
+        "food": [
+          null
+        ],
+        "elevator": [
+          null,
+          null
+        ],
+        "desk": [
+          null
+        ],
+        "water": [
+          null
+        ],
+        "emergency": [],
+        "room": [],
+        "help": [
+          null
+        ],
+        "snacks": [
+          null,
+          null
+        ],
+        "transport": [],
+        "swimming pool": [],
+        "hotel rooms": [],
+        "pharmacy": [],
+        "gym": [],
+        "car rental": [
+          null
+        ],
+        "cinema": [],
+        "petrol station": [
+          null
+        ],
+        "library": [],
+        "playground": [],
+        "sauna": [],
+        "casino": [],
+        "dentist": [],
+        "rooftop bar": [],
+        "bowling alley": [],
+        "petting zoo": [],
+        "chair": [],
+        "couch": [
+          null
+        ],
+        "plant": [],
+        "table": [],
+        "bench": [
+          null
+        ],
+        "settee": [
+          null
+        ],
+        "houseplant": [],
+        "flowers": [],
+        "seat": [],
+        "dinner": [
+          null
+        ],
+        "red chair": [],
+        "floral armchair": [
+          null
+        ],
+        "brown armchair": [
+          null
+        ],
+        "red sofa": [
+          null
+        ],
+        "flowers in a watering can": [],
+        "wooden bench": [
+          null
+        ],
+        "black bench": [
+          null
+        ],
+        "sofa": [
+          null
+        ],
+        "somewhere to sit": [],
+        "plants": [
+          null
+        ],
+        "benches": [
+          null
+        ],
+        "armchair": []
+      },
+      "closest": {
+        "reception desk": [],
+        "cafe": [],
+        "atm": [],
+        "auditorium": [],
+        "cloakroom": [],
+        "water fountain": [],
+        "charging station": [],
+        "information kiosk": [],
+        "taxi stand": [],
+        "prayer room": [],
+        "first aid station": [],
+        "luggage storage": [],
+        "bicycle parking": [],
+        "main staircase": [],
+        "fire extinguisher": [],
+        "loo": [
+          "Lost and found",
+          "Cafe",
+          "ATM"
+        ],
+        "lavatory": [],
+        "espresso": [],
+        "withdraw money": [],
+        "stairway": [],
+        "evacuation route": [
+          "Lost and found",
+          "Cafe",
+          "Taxi stand"
+        ],
+        "heart attack": [
+          "Cafe",
+          "Lost and found",
+          "ATM"
+        ],
+        "jacket drop-off": [],
+        "breastfeeding": [
+          "Baby changing room",
+          "Lost and found",
+          "Cafe"
+        ],
+        "photocopy": [],
+        "plenary session": [
+          "Cafe",
+          "Reception desk",
+          "Lost and found"
+        ],
+        "misplaced wallet": [],
+        "suitcase": [],
+        "plug in my laptop": [
+          "Luggage storage",
+          "Lost and found",
+          "Charging station"
+        ],
+        "cycle storage": [],
+        "chapel": [
+          "Prayer room",
+          "Auditorium",
+          "Lost and found"
+        ],
+        "doorway to the street": [],
+        "restroom": [],
+        "exit": [],
+        "meeting room": [],
+        "food": [],
+        "elevator": [],
+        "desk": [],
+        "water": [],
+        "emergency": [
+          "Lost and found",
+          "Emergency exit south",
+          "Emergency exit north"
+        ],
+        "room": [
+          "Meeting room 2",
+          "Meeting room 1",
+          "Prayer room"
+        ],
+        "help": [],
+        "snacks": [],
+        "transport": [
+          "Taxi stand",
+          "Lost and found",
+          "Luggage storage"
+        ],
+        "swimming pool": [
+          "Water fountain",
+          "Meeting room 2",
+          "Meeting room 1"
+        ],
+        "hotel rooms": [
+          "Meeting room 2",
+          "Prayer room",
+          "Meeting room 1"
+        ],
+        "pharmacy": [
+          "Cafe",
+          "Lost and found",
+          "ATM"
+        ],
+        "gym": [
+          "Auditorium",
+          "Meeting room 2",
+          "Meeting room 1"
+        ],
+        "car rental": [],
+        "cinema": [
+          "Auditorium",
+          "Cafe",
+          "Lost and found"
+        ],
+        "petrol station": [],
+        "library": [
+          "Lost and found",
+          "Cafe",
+          "Auditorium"
+        ],
+        "playground": [
+          "Lost and found",
+          "Cafe",
+          "ATM"
+        ],
+        "sauna": [
+          "Lost and found",
+          "Elevator B",
+          "Luggage storage"
+        ],
+        "casino": [
+          "Lost and found",
+          "ATM",
+          "Cafe"
+        ],
+        "dentist": [
+          "Lost and found",
+          "Cafe",
+          "ATM"
+        ],
+        "rooftop bar": [
+          "Cafe",
+          "Garden terrace",
+          "Lost and found"
+        ],
+        "bowling alley": [
+          "Lost and found",
+          "Cafe",
+          "Luggage storage"
+        ],
+        "petting zoo": [
+          "Lost and found",
+          "Cafe",
+          "ATM"
+        ],
+        "chair": [
+          "Lounge",
+          "Lost and found",
+          "Luggage storage"
+        ],
+        "couch": [],
+        "plant": [
+          "Lost and found",
+          "Garden terrace",
+          "Cafe"
+        ],
+        "table": [
+          "Cafe",
+          "Lost and found",
+          "Reception desk"
+        ],
+        "bench": [],
+        "settee": [],
+        "houseplant": [
+          "Garden terrace",
+          "Lost and found",
+          "ATM"
+        ],
+        "flowers": [
+          "Lost and found",
+          "Cafe",
+          "Auditorium"
+        ],
+        "seat": [
+          "Lost and found",
+          "Cafe",
+          "Luggage storage"
+        ],
+        "dinner": [],
+        "red chair": [
+          "Lounge",
+          "Fire extinguisher",
+          "Lost and found"
+        ],
+        "floral armchair": [],
+        "brown armchair": [],
+        "red sofa": [],
+        "flowers in a watering can": [
+          "Garden terrace",
+          "Water fountain",
+          "Luggage storage"
+        ],
+        "wooden bench": [],
+        "black bench": [],
+        "sofa": [],
+        "somewhere to sit": [
+          "Lost and found",
+          "Cafe",
+          "Lounge"
+        ],
+        "plants": [],
+        "benches": [],
+        "armchair": [
+          "Lounge",
+          "Lost and found",
+          "ATM"
+        ]
+      },
+      "relevance": {
+        "reception desk": "FILTERED",
+        "cafe": "FILTERED",
+        "atm": "FILTERED",
+        "auditorium": "FILTERED",
+        "cloakroom": "FILTERED",
+        "water fountain": "FILTERED",
+        "charging station": "FILTERED",
+        "information kiosk": "FILTERED",
+        "taxi stand": "FILTERED",
+        "prayer room": "FILTERED",
+        "first aid station": "FILTERED",
+        "luggage storage": "FILTERED",
+        "bicycle parking": "FILTERED",
+        "main staircase": "FILTERED",
+        "fire extinguisher": "FILTERED",
+        "loo": "FILTERED",
+        "lavatory": "FILTERED",
+        "espresso": "FILTERED",
+        "withdraw money": "FILTERED",
+        "stairway": "FILTERED",
+        "evacuation route": "FILTERED",
+        "heart attack": "FILTERED",
+        "jacket drop-off": "FILTERED",
+        "breastfeeding": "FILTERED",
+        "photocopy": "FILTERED",
+        "plenary session": "FILTERED",
+        "misplaced wallet": "FILTERED",
+        "suitcase": "FILTERED",
+        "plug in my laptop": "FILTERED",
+        "cycle storage": "FILTERED",
+        "chapel": "FILTERED",
+        "doorway to the street": "FILTERED",
+        "restroom": "FILTERED",
+        "exit": "FILTERED",
+        "meeting room": "FILTERED",
+        "food": "FILTERED",
+        "elevator": "FILTERED",
+        "desk": "FILTERED",
+        "water": "FILTERED",
+        "emergency": "FILTERED",
+        "room": "FILTERED",
+        "help": "FILTERED",
+        "snacks": "FILTERED",
+        "transport": "FILTERED",
+        "swimming pool": "FILTERED",
+        "hotel rooms": "FILTERED",
+        "pharmacy": "FILTERED",
+        "gym": "FILTERED",
+        "car rental": "FILTERED",
+        "cinema": "FILTERED",
+        "petrol station": "FILTERED",
+        "library": "FILTERED",
+        "playground": "FILTERED",
+        "sauna": "FILTERED",
+        "casino": "FILTERED",
+        "dentist": "FILTERED",
+        "rooftop bar": "FILTERED",
+        "bowling alley": "FILTERED",
+        "petting zoo": "FILTERED",
+        "chair": "FILTERED",
+        "couch": "FILTERED",
+        "plant": "FILTERED",
+        "table": "FILTERED",
+        "bench": "FILTERED",
+        "settee": "FILTERED",
+        "houseplant": "FILTERED",
+        "flowers": "FILTERED",
+        "seat": "FILTERED",
+        "dinner": "FILTERED",
+        "red chair": "FILTERED",
+        "floral armchair": "FILTERED",
+        "brown armchair": "FILTERED",
+        "red sofa": "FILTERED",
+        "flowers in a watering can": "FILTERED",
+        "wooden bench": "FILTERED",
+        "black bench": "FILTERED",
+        "sofa": "FILTERED",
+        "somewhere to sit": "FILTERED",
+        "plants": "FILTERED",
+        "benches": "FILTERED",
+        "armchair": "FILTERED"
+      }
+    },
+    "rate_limited_retries": 0
+  }
+}

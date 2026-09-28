@@ -1,0 +1,511 @@
+{
+ "name": "chaya-b3-detected-objects-v1",
+ "provenance": "AUTHOR-CONSTRUCTED on 2026-09-28, before any vector or search result was computed. Extends the B3 conference centre (dataset.json, unchanged) with detected objects. No reconstructed venue with Grounding DINO detections exists (no GPU), so each 'detection' is a human-annotated COCO val2017 box chosen by a fixed mechanical rule (select_crops.py: the first 3 annotations per class with a box >= 200x200 px covering >= 20% of the image), labelled with the worker's own detection-prompt phrase, and cut and embedded exactly as SEMANTIC_INDEXING does (clip_vectors.py). Crops are cluttered like real detections (a dog on chair-1, a person on couch-1, a teddy bear on couch-2). Images are not redistributed: URL, box and licence only. The visual_attribute queries were written by looking at the crops. Positions are invented. 15 detected objects, 2 extra manual POIs, 22 queries: small, regression/sanity only.",
+ "scoring": {
+  "ids": "expected entries are a manual POI's label or a detected object's id",
+  "types": {
+   "detected_exact": "the query is the detector label",
+   "detected_synonym": "shares no word with any expected object's label (runner-checked)",
+   "visual_attribute": "one specific object, told apart from same-label objects by appearance only",
+   "mixed": "acceptable answers include manual POIs and detected objects"
+  }
+ },
+ "extra_manual_pois": [
+  {
+   "label": "Lounge",
+   "category": "seating area",
+   "tags": [
+    "sofas",
+    "armchairs"
+   ],
+   "x": 21,
+   "z": 16
+  },
+  {
+   "label": "Garden terrace",
+   "category": "outdoor",
+   "tags": [
+    "plants",
+    "benches"
+   ],
+   "x": 26,
+   "z": 20
+  }
+ ],
+ "detected": [
+  {
+   "id": "chair-1",
+   "label": "chair",
+   "coco_category": "chair",
+   "coco_annotation_id": 100193,
+   "coco_image_id": 367082,
+   "url": "http://images.cocodataset.org/val2017/000000367082.jpg",
+   "bbox_xywh": [
+    17.2,
+    44.09,
+    437.0,
+    450.53
+   ],
+   "license": "Attribution-NonCommercial License",
+   "flickr_url": "http://farm3.staticflickr.com/2641/4200694835_95cb44c61b_z.jpg",
+   "x": 4,
+   "z": 13
+  },
+  {
+   "id": "chair-2",
+   "label": "chair",
+   "coco_category": "chair",
+   "coco_annotation_id": 100218,
+   "coco_image_id": 546964,
+   "url": "http://images.cocodataset.org/val2017/000000546964.jpg",
+   "bbox_xywh": [
+    4.11,
+    236.43,
+    327.92,
+    235.4
+   ],
+   "license": "Attribution License",
+   "flickr_url": "http://farm6.staticflickr.com/5058/5483923895_d3c3a20b21_z.jpg",
+   "x": 6,
+   "z": 14
+  },
+  {
+   "id": "chair-3",
+   "label": "chair",
+   "coco_category": "chair",
+   "coco_annotation_id": 100222,
+   "coco_image_id": 269932,
+   "url": "http://images.cocodataset.org/val2017/000000269932.jpg",
+   "bbox_xywh": [
+    34.41,
+    45.16,
+    340.59,
+    453.76
+   ],
+   "license": "Attribution-NonCommercial-ShareAlike License",
+   "flickr_url": "http://farm4.staticflickr.com/3077/2507616356_da3a74f899_z.jpg",
+   "x": 8,
+   "z": 15
+  },
+  {
+   "id": "couch-1",
+   "label": "couch",
+   "coco_category": "couch",
+   "coco_annotation_id": 97783,
+   "coco_image_id": 546717,
+   "url": "http://images.cocodataset.org/val2017/000000546717.jpg",
+   "bbox_xywh": [
+    6.88,
+    52.3,
+    452.82,
+    372.99
+   ],
+   "license": "Attribution License",
+   "flickr_url": "http://farm3.staticflickr.com/2769/4117004152_d8508e562d_z.jpg",
+   "x": 22,
+   "z": 13
+  },
+  {
+   "id": "couch-2",
+   "label": "couch",
+   "coco_category": "couch",
+   "coco_annotation_id": 97823,
+   "coco_image_id": 471869,
+   "url": "http://images.cocodataset.org/val2017/000000471869.jpg",
+   "bbox_xywh": [
+    0.0,
+    2.15,
+    413.0,
+    491.4
+   ],
+   "license": "Attribution-NonCommercial License",
+   "flickr_url": "http://farm3.staticflickr.com/2112/2499379494_3fe784ffd0_z.jpg",
+   "x": 24,
+   "z": 14
+  },
+  {
+   "id": "couch-3",
+   "label": "couch",
+   "coco_category": "couch",
+   "coco_annotation_id": 97882,
+   "coco_image_id": 219578,
+   "url": "http://images.cocodataset.org/val2017/000000219578.jpg",
+   "bbox_xywh": [
+    0.0,
+    140.34,
+    238.35,
+    282.52
+   ],
+   "license": "Attribution-NonCommercial-ShareAlike License",
+   "flickr_url": "http://farm5.staticflickr.com/4094/4917146875_e48e614ff2_z.jpg",
+   "x": 26,
+   "z": 15
+  },
+  {
+   "id": "plant-1",
+   "label": "plant",
+   "coco_category": "potted plant",
+   "coco_annotation_id": 18950,
+   "coco_image_id": 577735,
+   "url": "http://images.cocodataset.org/val2017/000000577735.jpg",
+   "bbox_xywh": [
+    62.97,
+    2.06,
+    515.09,
+    442.84
+   ],
+   "license": "Attribution-NonCommercial-ShareAlike License",
+   "flickr_url": "http://farm4.staticflickr.com/3013/2442315991_8216aed3e5_z.jpg",
+   "x": 24,
+   "z": 3
+  },
+  {
+   "id": "plant-2",
+   "label": "plant",
+   "coco_category": "potted plant",
+   "coco_annotation_id": 19702,
+   "coco_image_id": 475572,
+   "url": "http://images.cocodataset.org/val2017/000000475572.jpg",
+   "bbox_xywh": [
+    2.92,
+    28.94,
+    268.52,
+    314.25
+   ],
+   "license": "Attribution-NonCommercial-ShareAlike License",
+   "flickr_url": "http://farm4.staticflickr.com/3135/2746833091_f56afb805c_z.jpg",
+   "x": 26,
+   "z": 4
+  },
+  {
+   "id": "plant-3",
+   "label": "plant",
+   "coco_category": "potted plant",
+   "coco_annotation_id": 20365,
+   "coco_image_id": 69795,
+   "url": "http://images.cocodataset.org/val2017/000000069795.jpg",
+   "bbox_xywh": [
+    168.53,
+    102.08,
+    251.7,
+    303.02
+   ],
+   "license": "Attribution-NonCommercial-ShareAlike License",
+   "flickr_url": "http://farm3.staticflickr.com/2067/2442319829_30988bb57b_z.jpg",
+   "x": 28,
+   "z": 5
+  },
+  {
+   "id": "table-1",
+   "label": "table",
+   "coco_category": "dining table",
+   "coco_annotation_id": 118013,
+   "coco_image_id": 419974,
+   "url": "http://images.cocodataset.org/val2017/000000419974.jpg",
+   "bbox_xywh": [
+    94.76,
+    264.52,
+    330.99,
+    365.32
+   ],
+   "license": "Attribution-NonCommercial License",
+   "flickr_url": "http://farm4.staticflickr.com/3647/3655327694_5e4324ea90_z.jpg",
+   "x": 21,
+   "z": 7
+  },
+  {
+   "id": "table-2",
+   "label": "table",
+   "coco_category": "dining table",
+   "coco_annotation_id": 118128,
+   "coco_image_id": 578871,
+   "url": "http://images.cocodataset.org/val2017/000000578871.jpg",
+   "bbox_xywh": [
+    1.5,
+    239.96,
+    476.63,
+    392.69
+   ],
+   "license": "Attribution-NonCommercial-NoDerivs License",
+   "flickr_url": "http://farm8.staticflickr.com/7320/9278497816_1562a3e32c_z.jpg",
+   "x": 23,
+   "z": 8
+  },
+  {
+   "id": "table-3",
+   "label": "table",
+   "coco_category": "dining table",
+   "coco_annotation_id": 118217,
+   "coco_image_id": 381587,
+   "url": "http://images.cocodataset.org/val2017/000000381587.jpg",
+   "bbox_xywh": [
+    7.49,
+    211.48,
+    409.18,
+    211.33
+   ],
+   "license": "Attribution-NonCommercial License",
+   "flickr_url": "http://farm4.staticflickr.com/3754/9267426009_d3ed244453_z.jpg",
+   "x": 25,
+   "z": 9
+  },
+  {
+   "id": "bench-1",
+   "label": "bench",
+   "coco_category": "bench",
+   "coco_annotation_id": 572044,
+   "coco_image_id": 340451,
+   "url": "http://images.cocodataset.org/val2017/000000340451.jpg",
+   "bbox_xywh": [
+    42.88,
+    166.74,
+    527.11,
+    202.87
+   ],
+   "license": "Attribution-ShareAlike License",
+   "flickr_url": "http://farm9.staticflickr.com/8513/8399079993_cd99846f90_z.jpg",
+   "x": 26,
+   "z": 15
+  },
+  {
+   "id": "bench-2",
+   "label": "bench",
+   "coco_category": "bench",
+   "coco_annotation_id": 572099,
+   "coco_image_id": 303908,
+   "url": "http://images.cocodataset.org/val2017/000000303908.jpg",
+   "bbox_xywh": [
+    93.29,
+    204.36,
+    487.58,
+    222.64
+   ],
+   "license": "Attribution-NonCommercial-NoDerivs License",
+   "flickr_url": "http://farm9.staticflickr.com/8173/8058661860_20e65ed4e9_z.jpg",
+   "x": 28,
+   "z": 16
+  },
+  {
+   "id": "bench-3",
+   "label": "bench",
+   "coco_category": "bench",
+   "coco_annotation_id": 572536,
+   "coco_image_id": 349184,
+   "url": "http://images.cocodataset.org/val2017/000000349184.jpg",
+   "bbox_xywh": [
+    2.88,
+    204.22,
+    307.77,
+    427.15
+   ],
+   "license": "Attribution-ShareAlike License",
+   "flickr_url": "http://farm4.staticflickr.com/3230/2382908731_f4cc461bef_z.jpg",
+   "x": 30,
+   "z": 17
+  }
+ ],
+ "queries": [
+  {
+   "q": "chair",
+   "type": "detected_exact",
+   "expected": [
+    "chair-1",
+    "chair-2",
+    "chair-3"
+   ]
+  },
+  {
+   "q": "couch",
+   "type": "detected_exact",
+   "expected": [
+    "couch-1",
+    "couch-2",
+    "couch-3"
+   ]
+  },
+  {
+   "q": "plant",
+   "type": "detected_exact",
+   "expected": [
+    "plant-1",
+    "plant-2",
+    "plant-3"
+   ]
+  },
+  {
+   "q": "table",
+   "type": "detected_exact",
+   "expected": [
+    "table-1",
+    "table-2",
+    "table-3"
+   ]
+  },
+  {
+   "q": "bench",
+   "type": "detected_exact",
+   "expected": [
+    "bench-1",
+    "bench-2",
+    "bench-3"
+   ]
+  },
+  {
+   "q": "settee",
+   "type": "detected_synonym",
+   "expected": [
+    "couch-1",
+    "couch-2",
+    "couch-3"
+   ]
+  },
+  {
+   "q": "houseplant",
+   "type": "detected_synonym",
+   "expected": [
+    "plant-1",
+    "plant-2",
+    "plant-3"
+   ]
+  },
+  {
+   "q": "flowers",
+   "type": "detected_synonym",
+   "expected": [
+    "plant-1",
+    "plant-2",
+    "plant-3"
+   ]
+  },
+  {
+   "q": "seat",
+   "type": "detected_synonym",
+   "expected": [
+    "chair-1",
+    "chair-2",
+    "chair-3",
+    "couch-1",
+    "couch-2",
+    "couch-3",
+    "bench-1",
+    "bench-2",
+    "bench-3"
+   ]
+  },
+  {
+   "q": "dinner",
+   "type": "detected_synonym",
+   "expected": [
+    "table-1",
+    "table-2",
+    "table-3"
+   ]
+  },
+  {
+   "q": "red chair",
+   "type": "visual_attribute",
+   "expected": [
+    "chair-3"
+   ]
+  },
+  {
+   "q": "floral armchair",
+   "type": "visual_attribute",
+   "expected": [
+    "chair-2"
+   ]
+  },
+  {
+   "q": "brown armchair",
+   "type": "visual_attribute",
+   "expected": [
+    "chair-1"
+   ]
+  },
+  {
+   "q": "red sofa",
+   "type": "visual_attribute",
+   "expected": [
+    "couch-3"
+   ]
+  },
+  {
+   "q": "flowers in a watering can",
+   "type": "visual_attribute",
+   "expected": [
+    "plant-3"
+   ]
+  },
+  {
+   "q": "wooden bench",
+   "type": "visual_attribute",
+   "expected": [
+    "bench-3"
+   ]
+  },
+  {
+   "q": "black bench",
+   "type": "visual_attribute",
+   "expected": [
+    "bench-2"
+   ]
+  },
+  {
+   "q": "sofa",
+   "type": "mixed",
+   "expected": [
+    "Lounge",
+    "couch-1",
+    "couch-2",
+    "couch-3"
+   ]
+  },
+  {
+   "q": "somewhere to sit",
+   "type": "mixed",
+   "expected": [
+    "Lounge",
+    "Garden terrace",
+    "chair-1",
+    "chair-2",
+    "chair-3",
+    "couch-1",
+    "couch-2",
+    "couch-3",
+    "bench-1",
+    "bench-2",
+    "bench-3"
+   ]
+  },
+  {
+   "q": "plants",
+   "type": "mixed",
+   "expected": [
+    "Garden terrace",
+    "plant-1",
+    "plant-2",
+    "plant-3"
+   ]
+  },
+  {
+   "q": "benches",
+   "type": "mixed",
+   "expected": [
+    "Garden terrace",
+    "bench-1",
+    "bench-2",
+    "bench-3"
+   ]
+  },
+  {
+   "q": "armchair",
+   "type": "mixed",
+   "expected": [
+    "Lounge",
+    "chair-1",
+    "chair-2",
+    "chair-3"
+   ]
+  }
+ ]
+}

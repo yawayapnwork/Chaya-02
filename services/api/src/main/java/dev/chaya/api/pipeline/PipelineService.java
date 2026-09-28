@@ -20,6 +20,7 @@ import dev.chaya.api.processing.ProcessingJobRepository;
 import dev.chaya.api.processing.ProcessingJobRepository.ClaimedJob;
 import dev.chaya.api.rescan.PolygonGeometry;
 import dev.chaya.api.rescan.RescanProperties;
+import dev.chaya.api.search.PoiEmbeddingService;
 import dev.chaya.api.security.Actor;
 import dev.chaya.api.security.Role;
 import dev.chaya.api.storage.ObjectStore;
@@ -855,6 +856,12 @@ public class PipelineService {
         return superseded;
     }
 
+    /**
+     * One detected object becomes a POI. Its {@code embedding} in the artifact is a CLIP IMAGE-tower vector (of the crop), so
+     * it is stored as image_embedding; the POI's text-space embedding (of its detector label) is left to the embedding
+     * backfill, exactly like a manual POI's (V21__search_embedding_spaces.sql). The bounding box keeps the frame it was
+     * measured in (sourceFrame), as V12__semantic_search.sql documents.
+     */
     @SuppressWarnings("unchecked")
     private boolean insertDetectedPoi(String source, RunRow run, UUID floorId, Map<String, Object> obj, String embeddingModel,
                                       UUID frameId) {
@@ -864,12 +871,21 @@ public class PipelineService {
             log.warn("{}: skipping a detected object with a malformed position/embedding", source);
             return false;
         }
+        if (embedding.size() != PoiEmbeddingService.EMBEDDING_DIM || embeddingModel == null || embeddingModel.isBlank()) {
+            log.warn("{}: skipping a detected object whose image embedding is {}-d from model {} (the schema stores {}-d)",
+                source, embedding.size(), embeddingModel, PoiEmbeddingService.EMBEDDING_DIM);
+            return false;
+        }
         String label = String.valueOf(obj.getOrDefault("label", "object"));
         double confidence = obj.get("confidence") instanceof Number n ? n.doubleValue() : 0.0;
         String bboxJson = null;
-        if (obj.get("bbox_px") != null) {
+        if (obj.get("bbox_px") instanceof Map<?, ?> bbox) {
+            Map<String, Object> withFrame = new LinkedHashMap<>((Map<String, Object>) bbox);
+            if (obj.get("source_frame") instanceof String frame && !frame.isBlank()) {
+                withFrame.put("sourceFrame", frame);
+            }
             try {
-                bboxJson = mapper.writeValueAsString(obj.get("bbox_px"));
+                bboxJson = mapper.writeValueAsString(withFrame);
             } catch (JsonProcessingException e) {
                 bboxJson = null;
             }
@@ -877,7 +893,8 @@ public class PipelineService {
         UUID poiId = jdbc.sql("INSERT INTO poi (organization_id, venue_id, floor_id) VALUES (:o, :v, :f) RETURNING id")
             .param("o", run.orgId()).param("v", run.venueId()).param("f", floorId).query(UUID.class).single();
         jdbc.sql("INSERT INTO poi_version (organization_id, venue_id, poi_id, version_number, label, tags, x, y, z, "
-                + "embedding, embedding_model, source, detection_confidence, bounding_box, pipeline_run_id, coordinate_frame_id, created_by) "
+                + "image_embedding, image_embedding_model, source, detection_confidence, bounding_box, pipeline_run_id, "
+                + "coordinate_frame_id, created_by) "
                 + "VALUES (:o, :v, :p, 1, :label, '{}', :x, :y, :z, CAST(:emb AS vector), :model, 'AUTO_DETECTED', :conf, "
                 + "CAST(:bbox AS jsonb), :run, :frame, 'system:semantic-indexing')")
             .param("o", run.orgId()).param("v", run.venueId()).param("p", poiId).param("label", label)

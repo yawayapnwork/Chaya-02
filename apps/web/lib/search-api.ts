@@ -12,13 +12,20 @@ export interface SearchResult {
   x: number;
   y: number;
   z: number;
-  /** In [0, 1]. Comparable across results only when matchType is the same (see SearchResponse). */
+  /** In [0, 1]. For an embedding match: CLIP text-to-text cosine with the POI's own text (a detected object's text is
+   * its detector label), the same space for every result. Not comparable with lexical_fallback similarities. */
   similarity: number;
   detectionConfidence: number | null;
   source: "MANUAL" | "AUTO_DETECTED";
   boundingBox: Record<string, unknown> | null;
-  /** Similarity minus the query's mean similarity to the venue's POIs of the same source; null when not judged. */
+  /** Similarity minus the query's mean similarity to the distinct POI texts in scope; null for the lexical fallback. */
   relevanceMargin?: number | null;
+  /** Detected objects only: CLIP text-to-image cosine with the crop. Its own scale; never compare it with similarity. */
+  imageSimilarity?: number | null;
+  /** FILTERED searches only: the evidence that made this a result. */
+  matchedBy?: "TEXT" | "IMAGE" | "TEXT_AND_IMAGE" | null;
+  /** Detected objects only: the capture frame the bounding box was measured in. */
+  sourceFrame?: string | null;
 }
 
 /** Mirrors dev.chaya.api.search.SearchDtos.SearchResponse. matchType: "embedding" is real CLIP cosine

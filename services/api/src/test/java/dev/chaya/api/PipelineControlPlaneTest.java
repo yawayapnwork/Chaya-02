@@ -446,15 +446,16 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
         }
 
         List<Map<String, Object>> rows = jdbc.sql(
-                "SELECT p.floor_id, v.label, v.x, v.y, v.z, v.source, v.detection_confidence, v.embedding_model, "
-                    + "v.bounding_box, v.pipeline_run_id FROM poi p JOIN poi_version v ON v.poi_id = p.id "
+                "SELECT p.floor_id, v.label, v.x, v.y, v.z, v.source, v.detection_confidence, v.image_embedding_model, "
+                    + "v.embedding IS NULL AS text_pending, v.bounding_box, v.pipeline_run_id FROM poi p JOIN poi_version v ON v.poi_id = p.id "
                     + "WHERE p.venue_id = :v AND v.source = 'AUTO_DETECTED'")
             .param("v", s.c().venue())
-            .query((rs, i) -> Map.<String, Object>of(
-                "floorId", rs.getObject("floor_id", UUID.class), "label", rs.getString("label"), "x", rs.getDouble("x"),
-                "y", rs.getDouble("y"), "z", rs.getDouble("z"), "source", rs.getString("source"),
-                "confidence", rs.getDouble("detection_confidence"), "model", rs.getString("embedding_model"),
-                "boundingBox", rs.getString("bounding_box"), "runId", rs.getObject("pipeline_run_id", UUID.class)))
+            .query((rs, i) -> Map.<String, Object>ofEntries(
+                Map.entry("floorId", rs.getObject("floor_id", UUID.class)), Map.entry("label", rs.getString("label")),
+                Map.entry("x", rs.getDouble("x")), Map.entry("y", rs.getDouble("y")), Map.entry("z", rs.getDouble("z")),
+                Map.entry("source", rs.getString("source")), Map.entry("confidence", rs.getDouble("detection_confidence")),
+                Map.entry("imageModel", rs.getString("image_embedding_model")), Map.entry("textPending", rs.getBoolean("text_pending")),
+                Map.entry("boundingBox", rs.getString("bounding_box")), Map.entry("runId", rs.getObject("pipeline_run_id", UUID.class))))
             .list();
 
         assertThat(rows).hasSize(1);
@@ -464,8 +465,9 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
         assertThat((Double) row.get("x")).isCloseTo(1.5, org.assertj.core.data.Offset.offset(1e-6));
         assertThat(row.get("source")).isEqualTo("AUTO_DETECTED");
         assertThat((Double) row.get("confidence")).isCloseTo(0.87, org.assertj.core.data.Offset.offset(1e-6));
-        assertThat(row.get("model")).isEqualTo("open_clip:ViT-B-32:openai");
-        assertThat((String) row.get("boundingBox")).contains("\"frameWidth\"");
+        assertThat(row.get("imageModel")).as("the crop's CLIP IMAGE vector has its own column").isEqualTo("open_clip:ViT-B-32:openai");
+        assertThat(row.get("textPending")).as("the label's text-space vector is the embedding backfill's job").isEqualTo(true);
+        assertThat((String) row.get("boundingBox")).contains("\"frameWidth\"").contains("\"sourceFrame\": \"000012.jpg\"");
         assertThat(row.get("runId")).isEqualTo(s.run());
         UUID storedFrame = jdbc.sql("SELECT v.coordinate_frame_id FROM poi p JOIN poi_version v ON v.poi_id = p.id "
                 + "WHERE p.venue_id = :v AND v.source = 'AUTO_DETECTED'").param("v", s.c().venue()).query(UUID.class).single();

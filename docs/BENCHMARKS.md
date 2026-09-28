@@ -31,6 +31,7 @@ rescan timings. What *was* measured used:
 | A real COLMAP reconstruction of 11 photographs of the Château de Sceaux (8,911 points with per-point reprojection error and track length) | real | B2, B5 |
 | Hand-drawn floor plans with scripted recon laps (planner fixtures) | **synthetic** | B1 |
 | An author-written venue of 30 POIs and 59 queries | **author-constructed** | B3 |
+| 15 real object crops (COCO val2017 human-annotated boxes, chosen by a fixed rule) standing in for detections, 22 author-written queries | real images, **author-constructed** queries | B3 |
 | A hand-made two-floor routing graph | **synthetic**, self-test only | B4 |
 
 ## Summary
@@ -39,7 +40,7 @@ rescan timings. What *was* measured used:
 |---|---|---|---|
 | 1 | Capture-path planner | Yes, at equal walking distance, on all 7 synthetic scenes. **Not** at equal waypoint count on the largest one. | Synthetic scenes and the planner's own coverage model only. Real reconstruction coverage: **unavailable**. |
 | 2 | Geometry cleanup | Statistical outlier removal targets weak points **6.6×** better than chance on real SfM evidence. The radius filter barely beats chance (1.3×) and removes over half the cloud. | Real data, proxy metric. Rendering quality, and semantic-aware cleanup: **unavailable**. |
-| 3 | Semantic search (CLIP + embedding job + relevance filter) | Yes for synonyms: top-1 **58.8% vs 5.9%** lexical without the filter. With the relevance filter (calibrated on a separate venue), **86.7%** of nonsense queries now correctly return nothing (was 0%), at a cost: answerable top-1 **79.5% → 70.5%**. With vision down, fallback p95 is now **5 ms** (was 3.8 s). | Real system, small author-built datasets. |
+| 3 | Semantic search (CLIP + embedding job + relevance filter) | Yes for synonyms: top-1 **58.8% vs 5.9%** lexical without the filter. With the relevance filter (calibrated on a separate venue), **86.7%** of nonsense queries now correctly return nothing (was 0%), at a cost: answerable top-1 **79.5% → 70.5%**. With vision down, fallback p95 is now **5 ms** (was 3.8 s). Detected objects: **0/22 → 22/22** queries whose answer includes one now return it in the top 5, after ranking both kinds in CLIP text space. | Real system, small author-built datasets. Real crops stand in for Grounding DINO detections. |
 | 4 | Accessible routing | The router's rules hold on a self-test graph (stairs, a narrow passage and a floor change avoided). | Synthetic self-test. Real venue: **unavailable**. |
 | 5 | Incremental rescan | Similarity alignment recovers known misalignments, **including a ×1.08 scale error**, to ~0.005° when noise-free, up to 30°. The quality gates rejected every failed alignment (**138/138**, 0 false accepts) and 18/118 correct ones. Noisy trials need a larger FPFH voxel. | Real geometry, controlled misalignment. Real rescan timings: **unavailable**. |
 
@@ -346,6 +347,73 @@ stays at the calibration choice.
 - **What the filter does not fix:** synonyms whose answer is out-ranked by a hub POI ("loo" → Lost and found)
   still fail. They now return nothing rather than a wrong answer.
 
+### Detected objects in the ranking (2026-09-28)
+
+**The defect** (docs/ADVERSARIAL_REVIEW.md CV-4). Manual POIs were scored by CLIP text-to-text cosine (~0.8-1.0 for a
+text query), detected objects by the query's cosine with their crop's CLIP **image** vector (~0.2-0.3 even when
+right), in one `ORDER BY`. The fix (docs/search.md "Ranking", V21__search_embedding_spaces.sql): every POI is ranked
+by a text-space vector (a detected object's is its detector label); the crop's image vector is used only for CLIP's
+own text-to-image comparisons: ordering same-label detections, and admitting a detection whose crop is closer to the
+query than to every detector label in scope. Clustering no longer merges different labels (CV-2), and search only
+compares vectors from the query's own model (CV-5).
+
+**Data — assumption.** There is no reconstructed venue with Grounding DINO detections (no GPU). Instead:
+
+- `b3_semantic_search/detected_objects.json` (SHA-256 `261aaa4e…1f6d3`): 15 **real** photographs' object boxes
+  from COCO val2017 (human annotations, not detector output), chosen mechanically by `select_crops.py`: the first 3
+  per class with a box ≥ 200 × 200 px covering ≥ 20 % of the image, for the 5 COCO classes that are phrases of the
+  worker's detection prompt (chair, couch, plant, table, bench). Labels are those prompt phrases. The crops are as
+  cluttered as real detections: a dog on chair-1, a person on couch-1, a teddy bear on couch-2.
+- Each crop is cut and embedded by the production code (`clip_vectors.py` runs `ClipEmbedder` unchanged in the
+  vision image; vectors in `detected_vectors.json`). Positions are invented. The runner stores each as the API under
+  test stores a detection (`add_detected`), with its own pipeline run as provenance, and adds 2 manual POIs whose
+  tags overlap them ("Lounge": sofas, armchairs; "Garden terrace": plants, benches).
+- 22 queries, written before any vector or result existed: 5 detected-exact (the label), 5 detected-synonym (no
+  shared word, runner-checked), 7 visual-attribute (one specific object told apart from same-label ones by
+  appearance; written by looking at the crops), 5 mixed (answers include manual POIs and detected objects).
+- Small and author-built: a regression check of the mechanism, not a measure of real-venue quality.
+
+**Run.** One fresh E2E stack (compose project `chaya-b3`), same data, two API builds:
+`run.py --only-mixed` against `services/api` built from HEAD `202f841` (**before**,
+`results/b3_semantic_search/2026-09-28T144526Z.json`), then the full `run.py` against the working tree (**after**,
+`2026-09-28T145043Z.json`; its Flyway V21 also migrated the before-run's 15 detected rows in place, and the backfill
+embedded their labels within seconds).
+
+**Results** (measured; mixed venue = 32 manual POIs + 15 detected objects):
+
+| | Before | After |
+|---|---|---|
+| queries whose answer includes a detected object, returning one in the top 5 | **0 / 22** | **22 / 22** |
+| detected-exact top-1 / top-5 (n=5) | 0% / 0% | 100% / 100% |
+| detected-synonym top-1 / top-5 (n=5) | 0% / 0% | 80% / 100% ("dinner" → Cafe first, then tables) |
+| visual-attribute top-1 (n=7) | 0% | 100% (e.g. "red chair" → chair-3, "wooden bench" → bench-3) |
+| mixed top-1 (n=5) | 60% (the manual answer only) | 100% |
+| mixed queries with a manual AND a detected answer in the top 5 | 0 / 5 | 2 / 5 |
+| manual query set in the mixed venue: all-answerable top-1 / top-5 (n=44) | 70.5% / 72.7% | 68.2% / 72.7% |
+| manual query set: ambiguous top-1 (n=12) | 66.7% | 58.3% ("desk" now returns the 3 detected tables before Reception desk) |
+| zero-result queries correctly empty, mixed venue (n=15) | 86.7% | 86.7% |
+| manual-set queries whose results include a detected object | 0 / 59 | 3 / 59 (desk, food, suitcase) |
+| results admitted by the image test alone | — | 7 / 219 |
+| server latency p50 / p95, mixed venue | 114 / 198 ms | 112 / 180 ms |
+
+The **manual-only** condition of the after run (same venue before the detections were added) reproduced the published
+numbers exactly (all-answerable 70.5% / 72.7%, zero-result 86.7%, the same 11 emptied queries), so taking the
+relevance mean over distinct texts changed nothing where all texts differ. Its server latency was p50 102 ms /
+p95 154 ms.
+
+**What it shows:**
+
+- **The defect is real and fixed.** Before, not one query reached a detected object, not even "couch" with three
+  couches in the venue. After, every such query does, and same-label objects are ordered by what their crops show.
+- **The image test is not free.** 6 of its 7 lone admissions are in the recorded top 5 (the 7th is further down):
+  2 are right ("dinner" → two tables), 1 is plausible ("settee" → the brown armchair), 3 are not what the query meant
+  ("suitcase" → the teddy-bear-on-a-couch crop, "food" → two tables with meals on them). It uses no threshold, so
+  nothing was tuned; it is also the one part with no calibration data behind it.
+- **Short labels are close to each other in text space.** "chair" also returns tables and "bench" tables, below the
+  right class but above the margin; and 15 detections crowd manual answers out of the top 5 for "somewhere to sit"
+  and "plants" (they are further down the top 10). "desk" → tables is the one manual-set answer that got worse.
+- **Unchanged:** exact queries, zero-result rejection and latency.
+
 **Discarded run.** The first B3 run measured client latency through `localhost`, which on this Windows host tries
 IPv6 first and stalls ~2 s per connection (measured: 2,058 ms via `localhost` vs 8 ms via `127.0.0.1`). Its
 accuracy numbers were identical; its client latencies were an artifact of the benchmark host. It was deleted, and
@@ -355,7 +423,8 @@ the runner now uses `127.0.0.1`.
 
 | Measurement | Missing | Command |
 |---|---|---|
-| Accuracy on auto-detected POIs (CLIP image embeddings) and on text-to-text vs text-to-image ranking in one list | A `SEMANTIC_INDEXING` run (GPU) | rerun `benchmarks/b3_semantic_search/run.py` against a venue that has AUTO_DETECTED POIs |
+| Accuracy on **real Grounding DINO detections** (real crops, labels, confidences and clustering), rather than COCO boxes | A `SEMANTIC_INDEXING` run (GPU) on a real venue, and judged queries for it | point `detected_objects.json`'s objects at that run's POIs and rerun `run.py` |
+| A calibrated image-channel rule, and the relevance margin on detector labels | A calibration venue with detections, separate from the test venue | as `calibrate.py`, with detections |
 | Accuracy on real venue metadata and real user queries | A real venue's POI list and a log of real queries with judged answers | replace `dataset.json` (same schema) and rerun |
 
 ## 4. Benchmark 4: navigation

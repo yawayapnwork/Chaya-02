@@ -38,22 +38,49 @@ def test_associate_detection_with_geometry_ignores_points_the_camera_cannot_see(
     assert associate_detection_with_geometry(det, positions, px, visible) is None
 
 
-def test_cluster_by_distance_merges_only_by_3d_proximity_not_label_text():
+def _det(label, position, embedding, confidence=0.8, frame="a.jpg", support=1, bbox=None):
+    return {"label": label, "confidence": confidence, "position": list(position), "embedding": list(embedding),
+            "bbox_px": bbox or {}, "source_frame": frame, "support_points": support}
+
+
+def test_cluster_by_distance_merges_the_same_object_seen_from_several_frames():
     objects = [
-        {"label": "chair", "confidence": 0.9, "position": [0, 0, 0], "embedding": [1.0, 0.0],
-         "bbox_px": {}, "source_frame": "a.jpg", "support_points": 2},
-        {"label": "seat", "confidence": 0.6, "position": [0.1, 0, 0], "embedding": [0.0, 1.0],  # different label text, same object
-         "bbox_px": {}, "source_frame": "b.jpg", "support_points": 4},
-        {"label": "chair", "confidence": 0.5, "position": [50, 50, 50], "embedding": [1.0, 0.0],  # same label, far away
-         "bbox_px": {}, "source_frame": "c.jpg", "support_points": 1},
+        _det("chair", [0, 0, 0], [1.0, 0.0], confidence=0.9, frame="a.jpg", support=2, bbox={"x": 1}),
+        _det("Chair ", [0.1, 0, 0], [0.8, 0.6], confidence=0.6, frame="b.jpg", support=4, bbox={"x": 2}),  # label case/space
+        _det("chair", [50, 50, 50], [1.0, 0.0], confidence=0.5, frame="c.jpg"),  # same label, far away
     ]
     clusters = cluster_by_distance(objects, distance=1.0)
     assert len(clusters) == 2
     near = next(c for c in clusters if c["detections_merged"] == 2)
     assert near["confidence"] == 0.9  # max over members
     assert near["support_points"] == 4  # max over members
-    norm = np.linalg.norm(near["embedding"])
-    assert norm == pytest.approx(1.0, abs=1e-6)  # re-normalised mean embedding
+    assert near["position"] == pytest.approx([0.05, 0, 0])  # centroid
+    assert (near["source_frame"], near["bbox_px"]) == ("a.jpg", {"x": 1})  # box and its frame from one member
+    assert np.linalg.norm(near["embedding"]) == pytest.approx(1.0, abs=1e-6)  # re-normalised mean embedding
+
+
+def test_cluster_by_distance_never_merges_different_objects_that_are_close_together():
+    # docs/ADVERSARIAL_REVIEW.md CV-2: a fire extinguisher 0.3 m from an exit sign must stay two objects, each with its
+    # own crop embedding, position and source frame.
+    objects = [
+        _det("exit sign", [0, 0, 2.0], [1.0, 0.0], confidence=0.7, frame="exit.jpg"),
+        _det("fire extinguisher", [0.3, 0, 1.8], [0.0, 1.0], confidence=0.8, frame="ext.jpg"),
+    ]
+    clusters = cluster_by_distance(objects, distance=0.75)
+    assert len(clusters) == 2
+    by_label = {c["label"]: c for c in clusters}
+    assert by_label["exit sign"]["embedding"] == pytest.approx([1.0, 0.0])
+    assert by_label["fire extinguisher"]["embedding"] == pytest.approx([0.0, 1.0])
+    assert by_label["fire extinguisher"]["position"] == pytest.approx([0.3, 0, 1.8])
+    assert by_label["fire extinguisher"]["source_frame"] == "ext.jpg"
+
+
+def test_cluster_by_distance_joins_the_nearest_same_label_cluster():
+    objects = [_det("chair", [0, 0, 0], [1.0]), _det("chair", [1.0, 0, 0], [1.0]), _det("chair", [0.9, 0, 0], [1.0])]
+    clusters = cluster_by_distance(objects, distance=0.5)
+    assert sorted(c["detections_merged"] for c in clusters) == [1, 2]
+    pair = next(c for c in clusters if c["detections_merged"] == 2)
+    assert pair["position"] == pytest.approx([0.95, 0, 0])
 
 
 def test_cluster_by_distance_keeps_isolated_detections_separate():

@@ -5,9 +5,8 @@ chaya_worker.grounding_dino -- the stock public checkpoint, not fine-tuned; see 
 localise each detection in 3D by finding where the trained splat's own points land inside its 2D box
 (reusing the exact camera-projection math chaya_worker.stages.semantic_segmentation already uses and
 tests), crop the detection and embed it with real CLIP image embeddings (chaya_worker.clip_embeddings),
-then cluster detections of the same physical object seen from multiple frames by 3D proximity alone --
-never by matching label text, since label text is not the search mechanism here (CLIP embedding
-similarity is; see docs/search.md). The result is written as a DETECTED_OBJECTS artifact; this worker has
+then cluster detections of the same physical object seen from multiple frames: same detector label AND 3D
+proximity (cluster_by_distance), so neighbouring but different objects are never fused into one. The result is written as a DETECTED_OBJECTS artifact; this worker has
 no database access (see ARCHITECTURE.md), so turning these into `poi`/`poi_version` rows with pgvector
 embeddings is the control plane's job (dev.chaya.api.search on ingest of this stage's report).
 
@@ -71,40 +70,54 @@ def viewmat_in_other_frame(viewmat: np.ndarray, region_to_other: Similarity) -> 
     return out
 
 
+def normalized_label(label: str) -> str:
+    """Pure: the detector label as a merge key (case and surrounding/inner whitespace ignored)."""
+    return " ".join(str(label).lower().split())
+
+
 def cluster_by_distance(objects: list[dict[str, Any]], distance: float) -> list[dict[str, Any]]:
-    """Pure: greedy spatial clustering. Two raw detections within `distance` (canonical metres) of an existing
-    cluster's running centroid are the same physical object, regardless of what label text either one
-    carries -- label text is never the merge key, only 3D proximity. Each output cluster's `embedding` is
-    the mean of its members' (already L2-normalised) embeddings, re-normalised; `confidence` is the max
-    over members; `label` is the most common raw label, kept only for display, not for matching."""
+    """Pure: greedy clustering of raw detections into physical objects. A detection joins a cluster only if it has the
+    same detector label (normalized_label) AND lies within `distance` canonical metres of that cluster's running
+    centroid; among such clusters it joins the nearest. 3D proximity alone is not enough: a fire extinguisher 0.3 m from
+    an exit sign is two objects, and averaging their CLIP crops would describe neither (docs/ADVERSARIAL_REVIEW.md CV-2).
+
+    Requiring the same label errs towards keeping objects apart: a sofa labelled "sofa" in one frame and "couch" in
+    another stays two POIs, a duplicate rather than a lost or corrupted object. The label is only a merge guard; search
+    never matches on it textually (docs/search.md).
+
+    Each output's `embedding` is the mean of its members' (already L2-normalised) CLIP image embeddings, re-normalised;
+    `position` is the members' centroid; `confidence` is the max over members; `bbox_px` and `source_frame` come together
+    from the single most confident member, so the box always refers to the frame it was measured in."""
     clusters: list[dict[str, Any]] = []
     for obj in objects:
-        pos = np.asarray(obj["position"])
+        key = normalized_label(obj["label"])
+        pos = np.asarray(obj["position"], dtype=np.float64)
         best, best_dist = None, distance
         for c in clusters:
-            d = float(np.linalg.norm(np.asarray(c["position"]) - pos))
+            if c["key"] != key:
+                continue
+            d = float(np.linalg.norm(c["centroid"] - pos))
             if d <= best_dist:
                 best, best_dist = c, d
         if best is None:
-            clusters.append({**obj, "members": [obj]})
+            clusters.append({"key": key, "members": [obj], "centroid": pos})
         else:
             best["members"].append(obj)
+            best["centroid"] = np.mean([np.asarray(m["position"], dtype=np.float64) for m in best["members"]], axis=0)
 
     merged = []
     for c in clusters:
         members = c["members"]
-        positions = np.array([m["position"] for m in members])
         embeddings = np.array([m["embedding"] for m in members])
         mean_embedding = embeddings.mean(axis=0)
         norm = np.linalg.norm(mean_embedding)
         if norm > 1e-9:
             mean_embedding = mean_embedding / norm
-        labels = [m["label"] for m in members]
         best_member = max(members, key=lambda m: m["confidence"])
         merged.append({
-            "label": max(set(labels), key=labels.count),
-            "confidence": max(m["confidence"] for m in members),
-            "position": positions.mean(axis=0).tolist(),
+            "label": best_member["label"],
+            "confidence": best_member["confidence"],
+            "position": c["centroid"].tolist(),
             "embedding": mean_embedding.tolist(),
             "bbox_px": best_member["bbox_px"],
             "source_frame": best_member["source_frame"],

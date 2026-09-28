@@ -314,11 +314,11 @@ public class CoordinateFrameService {
                 ((Number) row.get("z")).doubleValue()});
             jdbc.sql("""
                     INSERT INTO poi_version (organization_id, venue_id, poi_id, version_number, label, category, description, tags,
-                        x, y, z, attributes, scan_version_id, embedding, embedding_model, source, detection_confidence, bounding_box,
-                        pipeline_run_id, coordinate_frame_id, created_by)
+                        x, y, z, attributes, scan_version_id, embedding, embedding_model, image_embedding, image_embedding_model, source,
+                        detection_confidence, bounding_box, pipeline_run_id, coordinate_frame_id, created_by)
                     SELECT organization_id, venue_id, poi_id, version_number + 1, label, category, description, tags,
-                        :x, :y, :z, attributes, scan_version_id, embedding, embedding_model, source, detection_confidence, bounding_box,
-                        pipeline_run_id, :new, 'system:coordinate-frame-recalibration'
+                        :x, :y, :z, attributes, scan_version_id, embedding, embedding_model, image_embedding, image_embedding_model, source,
+                        detection_confidence, bounding_box, pipeline_run_id, :new, 'system:coordinate-frame-recalibration'
                       FROM poi_version WHERE poi_id = :p AND version_number = :n
                     """)
                 .param("x", p[0]).param("y", p[1]).param("z", p[2]).param("new", newFrame)
