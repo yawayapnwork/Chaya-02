@@ -1,5 +1,168 @@
 # Chaya 02: end-to-end validation
 
+## 0. Physical pipeline validation, 2026-09-28
+
+**Goal:** prove capture → FFmpeg → COLMAP/GLOMAP → canonical metric frame → Gaussian/geometry → Recast navmesh →
+route. The route must come from the processed geometry and the real navmesh, with nothing inserted by hand.
+
+**Verdict: NOT SUCCESSFUL. The run is INCOMPLETE.**
+
+- **5 of 12 stages ran, and all 5 SUCCEEDED** on real media. They run up to real COLMAP pose estimation.
+- **The run stops at `SPLAT_RECONSTRUCTION`** with `DEPENDENCY_UNAVAILABLE`: torch, gsplat and cuda are missing,
+  because this host has no CUDA GPU.
+- **The 6 later stages were not run.** They include the Recast navmesh; no route exists.
+- **The canonical metric frame could not be established either,** independently of the GPU: no measured distances
+  or surveyed control points exist for any capture available here (0.4).
+- **PROJECT_PLAN M9 (splat training) and M13 (navmesh & routing) stay not Done.**
+
+**Code under test:** commit `4a537d1` plus the new driver `scripts/e2e/physical_pipeline.py`. No product code was
+changed. No implementation error surfaced in the stages that ran, so there was nothing to fix. Worker suite at this
+commit: `pytest` 247 passed, 13 skipped (Python 3.12 venv).
+
+**Evidence:**
+
+- `docs/e2e-evidence/physical-pipeline.json`: per-stage records.
+- `docs/e2e-evidence/physical-run-log.txt`: console and structured worker log.
+- `docs/e2e-evidence/physical-artifacts/<STAGE>/`: every non-PII JSON output, plus stdout/stderr logs.
+
+Frame archives and the binary sparse model are identified by SHA-256 in the JSON. They are not committed, because of
+the photographs' copyright.
+
+### 0.1 Capture dataset
+
+**The repository contains no real capture dataset.** Its only media are the fixture navmesh and screenshots.
+
+The run therefore uses the same real, external capture as section 3: 11 photographs of the Château de Sceaux, from
+OpenMVG's public structure-from-motion set ("Copyright 2012 Pierre MOULON").
+
+- They are downloaded at test time. Nothing was generated or synthesised.
+- The encoded video is byte-identical to the 09-24 run: `f960743d…21fb`.
+- It is an **outdoor façade, not an indoor venue**. Even with a GPU, a navmesh from it would say little about
+  indoor routing (0.4).
+
+### 0.2 Commands
+
+```bash
+# Images from the working tree: the production CPU worker, plus the test-only CPU-COLMAP layer (section 5.2)
+docker build -t chaya-physical-worker:base services/reconstruction
+docker build -t chaya-physical-worker:colmap -f infra/ci/worker-colmap.Dockerfile \
+  --build-context base=docker-image://chaya-physical-worker:base infra/ci
+#   -> COLMAP 3.8 (built without CUDA), FFmpeg 5.1.9, chaya-navmesh 1.0.0 / recastnavigation 1.6.0; no GLOMAP
+
+# Capture: 11 real photographs -> H.264, exactly as in section 2 (ffmpeg from the worker image)
+for i in $(seq 7100 7110); do
+  curl -O https://raw.githubusercontent.com/openMVG/ImageDataset_SceauxCastle/master/images/100_$i.JPG
+done
+ffmpeg -framerate 2 -pattern_type glob -i "*.JPG" -vf scale=1600:-2 -c:v libx264 -pix_fmt yuv420p -crf 18 -g 1 sceaux-castle.mp4
+#   -> 4,917,797 bytes, 11 frames 1600x1202, 5.5 s, sha256 f960743de6220499436815d55489bd052323d67160367c2e41301cc8cb6921fb
+
+# The full-venue plan through the worker's own claim loop: default settings, plus the documented CPU thread bound (6.2)
+docker run --rm --memory 2g -e COLMAP_NUM_THREADS=2 -u 0 \
+  -v <repo>/scripts:/repo/scripts:ro -v <capture dir>:/cap:ro -v <out>:/out chaya-physical-worker:colmap \
+  python /repo/scripts/e2e/physical_pipeline.py --media /cap/sceaux-castle.mp4 --out /out/physical-pipeline.json --store /tmp/run
+#   -> exit 2 (INCOMPLETE), 2026-09-28 14:27:35 to 14:29:05 +05:30
+```
+
+**How the driver works:**
+
+- It runs the real `Orchestrator.run_once` claim loop with the real `Toolchain` and every stage class, unmodified.
+- The control plane is stood in for by a sequencer. Each stage gets the inputs `PipelineService#inputs` would give it:
+  - raw media to the first two stages;
+  - earlier successful non-log outputs after that;
+  - nothing PII-flagged after `PRIVACY_PREPROCESS`.
+- It passes the ACTIVE `coordinateFrame`. There is none, because nothing was calibrated.
+- It stops at the first failure, as `PipelineService#advance` does.
+- Every output is re-read from storage and re-hashed.
+- **Nothing is inserted:** no splat, plane model, graph, POI or frame.
+
+The full control-plane path (API, MinIO, Keycloak, two workers) produced the same stop at the same stage in the
+09-24 run (section 4.2, steps 9.1–10).
+
+### 0.3 Per-stage record
+
+Inputs are the artifacts handed to the stage. Their checksums are in `physical-pipeline.json`.
+
+**Status of every output:** every output below was stored, and its size and SHA-256 matched the stored bytes
+(`verified: true`).
+
+**Coordinate frame:** the work order's `coordinateFrame` was `null` for every stage.
+
+**Configuration:** each stage's full configuration snapshot and every command line are recorded in
+`physical-pipeline.json` (`configuration`).
+
+| # | Stage | Input | Output (bytes, SHA-256) | Status | Duration | Configuration | Output coordinate frame | Failure reason |
+|---|---|---|---|---|---:|---|---|---|
+| 1 | INPUT_VALIDATION | RAW_VIDEO `f960743d…` | INPUT_REPORT (400, `9afdd8f7…7b23`) | SUCCEEDED | 0.78 s | ffprobe | none (media) | |
+| 2 | FFMPEG_PREPROCESS | RAW_VIDEO, INPUT_REPORT | FRAME_ARCHIVE (3,409,920, `1c8a46ad…aaa3`, PII); FRAME_MANIFEST (416, `328a0b00…3b10`) | SUCCEEDED | 0.61 s | `fps=2`, max height 1080; 11 frames | image pixels | |
+| 3 | FRAME_QUALITY_FILTER | FRAME_ARCHIVE, FRAME_MANIFEST | FRAME_ARCHIVE_SELECTED (3,409,920, `de217a05…10b3`, PII); FRAME_QUALITY_REPORT (6,303, `1aaedb34…00a9`) | SUCCEEDED | 0.31 s | blur 40, duplicate distance 2.0, min 10 frames; 11 of 11 kept | image pixels | |
+| 4 | PRIVACY_PREPROCESS | FRAME_ARCHIVE_SELECTED (+ reports) | FRAME_ARCHIVE_ANON (3,502,080, `356d0ab0…9b21`); PRIVACY_REPORT (8,898, `dbbc676c…2ca1`) | SUCCEEDED | 19.96 s | Haar faces + heuristic-quad, fail-closed | image pixels | Succeeded, but the over-masking persists (F5): 55 "faces", 10 of 11 frames escalated |
+| 5 | POSE_ESTIMATION | FRAME_ARCHIVE_ANON (+ reports) | SPARSE_MODEL (3,246,080, `0463ccbb…c7eb`); POSES (4,001, `d8746106…9535`) | SUCCEEDED | 63.72 s | COLMAP 3.8 CPU: `feature_extractor` (SIMPLE_RADIAL, single camera, `use_gpu 0`, 2 threads); `exhaustive_matcher`; `mapper` (GLOMAP absent); `model_converter` | **RECONSTRUCTION** frame: arbitrary scale, rotation and origin; not metric | |
+| 6 | SPLAT_RECONSTRUCTION | SPARSE_MODEL, POSES, FRAME_ARCHIVE_ANON | none | **FAILED** | 0.04 s | gsplat, 7000 iterations (never started) | — | `DEPENDENCY_UNAVAILABLE`: "missing: torch, gsplat, cuda". **Hardware: no CUDA device.** |
+| 7 | SEMANTIC_SEGMENTATION | — | — | NOT_RUN | — | — | — | needs SPLAT; the worker also lacks torch, transformers |
+| 8 | GEOMETRIC_CLEANUP | — | — | NOT_RUN | — | — | — | needs SPLAT; the worker also lacks Open3D |
+| 9 | PLANE_FITTING (+ GRAVITY_ESTIMATE) | — | — | NOT_RUN | — | — | — | needs SPLAT_CLEAN; the worker also lacks Open3D |
+| — | *Calibration* (`POST …/coordinate-frames`) | — | — | NOT_RUN | — | — | — | needs GRAVITY_ESTIMATE, **and** at least 2 measured distances or 3 surveyed control points. No such measurements exist for this capture. |
+| 10 | ARTIFACT_GENERATION | — | — | NOT_RUN | — | — | — | needs SPLAT_CLEAN/SPLAT |
+| 11 | SEMANTIC_INDEXING | — | — | NOT_RUN | — | — | — | needs the splat and a canonical frame; the worker also lacks torch, transformers, open_clip, PIL |
+| 12 | NAVIGATION_BAKING (Recast) | — | — | NOT_RUN | — | — | — | needs the splat, PLANE_MODEL and a canonical frame. `chaya-navmesh` itself **is** present on this worker (`chaya-navmesh 1.0.0 recastnavigation 1.6.0`). |
+| — | Route (`POST /navigation/routes`) | — | — | NOT_RUN | — | — | — | no NAVIGATION_GRAPH exists; the API refuses with `ROUTE_UNAVAILABLE` (section 4.2, step 16) |
+
+**COLMAP's analysis of the stored SPARSE_MODEL** (`colmap model_analyzer`):
+
+- 1 camera; **11 of 11 images registered**;
+- **5,814 points**, 25,215 observations, mean track length 4.34;
+- **mean reprojection error 0.399 px**.
+
+COLMAP is not bit-for-bit deterministic across runs: a first pass of the same command gave 5,792 points and 0.403 px.
+That pass also set `MIN_FRAMES=3`, an override that was unnecessary and was dropped for the recorded run.
+
+### 0.4 Where execution stops, and why
+
+1. **`SPLAT_RECONSTRUCTION`: hardware.**
+   - The host GPU is Intel integrated graphics (`Win32_VideoController`: "Intel(R) Graphics"). There is no NVIDIA
+     device and no `nvidia-smi`.
+   - gsplat's rasteriser is CUDA-only, and the stage deliberately has no CPU path.
+   - Every later stage consumes this splat.
+   - **Using the COLMAP sparse points in place of a trained splat was not done.** The stage itself defines an
+     unoptimised SfM seed as "not a reconstruction", so doing this would substitute for the blocked stage.
+2. **Canonical metric frame: data, independent of the GPU.**
+   - The frame is produced by the control plane's calibration (`CoordinateFrameService`). It combines PLANE_FITTING's
+     GRAVITY_ESTIMATE with either at least 2 agreeing measured distances or at least 3 surveyed control points.
+   - Reconstruction units are never assumed to be metres.
+   - The public Sceaux photographs come with no physical measurements, and none can be honestly invented.
+   - So even on a GPU host this capture could not reach NAVIGATION_BAKING, which fails `NOT_CALIBRATED` without a
+     frame.
+3. **Suitability of the capture.**
+   - It is an exterior façade shot from a few metres away, not a walkable interior.
+   - It is a valid SfM test.
+   - It is a poor navmesh test: the visible ground is a small strip in front of the building.
+
+### 0.5 What is needed for a successful run
+
+1. **A real indoor capture that carries its own metric references:**
+   - a short walk-through video of a corridor or room;
+   - at least two tape-measured distances between identifiable points (door width, corridor length), or three
+     surveyed control points;
+   - recorded at capture time and kept with the dataset.
+2. **An NVIDIA GPU worker** (compute capability ≥ 7.0) with the reconstruction toolchain: DEPLOYMENT.md "GPU workers",
+   torch + gsplat, Open3D, transformers, plus COLMAP (GLOMAP optional). `chaya-navmesh` is already in the worker
+   image.
+3. Then, through the full stack (`scripts/e2e/e2e_validate.py`, section 2), with the GPU worker in place of the
+   toolchain worker. `physical_pipeline.py` shows how far a capture gets. It cannot calibrate or resume, and COLMAP is
+   not deterministic, so a re-run would produce a different reconstruction from the one that was calibrated.
+   1. Run the capture until the run fails `NOT_CALIBRATED` (at SEMANTIC_INDEXING).
+   2. Calibrate that run with the measured distances
+      (`POST /api/v1/venues/{venueId}/reconstructions/{runId}/coordinate-frames`).
+   3. Retry. Only the failed stage and those after it re-run (section 4.2, step 10.2).
+   4. Request a route.
+
+   Only then may M9 and M13 be marked Done.
+
+---
+
+*Sections 1–9 below are the 2026-09-24 full-stack validation (API, Keycloak, MinIO, both workers, browser). They are
+unchanged, except that section 9 lists the files this 2026-09-28 validation added.*
+
 **Date:** 2026-09-24.
 **Code under test:** commit `372b5b5` plus the working tree listed in [section 9](#9-files-added-or-changed). That
 includes the CI/CD hardening done earlier the same day (Spring Boot 3.5.16, new API and web runtime images, pinned
@@ -452,3 +615,5 @@ The first run of this validation had a third FAIL: step 22, admin audit log, HTT
 | `scripts/e2e/e2e_validate.py` | test harness | scripted workflow; pose checks; token renewal (6.4); redacted secrets |
 | `scripts/e2e/viewer_check.cjs` | test harness | browser checks, including the Keycloak PKCE sign-in |
 | `docs/e2e-evidence/*` | evidence | see the top of this document. Logs are `.txt`, because `*.log` is gitignored. |
+| `scripts/e2e/physical_pipeline.py` | test harness (2026-09-28) | physical-pipeline driver (section 0) |
+| `docs/e2e-evidence/physical-*` | evidence (2026-09-28) | section 0 |

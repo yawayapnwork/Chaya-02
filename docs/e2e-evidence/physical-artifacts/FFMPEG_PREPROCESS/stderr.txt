@@ -1,0 +1,105 @@
+Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '/tmp/run/work/10164b83-23c9-49a8-b88c-44d84b1f0349/inputs/861041a9-f372-4572-a943-4eed3cc275e8-138775e6-19ae-4c68-a3b7-092167a1cb7d':
+  Metadata:
+    major_brand     : isom
+    minor_version   : 512
+    compatible_brands: isomiso2avc1mp41
+    encoder         : Lavf59.27.100
+  Duration: 00:00:05.50, start: 0.000000, bitrate: 7153 kb/s
+  Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(tv, bt470bg/unknown/unknown, progressive), 1600x1202, 7151 kb/s, 2 fps, 2 tbr, 16384 tbn (default)
+    Metadata:
+      handler_name    : VideoHandler
+      vendor_id       : [0][0][0][0]
+      encoder         : Lavc59.37.100 libx264
+Stream mapping:
+  Stream #0:0 -> #0:0 (h264 (native) -> mjpeg (native))
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea081fd900] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea0824ea40] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea0829fb80] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea082f0cc0] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08341e00] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08392f40] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea083e4100] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea084352c0] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08486480] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea084d7640] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08528800] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea085799c0] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea085cab80] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea0861bd40] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea0866cf00] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea086be0c0] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea0870f280] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08760440] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea087b1600] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea087c0000] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08206380] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08327700] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea0828ca80] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea082e50c0] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea0838ef40] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08253880] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea083ef640] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08446b40] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08497c80] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea084e8dc0] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08539f00] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea0858b040] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea085dc180] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea0862d2c0] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea0867e400] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea086cf5c0] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08720780] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08771940] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea083535c0] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08301a40] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea087d7100] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea082eccc0] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08282580] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea0838a240] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea083e3dc0] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08255bc0] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08442740] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08493300] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea084e42c0] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08535400] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08586540] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea085d7680] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea086287c0] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08679900] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea086caa40] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea0871bb80] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea0876ccc0] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea087f0b80] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea083535c0] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08304dc0] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea082e68c0] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea0827e100] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08384440] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea083e4f40] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08257800] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08443840] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08493640] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea084e4600] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08535740] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08586880] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea085d79c0] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08628b00] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea08679c40] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea086cad80] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea0871bec0] deprecated pixel format used, make sure you did set range correctly
+[swscaler @ 0x59ea081ed040] [swscaler @ 0x59ea0876d080] deprecated pixel format used, make sure you did set range correctly
+Output #0, image2, to '/tmp/run/work/10164b83-23c9-49a8-b88c-44d84b1f0349/frames/v00-%06d.jpg':
+  Metadata:
+    major_brand     : isom
+    minor_version   : 512
+    compatible_brands: isomiso2avc1mp41
+    encoder         : Lavf59.27.100
+  Stream #0:0(und): Video: mjpeg, yuvj420p(pc, bt470bg/unknown/unknown, progressive), 1438x1080, q=2-31, 200 kb/s, 2 fps, 2 tbn (default)
+    Metadata:
+      handler_name    : VideoHandler
+      vendor_id       : [0][0][0][0]
+      encoder         : Lavc59.37.100 mjpeg
+    Side data:
+      cpb: bitrate max/min/avg: 0/0/200000 buffer size: 0 vbv_delay: N/A
+frame=    1 fps=0.0 q=0.0 size=N/A time=00:00:00.00 bitrate=N/A speed=   0x    frame=   11 fps=0.0 q=2.0 Lsize=N/A time=00:00:05.50 bitrate=N/A speed=16.2x    
+video:3301kB audio:0kB subtitle:0kB other streams:0kB global headers:0kB muxing overhead: unknown
