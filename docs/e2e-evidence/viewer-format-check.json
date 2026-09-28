@@ -1,0 +1,137 @@
+{
+  "kind": "FORMAT VALIDATION (synthetic fixture; not a venue reconstruction)",
+  "results": [
+    {
+      "id": "A1",
+      "name": "HTTP artifact retrieval by the viewer (real API)",
+      "expected": "200 application/octet-stream; X-Chaya-Viewer-Token only; bytes == stored fixture",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "HTTP 200 application/octet-stream 167964 B; request auth: X-Chaya-Viewer-Token; sha256=af64e4f4d2037e8c3c2949f41134921691f9b5b9e8fd36a7331a1b32607bf48d",
+      "evidence": {
+        "url": "/api/v1/venues/6e23cf31-c93e-4d76-bc4d-70d01b50e2d3/reconstructions/a1cd285e-2c9d-42e5-b97c-a16e12bad05b/artifacts/KSPLAT",
+        "expectedSha256": "af64e4f4d2037e8c3c2949f41134921691f9b5b9e8fd36a7331a1b32607bf48d"
+      }
+    },
+    {
+      "id": "A2",
+      "name": "GaussianSplats3D initialises and reports every splat (format compatibility)",
+      "expected": "splat count 3,701, no load error",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "Splats: 3,701; load errors shown: 0"
+    },
+    {
+      "id": "A3",
+      "name": "Rendered scene (pixels read back from the WebGL canvas)",
+      "expected": "> 5 % of sampled pixels differ from the clear colour",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "10.3 % covered on a 1080x847 canvas"
+    },
+    {
+      "id": "A4",
+      "name": "POI overlay on the calibrated scene",
+      "expected": "3 markers; the Red pillar marker sits under red rendered splats",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "frame: 'Calibrated, metres (venue datum, v1)'; markers=3; mean colour above the Red pillar marker rgb(215,41,41)"
+    },
+    {
+      "id": "A4.1",
+      "name": "Clicking a POI marker selects it",
+      "expected": "POI details show 'Red pillar'",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "Red pillar FIXTURE format-fixture POI at a pillar base 1.00, 1.00, 0.00"
+    },
+    {
+      "id": "A5",
+      "name": "Camera interaction (drag orbits the built-in controls)",
+      "expected": "the next frames differ (mean cell difference > 4/255); scene still drawn",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "mean cell difference 13.4; 12.0 % covered after"
+    },
+    {
+      "id": "A6",
+      "name": "No unexpected browser console errors",
+      "expected": "none (a logged route 404/409 is expected)",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "0 console errors",
+      "evidence": [
+        "Failed to load resource: the server responded with a status of 409 ()"
+      ]
+    },
+    {
+      "id": "A7",
+      "name": "Route overlay",
+      "expected": "drawn only for a real route; otherwise the API's refusal is shown and nothing is drawn",
+      "status": "BLOCKED",
+      "blocked_dependency": "NAVIGATION_BAKING (no navmesh-backed graph for the fixture run)",
+      "actual": "route HTTP 409; panel: No route available: floor 3cea857d-07ce-4ad4-8260-a97b073be211 has no STANDARD navigation graph baked from a Recast navmesh; run NAVIGATION_BAKING on a calibrated reconstruction of this floor "
+    },
+    {
+      "id": "B1",
+      "name": "HTTP artifact retrieval by the viewer (real API)",
+      "expected": "200 application/octet-stream; Authorization: Bearer <Keycloak JWT> only; bytes == stored fixture",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "HTTP 200 application/octet-stream 167964 B; request auth: Authorization: Bearer; sha256=af64e4f4d2037e8c3c2949f41134921691f9b5b9e8fd36a7331a1b32607bf48d",
+      "evidence": {
+        "url": "/api/v1/venues/6e23cf31-c93e-4d76-bc4d-70d01b50e2d3/reconstructions/a1cd285e-2c9d-42e5-b97c-a16e12bad05b/artifacts/KSPLAT",
+        "expectedSha256": "af64e4f4d2037e8c3c2949f41134921691f9b5b9e8fd36a7331a1b32607bf48d"
+      }
+    },
+    {
+      "id": "B2",
+      "name": "GaussianSplats3D initialises and reports every splat (format compatibility)",
+      "expected": "splat count 3,701, no load error",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "Splats: 3,701; load errors shown: 0"
+    },
+    {
+      "id": "B3",
+      "name": "Rendered scene (pixels read back from the WebGL canvas)",
+      "expected": "> 5 % of sampled pixels differ from the clear colour",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "7.7 % covered on a 1080x847 canvas"
+    },
+    {
+      "id": "B4",
+      "name": "POI overlay on the calibrated scene",
+      "expected": "3 markers; the Red pillar marker sits under red rendered splats",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "frame: 'Calibrated, metres (venue datum, v1)'; markers=3; mean colour above the Red pillar marker rgb(215,41,41)"
+    },
+    {
+      "id": "B4.1",
+      "name": "Clicking a POI marker selects it",
+      "expected": "POI details show 'Red pillar'",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "Red pillar FIXTURE format-fixture POI at a pillar base 1.00, 1.00, 0.00"
+    },
+    {
+      "id": "B5",
+      "name": "Camera interaction (drag orbits the built-in controls)",
+      "expected": "the next frames differ (mean cell difference > 4/255); scene still drawn",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "mean cell difference 11.7; 12.1 % covered after"
+    },
+    {
+      "id": "B6",
+      "name": "No unexpected browser console errors",
+      "expected": "none (a logged route 404/409 is expected)",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "0 console errors",
+      "evidence": []
+    }
+  ]
+}

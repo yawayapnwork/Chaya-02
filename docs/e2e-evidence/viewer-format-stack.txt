@@ -1,0 +1,10 @@
+api chaya-api:smoke sha256:588406874883647506bba91154ea731bb05d06a334a748f1c136007d00be983a
+web chaya-viewer-web sha256:bec6e90106fdc6a0af8a80a4733095c659f0110cb4ecd458c1542628156f1a16
+reconstruction-worker chaya-viewer-reconstruction-worker sha256:9e5666adef7a0714f59a8974c5222ff420b5945afb44af3a
+ARTIFACT_GENERATION
+viewer-format-cpu-worker
+docker engine 29.6.2
+playwright 1.63.0
+@mkkellogg/gaussian-splats-3d 0.4.7
+three 0.186.0
+reconstruction-worker full image id sha256:9e5666adef7a0714f59a8974c5222ff420b5945afb44af3a680640cb516b8056

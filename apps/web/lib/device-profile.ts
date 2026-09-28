@@ -11,7 +11,10 @@ export interface DeviceProfile {
   sphericalHarmonicsDegree: 0 | 1 | 2;
   /** GaussianSplats3D `halfPrecisionCovariancesOnGPU`: halves GPU texture memory for splat shape data. */
   halfPrecisionCovariancesOnGPU: boolean;
-  /** GaussianSplats3D `gpuAcceleratedSort`: the library itself already defaults this off on mobile. */
+  /** GaussianSplats3D `gpuAcceleratedSort`. Always false: in the pinned 0.4.7, GPU-computed distances mean the viewer
+   * never uploads splat centres to its sort worker, and the worker clamps every sort to the centres it has received
+   * (none), so it reports 0 splats to render and the canvas stays empty while the scene counts as loaded. Found by
+   * e2e/ksplat-viewer.spec.ts reading the rendered pixels (docs/E2E_VALIDATION.md, viewer format validation). */
   gpuAcceleratedSort: boolean;
   /** GaussianSplats3D `sharedMemoryForWorkers`: needs cross-origin isolation or the worker transfer fails. */
   sharedMemoryForWorkers: boolean;
@@ -40,7 +43,7 @@ export function detectDeviceProfile(): DeviceProfile {
     tier,
     sphericalHarmonicsDegree: tier === "high" ? 1 : 0,
     halfPrecisionCovariancesOnGPU: true,
-    gpuAcceleratedSort: !isMobileUa,
+    gpuAcceleratedSort: false,
     sharedMemoryForWorkers: hasSharedArrayBufferSupport(),
     ignoreDevicePixelRatio: tier === "low",
     splatAlphaRemovalThreshold: tier === "low" ? 12 : tier === "mid" ? 5 : 1,

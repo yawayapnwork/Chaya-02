@@ -1,0 +1,21 @@
+[PASS   ] V0    API health: HTTP 200 UP
+[PASS   ] V0.1  Web readiness: HTTP 200
+[PASS   ] V1    Tenant, two venues, managers: org=c2a8bafb-3925-41b2-8c58-c697ad628401 venueA=6e23cf31-c93e-4d76-bc4d-70d01b50e2d3 venueB=4d0033ac-228c-4e89-bb1b-e27ae4c00eaf
+[PASS   ] V2    Carrier capture accepted and a pipeline run started: carrier carrier.mp4 (13868 B, synthetic ffmpeg testsrc: carries no scene) ACCEPTED; run HTTP 202 a1cd285e-2c9d-42e5-b97c-a16e12bad05b
+[PASS   ] V3    Stages before the exporter reported as labelled STAND-INS (not executed): INPUT_VALIDATION; FFMPEG_PREPROCESS; FRAME_QUALITY_FILTER; PRIVACY_PREPROCESS; POSE_ESTIMATION(POSES); SPLAT_RECONSTRUCTION(SPLAT); SEMANTIC_SEGMENTATION; GEOMETRIC_CLEANUP; PLANE_FITTING
+[PASS   ] V4    ARTIFACT_GENERATION run by the REAL worker container (production exporter): state=SUCCEEDED worker=viewer-format-cpu-worker gaussian_count=3701 outputs=['KSPLAT', 'ARTIFACT_MANIFEST', 'VIEWER_BUNDLE']
+[PASS   ] V4.1  Stored artifact: MinIO bytes == Postgres record == committed fixture: s3://chaya-derived/org/c2a8bafb-3925-41b2-8c58-c697ad628401/venue/6e23cf31-c93e-4d76-bc4d-70d01b50e2d3/scan/c83907f8-6405-46d2-89a1-b2af6ec8cffe/run/a1cd285e-2c9d-42e5-b97c-a16e12bad05b/ARTIFACT_GENERATION/attempt-1/scene.ksplat 167964 B sha256=af64e4f4d2037e8c3c2949f41134921691f9b5b9e8fd36a7331a1b32607bf48d; db=af64e4f4d2037e8c3c2949f41134921691f9b5b9e8fd36a7331a1b32607bf48d|167964; fixture=af64e4f4d2037e8c3c2949f41134921691f9b5b9e8fd36a7331a1b32607bf48d
+[PASS   ] V4.2  Exporter manifest names its input: the fixture splat, by name and checksum: manifest artifacts: [('POSES', 'poses.json'), ('SPLAT', 'format-fixture-scene.ply'), ('KSPLAT', 'scene.ksplat')]; coordinateSpace=RECONSTRUCTION
+[PASS   ] V5    Calibrate the fixture run through the real API (control points by construction): HTTP 201 canonical=True datum=VENUE_CONTROL_POINTS scale=2.5000000000000004 rms=9.954931000182252e-16
+[PASS   ] V5.1  POIs placed in the calibrated frame: [('Blue pillar', 'CURRENT'), ('Green pillar', 'CURRENT'), ('Red pillar', 'CURRENT')]
+[BLOCKED] V6    Route over the fixture: HTTP 409 {"type":"about:blank","title":"Conflict","status":409,"detail":"floor 3cea857d-07ce-4ad4-8260-a97b073be211 has no STANDARD navigation graph baked from a Recast navmesh; run NAVIGATION_BAKING on a cali; navigation_graph rows: 0
+[PASS   ] V7.1  Public viewer token: artifact over HTTP: HTTP 200 application/octet-stream len=167964 nosniff=nosniff cache=private, max-age=3600 sha256=af64e4f4d2037e8c3c2949f41134921691f9b5b9e8fd36a7331a1b32607bf48d
+[PASS   ] V7.2  Venue manager (Keycloak JWT): artifact over HTTP: HTTP 200 sha256 match=True
+[PASS   ] V7.3  No credentials: HTTP 401
+[PASS   ] V7.4  Public token for venue A asks under venue B: HTTP 404
+[PASS   ] V7.5  Manager of venue B asks for venue A's artifact: HTTP 404
+[PASS   ] V7.6  A non-viewer kind (the raw SPLAT) cannot be fetched: HTTP 400
+[PASS   ] V7.7  Reconstruction record the viewer reads: HTTP 200 runId=a1cd285e-2c9d-42e5-b97c-a16e12bad05b runStatus=RUNNING KSPLAT sha256=af64e4f4d2037e8c3c2949f41134921691f9b5b9e8fd36a7331a1b32607bf48d frame.canonical=True
+[PASS   ] V7.8  Revoked link's token: HTTP 401
+
+PASS=18 FAIL=0 BLOCKED=1 -> C:\Users\YASHIK~1\AppData\Local\Temp\claude\C--Dev-Chaya-02\d9ea73cf-2917-4163-a76f-88ede590ac76\scratchpad\final\viewer-format-results.json

@@ -1,0 +1,133 @@
+{
+  "note": "FORMAT VALIDATION FIXTURE -- a deterministic synthetic Gaussian scene exported by the production exporter. NOT a reconstruction of any venue.",
+  "splat_count": 3701,
+  "files": {
+    "scene.ply": {
+      "sha256": "f9c37d540e4478a3df581caa38ff5177efac513603258f439780d51e13a01634",
+      "role": "SPLAT input"
+    },
+    "scene.ksplat": {
+      "sha256": "af64e4f4d2037e8c3c2949f41134921691f9b5b9e8fd36a7331a1b32607bf48d",
+      "role": "ARTIFACT_GENERATION KSPLAT output"
+    }
+  },
+  "reconstruction_to_canonical": {
+    "scale": 2.5,
+    "rotation_wxyz": [
+      0.6830127018922194,
+      -0.6830127018922193,
+      -0.18301270189221927,
+      0.18301270189221927
+    ],
+    "translation": [
+      1.2,
+      -0.7,
+      0.0
+    ]
+  },
+  "control_points_by_construction": [
+    {
+      "label": "floor corner (0, 0)",
+      "venue": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "reconstruction": [
+        -0.27569219381653065,
+        0.0,
+        0.48248711305964276
+      ]
+    },
+    {
+      "label": "floor corner (6, 0)",
+      "venue": [
+        6.0,
+        0.0,
+        0.0
+      ],
+      "reconstruction": [
+        1.8027687752661223,
+        0.0,
+        -0.717512886940357
+      ]
+    },
+    {
+      "label": "floor corner (6, 4)",
+      "venue": [
+        6.0,
+        4.0,
+        0.0
+      ],
+      "reconstruction": [
+        2.602768775266122,
+        0.0,
+        0.6681277591147449
+      ]
+    },
+    {
+      "label": "floor corner (0, 4)",
+      "venue": [
+        0.0,
+        4.0,
+        0.0
+      ],
+      "reconstruction": [
+        0.5243078061834693,
+        0.0,
+        1.8681277591147445
+      ]
+    },
+    {
+      "label": "red pillar top centre",
+      "venue": [
+        1.0,
+        1.0,
+        2.0
+      ],
+      "reconstruction": [
+        0.2707179676972449,
+        -0.8,
+        0.6288972745734183
+      ]
+    }
+  ],
+  "pois_by_construction": [
+    {
+      "label": "Red pillar",
+      "canonical": [
+        1.0,
+        1.0,
+        0.0
+      ]
+    },
+    {
+      "label": "Green pillar",
+      "canonical": [
+        4.0,
+        3.0,
+        0.0
+      ]
+    },
+    {
+      "label": "Blue pillar",
+      "canonical": [
+        5.0,
+        1.0,
+        0.0
+      ]
+    }
+  ],
+  "canonical_bounds": {
+    "min": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "max": [
+      6.0,
+      4.0,
+      2.0
+    ]
+  }
+}

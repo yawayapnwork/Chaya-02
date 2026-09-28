@@ -1,0 +1,15 @@
+[PASS] A1 HTTP artifact retrieval by the viewer (real API): HTTP 200 application/octet-stream 167964 B; request auth: X-Chaya-Viewer-Token; sha256=af64e4f4d2037e8c3c2949f41134921691f9b5b9e8fd36a7331a1b32607bf48d
+[PASS] A2 GaussianSplats3D initialises and reports every splat (format compatibility): Splats: 3,701; load errors shown: 0
+[PASS] A3 Rendered scene (pixels read back from the WebGL canvas): 10.3 % covered on a 1080x847 canvas
+[PASS] A4 POI overlay on the calibrated scene: frame: 'Calibrated, metres (venue datum, v1)'; markers=3; mean colour above the Red pillar marker rgb(215,41,41)
+[PASS] A4.1 Clicking a POI marker selects it: Red pillar FIXTURE format-fixture POI at a pillar base 1.00, 1.00, 0.00
+[PASS] A5 Camera interaction (drag orbits the built-in controls): mean cell difference 13.4; 12.0 % covered after
+[PASS] A6 No unexpected browser console errors: 0 console errors
+[BLOCKED] A7 Route overlay: route HTTP 409; panel: No route available: floor 3cea857d-07ce-4ad4-8260-a97b073be211 has no STANDARD navigation graph baked from a Recast navmesh; run NAVIGATION_BAKING on a calibrated reconstruction of this floor 
+[PASS] B1 HTTP artifact retrieval by the viewer (real API): HTTP 200 application/octet-stream 167964 B; request auth: Authorization: Bearer; sha256=af64e4f4d2037e8c3c2949f41134921691f9b5b9e8fd36a7331a1b32607bf48d
+[PASS] B2 GaussianSplats3D initialises and reports every splat (format compatibility): Splats: 3,701; load errors shown: 0
+[PASS] B3 Rendered scene (pixels read back from the WebGL canvas): 7.7 % covered on a 1080x847 canvas
+[PASS] B4 POI overlay on the calibrated scene: frame: 'Calibrated, metres (venue datum, v1)'; markers=3; mean colour above the Red pillar marker rgb(215,41,41)
+[PASS] B4.1 Clicking a POI marker selects it: Red pillar FIXTURE format-fixture POI at a pillar base 1.00, 1.00, 0.00
+[PASS] B5 Camera interaction (drag orbits the built-in controls): mean cell difference 11.7; 12.1 % covered after
+[PASS] B6 No unexpected browser console errors: 0 console errors

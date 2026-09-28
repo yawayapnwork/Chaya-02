@@ -160,8 +160,189 @@ That pass also set `MIN_FRAMES=3`, an override that was unnecessary and was drop
 
 ---
 
+## V. Digital-twin viewing path, 2026-09-28
+
+The required path is real reconstruction → production splat export → stored artifact → authenticated viewer request →
+GaussianSplats3D → rendered scene.
+
+**Two different claims, validated separately:**
+
+| Claim | Status |
+|---|---|
+| **REAL VENUE RECONSTRUCTION VALIDATION**: a reconstruction of a real venue, viewed | **NOT DONE.** No real reconstruction exists here: `SPLAT_RECONSTRUCTION` needs a CUDA GPU (section 0). Nothing below is, or is called, a venue reconstruction. |
+| **FORMAT VALIDATION**: a deterministic synthetic Gaussian scene, exported by the production exporter and taken through the rest of the path | **PASS**, in CI and on the full running stack. Routing is BLOCKED: no navmesh exists. |
+
+**Product defect found and fixed.** The digital-twin viewer drew nothing on desktop browsers: it showed a black canvas
+while reporting the scene as loaded with every splat counted (V.4).
+
+- The defect has been there since the viewer was introduced (`a158287`).
+- The previous Playwright test passed anyway, because it checked the splat count and never the pixels.
+
+Evidence (no screenshots; every visual claim is a measured value):
+
+| File | Contents |
+|---|---|
+| `viewer-format-results.json`, `viewer-format-run-log.txt` | full-stack harness: exporter, storage, calibration, POIs, route, HTTP authorization |
+| `viewer-format-check.json`, `viewer-format-check.txt` | real Chromium against the real web container: public link and Keycloak sign-in |
+| `viewer-format-stack.txt` | image ids, worker stage set, library versions |
+
+### V.1 The fixture
+
+`packages/contracts/fixtures/viewer-scene`. Its `fixture.json` says, in words: "NOT a reconstruction of any venue".
+
+- **The scene.** 3,701 Gaussians in canonical metres (+Z up):
+  - a 6 m × 4 m checkerboard floor at z = 0 (flat Gaussians);
+  - red, green and blue pillars, each 2 m tall.
+- **The frame.** It is stored in a "reconstruction frame" with a known similarity: scale 2.5, a COLMAP-like −Y up, a 30°
+  yaw and an offset. Calibration and canonical placement are therefore exercised, not an identity.
+- **The bytes.** `generate_viewer_scene.py` writes `scene.ply` and runs the **production ARTIFACT_GENERATION stage**
+  (`chaya_worker.stages.artifact_generation`) on it. The stage's KSPLAT output is committed as `scene.ksplat`
+  (167,964 B, sha256 `af64e4f4…f48d`).
+- **The binding.** `tests/unit/test_viewer_scene_fixture.py` fails unless the committed `.ksplat` is byte-identical to
+  what that stage writes today. It passes on Windows and on Linux (Debian, the worker image).
+- **Control points and POI positions.** Both are exact **by construction** of the synthetic scene. They are not a
+  survey, and are labelled so wherever they are used.
+
+### V.2 FORMAT VALIDATION in CI (no backend)
+
+These run in the existing `frontend` CI job (`npm test`, `npm run test:e2e`).
+
+- **`apps/web/lib/viewer-scene-fixture.test.ts`** uses the pinned `KSplatLoader` (GaussianSplats3D 0.4.7):
+  - it reads all 3,701 splats;
+  - every position and every colour/opacity matches the library's own `PlyLoader` on `scene.ply`;
+  - the viewer's own placement math (`lib/coordinate-frame`) with the fixture's similarity reproduces the 6 × 4 × 2 m
+    box.
+- **`apps/web/e2e/ksplat-viewer.spec.ts`**, rewritten. The JSON API is mocked; the artifact response carries the
+  fixture's exact bytes. It checks:
+  - **Artifact request.** One request, carrying `X-Chaya-Viewer-Token` and no `Authorization`. The SHA-256 of the
+    bytes the browser received equals the fixture's.
+  - **Splat count.** GaussianSplats3D reports 3,701.
+  - **Rendering.** More than 5 % of the canvas's sampled pixels are drawn. The pixels are read back from the WebGL
+    canvas inside a `requestAnimationFrame` callback that runs after the viewer's render.
+  - **POI overlay.** Three POI markers appear. The pixels just above the "Red pillar" marker are red, so the overlay and
+    the splat share one placement. Clicking the marker selects that POI.
+  - **Camera interaction.** A mouse drag changes the rendered frame.
+- **`apps/web/e2e/viewer.spec.ts`.** The two tests that stubbed the download with a request that never resolved now get
+  the fixture's bytes:
+  - uncalibrated: it renders, and no POIs are drawn;
+  - calibrated: it renders, and the POIs are placed.
+- **Scene waits.** They use a 60 s budget (`SCENE_TIMEOUT`): software WebGL takes about 5 s per page alone, and much
+  longer with many pages in parallel.
+- **Result.** 12/12 Playwright tests in two full runs, and 12/12 when the three scene tests were repeated four times
+  serially. With the scene tests repeated ×4 on 4 parallel workers, 11/12 passed. The failure was a floor list that
+  never loaded under that load, before any artifact was requested.
+- **Unit suites.** `npm run lint` and `npm run typecheck` are clean; `npm test` gives 106/106.
+
+**Negative control.** With the old device profile restored (`gpuAcceleratedSort: !isMobileUa`), `ksplat-viewer.spec.ts`
+fails at the rendering check, with 0 % of pixels drawn.
+
+### V.3 FORMAT VALIDATION on the full running stack
+
+**What is real:**
+
+- Postgres, MinIO, ClamAV and Keycloak;
+- the API image (`chaya-api:smoke`);
+- the web image and the CPU worker image, both built from the working tree.
+
+**The worker.** It claims only `ARTIFACT_GENERATION`: a scratch compose override sets `WORKER_STAGES`, so it cannot race
+the stand-ins.
+
+**Stand-ins (not executed).**
+
+- The harness claims `INPUT_VALIDATION` … `PLANE_FITTING` through the worker API, as the worker service account, and
+  reports each as SUCCEEDED with `command.standIn = true` and a note saying the stage was not executed.
+- Only two of them publish anything:
+  - the pose stand-in publishes a labelled placeholder `POSES` (`{"standIn": true, "poses": []}`), because calibration
+    binds to a run's POSES;
+  - the splat stand-in publishes the fixture PLY as `SPLAT` (`format-fixture-scene.ply`).
+- The run's capture media is a 2 s ffmpeg test pattern (13,868 B). It passed real ClamAV and content sniffing, but
+  carries no scene and is used by no stage.
+- Nothing after `ARTIFACT_GENERATION` is stood in.
+
+```bash
+# Throwaway env: fresh random values for every key of .env.example (+ S3_RECON_*), outside the repository.
+# viewer-override.yml: services.reconstruction-worker.environment.WORKER_STAGES=ARTIFACT_GENERATION
+C="docker compose -p chaya-viewer --env-file <scratch>/viewer.env -f infra/docker/docker-compose.yml \
+   -f infra/ci/docker-compose.smoke.yml -f infra/ci/docker-compose.e2e.yml -f <scratch>/viewer-override.yml --profile pipeline"
+$C build api web reconstruction-worker
+$C down -v --remove-orphans            # 15:56:16; 0 volumes left
+$C up -d postgres redis minio minio-init keycloak clamav api web reconstruction-worker   # all healthy at 15:58:36 +05:30
+
+ffmpeg -f lavfi -i testsrc=duration=2:size=640x360:rate=10 -c:v libx264 -pix_fmt yuv420p carrier.mp4
+services/reconstruction/.venv/Scripts/python scripts/e2e/viewer_format_validation.py --env-file <scratch>/viewer.env \
+  --project chaya-viewer --carrier carrier.mp4 --out docs/e2e-evidence/viewer-format-results.json \
+  --handoff <scratch>/viewer-handoff.json                    # secrets: kept outside the evidence
+cd apps/web && HANDOFF=<scratch>/viewer-handoff.json OUT=../../docs/e2e-evidence/viewer-format-check.json \
+  node ../../scripts/e2e/viewer_format_check.cjs            # 16:01:55 to 16:02:28 +05:30
+```
+
+**Harness: 18 PASS, 0 FAIL, 1 BLOCKED.**
+
+| Step | Check | Result |
+|---|---|---|
+| V3 | Stages before the exporter | 9 labelled stand-ins; `pipeline_stage_run.command->>'standIn' = true` for each |
+| V4 | Production exporter | `ARTIFACT_GENERATION` SUCCEEDED on `viewer-format-cpu-worker` (the real container), `gaussian_count` 3,701. Outputs: KSPLAT, ARTIFACT_MANIFEST, VIEWER_BUNDLE. **PASS** |
+| V4.1 | Stored artifact | MinIO object 167,964 B; sha256 of the stored bytes == `processing_artifact.checksum_sha256` == the committed fixture (`af64e4f4…f48d`). The worker container's exporter wrote the same bytes as the committed fixture. **PASS** |
+| V4.2 | Manifest provenance | lists `SPLAT format-fixture-scene.ply` by checksum; `coordinateSpace: RECONSTRUCTION`. **PASS** |
+| V5 | Calibration (real API) | 5 control points by construction → 201, canonical, `VENUE_CONTROL_POINTS`, scale 2.5, RMS 1.0e-15 m. **PASS** |
+| V5.1 | POIs | 3 manual POIs at the pillar bases, `frameStatus CURRENT`. **PASS** |
+| V6 | Route | 409: "no STANDARD navigation graph baked from a Recast navmesh; run NAVIGATION_BAKING…"; 0 `navigation_graph` rows. **BLOCKED** (no navmesh) |
+| V7.1 | Public viewer token → artifact | 200, `application/octet-stream`, `nosniff`, `private, max-age=3600`, bytes == fixture. **PASS** |
+| V7.2 | Manager (Keycloak JWT) → artifact | 200, bytes == fixture. **PASS** |
+| V7.3–V7.8 | Refusals | no credentials 401; the venue-A token under venue B 404; venue B's manager 404; raw `SPLAT` kind 400; a revoked link's token 401. `reconstructions/latest` returns this run with the fixture's sha256 and a canonical frame. **PASS** |
+
+**Browser: 12 PASS, 0 FAIL, 1 BLOCKED.** Real Chromium, the real web container. A is the public link; B is the Keycloak
+PKCE sign-in as the venue manager.
+
+| Check | A: public link | B: signed-in manager |
+|---|---|---|
+| HTTP artifact retrieval (as the browser received it) | 200, 167,964 B, `X-Chaya-Viewer-Token` only, sha256 == fixture | 200, `Authorization: Bearer` only, sha256 == fixture |
+| Format / viewer initialisation | "Splats 3,701", no load error | same |
+| Rendered scene | 10.3 % of pixels drawn | 7.7 % |
+| POI overlay | 3 markers; rgb(215, 41, 41) above the Red pillar marker; click selects it | same |
+| Camera interaction | drag: mean cell difference 13.4/255; 12.0 % drawn after | 11.7/255; 12.1 % |
+| Console errors | 0 | 0 |
+| Route overlay | **BLOCKED**: route 409; the panel shows the API's reason; nothing drawn | not exercised |
+
+### V.4 Defect: the viewer drew nothing on desktop (fixed)
+
+- **Symptom.**
+  - The desktop viewer showed a black canvas.
+  - The sidebar still said "Splats 3,701", and there was no error.
+  - POI markers were projected into the empty scene.
+  - The old `ksplat-viewer.spec.ts` passed: it waited for the splat count only.
+- **Found by.** The new pixel check. Instrumenting WebGL showed one draw call in 3 s of rendering.
+- **Cause.** `lib/device-profile.ts` set `gpuAcceleratedSort: !isMobileUa`, so it was true on every desktop browser. In
+  GaussianSplats3D 0.4.7, with GPU-computed distances:
+  - `addSplatScene` never uploads splat centres to the sort worker (it pushes them only `if (!this.gpuAcceleratedSort)`);
+  - the worker clamps every sort to `min(splatRenderCount, uploadedSplatCount)`, which is 0;
+  - so the sort reports 0 splats to render, the mesh's `instanceCount` stays 0, and three.js draws nothing.
+
+  Observed in the worker messages: out `sort {splatRenderCount: 3701}`, in `sortDone {splatRenderCount: 0}`.
+- **Fix.** `gpuAcceleratedSort: false`, which is the library's own default, with the reason documented at the field.
+- **Verified.**
+  - All 3,701 splats become instances.
+  - The CI spec and the full-stack check render (V.2, V.3).
+  - The negative control fails with the old value.
+- **Considered and rejected.** A stale camera matrix (the external camera's `matrixWorld` is not updated before the
+  library's first sort) was suspected too. Once the sort fix was in, rendering was identical with or without
+  `camera.updateMatrixWorld()`, so that change was **not** made.
+
+### V.5 What remains
+
+- **REAL VENUE RECONSTRUCTION VALIDATION** needs a real reconstruction: a GPU worker and a real, measured capture
+  (section 0.5).
+- **Route overlay.** It needs `NAVIGATION_BAKING` on a real, calibrated reconstruction; no navmesh exists here.
+- **Integrity check.** The viewer does not check the downloaded bytes against the `sha256` the API returns. The tests
+  above do that check themselves. A mismatch in the app today would surface only as a load error or a wrong scene.
+  This is a product gap and was left open.
+- **Headless rendering only.** Rendering was measured in headless Chromium with software WebGL. No physical GPU or
+  mobile browser was used.
+
+---
+
 *Sections 1–9 below are the 2026-09-24 full-stack validation (API, Keycloak, MinIO, both workers, browser). They are
-unchanged, except that section 9 lists the files this 2026-09-28 validation added.*
+unchanged, except that section 9 lists the files the 2026-09-28 validations (sections 0 and V) added.*
 
 **Date:** 2026-09-24.
 **Code under test:** commit `372b5b5` plus the working tree listed in [section 9](#9-files-added-or-changed). That
@@ -617,3 +798,8 @@ The first run of this validation had a third FAIL: step 22, admin audit log, HTT
 | `docs/e2e-evidence/*` | evidence | see the top of this document. Logs are `.txt`, because `*.log` is gitignored. |
 | `scripts/e2e/physical_pipeline.py` | test harness (2026-09-28) | physical-pipeline driver (section 0) |
 | `docs/e2e-evidence/physical-*` | evidence (2026-09-28) | section 0 |
+| `packages/contracts/fixtures/viewer-scene/*`, `services/reconstruction/tests/unit/test_viewer_scene_fixture.py` | FORMAT VALIDATION fixture + test (2026-09-28) | section V.1 |
+| `apps/web/lib/device-profile.ts` | fix (2026-09-28) | V.4: the desktop viewer drew nothing |
+| `apps/web/lib/viewer-scene-fixture.test.ts`, `apps/web/e2e/viewer-fixture.ts`, `apps/web/e2e/ksplat-viewer.spec.ts`, `apps/web/e2e/viewer.spec.ts` | tests (2026-09-28) | V.2 |
+| `scripts/e2e/viewer_format_validation.py`, `scripts/e2e/viewer_format_check.cjs` | test harness (2026-09-28) | V.3 |
+| `docs/e2e-evidence/viewer-format-*` | evidence (2026-09-28) | section V |

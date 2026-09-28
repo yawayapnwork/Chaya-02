@@ -1,51 +1,61 @@
-import { readFileSync } from "node:fs";
-import path from "node:path";
-import { test, expect, type Page } from "@playwright/test";
+import { createHash } from "node:crypto";
+import { test, expect } from "@playwright/test";
+import { FIXTURE, KSPLAT_SHA256, SCENE_TIMEOUT, colourAbove, frameDifference, mockViewerApi, sampleCanvas } from "./viewer-fixture";
 
-// Pipeline compatibility: the production encoder's .ksplat (packages/contracts/fixtures/ksplat/scene.ksplat -- the
-// worker test tests/unit/test_ksplat_fixture.py fails unless it is byte-identical to what chaya_worker.ksplat writes)
-// served as the artifact download, fetched by the viewer's real download path (lib/reconstruction-api.fetchArtifact,
-// progress and Blob URL), and loaded by the real GaussianSplats3D Viewer in Chromium. The JSON API around it is mocked;
-// the artifact download is NOT stubbed -- the browser receives and parses the actual bytes.
+// FORMAT VALIDATION (not a real venue reconstruction): the production exporter's .ksplat of the synthetic viewer-scene
+// fixture (e2e/viewer-fixture.ts), delivered byte for byte to the viewer's real download path and loaded, rendered and
+// overlaid by the real GaussianSplats3D viewer in Chromium. The JSON API is mocked; nothing about the scene is.
 
-const VENUE_ID = "11111111-1111-1111-1111-111111111111";
-const FLOOR_ID = "22222222-2222-2222-2222-222222222222";
 const RUN_ID = "44444444-4444-4444-4444-444444444444";
-// Resolved from the web app root (Playwright runs specs from there).
-const KSPLAT = readFileSync(path.resolve(process.cwd(), "../../packages/contracts/fixtures/ksplat/scene.ksplat"));
 
-async function mockJson(page: Page, urlPattern: string, body: unknown) {
-  await page.route(urlPattern, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) }));
-}
-
-test("the viewer downloads the production .ksplat and GaussianSplats3D loads all of its splats", async ({ page }) => {
+test("FORMAT VALIDATION: the exported fixture downloads, loads every splat, renders, orbits, and carries its POI overlay", async ({ page }) => {
+  test.setTimeout(3 * SCENE_TIMEOUT);
   const pageErrors: string[] = [];
   page.on("pageerror", (e) => pageErrors.push(e.message));
-  const expiresAt = new Date(Date.now() + 60_000).toISOString();
-  const generatedAt = new Date().toISOString();
-  await mockJson(page, "**/mock-api/api/v1/public/viewer-token", { token: "cvt_test", expiresAt, venueId: VENUE_ID });
-  await mockJson(page, `**/mock-api/api/v1/venues/${VENUE_ID}/floors`, [{ id: FLOOR_ID, level: 0, name: "Ground Floor" }]);
-  await mockJson(page, `**/mock-api/api/v1/venues/${VENUE_ID}/floors/${FLOOR_ID}/reconstructions`, [
-    { runId: RUN_ID, floorId: FLOOR_ID, generatedAt, runStatus: "SUCCEEDED", runQuality: "FINAL" },
-  ]);
-  await mockJson(page, `**/mock-api/api/v1/venues/${VENUE_ID}/pois`, []);
-  await mockJson(page, `**/mock-api/api/v1/venues/${VENUE_ID}/reconstructions/${RUN_ID}`, {
-    runId: RUN_ID, scanId: "scan-1", floorId: FLOOR_ID, generatedAt, runStatus: "SUCCEEDED", runQuality: "FINAL",
-    artifacts: [{ kind: "KSPLAT", contentType: "application/octet-stream", sizeBytes: KSPLAT.length, sha256: "0".repeat(64),
-      url: `/api/v1/venues/${VENUE_ID}/reconstructions/${RUN_ID}/artifacts/KSPLAT` }],
-    coordinateFrame: null,
-  });
-  let served = 0;
-  await page.route(`**/mock-api/api/v1/venues/${VENUE_ID}/reconstructions/${RUN_ID}/artifacts/KSPLAT`, (route) => {
-    served++;
-    return route.fulfill({ status: 200, contentType: "application/octet-stream", body: KSPLAT });
-  });
+  const artifactPath = await mockViewerApi(page, RUN_ID, { calibrated: true });
+  const artifactResponse = page.waitForResponse((r) => r.url().endsWith(artifactPath));
 
   await page.goto(`/viewer?link=good-secret`);
 
+  // HTTP artifact retrieval: one authenticated request, and the browser received exactly the exporter's bytes.
+  const response = await artifactResponse;
+  const headers = response.request().headers();
+  expect(headers["x-chaya-viewer-token"]).toBe("cvt_test");
+  expect(headers["authorization"]).toBeUndefined();
+  expect(createHash("sha256").update(await response.body()).digest("hex")).toBe(KSPLAT_SHA256);
+
+  // Viewer initialisation and format compatibility: GaussianSplats3D reports every splat of the fixture.
   const splats = page.locator("dt", { hasText: /^Splats$/ }).locator("xpath=following-sibling::dd[1]");
-  await expect(splats).toHaveText("3", { timeout: 30_000 });
+  await expect(splats).toHaveText(FIXTURE.splat_count.toLocaleString("en-US"), { timeout: SCENE_TIMEOUT });
   await expect(page.getByText("Could not load the reconstruction")).toHaveCount(0);
-  expect(served).toBe(1);
+  await expect(page.getByTestId("coordinate-frame-status")).toHaveText("Calibrated, metres (venue datum, v1)");
+
+  // Rendered scene: the WebGL canvas holds drawn splats, not just the clear colour.
+  await expect.poll(async () => (await sampleCanvas(page)).covered, { timeout: SCENE_TIMEOUT }).toBeGreaterThan(0.05);
+  const before = await sampleCanvas(page);
+
+  // POI overlay: one marker per fixture POI, and the red pillar's marker sits under red rendered splats.
+  const markers = page.locator(".chaya-poi-marker");
+  await expect(markers).toHaveCount(FIXTURE.pois_by_construction.length);
+  const red = page.locator('.chaya-poi-marker[title="Red pillar"]');
+  const box = (await red.boundingBox())!;
+  const canvasBox = (await page.getByTestId("splat-canvas").boundingBox())!;
+  expect(box.x > canvasBox.x && box.x < canvasBox.x + canvasBox.width && box.y > canvasBox.y && box.y < canvasBox.y + canvasBox.height).toBe(true);
+  const [r, g, b] = await colourAbove(page, box.x + box.width / 2, box.y + box.height / 2);
+  expect(r, `colour above the Red pillar marker: ${[r, g, b].map(Math.round)}`).toBeGreaterThan(g + 40);
+  expect(r).toBeGreaterThan(b + 40);
+  await red.click();
+  await expect(page.getByTestId("poi-details")).toContainText("Red pillar");
+
+  // Camera interaction: dragging on the canvas orbits the built-in controls; the next frame is a different view.
+  const cx = canvasBox.x + canvasBox.width / 2;
+  const cy = canvasBox.y + canvasBox.height * 0.75;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + 220, cy - 40, { steps: 12 });
+  await page.mouse.up();
+  await expect.poll(async () => frameDifference(before, await sampleCanvas(page)), { timeout: SCENE_TIMEOUT }).toBeGreaterThan(4);
+  expect((await sampleCanvas(page)).covered).toBeGreaterThan(0.02);
+
   expect(pageErrors).toEqual([]);
 });
