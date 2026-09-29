@@ -108,14 +108,21 @@ the stage and everything downstream only ever hold canonical coordinates.
    - the tool and recastnavigation versions;
    - per-stage build counts.
 5. **NAVIGATION_GRAPH** (`chaya_worker.stages.navigation_baking.navigation_graph_document`): the Detour polygon graph.
-   - Nodes are polygon centroids. Edges are Detour links, weighted by centroid distance.
-   - `min_clearance_m` is the length of the Detour portal. Recast has already eroded that portal by the agent radius,
-     so it is not the wall-to-wall width (review N-3).
+   - Nodes are polygon centroids (canonical metres). Edges are Detour links.
+   - Every edge records what was measured on the canonical geometry (`chaya_worker.navmesh.build_routing_graphs`):
+     - `length_m`: the 3-D centroid-to-centroid distance.
+     - `rise_m`: the signed rise along canonical +Z (`CANONICAL_UP`) between the centroids.
+     - `max_slope_deg`: the steepest of both polygons' face slopes and the centroid-to-centroid grade, each measured
+       against `CANONICAL_UP`. The grade catches a step between two level polygons: two flat treads 0.17 m apart with
+       centroids 0.3 m apart are each 0° but joined by a 29.5° edge. Rise and run are projections onto and off the up
+       axis (`edge_rise_run`), never a coordinate index.
+     - `min_clearance_m`: the length of the Detour portal. Recast has already eroded the walkable area by the agent
+       radius, so it is not the wall-to-wall width (review N-3). It is the only clearance measured.
    - **STANDARD**: every link.
-   - **STEP_FREE**: only links between two polygons that are both within `navmesh_max_ramp_slope_deg` (~5°) of level,
-     measured against canonical +Z.
-   - The graph carries a `navmesh` block: `source: RECAST_NAVMESH`, `status: READY`, the navmesh SHA-256, and the tool
-     and library versions.
+   - **STEP_FREE**: only links whose `max_slope_deg` is within `navmesh_max_ramp_slope_deg` (5°).
+   - The graph carries an `edge_measurements` block naming the units, the up axis and how each field was measured, and
+     a `navmesh` block: `source: RECAST_NAVMESH`, `status: READY`, the navmesh SHA-256, and the tool and library
+     versions.
 
 Failure states, each a structured stage failure with nothing published: `NAVMESH_TOOL_UNAVAILABLE` (no chaya-navmesh
 on the worker), `INVALID_GEOMETRY` (non-finite, out-of-range or empty geometry, or a plane referencing missing
@@ -138,9 +145,12 @@ nodes and edges. V18 stores the binding on the graph: `source = 'RECAST_NAVMESH'
 `recastnavigation_version`. A CHECK constraint makes RECAST_NAVMESH impossible without them. Every other graph
 (hand-inserted, benchmark self-tests, test fixtures, anything from before V18) is `SYNTHETIC`, the column default.
 
-Elevators are not detected from geometry -- a hallway scan generally cannot see inside one. Floor-to-floor
-transitions are resolved entirely at query time (see below), not baked into any one floor's graph, because
-`navigation_edge` can never span two different `graph_id`s (its foreign keys are scoped to one graph).
+Ingestion stores `max_slope_deg` and `min_clearance_m` on `navigation_edge` (V22 added `max_slope_deg`). A missing
+or invalid value is stored as NULL, meaning "not measured". STEP_FREE routing refuses NULL (below).
+
+Stairs, ramps and elevators between floors are not detected from geometry: each floor is reconstructed on its own, and
+a hallway scan cannot see inside an elevator. Floor-to-floor travel uses registered floor connections (below), not any
+floor's graph. `navigation_edge` can never span two `graph_id`s anyway (its foreign keys are scoped to one graph).
 
 ### What has and has not been validated
 
@@ -164,6 +174,29 @@ transitions are resolved entirely at query time (see below), not baked into any 
   GPU and Open3D (docs/E2E_VALIDATION.md), so nothing here shows routing quality on real scans. The splat-to-geometry
   step (occupancy grid, obstacle boxes) has only met synthetic point clouds.
 
+## Floor connections: `/api/v1/venues/{venueId}/floor-connections`
+
+`dev.chaya.api.navigation.FloorConnectionService` (V22 `floor_connection`). Venue staff register each connection a
+route may use between two floors:
+
+| Field | Meaning | Required |
+|---|---|---|
+| `connectorType` | `STAIRS`, `RAMP` or `ELEVATOR` | always |
+| `fromFloorId`, `fromPoiId`, `toFloorId`, `toPoiId` | a landing POI on each floor, each placed in its own floor's frame | always |
+| `bidirectional` | usable in both directions (default `true`) | – |
+| `lengthM` | walked length in metres, measured on site | STAIRS and RAMP; refused for ELEVATOR |
+| `minClearanceM` | narrowest clear width (ramp width, elevator door), metres | for STEP_FREE use |
+| `maxSlopeDeg` | a ramp's steepest slope, degrees | for STEP_FREE use of a RAMP |
+
+A multi-stop elevator is one connection per pair of floors it serves. `PUT …/{id}/status` sets `IN_SERVICE` or
+`OUT_OF_SERVICE` (an elevator under maintenance); routing skips the latter. Creation is refused with `400
+INVALID_FLOOR_CONNECTION` for:
+
+- an unknown type;
+- the same floor twice;
+- stairs or a ramp without a length, or an elevator with one;
+- a landing POI that is not on the floor it is named for.
+
 ## Routing: `POST /api/v1/navigation/routes`
 
 `dev.chaya.api.navigation.RouteService` runs Dijkstra over `navigation_node`/`navigation_edge`. On a floor that is
@@ -173,49 +206,121 @@ are polygon centroids, not a smoothed path. Detour's own string-pulled query exi
 and is exercised by the worker tests, but the API does not run it at request time.
 
 - **Navmesh only**: a floor is routed on only if its ACTIVE graph for the requested profile has `source =
-  'RECAST_NAVMESH'`, meaning it was ingested bound to a NAVMESH artifact by checksum. If there is no such graph, or the
-  ACTIVE graph is SYNTHETIC (hand-inserted), the route fails with `409 NAVMESH_NOT_READY`, which names the graph that
-  was refused. There is no fallback to any other graph. The start and destination floors must have one. A multi-floor
-  route never passes through an intermediate floor that lacks one. `chaya.navigation.accept-synthetic-graphs` (default `false`, not set in
-  `application.yml`) exists only so `RouteServiceTest` can unit-test routing rules on hand-built graphs. The B4
-  synthetic self-test also needs it on the stack it runs against.
+  'RECAST_NAVMESH'` and was baked in the floor's current frame. There is no fallback to any other graph.
+  `chaya.navigation.accept-synthetic-graphs` (default `false`, not set in `application.yml`) exists only so
+  `RouteServiceTest` can unit-test routing rules on hand-built graphs. The B4 synthetic self-test also needs it on the
+  stack it runs against.
+- **Metric frames**: the start and destination floors must have a current canonical frame (metric scale,
+  gravity-aligned +Z), and the destination POI must be placed in it. The request's `start` and `blockedRegions` are
+  canonical metres on their floor, in that frame.
+- **Snapping**: the start and the destination each join the nearest graph node within
+  `chaya.navigation.node-snap-max-distance-meters` whose straight segment to them crosses no reported obstacle.
+- **Accessibility** (`accessibility: "STEP_FREE"`, default `"STANDARD"`) fails closed. It routes on the STEP_FREE
+  graph and uses an edge only when all of these hold:
+  - it was baked step-free;
+  - its `min_clearance_m` was measured and is at least `chaya.navigation.min-accessible-clearance-m` (0.9 m);
+  - its `max_slope_deg` was measured and is at most `chaya.navigation.max-accessible-slope-deg` (4.76°, 1:12).
 
-- **Frames**: the start floor (and the destination floor) must have a current canonical coordinate frame
-  (`409 NAVIGATION_NOT_CALIBRATED`); the ACTIVE graph must have been baked in it (`409 NAVIGATION_FRAME_STALE`); the
-  destination POI must be placed in it (`409 POI_NOT_CALIBRATED`). The request's `start` and `blockedRegions` are
-  canonical metres on that floor.
+  An unmeasured value excludes the edge; it is never treated as passing. Between floors, STEP_FREE uses only an
+  ELEVATOR or RAMP connection with a registered `minClearanceM` of at least the same 0.9 m, and, for a ramp, a
+  registered `maxSlopeDeg` within the same limit. It never uses stairs.
+- **Multi-floor**: no coordinate on one floor is ever compared with a coordinate on another. A route crosses floors
+  only through a registered, in-service connection where:
+  - both landing POIs still exist, are still on their floors, and are placed in their floors' current frames;
+  - both floors are routable for the profile.
 
-- **Accessibility** (`accessibility: "STEP_FREE"`, default `"STANDARD"`): selects the STEP_FREE-profile
-  graph, additionally rejects any edge whose measured `min_clearance_m` is below
-  `chaya.navigation.min-accessible-clearance-m`, and only crosses floors via an elevator, never stairs.
-  This is never a renamed shortest path: the edges available to it are geometrically different, computed
-  at bake time from real slope and clearance data.
-- **Multi-floor**: a transition is found by matching a stairs- or elevator-categorised POI on the current
-  floor to the closest same-category POI on an adjacent (stairs) or any (elevator) floor, within
-  `chaya.navigation.transition-match-radius-meters` -- real POI positions placed by venue staff, not a
-  fabricated link table. A route is then floor-local navigation, a transition, and floor-local navigation
-  again, repeated per hop. Comparing positions across floors is only meaningful when both floors share one venue
-  datum, so both must be calibrated against surveyed control points (`VENUE_CONTROL_POINTS`); two `FLOOR_LOCAL`
-  frames have unrelated origins and headings, and the route is refused (`409 FLOORS_NOT_REGISTERED`).
-- **Dynamic obstacles**: `blockedRegions` in the request (each an axis-aligned box the AR client actually
-  observed, on one floor) excludes any graph node that falls inside them, for that one query only --
-  nothing is written to the database. This is the runtime-obstacle architecture the task calls for: the
-  client reports what it detected, the server never invents a person or obstacle itself.
-- **Distance and time**: `distanceMeters` is the summed walked distance across every leg. Walking speed is
-  a real, commonly used pedestrian-planning constant (~1.3 m/s standard, ~1.0 m/s accessible); floor
-  transitions add a flat, configurable time (stairs ~20 s, elevator ~45 s) on top of walking time, not
-  counted as walked distance.
+  The search is a Dijkstra over points: the start, connection landings and the destination. Moving between two points
+  on one floor is a real floor-local route over that floor's graph. Crossing a connection costs its registered length,
+  or its elevator time. The search minimises estimated duration, so it can chain connections through intermediate
+  floors. Two floors therefore no longer need a shared venue datum.
+- **Dynamic obstacles**: each `blockedRegions` entry is an axis-aligned horizontal box the AR client observed on one
+  floor. It blocks that floor's full height, for one query only; nothing is written to the database. It excludes:
+  - every graph node inside it;
+  - every edge whose segment crosses it (Liang–Barsky segment/box clipping), even with both endpoints outside;
+  - a start or destination snap segment that crosses it.
+
+  A start or destination inside a box has no route. Blocking is tested on the centroid-to-centroid segments the route
+  reports, not on Detour's polygon interiors: a box that clips a polygon without crossing any of its edge segments does
+  not block it.
+- **Distance and time**:
+  - An edge's routing weight is the 3-D distance between its nodes' canonical positions. The stored `length_m` is
+    not read.
+  - A leg's distance is the 3-D length of its reported waypoint polyline.
+  - `distanceMeters` is the sum of the legs plus the registered `lengthM` of every stairs or ramp connection used.
+  - `estimatedDurationSeconds` adds up:
+    - walked leg length ÷ walking speed (1.3 m/s standard, 1.0 m/s STEP_FREE);
+    - stairs length ÷ `stairs-speed-mps` (0.5 m/s);
+    - ramp length ÷ walking speed;
+    - `elevator-transition-seconds` (45 s) per elevator ride.
 
 ### Response
 
-`RouteResponse` returns the full waypoint sequence (each tagged `START`/`WAYPOINT`/`TRANSITION`/
-`DESTINATION` and its floor), `distanceMeters`, `estimatedDurationSeconds`, `floorTransitions` (each with
-its connector type and the POI that anchors it), the resolved `accessibilityProfile`, and
-`accessibilityConstraintsApplied` -- a human-readable list of exactly which constraints were active, so a
-client never has to guess what "accessible" excluded -- and `routingSources`: for every floor leg, the graph routed
-on, its `source`, and the navmesh SHA-256 and recastnavigation version it was baked with.
+`RouteResponse` returns:
 
-`NAVMESH_NOT_READY` (409) is returned when a floor has no navmesh-backed graph (above). `ROUTE_UNAVAILABLE` (404) is
-returned, never a fabricated path, whenever: the start or destination cannot be snapped within `chaya.navigation.node-snap-max-distance-meters`
-of the graph, the graph is disconnected between them, an obstacle region removes the only path, or no
-floor transition connects the start and destination floors (accessibly, when STEP_FREE was requested).
+- `waypoints`: the full sequence, each tagged `START`, `WAYPOINT`, `TRANSITION` or `DESTINATION`, with its floor.
+- `distanceMeters` and `estimatedDurationSeconds`.
+- `floorTransitions`: each crossing, with the connector type, the connection id, the departure (`poiId`) and arrival
+  (`toPoiId`) landings, and its own distance and duration.
+- `accessibilityProfile`.
+- `accessibilityConstraintsApplied`: a human-readable list of exactly which constraints were active, including that
+  unmeasured slope and clearance were excluded.
+- `routingSources`: for every floor leg, the graph routed on, its `source`, and the navmesh SHA-256 and
+  recastnavigation version it was baked with.
+
+### Failure states
+
+A failure never returns a fabricated or partial path.
+
+| Code | HTTP | When |
+|---|---|---|
+| `METRIC_CALIBRATION_REQUIRED` | 409 | The start or destination floor has no current metric, gravity-aligned frame, or the destination POI is not placed in it (or not on any floor). |
+| `NAVMESH_NOT_READY` | 409 | The start or destination floor has no ACTIVE RECAST_NAVMESH graph for the profile, or has one baked in an older frame. The message names the refused graph. |
+| `FLOOR_CONNECTION_UNAVAILABLE` | 404 | The destination is on another floor, and no chain of usable registered connections joins the floors for this profile. The message lists each unusable connection and why. |
+| `NO_ACCESSIBLE_ROUTE` | 404 | STEP_FREE was requested and no path meets the measured constraints. The message counts the edges excluded for each reason. |
+| `NO_ROUTE` | 404 | STANDARD was requested and the graph does not connect the start and destination: it is disconnected, a point is too far to snap, or reported obstacles cut the path. |
+
+A connection is unusable when it is out of service, when it is stairs and STEP_FREE was requested, when a width or
+slope STEP_FREE needs is unregistered or fails, when a landing is not in its floor's current frame, or when a floor is
+not routable. The edge-exclusion reasons for `NO_ACCESSIBLE_ROUTE` are: unmeasured clearance, too narrow, unmeasured
+slope, too steep, not step-free, and reported obstacles.
+
+Request validation returns `400`: `INVALID_ACCESSIBILITY`, `INVALID_BLOCKED_REGION` (non-finite bounds or min > max),
+or `INVALID_START` (non-finite). The worker's own Detour query (`chaya_worker.recast.find_path`) also fails with
+`NO_ROUTE`.
+
+## What is measured and what is assumed
+
+| Quantity | Status | Source and limits |
+|---|---|---|
+| Canonical frame: metres, +Z against gravity | **measured** at calibration | Known distances or control points give scale. The floor plane, operator floor points or control points give gravity ([coordinate-frames.md](coordinate-frames.md)). |
+| Walkable surface, obstacles, erosion | **measured** from the reconstruction, then Recast | Observed floor cells, and wall/furniture points in the agent's height band. Recast applies its slope, climb, height and radius filters. |
+| Node positions, edge 3-D length, route distance on a floor | **measured** (derived from the canonical geometry) | Polygon centroids and polyline length. |
+| Edge slope (`max_slope_deg`) | **measured** against canonical +Z | Polygon face normals and the centroid grade. These come from the coarse Detour polygons, not the detail mesh, so a step smaller than what the coarse polygons show is not seen. |
+| Edge clearance (`min_clearance_m`) | **measured**, conservatively | The Detour portal length after agent-radius erosion. The true corridor is wider by about two agent radii. A portal can also cross the corridor at an angle. |
+| Agent size: radius 0.35 m, height 1.8 m, climb 0.4 m, max slope 45° | **assumed** | Worker settings (`chaya_worker.settings`). |
+| Accessibility limits: 0.9 m clear width, 4.76° slope | **assumed** (ADA-derived) | `chaya.navigation.*`. The worker bakes STEP_FREE at 5° (`navmesh_max_ramp_slope_deg`); the API then applies 4.76°. |
+| Floor connections: existence, landings, stairs/ramp walked length, ramp slope, clear width | **registered by staff**, not reconstructed | `floor_connection`. Chaya cannot check them against geometry. |
+| Walking speeds (1.3 / 1.0 m/s), stairs speed (0.5 m/s), elevator ride (45 s) | **assumed** planning constants | `chaya.navigation.*`. |
+| Dynamic obstacles | **reported by the client** | `blockedRegions`. The server never invents one. |
+
+### Routing: what has and has not been validated
+
+- **With real Recast output:** `PipelineControlPlaneTest` ingests the real Recast output for the fixture mesh (see the
+  baking section) and routes on it.
+- **Algorithmic unit tests only.** These use synthetic fixtures and are not evidence of navigation in any venue.
+  - `RouteServiceTest` hand-builds graphs, frames and connections to test the routing rules:
+    - unknown and insufficient clearance, steep and unmeasured slope, and steps;
+    - stairs, elevators and ramps, including fail-closed width and slope;
+    - multi-floor routing between floors with unrelated frames, and chained connections;
+    - out-of-service connections, and landings in a stale frame;
+    - an obstacle that blocks an edge without covering a node, and rerouting around a dynamic obstacle;
+    - metric distance and duration from the geometry rather than stored lengths;
+    - every failure code.
+  - `RouteGeometryTest` covers segment/box blocking and polyline length.
+  - `tests/unit/test_navigation_baking.py` covers slope, rise and run against canonical +Z, and a step between two
+    level polygons.
+- **Not validated:**
+  - No real venue has been routed on.
+  - No real multi-floor venue has registered connections.
+  - No reconstruction has put a stair or ramp into the navmesh input. The input is still the single floor plane, so a
+    floor's STEP_FREE and STANDARD graphs differ only where that one plane's polygons do.

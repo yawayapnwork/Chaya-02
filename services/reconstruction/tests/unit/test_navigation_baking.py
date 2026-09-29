@@ -16,6 +16,8 @@ from chaya_worker.navmesh import (
     NavmeshError,
     Polygon,
     build_routing_graphs,
+    edge_grade_degrees,
+    edge_rise_run,
     geometry_from_reconstruction,
     obstacle_band_mask,
     point_in_polygon_xy,
@@ -170,3 +172,44 @@ def test_build_routing_graphs_keeps_a_gentle_ramp_in_step_free():
 def test_polygon_centroid_is_the_real_vertex_average():
     centroid = polygon_centroid(Polygon(0, [(0, 0, 0), (2, 0, 0), (1, 3, 0)]))
     assert np.allclose(centroid, [1.0, 1.0, 0.0])
+
+
+# ---- slope against the canonical up axis ------------------------------------------------------------------------------
+
+
+def test_edge_rise_and_run_are_measured_along_canonical_up_not_a_horizontal_axis():
+    """+Z is up in the canonical frame. A 3 m move along +Y is level (Recast's +Y-up convention must never leak in here);
+    the same move along +Z is a vertical rise."""
+    assert edge_rise_run(np.zeros(3), np.array([0.0, 3.0, 0.0])) == pytest.approx((0.0, 3.0))
+    assert edge_grade_degrees(np.zeros(3), np.array([0.0, 3.0, 0.0])) == pytest.approx(0.0)
+    assert edge_rise_run(np.zeros(3), np.array([0.0, 0.0, 3.0])) == pytest.approx((3.0, 0.0))
+    assert edge_grade_degrees(np.zeros(3), np.array([0.0, 0.0, 3.0])) == pytest.approx(90.0)
+    # 1:12 (the accessible-ramp limit) in metres: 0.1 m of rise over 1.2 m of run, in any horizontal direction
+    run_dir = np.array([0.6, 0.8, 0.0])
+    assert edge_grade_degrees(np.zeros(3), run_dir * 1.2 + [0, 0, 0.1]) == pytest.approx(np.degrees(np.arctan(1 / 12)))
+    assert edge_rise_run(np.array([0, 0, 0.5]), np.zeros(3))[0] == pytest.approx(-0.5), "rise is signed: descending is negative"
+
+
+def test_a_step_between_two_level_polygons_is_not_step_free():
+    """Two treads: each polygon is perfectly level, but the second is 0.17 m higher (a stair riser) 0.3 m further on.
+    Per-polygon slope alone would call this step-free; the centroid-to-centroid grade does not."""
+    lower = Polygon(0, [(0, 0, 0), (0.3, 0, 0), (0.3, 1, 0), (0, 1, 0)], [_link(1, (0.3, 0, 0), (0.3, 1, 0))])
+    upper = Polygon(1, [(0.3, 0, 0.17), (0.6, 0, 0.17), (0.6, 1, 0.17), (0.3, 1, 0.17)], [_link(0, (0.3, 1, 0), (0.3, 0, 0))])
+    assert polygon_slope_degrees(lower) == polygon_slope_degrees(upper) == pytest.approx(0.0)
+
+    graphs = build_routing_graphs([lower, upper], max_ramp_slope_deg=5.0)
+    (edge,) = graphs["STANDARD"]["edges"]
+    assert edge["rise_m"] == pytest.approx(0.17)
+    assert edge["max_slope_deg"] == pytest.approx(np.degrees(np.arctan2(0.17, 0.3)))
+    assert edge["step_free"] is False
+    assert graphs["STEP_FREE"]["edges"] == []
+
+
+def test_every_edge_records_its_measured_slope_clearance_and_metric_length():
+    flat = Polygon(0, [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)], [_link(1, (1, 0, 0), (1, 1, 0))])
+    level_far = Polygon(1, [(1, 0, 0), (4, 0, 0), (4, 1, 0), (1, 1, 0)], [_link(0, (1, 1, 0), (1, 0, 0))])
+    (edge,) = build_routing_graphs([flat, level_far], max_ramp_slope_deg=5.0)["STEP_FREE"]["edges"]
+    assert edge["length_m"] == pytest.approx(2.0)  # centroids at x = 0.5 and x = 2.5
+    assert edge["max_slope_deg"] == pytest.approx(0.0)
+    assert edge["rise_m"] == pytest.approx(0.0)
+    assert edge["min_clearance_m"] == pytest.approx(1.0)

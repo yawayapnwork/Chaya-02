@@ -36,6 +36,14 @@
   "detail_sample_max_error_m": 0.05
  },
  "polygon_count": 11,
+ "edge_measurements": {
+  "units": "m",
+  "up_axis": "+Z",
+  "length_m": "3-D distance between polygon centroids",
+  "max_slope_deg": "steepest of both polygons' face slopes and the centroid-to-centroid grade, against canonical +Z",
+  "min_clearance_m": "Detour portal length; the walkable area was already eroded by recast_config.agent_radius_m",
+  "step_free_max_slope_deg": 5.0
+ },
  "graphs": {
   "STANDARD": {
    "nodes": [
@@ -133,6 +141,8 @@
      "from": "p0",
      "to": "p3",
      "length_m": 0.9419247433963195,
+     "rise_m": -6.938893903907228e-18,
+     "max_slope_deg": 4.2208184674012787e-16,
      "step_free": true,
      "min_clearance_m": 0.6403124237432849
     },
@@ -140,6 +150,8 @@
      "from": "p1",
      "to": "p6",
      "length_m": 1.1426394882026438,
+     "rise_m": -6.938893903907228e-18,
+     "max_slope_deg": 3.479394325924362e-16,
      "step_free": true,
      "min_clearance_m": 0.670820393249937
     },
@@ -147,6 +159,8 @@
      "from": "p2",
      "to": "p7",
      "length_m": 2.909371829870572,
+     "rise_m": 0.0,
+     "max_slope_deg": 0.0,
      "step_free": true,
      "min_clearance_m": 0.5
     },
@@ -154,6 +168,8 @@
      "from": "p2",
      "to": "p4",
      "length_m": 1.7017964364491753,
+     "rise_m": 1.3877787807814457e-17,
+     "max_slope_deg": 4.672348897527064e-16,
      "step_free": true,
      "min_clearance_m": 1.4212670403551895
     },
@@ -161,6 +177,8 @@
      "from": "p2",
      "to": "p5",
      "length_m": 0.643341968853959,
+     "rise_m": 1.3877787807814457e-17,
+     "max_slope_deg": 1.2359502548579706e-15,
      "step_free": true,
      "min_clearance_m": 0.854400374531753
     },
@@ -168,6 +186,8 @@
      "from": "p3",
      "to": "p5",
      "length_m": 0.8695464973830387,
+     "rise_m": 6.938893903907228e-18,
+     "max_slope_deg": 4.572145783801699e-16,
      "step_free": true,
      "min_clearance_m": 0.7810249675906655
     },
@@ -175,6 +195,8 @@
      "from": "p4",
      "to": "p6",
      "length_m": 0.9626713411705526,
+     "rise_m": -6.938893903907228e-18,
+     "max_slope_deg": 4.1298553117777283e-16,
      "step_free": true,
      "min_clearance_m": 1.5231546211727816
     },
@@ -182,6 +204,8 @@
      "from": "p7",
      "to": "p10",
      "length_m": 1.1504226276556897,
+     "rise_m": 6.938893903907228e-18,
+     "max_slope_deg": 3.4558546192115427e-16,
      "step_free": true,
      "min_clearance_m": 1.9723082923316022
     },
@@ -189,6 +213,8 @@
      "from": "p7",
      "to": "p9",
      "length_m": 1.9039432764659776,
+     "rise_m": 1.3877787807814457e-17,
+     "max_slope_deg": 4.176272897382654e-16,
      "step_free": true,
      "min_clearance_m": 1.8110770276274835
     },
@@ -196,6 +222,8 @@
      "from": "p8",
      "to": "p10",
      "length_m": 0.7983489907998323,
+     "rise_m": -6.938893903907228e-18,
+     "max_slope_deg": 4.979894003305892e-16,
      "step_free": true,
      "min_clearance_m": 1.664331697709324
     }
@@ -297,6 +325,8 @@
      "from": "p0",
      "to": "p3",
      "length_m": 0.9419247433963195,
+     "rise_m": -6.938893903907228e-18,
+     "max_slope_deg": 4.2208184674012787e-16,
      "step_free": true,
      "min_clearance_m": 0.6403124237432849
     },
@@ -304,6 +334,8 @@
      "from": "p1",
      "to": "p6",
      "length_m": 1.1426394882026438,
+     "rise_m": -6.938893903907228e-18,
+     "max_slope_deg": 3.479394325924362e-16,
      "step_free": true,
      "min_clearance_m": 0.670820393249937
     },
@@ -311,6 +343,8 @@
      "from": "p2",
      "to": "p7",
      "length_m": 2.909371829870572,
+     "rise_m": 0.0,
+     "max_slope_deg": 0.0,
      "step_free": true,
      "min_clearance_m": 0.5
     },
@@ -318,6 +352,8 @@
      "from": "p2",
      "to": "p4",
      "length_m": 1.7017964364491753,
+     "rise_m": 1.3877787807814457e-17,
+     "max_slope_deg": 4.672348897527064e-16,
      "step_free": true,
      "min_clearance_m": 1.4212670403551895
     },
@@ -325,6 +361,8 @@
      "from": "p2",
      "to": "p5",
      "length_m": 0.643341968853959,
+     "rise_m": 1.3877787807814457e-17,
+     "max_slope_deg": 1.2359502548579706e-15,
      "step_free": true,
      "min_clearance_m": 0.854400374531753
     },
@@ -332,6 +370,8 @@
      "from": "p3",
      "to": "p5",
      "length_m": 0.8695464973830387,
+     "rise_m": 6.938893903907228e-18,
+     "max_slope_deg": 4.572145783801699e-16,
      "step_free": true,
      "min_clearance_m": 0.7810249675906655
     },
@@ -339,6 +379,8 @@
      "from": "p4",
      "to": "p6",
      "length_m": 0.9626713411705526,
+     "rise_m": -6.938893903907228e-18,
+     "max_slope_deg": 4.1298553117777283e-16,
      "step_free": true,
      "min_clearance_m": 1.5231546211727816
     },
@@ -346,6 +388,8 @@
      "from": "p7",
      "to": "p10",
      "length_m": 1.1504226276556897,
+     "rise_m": 6.938893903907228e-18,
+     "max_slope_deg": 3.4558546192115427e-16,
      "step_free": true,
      "min_clearance_m": 1.9723082923316022
     },
@@ -353,6 +397,8 @@
      "from": "p7",
      "to": "p9",
      "length_m": 1.9039432764659776,
+     "rise_m": 1.3877787807814457e-17,
+     "max_slope_deg": 4.176272897382654e-16,
      "step_free": true,
      "min_clearance_m": 1.8110770276274835
     },
@@ -360,6 +406,8 @@
      "from": "p8",
      "to": "p10",
      "length_m": 0.7983489907998323,
+     "rise_m": -6.938893903907228e-18,
+     "max_slope_deg": 4.979894003305892e-16,
      "step_free": true,
      "min_clearance_m": 1.664331697709324
     }

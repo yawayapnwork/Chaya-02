@@ -556,6 +556,10 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
         Integer polygons = jdbc.sql("SELECT count(*) FROM navigation_node n JOIN navigation_graph g ON g.id = n.graph_id "
                 + "WHERE g.venue_id = :v AND g.profile = 'STANDARD'").param("v", s.c().venue()).query(Integer.class).single();
         assertThat(polygons).as("one node per Detour polygon").isEqualTo(mapper.readTree(graphTemplate).get("polygon_count").asInt());
+        Integer unmeasured = jdbc.sql("SELECT count(*) FROM navigation_edge e JOIN navigation_graph g ON g.id = e.graph_id "
+                + "WHERE g.venue_id = :v AND (e.max_slope_deg IS NULL OR e.min_clearance_m IS NULL)")
+            .param("v", s.c().venue()).query(Integer.class).single();
+        assertThat(unmeasured).as("every edge of the real Recast graph carries a measured slope and clearance").isZero();
 
         // Route across the wall, from the left room to the right one, on the ingested navmesh graph.
         Actor viewer = new Actor(Actor.Kind.USER, "viewer", s.c().org(), Set.of(s.c().venue()), Set.of(Role.VIEWER));

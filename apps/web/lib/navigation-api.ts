@@ -20,12 +20,19 @@ export interface RouteWaypoint {
   kind: "START" | "WAYPOINT" | "TRANSITION" | "DESTINATION";
 }
 
-/** Mirrors dev.chaya.api.navigation.NavigationDtos.FloorTransition. */
+/** Mirrors dev.chaya.api.navigation.NavigationDtos.FloorTransition: one crossing of a registered floor connection. */
 export interface FloorTransition {
   fromFloorId: string;
   toFloorId: string;
-  connectorType: "STAIRS" | "ELEVATOR" | "ESCALATOR" | "RAMP";
+  connectorType: "STAIRS" | "ELEVATOR" | "RAMP";
+  /** The landing POI the route leaves from, on fromFloorId. */
   poiId: string;
+  connectionId: string;
+  /** The landing POI the route arrives at, on toFloorId. */
+  toPoiId: string;
+  /** Registered walked length (0 for an elevator). */
+  distanceMeters: number;
+  durationSeconds: number;
 }
 
 /** Mirrors dev.chaya.api.navigation.NavigationDtos.RouteResponse. */

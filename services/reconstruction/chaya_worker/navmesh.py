@@ -24,15 +24,19 @@ from .errors import DependencyError, StageError
 from .frames import CANONICAL_UP
 
 # ---- failure states -------------------------------------------------------------------------------------------------
-# The structured error codes NAVIGATION_BAKING and route queries fail with. NAVMESH_NOT_READY is the API's (a floor
-# with no navmesh-backed graph, dev.chaya.api.navigation.RouteService); it is listed here so the set is in one place.
+# The structured error codes NAVIGATION_BAKING and route queries fail with. The route states are the API's
+# (dev.chaya.api.navigation.RouteService); they are listed here so the set is in one place. The worker's own Detour
+# path query (chaya_worker.recast.find_path) only ever fails with NO_ROUTE.
 
 NAVMESH_TOOL_UNAVAILABLE = "NAVMESH_TOOL_UNAVAILABLE"
 INVALID_GEOMETRY = "INVALID_GEOMETRY"
 NO_WALKABLE_SURFACE = "NO_WALKABLE_SURFACE"
 NAVMESH_BUILD_FAILED = "NAVMESH_BUILD_FAILED"
 NAVMESH_NOT_READY = "NAVMESH_NOT_READY"
-ROUTE_UNAVAILABLE = "ROUTE_UNAVAILABLE"
+NO_ROUTE = "NO_ROUTE"
+NO_ACCESSIBLE_ROUTE = "NO_ACCESSIBLE_ROUTE"
+FLOOR_CONNECTION_UNAVAILABLE = "FLOOR_CONNECTION_UNAVAILABLE"
+METRIC_CALIBRATION_REQUIRED = "METRIC_CALIBRATION_REQUIRED"
 
 
 class NavmeshError(StageError):
@@ -263,8 +267,9 @@ def polygon_centroid(poly: Polygon) -> np.ndarray:
 
 
 def polygon_slope_degrees(poly: Polygon) -> float:
-    """Pure: angle between the polygon's own face normal and the canonical vertical (+Z), in degrees. 0 = flat.
-    Meaningful only because the polygon is in the canonical frame, where +Z really is opposite to gravity."""
+    """Pure: angle between the polygon's own face normal and the canonical up axis (CANONICAL_UP, +Z), in degrees.
+    0 = flat. Meaningful only because the polygon is in the canonical frame, where +Z is opposite to gravity (the frame's
+    gravity alignment, docs/coordinate-frames.md) and units are metres."""
     v = np.array(poly.vertices, dtype=np.float64)
     normal = np.zeros(3)
     for i in range(1, len(v) - 1):  # Newell-style sum over the fan: robust to a degenerate first triangle
@@ -274,6 +279,23 @@ def polygon_slope_degrees(poly: Polygon) -> float:
         return 0.0
     cos_angle = abs(float(np.dot(normal / norm, CANONICAL_UP)))
     return float(np.degrees(np.arccos(np.clip(cos_angle, 0.0, 1.0))))
+
+
+def edge_rise_run(a: np.ndarray, b: np.ndarray) -> tuple[float, float]:
+    """Pure: the vertical rise (along CANONICAL_UP, metres, signed) and the horizontal run (metres, perpendicular to
+    CANONICAL_UP) from canonical point `a` to `b`. Never reads a coordinate index as "up": the up axis is the frame's."""
+    d = np.asarray(b, dtype=np.float64) - np.asarray(a, dtype=np.float64)
+    rise = float(d @ CANONICAL_UP)
+    run = float(np.linalg.norm(d - rise * CANONICAL_UP))
+    return rise, run
+
+
+def edge_grade_degrees(a: np.ndarray, b: np.ndarray) -> float:
+    """Pure: the grade of the straight segment from `a` to `b` against the canonical horizontal, in degrees (0 = level,
+    90 = vertical). Two level polygons at different heights -- a step or a stair flight between two treads -- have a
+    non-zero grade even though each polygon on its own is flat."""
+    rise, run = edge_rise_run(a, b)
+    return float(np.degrees(np.arctan2(abs(rise), run)))
 
 
 def portal_width(link: Link) -> float:
@@ -299,10 +321,18 @@ def point_in_polygon_xy(point: np.ndarray, poly: Polygon) -> bool:
 
 def build_routing_graphs(polygons: list[Polygon], *, max_ramp_slope_deg: float) -> dict[str, dict[str, list]]:
     """Pure: turns the Detour navmesh's polygon links into the two profile graphs dev.chaya.api.navigation.RouteService
-    pathfinds over. Nodes are polygon centroids; an edge is a Detour link, weighted by centroid-to-centroid distance, with
-    the portal it crosses recorded as `min_clearance_m` (see portal_width). STEP_FREE keeps only the edges between two
-    polygons that are BOTH within `max_ramp_slope_deg` of level -- a real per-polygon slope computation, excluding stairs
-    and anything steeper than an accessible ramp, never a renamed copy of STANDARD.
+    pathfinds over. Nodes are polygon centroids. An edge is a Detour link, recording what was measured on the canonical
+    geometry:
+
+      length_m         3-D centroid-to-centroid distance, metres.
+      rise_m           signed rise along CANONICAL_UP between the centroids, metres.
+      max_slope_deg    the steepest of: each polygon's own face slope, and the grade of the centroid-to-centroid segment,
+                       all against CANONICAL_UP. The segment grade is what catches a step between two level polygons.
+      min_clearance_m  the Detour portal length (see portal_width), metres.
+
+    STEP_FREE keeps only the edges whose max_slope_deg is within `max_ramp_slope_deg` -- excluding stairs, steps and
+    anything steeper than an accessible ramp. It is never a renamed copy of STANDARD. A polygon or edge whose slope
+    cannot be computed (degenerate geometry) is never step-free.
     """
     by_id = {p.id: p for p in polygons}
     slopes = {p.id: polygon_slope_degrees(p) for p in polygons}
@@ -319,10 +349,15 @@ def build_routing_graphs(polygons: list[Polygon], *, max_ramp_slope_deg: float) 
             if other is None or (other.id, p.id) in seen or other.id == p.id:
                 continue
             seen.add((p.id, other.id))
-            length = float(np.linalg.norm(centroids[p.id] - centroids[other.id]))
-            step_free = slopes[p.id] <= max_ramp_slope_deg and slopes[other.id] <= max_ramp_slope_deg
-            edge = {"from": f"p{p.id}", "to": f"p{other.id}", "length_m": length, "step_free": step_free,
-                    "min_clearance_m": portal_width(link)}
+            a, b = centroids[p.id], centroids[other.id]
+            length = float(np.linalg.norm(b - a))
+            if not np.isfinite(length) or length <= 0:
+                continue  # coincident centroids: no measurable edge
+            rise, _ = edge_rise_run(a, b)
+            max_slope = max(slopes[p.id], slopes[other.id], edge_grade_degrees(a, b))
+            step_free = bool(np.isfinite(max_slope) and max_slope <= max_ramp_slope_deg)
+            edge = {"from": f"p{p.id}", "to": f"p{other.id}", "length_m": length, "rise_m": rise,
+                    "max_slope_deg": float(max_slope), "step_free": step_free, "min_clearance_m": portal_width(link)}
             standard_edges.append(edge)
             if step_free:
                 step_free_edges.append(edge)

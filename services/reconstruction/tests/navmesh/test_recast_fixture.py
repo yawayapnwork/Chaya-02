@@ -19,8 +19,8 @@ import pytest
 from chaya_worker.navmesh import (
     INVALID_GEOMETRY,
     NAVMESH_BUILD_FAILED,
+    NO_ROUTE,
     NO_WALKABLE_SURFACE,
-    ROUTE_UNAVAILABLE,
     NavGeometry,
     NavmeshError,
     NavmeshToolUnavailable,
@@ -151,7 +151,7 @@ def test_route_to_a_point_inside_blocked_geometry_is_unavailable(built, navmesh_
     with pytest.raises(NavmeshError) as exc:
         find_path(navmesh_tool, build.navmesh_path, np.array([1.0, 0.6, 0.0]), np.array([2.0, 1.5, 0.0]), tmp_path,
                   _runner(tmp_path), snap_horizontal_m=0.3, snap_vertical_m=1.0)
-    assert exc.value.code == ROUTE_UNAVAILABLE
+    assert exc.value.code == NO_ROUTE
 
 
 def test_route_between_disconnected_floors_is_unavailable_never_partial(navmesh_tool, tmp_path):
@@ -161,7 +161,7 @@ def test_route_between_disconnected_floors_is_unavailable_never_partial(navmesh_
     with pytest.raises(NavmeshError) as exc:
         find_path(navmesh_tool, build.navmesh_path, np.array([1.5, 1.5, 0]), np.array([6.5, 1.5, 0]), tmp_path, _runner(tmp_path),
                   snap_horizontal_m=0.5, snap_vertical_m=1.0)
-    assert exc.value.code == ROUTE_UNAVAILABLE
+    assert exc.value.code == NO_ROUTE
 
 
 # ---- failure states, from the real tool ------------------------------------------------------------------------------

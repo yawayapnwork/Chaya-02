@@ -25,8 +25,8 @@ import numpy as np
 from .navmesh import (
     INVALID_GEOMETRY,
     NAVMESH_BUILD_FAILED,
+    NO_ROUTE,
     NO_WALKABLE_SURFACE,
-    ROUTE_UNAVAILABLE,
     Link,
     NavGeometry,
     NavmeshError,
@@ -40,7 +40,7 @@ TOOL_REQUIREMENT = f"exe:{TOOL_NAME}"  # resolved by chaya_worker.toolchain: CHA
 NAVMESH_FORMAT = "detour-tile"  # the raw dtCreateNavMeshData output: loadable with dtNavMesh::init(data, size, flags)
 
 # chaya-navmesh's exit statuses (services/reconstruction/native/chaya-navmesh/src/main.cpp) -> this project's failure states.
-_EXIT_CODES = {3: INVALID_GEOMETRY, 4: NO_WALKABLE_SURFACE, 5: NAVMESH_BUILD_FAILED, 6: ROUTE_UNAVAILABLE}
+_EXIT_CODES = {3: INVALID_GEOMETRY, 4: NO_WALKABLE_SURFACE, 5: NAVMESH_BUILD_FAILED, 6: NO_ROUTE}
 
 
 class Runner(Protocol):
@@ -205,7 +205,7 @@ def bake(tool_path: str, geometry: NavGeometry, config: RecastConfig, workdir: P
 def find_path(tool_path: str, navmesh_path: Path, start: np.ndarray, end: np.ndarray, workdir: Path, runner: Runner, *,
               snap_horizontal_m: float, snap_vertical_m: float) -> dict[str, Any]:
     """Detour's own query (findNearestPoly, findPath, findStraightPath) between two canonical points. Returns the
-    straight path and the snapped endpoints in canonical coordinates, and the polygon corridor. ROUTE_UNAVAILABLE when
+    straight path and the snapped endpoints in canonical coordinates, and the polygon corridor. NO_ROUTE when
     either point is off the navmesh or they are not connected -- never a partial path."""
     out = workdir / "navmesh-path.json"
     s, e = canonical_to_recast(np.asarray(start, dtype=np.float64)), canonical_to_recast(np.asarray(end, dtype=np.float64))

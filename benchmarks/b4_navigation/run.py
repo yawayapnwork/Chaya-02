@@ -97,10 +97,11 @@ def seed_synthetic(stack: Stack) -> tuple[Nav, list[dict]]:
     loop, a two-step shortcut (not step-free) and a 0.7 m passage (step-free but too narrow). Stairs and an elevator
     connect to floor 1. Hand-made: a SELF-TEST only.
 
-    Routing only runs on graphs and POIs in a floor's current calibrated coordinate frame, and across floors only when
-    both are registered to one venue datum. Each floor therefore gets a SYNTHETIC identity frame with the
-    VENUE_CONTROL_POINTS datum, on a placeholder SUCCEEDED run -- self-test scaffolding that makes the hand-made
-    coordinates canonical by definition, not a calibration of anything."""
+    Routing only runs on graphs and POIs in a floor's current calibrated coordinate frame, and crosses floors only
+    through registered floor connections (POST /venues/{id}/floor-connections). Each floor therefore gets a SYNTHETIC
+    identity frame on a placeholder SUCCEEDED run -- self-test scaffolding that makes the hand-made coordinates canonical
+    by definition, not a calibration of anything -- and the stairs and elevator are registered with made-up
+    measurements. Edge slopes and clearances are made up too."""
     s = stack
     s.ensure_test_client()
     tag = uuid.uuid4().hex[:8]
@@ -149,9 +150,10 @@ def seed_synthetic(stack: Stack) -> tuple[Nav, list[dict]]:
                     continue  # the STEP_FREE graph is baked without them (navmesh.build_routing_graphs)
                 (xa, ya), (xb, yb) = spec["nodes"][a], spec["nodes"][b]
                 length = ((xa - xb) ** 2 + (ya - yb) ** 2) ** 0.5
+                slope = 0.0 if step_free else 30.0  # the two steps: a steep edge, as the bake measures one
                 s.psql(f"INSERT INTO navigation_edge (organization_id, venue_id, graph_id, from_node_id, to_node_id, length_m, step_free, "
-                       f"bidirectional, min_clearance_m) VALUES ('{org}', '{venue}', '{g}', '{ids[a]}', '{ids[b]}', {length}, "
-                       f"{str(step_free).lower()}, true, {clearance})")
+                       f"bidirectional, min_clearance_m, max_slope_deg) VALUES ('{org}', '{venue}', '{g}', '{ids[a]}', '{ids[b]}', {length}, "
+                       f"{str(step_free).lower()}, true, {clearance}, {slope})")
             s.psql(f"UPDATE navigation_graph SET status = 'ACTIVE' WHERE id = '{g}'")
 
     def poi(lvl: int, label: str, category: str, x: float, y: float) -> str:
@@ -159,10 +161,12 @@ def seed_synthetic(stack: Stack) -> tuple[Nav, list[dict]]:
                                                                     "tags": [], "x": x, "y": y, "z": height[lvl]})
         r.raise_for_status()
         return r.json()["id"]
-    poi(0, "Stairs (ground)", "stairs", 5, 5)
-    poi(1, "Stairs (level 1)", "stairs", 5, 5)
-    poi(0, "Elevator (ground)", "elevator", 25, 5)
-    poi(1, "Elevator (level 1)", "elevator", 25, 5)
+    stairs = (poi(0, "Stairs (ground)", "stairs", 5, 5), poi(1, "Stairs (level 1)", "stairs", 5, 5))
+    elevator = (poi(0, "Elevator (ground)", "elevator", 25, 5), poi(1, "Elevator (level 1)", "elevator", 25, 5))
+    for connector, (a, b), length, slope, clearance in (("STAIRS", stairs, 8.0, 30.0, 1.2), ("ELEVATOR", elevator, None, None, 1.1)):
+        s.call(user, "POST", f"/api/v1/venues/{venue}/floor-connections", json={
+            "connectorType": connector, "fromFloorId": floors[0], "fromPoiId": a, "toFloorId": floors[1], "toPoiId": b,
+            "bidirectional": True, "lengthM": length, "maxSlopeDeg": slope, "minClearanceM": clearance}).raise_for_status()
     room_e = poi(0, "Room E", "room", 10, 10)
     cafe = poi(1, "Cafe", "food", 20, 5)
     pairs = [{"name": "A -> Room E (same floor)", "floor": floors[0], "start": [0.0, 0.0, 0.0], "poi": room_e},

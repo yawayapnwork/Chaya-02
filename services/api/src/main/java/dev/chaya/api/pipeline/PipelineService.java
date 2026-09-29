@@ -1042,10 +1042,15 @@ public class PipelineService {
             // min_clearance_m has a CHECK (> 0): a non-positive value means "no real clearance measurement",
             // stored as NULL (unknown) rather than violating the constraint or claiming a false measurement.
             Double clearance = clearanceRaw instanceof Number n && n.doubleValue() > 0 ? n.doubleValue() : null;
+            // max_slope_deg: measured against canonical +Z by the worker. Anything missing or outside [0, 90] is stored as
+            // NULL (not measured), which STEP_FREE routing refuses rather than trusts.
+            Object slopeRaw = e.get("max_slope_deg");
+            Double slope = slopeRaw instanceof Number n && Double.isFinite(n.doubleValue()) && n.doubleValue() >= 0
+                && n.doubleValue() <= 90 ? n.doubleValue() : null;
             jdbc.sql("INSERT INTO navigation_edge (organization_id, venue_id, graph_id, from_node_id, to_node_id, length_m, step_free, "
-                    + "bidirectional, min_clearance_m) VALUES (:o, :v, :g, :from, :to, :len, :sf, true, :clear)")
+                    + "bidirectional, min_clearance_m, max_slope_deg) VALUES (:o, :v, :g, :from, :to, :len, :sf, true, :clear, :slope)")
                 .param("o", run.orgId()).param("v", run.venueId()).param("g", graphId).param("from", from).param("to", to)
-                .param("len", lengthNumber.doubleValue()).param("sf", stepFree).param("clear", clearance).update();
+                .param("len", lengthNumber.doubleValue()).param("sf", stepFree).param("clear", clearance).param("slope", slope).update();
         }
         if (activate) {
             activateGraph(run.venueId(), floorId, profile, graphId);

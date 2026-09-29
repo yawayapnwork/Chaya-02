@@ -125,6 +125,10 @@ public struct FloorTransition: Codable, Equatable, Sendable {
     public var toFloorId: UUID
     public var connectorType: String
     public var poiId: UUID
+    public var connectionId: UUID?
+    public var toPoiId: UUID?
+    public var distanceMeters: Double?
+    public var durationSeconds: Double?
 }
 
 /// Mirrors dev.chaya.api.navigation.NavigationDtos.RouteResponse (docs/navigation.md). Both AR clients

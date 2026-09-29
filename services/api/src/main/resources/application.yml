@@ -93,10 +93,10 @@ chaya:
   navigation:
     standard-walking-speed-mps: 1.3
     accessible-walking-speed-mps: 1.0
+    stairs-speed-mps: 0.5
     min-accessible-clearance-m: 0.9
-    stairs-transition-seconds: 20
+    max-accessible-slope-deg: 4.76
     elevator-transition-seconds: 45
-    transition-match-radius-meters: 5.0
     node-snap-max-distance-meters: 10.0
   rescan:
     # The control plane's own copy of the alignment quality gate (see dev.chaya.api.rescan.RescanService

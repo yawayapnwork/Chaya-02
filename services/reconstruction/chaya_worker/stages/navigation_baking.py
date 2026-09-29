@@ -33,7 +33,7 @@ import json
 import numpy as np
 
 from ..contract import ArtifactSpec, StageContext, StageError, StageResult
-from ..frames import frame_provenance, require_canonical
+from ..frames import UNITS, UP_AXIS, frame_provenance, require_canonical
 from ..navmesh import (
     INVALID_GEOMETRY,
     NO_WALKABLE_SURFACE,
@@ -65,7 +65,15 @@ def navigation_graph_document(build: NavmeshBuild, navmesh_ref: dict, tool: dict
     and only when the checksum is that of the NAVMESH artifact published alongside it."""
     binding = {"source": "RECAST_NAVMESH", "status": NAVMESH_STATUS_READY, "manifest": "navmesh-manifest.json", **navmesh_ref,
                "tool_version": tool["tool_version"], "recastnavigation_version": tool["recastnavigation_version"]}
+    measurements = {
+        "units": UNITS, "up_axis": UP_AXIS,
+        "length_m": "3-D distance between polygon centroids",
+        "max_slope_deg": "steepest of both polygons' face slopes and the centroid-to-centroid grade, against canonical +Z",
+        "min_clearance_m": "Detour portal length; the walkable area was already eroded by recast_config.agent_radius_m",
+        "step_free_max_slope_deg": max_ramp_slope_deg,
+    }
     return {"coordinate_frame": frame, "navmesh": binding, "recast_config": config.as_dict(), "polygon_count": len(build.polygons),
+            "edge_measurements": measurements,
             "graphs": build_routing_graphs(build.polygons, max_ramp_slope_deg=max_ramp_slope_deg)}
 
 
