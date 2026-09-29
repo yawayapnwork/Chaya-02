@@ -9,6 +9,8 @@ interface SemanticSearchPanelProps {
   /** The currently viewed floor, used only for the "this floor only" filter's target -- results can span
    * every floor of the venue unless that filter is checked. */
   floorId: string;
+  /** The finalized scan version on screen: results are limited to its POIs. Null when the reconstruction is not one. */
+  scanVersionId?: string | null;
   onSelectResult: (result: SearchResult) => void;
 }
 
@@ -19,7 +21,7 @@ function message(e: unknown): string {
 /** Natural-language + voice object search. Voice input (lib/voice-input.ts) only ever fills the text box
  * below; the actual ranking always goes through searchVenue, which is backed by real CLIP embeddings on
  * the server (dev.chaya.api.search), never by matching the spoken words directly. */
-export default function SemanticSearchPanel({ venueId, floorId, onSelectResult }: SemanticSearchPanelProps) {
+export default function SemanticSearchPanel({ venueId, floorId, scanVersionId, onSelectResult }: SemanticSearchPanelProps) {
   const [query, setQuery] = useState("");
   const [restrictToFloor, setRestrictToFloor] = useState(false);
   const [accessible, setAccessible] = useState(false);
@@ -34,7 +36,11 @@ export default function SemanticSearchPanel({ venueId, floorId, onSelectResult }
     setBusy(true);
     setError(null);
     try {
-      setResponse(await searchVenue(venueId, text, { floorId: restrictToFloor ? floorId : undefined, accessible: accessible || undefined }));
+      setResponse(await searchVenue(venueId, text, {
+        floorId: restrictToFloor ? floorId : undefined,
+        accessible: accessible || undefined,
+        scanVersionId: scanVersionId ?? undefined,
+      }));
     } catch (e) {
       setError(message(e));
       setResponse(null);

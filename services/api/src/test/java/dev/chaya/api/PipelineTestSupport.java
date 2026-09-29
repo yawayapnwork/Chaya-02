@@ -140,6 +140,12 @@ abstract class PipelineTestSupport extends CaptureTestSupport {
             case "PRIVACY_PREPROCESS" -> List.of(artifact(order, "frame-000001.png", "FRAME_ANON", false, false, "blurred-frame-bytes"));
             case "POSE_ESTIMATION" -> List.of(artifact(order, "poses.json", "POSES", false, false, "{}"));
             case "SPLAT_RECONSTRUCTION" -> List.of(artifact(order, "scene.ksplat", "SPLAT", false, false, "splat-bytes"));
+            // The kinds chaya_worker.stages.geometric_cleanup / region_splice / artifact_generation publish: a ScanVersion
+            // pins its cloud and viewer asset, and cannot be finalized without them.
+            case "GEOMETRIC_CLEANUP" -> List.of(artifact(order, "splat-clean.ply", "SPLAT_CLEAN", false, false, "clean-cloud-bytes"));
+            case "REGION_SPLICE" -> List.of(artifact(order, "splat-merged.ply", "SPLAT_MERGED", false, false, "merged-cloud-bytes"));
+            case "ARTIFACT_GENERATION" -> List.of(artifact(order, "scene.ksplat", "KSPLAT", false, false, "ksplat-bytes"),
+                artifact(order, "manifest.json", "ARTIFACT_MANIFEST", false, false, "{}"));
             default -> List.of(artifact(order, stage.toLowerCase() + ".json", stage, false, false, "{}"));
         };
     }

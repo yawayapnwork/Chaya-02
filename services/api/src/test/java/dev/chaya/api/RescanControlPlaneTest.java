@@ -46,8 +46,9 @@ class RescanControlPlaneTest extends PipelineTestSupport {
     private UUID parentFrame;
     private UUID parentRun;
 
-    /** A FINALIZED parent ScanVersion whose provenance names its run, and that run's real GEOMETRIC_CLEANUP output (kind
-     * SPLAT_CLEAN) in the derived bucket: exactly what PipelineService#globalCloudInput resolves. */
+    /** A FINALIZED parent ScanVersion of a full run: the run's real GEOMETRIC_CLEANUP output (kind SPLAT_CLEAN) in the
+     * derived bucket and a KSPLAT row, both pinned by the version, and the run's canonical frame recorded on it --
+     * exactly what PipelineService#globalCloudInput resolves (the parent's pinned cloud). */
     private UUID finalizedParentWithGlobalCloud(Ctx c) {
         UUID session = jdbc.sql("INSERT INTO capture_session (organization_id, venue_id, floor_id, operator_id) "
                 + "VALUES (:o, :v, :f, 'operator-sub') RETURNING id")
@@ -80,21 +81,30 @@ class RescanControlPlaneTest extends PipelineTestSupport {
         String uploadId = derived.beginMultipart(key, "application/octet-stream");
         String etag = derived.uploadPart(key, uploadId, 1, data);
         derived.completeMultipart(key, uploadId, List.of(new ObjectStore.PartEtag(1, etag)));
-        jdbc.sql("""
+        UUID cloud = jdbc.sql("""
                 INSERT INTO processing_artifact (id, organization_id, venue_id, scan_id, job_id, stage, bucket, object_key,
                     checksum_sha256, content_type, size_bytes, kind, stage_run_id, contains_pii, partial)
                 VALUES (gen_random_uuid(), :o, :v, :s, :j, 'GEOMETRIC_CLEANUP', 'chaya-derived-test', :key, :sha,
-                    'application/octet-stream', :sz, 'SPLAT_CLEAN', :sr, false, false)
+                    'application/octet-stream', :sz, 'SPLAT_CLEAN', :sr, false, false) RETURNING id
                 """)
             .param("o", c.org()).param("v", c.venue()).param("s", scan).param("j", job).param("key", key)
-            .param("sha", sha256(data)).param("sz", data.length).param("sr", stageRun).update();
+            .param("sha", sha256(data)).param("sz", data.length).param("sr", stageRun).query(UUID.class).single();
+        UUID ksplat = fx.publishedArtifact(c.org(), c.venue(), scan, run, "ARTIFACT_GENERATION", "KSPLAT");
 
-        return jdbc.sql("""
-                INSERT INTO scan_version (organization_id, venue_id, scan_id, floor_id, version_number, status, provenance, finalized_at)
-                VALUES (:o, :v, :s, :f, 1, 'FINALIZED', CAST(:p AS jsonb), now()) RETURNING id
+        UUID version = jdbc.sql("""
+                INSERT INTO scan_version (organization_id, venue_id, scan_id, floor_id, version_number, pipeline_run_id)
+                VALUES (:o, :v, :s, :f, 1, :r) RETURNING id
                 """)
-            .param("o", c.org()).param("v", c.venue()).param("s", scan).param("f", c.floor())
-            .param("p", "{\"bootstrap\":true,\"runId\":\"" + run + "\"}").query(UUID.class).single();
+            .param("o", c.org()).param("v", c.venue()).param("s", scan).param("f", c.floor()).param("r", run)
+            .query(UUID.class).single();
+        for (var pin : Map.of(cloud, "SPLAT_CLEAN", ksplat, "KSPLAT").entrySet()) {
+            jdbc.sql("INSERT INTO scan_version_artifact (scan_version_id, artifact_id, kind, owner_version_id) VALUES (:v, :a, :k, :v)")
+                .param("v", version).param("a", pin.getKey()).param("k", pin.getValue()).update();
+        }
+        jdbc.sql("UPDATE scan_version SET status = 'FINALIZED', finalized_at = now(), coordinate_frame_id = :f, "
+                + "provenance = CAST(:p AS jsonb) WHERE id = :v")
+            .param("f", parentFrame).param("p", "{\"bootstrap\":true,\"runId\":\"" + run + "\"}").param("v", version).update();
+        return version;
     }
 
     private Started startRescanRun(Ctx c, UUID parentVersionId) throws Exception {
@@ -176,7 +186,7 @@ class RescanControlPlaneTest extends PipelineTestSupport {
         // the parent version is exactly as it was
         assertThat(versionRow(parent)).isEqualTo(parentBefore);
         assertThat(jdbc.sql("SELECT count(*) FROM processing_artifact a JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id "
-            + "WHERE sr.run_id = :r").param("r", parentRun).query(Integer.class).single()).isEqualTo(1);
+            + "WHERE sr.run_id = :r").param("r", parentRun).query(Integer.class).single()).isEqualTo(2);
     }
 
     @Test
@@ -317,12 +327,7 @@ class RescanControlPlaneTest extends PipelineTestSupport {
         JsonNode align = claimExpecting("REGION_ALIGNMENT");
         send(align, acceptedAlignmentReport(align, alignment(0.9, true, 1.0)), svc).andExpect(status().isOk());
         for (String stage : List.of("REGION_SPLICE", "PLANE_FITTING", "ARTIFACT_GENERATION")) {
-            JsonNode o = claimExpecting(stage);
-            List<Map<String, Object>> outputs = new ArrayList<>(outputsFor(o));
-            if (stage.equals("ARTIFACT_GENERATION")) {
-                outputs.add(artifact(o, "scene.ksplat", "KSPLAT", false, false, "merged-model-bytes"));
-            }
-            send(o, report("SUCCEEDED", outputs, null, null), svc).andExpect(status().isOk());
+            succeed(claimExpecting(stage)); // SPLAT_MERGED, ..., KSPLAT of the merged model (PipelineTestSupport#outputsFor)
         }
         JsonNode semantic = claimExpecting("SEMANTIC_INDEXING");
         send(semantic, report("SUCCEEDED", List.of(artifact(semantic, "detected-objects.json", "DETECTED_OBJECTS", false, false,
@@ -351,13 +356,16 @@ class RescanControlPlaneTest extends PipelineTestSupport {
         send(nav, report("FAILED", List.of(), "NAVMESH_BUILD_FAILED", "Recast failed"), svc).andExpect(status().isOk());
         assertThat(livePois(c)).as("a failed re-scan never touches a POI").isEqualTo(before);
         assertThat(reconstructions.listForFloor(viewer, c.venue(), c.floor()))
-            .as("the failed re-scan's merged model is not listed for viewers").isEmpty();
+            .as("the failed re-scan's merged model is not listed for viewers; the parent version's is")
+            .extracting(ReconstructionService.ReconstructionVersion::runId).containsExactly(parentRun);
 
         // A re-scan that finalizes: the region's AUTO_DETECTED POI is replaced; the MANUAL one and the outside one survive.
         JsonNode nav2 = rescanToNavigationBaking(c, parent);
         succeed(nav2);
         assertThat(livePois(c)).containsExactly("AUTO_DETECTED:auto_detected poi", "AUTO_DETECTED:new bench", "MANUAL:manual poi");
-        assertThat(reconstructions.listForFloor(viewer, c.venue(), c.floor())).hasSize(1);
+        assertThat(reconstructions.listForFloor(viewer, c.venue(), c.floor()))
+            .extracting(ReconstructionService.ReconstructionVersion::versionNumber)
+            .as("the failed attempt kept number 2; numbers are never reused").containsExactly(3, 1);
         assertThat(jdbc.sql("SELECT count(*) FROM audit_log WHERE action = 'rescan.downstream_applied'").query(Integer.class).single())
             .isGreaterThanOrEqualTo(1);
     }

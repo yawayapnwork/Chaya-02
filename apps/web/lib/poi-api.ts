@@ -16,9 +16,15 @@ export interface Poi {
   y: number;
   z: number;
   coordinateFrameId: string | null;
-  /** CURRENT: in the floor's current frame. STALE: in an older one. UNBOUND: in no calibrated frame. */
+  /** CURRENT: in the floor's current frame (for a version-scoped list: in that version's frame). STALE: in an older
+   * one. UNBOUND: in no calibrated frame. */
   frameStatus: "CURRENT" | "STALE" | "UNBOUND";
+  /** The scan version this POI version was placed against; null if its reconstruction has no version yet. */
+  scanVersionId: string | null;
 }
 
-export const listPois = (venueId: string) => api<Poi[]>(`/venues/${venueId}/pois`);
+/** Without scanVersionId: every live POI of the venue. With it: exactly the POIs of that finalized scan version, each
+ * as it is in that version. */
+export const listPois = (venueId: string, scanVersionId?: string | null) =>
+  api<Poi[]>(`/venues/${venueId}/pois${scanVersionId ? `?scanVersionId=${encodeURIComponent(scanVersionId)}` : ""}`);
 export const getPoi = (venueId: string, poiId: string) => api<Poi>(`/venues/${venueId}/pois/${poiId}`);

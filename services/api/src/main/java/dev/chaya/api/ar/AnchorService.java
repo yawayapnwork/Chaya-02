@@ -45,7 +45,7 @@ public class AnchorService {
             SELECT id, venue_id, floor_id, marker_type, marker_identifier, marker_size_m,
                    physical_x, physical_y, physical_z, physical_qx, physical_qy, physical_qz, physical_qw,
                    digital_x, digital_y, digital_z, digital_qx, digital_qy, digital_qz, digital_qw,
-                   calibration_status, last_calibrated_at, coordinate_frame_id
+                   calibration_status, last_calibrated_at, coordinate_frame_id, scan_version_id
               FROM ar_anchor
              WHERE venue_id = :v AND organization_id = :o AND floor_id = :f AND deleted_at IS NULL
             """;
@@ -75,7 +75,8 @@ public class AnchorService {
         Instant lastCalibratedAt = calibrated == null ? null : calibrated.toInstant();
         return new Anchor(rs.getObject("id", UUID.class), rs.getObject("venue_id", UUID.class),
             rs.getObject("floor_id", UUID.class), rs.getString("marker_type"), rs.getString("marker_identifier"),
-            rs.getObject("marker_size_m") == null ? null : rs.getDouble("marker_size_m"), physical, digital, rs.getString("calibration_status"), lastCalibratedAt, rs.getObject("coordinate_frame_id", UUID.class));
+            rs.getObject("marker_size_m") == null ? null : rs.getDouble("marker_size_m"), physical, digital, rs.getString("calibration_status"), lastCalibratedAt, rs.getObject("coordinate_frame_id", UUID.class),
+            rs.getObject("scan_version_id", UUID.class));
     }
 
     @Transactional(readOnly = true)
@@ -104,8 +105,10 @@ public class AnchorService {
         UUID id = jdbc.sql("""
                 INSERT INTO ar_anchor (organization_id, venue_id, floor_id, marker_type, marker_identifier, marker_size_m,
                     physical_x, physical_y, physical_z, physical_qx, physical_qy, physical_qz, physical_qw,
-                    digital_x, digital_y, digital_z, digital_qx, digital_qy, digital_qz, digital_qw, coordinate_frame_id)
-                VALUES (:o, :v, :f, :mt, :mi, :size, :px, :py, :pz, :pqx, :pqy, :pqz, :pqw, :dx, :dy, :dz, :dqx, :dqy, :dqz, :dqw, :frame)
+                    digital_x, digital_y, digital_z, digital_qx, digital_qy, digital_qz, digital_qw, coordinate_frame_id,
+                    scan_version_id)
+                VALUES (:o, :v, :f, :mt, :mi, :size, :px, :py, :pz, :pqx, :pqy, :pqz, :pqw, :dx, :dy, :dz, :dqx, :dqy, :dqz, :dqw, :frame,
+                    floor_current_scan_version(:f))
                 RETURNING id
                 """)
             .param("o", actor.organizationId()).param("v", venueId).param("f", floorId).param("frame", frame)
@@ -129,6 +132,7 @@ public class AnchorService {
         UUID frame = requireCurrentFrame(venueId, floorId).id();
         int rows = jdbc.sql("""
                 UPDATE ar_anchor SET marker_type = :mt, marker_identifier = :mi, marker_size_m = :size, coordinate_frame_id = :frame,
+                    scan_version_id = floor_current_scan_version(:f),
                     physical_x = :px, physical_y = :py, physical_z = :pz,
                     physical_qx = :pqx, physical_qy = :pqy, physical_qz = :pqz, physical_qw = :pqw,
                     digital_x = :dx, digital_y = :dy, digital_z = :dz,

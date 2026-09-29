@@ -20,6 +20,7 @@ import dev.chaya.api.processing.ProcessingJobRepository;
 import dev.chaya.api.processing.ProcessingJobRepository.ClaimedJob;
 import dev.chaya.api.rescan.PolygonGeometry;
 import dev.chaya.api.rescan.RescanProperties;
+import dev.chaya.api.rescan.ScanVersionService;
 import dev.chaya.api.search.PoiEmbeddingService;
 import dev.chaya.api.security.Actor;
 import dev.chaya.api.security.Role;
@@ -98,13 +99,16 @@ public class PipelineService {
     private final ObjectMapper mapper;
     private final String derivedBucketName;
     private final CoordinateFrameService frames;
+    private final ScanVersionService versions;
 
     public PipelineService(JdbcClient jdbc, ProcessingJobRepository jobs, AuditService audit,
                            @Qualifier("derived") ObjectStore derived, PipelineProperties props,
                            RescanProperties rescanProps,
-                           TransactionTemplate tx, ObjectMapper mapper, StorageProperties storage, CoordinateFrameService frames) {
+                           TransactionTemplate tx, ObjectMapper mapper, StorageProperties storage, CoordinateFrameService frames,
+                           ScanVersionService versions) {
         this.derivedBucketName = storage.derivedBucket();
         this.frames = frames;
+        this.versions = versions;
         this.jdbc = jdbc;
         this.jobs = jobs;
         this.audit = audit;
@@ -159,7 +163,7 @@ public class PipelineService {
                 SELECT coalesce(p.reconstruction_frame_run_id, p.id)
                   FROM scan_version v
                   JOIN scan_version parent ON parent.id = v.parent_version_id
-                  JOIN pipeline_run p ON p.scan_id = parent.scan_id
+                  JOIN pipeline_run p ON p.id = parent.pipeline_run_id
                  WHERE v.id = :sv
                 """).param("sv", scanVersionId).query(UUID.class).optional().orElse(null);
         jdbc.sql("UPDATE pipeline_run SET reconstruction_frame_run_id = :root WHERE id = :r")
@@ -304,11 +308,11 @@ public class PipelineService {
     }
 
     /**
-     * The venue's existing reconstruction to align the new region against and splice into: the SPLAT_MERGED (else
-     * SPLAT_CLEAN) of exactly the run the parent ScanVersion records in its provenance -- the reconstruction that version
-     * finalized, not whatever other run of the same scan produced a cloud (review V-8). Never the current (still-building)
-     * run's own output -- that would be aligning the region against itself. Returned as kind GLOBAL_CLOUD so
-     * chaya_worker.stages.region_alignment/region_splice can tell it apart from this run's own SPLAT_CLEAN. The parent's
+     * The venue's existing reconstruction to align the new region against and splice into: exactly the cloud the parent
+     * ScanVersion pinned when it finalized (scan_version_artifact; SPLAT_MERGED for a re-scan, SPLAT_CLEAN for a full
+     * reconstruction) -- not whatever other run or stage of the same scan produced a cloud (review V-8). Never the current
+     * (still-building) run's own output -- that would be aligning the region against itself. Returned as kind GLOBAL_CLOUD
+     * so chaya_worker.stages.region_alignment/region_splice can tell it apart from this run's own SPLAT_CLEAN. The parent's
      * artifact is only ever read: the splice writes a new SPLAT_MERGED under this run.
      */
     private Optional<InputRef> globalCloudInput(UUID incrementalScanVersionId) {
@@ -316,12 +320,9 @@ public class PipelineService {
                 SELECT a.id, a.bucket, a.object_key, a.checksum_sha256, a.content_type, a.size_bytes
                   FROM scan_version incoming
                   JOIN scan_version parent ON parent.id = incoming.parent_version_id
-                  JOIN pipeline_stage_run sr ON sr.run_id = CAST(parent.provenance ->> 'runId' AS uuid)
-                  JOIN processing_artifact a ON a.stage_run_id = sr.id
-                 WHERE incoming.id = :v AND parent.status = 'FINALIZED' AND sr.status = 'SUCCEEDED'
-                   AND a.kind IN ('SPLAT_MERGED', 'SPLAT_CLEAN')
-                 ORDER BY CASE a.kind WHEN 'SPLAT_MERGED' THEN 0 ELSE 1 END, a.created_at DESC
-                 LIMIT 1
+                  JOIN scan_version_artifact pin ON pin.scan_version_id = parent.id AND pin.kind IN ('SPLAT_MERGED', 'SPLAT_CLEAN')
+                  JOIN processing_artifact a ON a.id = pin.artifact_id
+                 WHERE incoming.id = :v AND parent.status = 'FINALIZED'
                 """)
             .param("v", incrementalScanVersionId)
             .query((rs, i) -> new InputRef(rs.getObject("id", UUID.class), "GLOBAL_CLOUD", null,
@@ -405,10 +406,10 @@ public class PipelineService {
             .param("sha", outputSha).param("ec", r.errorCode()).param("em", r.errorMessage())
             .param("ed", r.errorDetails() == null ? null : json(r.errorDetails())).param("w", job.workerId()).update();
         for (ArtifactReport a : outputs) {
-            insertArtifact(UUID.randomUUID(), job, stageRunId, a);
+            insertArtifact(UUID.randomUUID(), job, run.scanVersionId(), stageRunId, a);
         }
-        if (r.stdout() != null) insertArtifact(stdoutId, job, stageRunId, forceLog(r.stdout(), "LOG_STDOUT"));
-        if (r.stderr() != null) insertArtifact(stderrId, job, stageRunId, forceLog(r.stderr(), "LOG_STDERR"));
+        if (r.stdout() != null) insertArtifact(stdoutId, job, run.scanVersionId(), stageRunId, forceLog(r.stdout(), "LOG_STDOUT"));
+        if (r.stderr() != null) insertArtifact(stderrId, job, run.scanVersionId(), stageRunId, forceLog(r.stderr(), "LOG_STDERR"));
 
         String failCode = r.errorCode();
         String failMessage = r.errorMessage();
@@ -626,9 +627,8 @@ public class PipelineService {
                 Map.of("navigationGraphsActivated", graphsActivated, "poisSuperseded", pois[0], "poisCreated", pois[1]));
             Map<String, Object> provenance = Map.of("runId", run.id().toString(), "stages",
                 run.stages().stream().map(Enum::name).toList());
-            jdbc.sql("UPDATE scan_version SET status = 'FINALIZED', finalized_at = now(), provenance = CAST(:p AS jsonb) "
-                    + "WHERE id = :v AND status = 'DRAFT'")
-                .param("p", json(provenance)).param("v", run.scanVersionId()).update();
+            // Pins the run's artifacts (and what it inherits from its parent) and the frame, then FINALIZED.
+            versions.finalizeVersion(run.scanVersionId(), provenance);
         }
     }
 
@@ -732,11 +732,14 @@ public class PipelineService {
         return new ArtifactReport(kind, a.key(), a.sha256(), a.contentType(), a.sizeBytes(), false, false);
     }
 
-    private void insertArtifact(UUID id, JobRow job, UUID stageRunId, ArtifactReport a) {
-        jdbc.sql("INSERT INTO processing_artifact (id, organization_id, venue_id, scan_id, job_id, stage, bucket, object_key, "
-                + "checksum_sha256, content_type, size_bytes, kind, stage_run_id, contains_pii, partial) "
-                + "VALUES (:id, :o, :v, :s, :j, :st, :b, :k, :sha, :ct, :sz, :kind, :sr, :pii, :part)")
-            .param("id", id).param("o", job.orgId()).param("v", job.venueId()).param("s", job.scanId()).param("j", job.id())
+    /** A re-scan run's artifacts name the (DRAFT) version they are produced for; the V4 guard refuses any once it is
+     * finalized. A full run's artifacts have no version yet: a bootstrap pins them (scan_version_artifact). */
+    private void insertArtifact(UUID id, JobRow job, UUID scanVersionId, UUID stageRunId, ArtifactReport a) {
+        jdbc.sql("INSERT INTO processing_artifact (id, organization_id, venue_id, scan_id, scan_version_id, job_id, stage, bucket, "
+                + "object_key, checksum_sha256, content_type, size_bytes, kind, stage_run_id, contains_pii, partial) "
+                + "VALUES (:id, :o, :v, :s, :sv, :j, :st, :b, :k, :sha, :ct, :sz, :kind, :sr, :pii, :part)")
+            .param("id", id).param("o", job.orgId()).param("v", job.venueId()).param("s", job.scanId())
+            .param("sv", scanVersionId).param("j", job.id())
             .param("st", job.stage().name()).param("b", derivedBucketName).param("k", a.key()).param("sha", a.sha256())
             .param("ct", a.contentType()).param("sz", a.sizeBytes()).param("kind", a.kind()).param("sr", stageRunId)
             .param("pii", a.containsPii()).param("part", a.partial()).update();
@@ -849,7 +852,9 @@ public class PipelineService {
             double x = ((Number) row.get("x")).doubleValue();
             double y = ((Number) row.get("y")).doubleValue();
             if (PolygonGeometry.pointInPolygon(x, y, points)) {
-                jdbc.sql("UPDATE poi SET deleted_at = now() WHERE id = :p").param("p", row.get("id")).update();
+                // Gone from now on, but still part of the versions before this one (scan_version_poi_version, V23).
+                jdbc.sql("UPDATE poi SET deleted_at = now(), superseded_by_scan_version_id = :sv WHERE id = :p")
+                    .param("sv", run.scanVersionId()).param("p", row.get("id")).update();
                 superseded++;
             }
         }
@@ -894,13 +899,13 @@ public class PipelineService {
             .param("o", run.orgId()).param("v", run.venueId()).param("f", floorId).query(UUID.class).single();
         jdbc.sql("INSERT INTO poi_version (organization_id, venue_id, poi_id, version_number, label, tags, x, y, z, "
                 + "image_embedding, image_embedding_model, source, detection_confidence, bounding_box, pipeline_run_id, "
-                + "coordinate_frame_id, created_by) "
+                + "coordinate_frame_id, scan_version_id, created_by) "
                 + "VALUES (:o, :v, :p, 1, :label, '{}', :x, :y, :z, CAST(:emb AS vector), :model, 'AUTO_DETECTED', :conf, "
-                + "CAST(:bbox AS jsonb), :run, :frame, 'system:semantic-indexing')")
+                + "CAST(:bbox AS jsonb), :run, :frame, :sv, 'system:semantic-indexing')")
             .param("o", run.orgId()).param("v", run.venueId()).param("p", poiId).param("label", label)
             .param("x", position.get(0).doubleValue()).param("y", position.get(1).doubleValue()).param("z", position.get(2).doubleValue())
             .param("emb", vectorLiteral(embedding)).param("model", embeddingModel).param("conf", confidence)
-            .param("bbox", bboxJson).param("run", run.id()).param("frame", frameId).update();
+            .param("bbox", bboxJson).param("run", run.id()).param("frame", frameId).param("sv", run.scanVersionId()).update();
         return true;
     }
 
@@ -1011,9 +1016,10 @@ public class PipelineService {
 
         UUID graphId = jdbc.sql("INSERT INTO navigation_graph (organization_id, venue_id, floor_id, profile, status, coordinate_frame_id, "
                 + "source, pipeline_run_id, navmesh_artifact_id, navmesh_manifest_artifact_id, navmesh_sha256, navmesh_tool_version, "
-                + "recastnavigation_version) VALUES (:o, :v, :f, :p, 'DRAFT', :frame, 'RECAST_NAVMESH', :run, :nav, :man, :sha, :tool, "
-                + ":recast) RETURNING id")
+                + "recastnavigation_version, scan_version_id) VALUES (:o, :v, :f, :p, 'DRAFT', :frame, 'RECAST_NAVMESH', :run, :nav, "
+                + ":man, :sha, :tool, :recast, :sv) RETURNING id")
             .param("o", run.orgId()).param("v", run.venueId()).param("f", floorId).param("p", profile).param("frame", frameId)
+            .param("sv", run.scanVersionId())
             .param("run", run.id()).param("nav", navmesh.navmeshArtifactId()).param("man", navmesh.manifestArtifactId())
             .param("sha", navmesh.sha256()).param("tool", navmesh.toolVersion()).param("recast", navmesh.recastVersion())
             .query(UUID.class).single();

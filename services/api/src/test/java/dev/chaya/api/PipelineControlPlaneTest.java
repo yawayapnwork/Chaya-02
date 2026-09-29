@@ -63,7 +63,8 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
             assertThat(last.get("exitStatus").asInt()).isZero();
             assertThat(last.get("command").get("argv").get(0).asText()).isEqualTo("test-stage");
             assertThat(last.get("outputSha256").asText()).matches("[0-9a-f]{64}");
-            assertThat(last.get("artifacts").size()).isEqualTo(1);
+            // ARTIFACT_GENERATION publishes the viewer asset and its manifest; every other stage one artifact here.
+            assertThat(last.get("artifacts").size()).isEqualTo(stage.get("stage").asText().equals("ARTIFACT_GENERATION") ? 2 : 1);
         }
         assertThat(jdbc.sql("SELECT count(*) FROM pipeline_stage_run WHERE run_id = :r").param("r", s.run()).query(Integer.class).single())
             .isEqualTo(12);

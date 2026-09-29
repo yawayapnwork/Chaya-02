@@ -51,9 +51,10 @@ public class RescanService {
     private final RescanProperties props;
     private final ObjectMapper mapper;
     private final CoordinateFrameService frames;
+    private final ScanVersionService versions;
 
     public RescanService(JdbcClient jdbc, TenantGuard guard, AuditService audit, PipelineService pipeline,
-                         RescanProperties props, ObjectMapper mapper, CoordinateFrameService frames) {
+                         RescanProperties props, ObjectMapper mapper, CoordinateFrameService frames, ScanVersionService versions) {
         this.jdbc = jdbc;
         this.guard = guard;
         this.audit = audit;
@@ -61,6 +62,7 @@ public class RescanService {
         this.props = props;
         this.mapper = mapper;
         this.frames = frames;
+        this.versions = versions;
     }
 
     /** Steps 1-2: select an existing (FINALIZED) version and the changed region. Creates a region-scoped
@@ -119,18 +121,20 @@ public class RescanService {
             processingConfig.put("timeBudgetSeconds", timeBudgetSeconds);
         }
 
+        // The floor's next number, not parent + 1: two re-scans of the same parent are two versions (review V-4).
         UUID scanVersionId = jdbc.sql("""
                 INSERT INTO scan_version (organization_id, venue_id, scan_id, floor_id, version_number,
                     parent_version_id, status, region_geometry, processing_config, created_by)
                 VALUES (:o, :v, :s, :f, :n, :parent, 'DRAFT', CAST(:region AS jsonb), CAST(:config AS jsonb), :by) RETURNING id
                 """)
             .param("o", actor.organizationId()).param("v", venueId).param("s", scanId).param("f", floorId)
-            .param("n", parent.versionNumber() + 1).param("parent", parent.id())
+            .param("n", versions.nextVersionNumber(floorId)).param("parent", parent.id())
             .param("region", toJson(regionGeometry)).param("config", toJson(processingConfig)).param("by", actor.subject())
             .query(UUID.class).single();
 
         List<JobStage> plan = PipelineDefinition.incrementalPlan(privacyEnabled == null || privacyEnabled, navigationRebuildRequired);
         UUID runId = pipeline.start(actor, venueId, captureId, scanId, scanVersionId, plan, privacyEnabled, timeBudgetSeconds);
+        jdbc.sql("UPDATE scan_version SET pipeline_run_id = :r WHERE id = :v").param("r", runId).param("v", scanVersionId).update();
 
         audit.success(actor, venueId, "rescan.processing_started", "scan_version", scanVersionId, Map.of(
             "sourceVersionId", parent.id().toString(), "runId", runId.toString(),
@@ -142,7 +146,7 @@ public class RescanService {
     private FrameView requireCanonicalParentFrame(UUID parentVersionId) {
         UUID frameRun = jdbc.sql("""
                 SELECT coalesce(r.reconstruction_frame_run_id, r.id) FROM pipeline_run r
-                  JOIN scan_version v ON v.scan_id = r.scan_id WHERE v.id = :v
+                  JOIN scan_version v ON v.pipeline_run_id = r.id WHERE v.id = :v
                 """).param("v", parentVersionId).query(UUID.class).optional().orElse(null);
         return frames.activeForRun(frameRun).filter(FrameView::canonical)
             .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, CoordinateFrameService.NOT_CALIBRATED,
@@ -159,7 +163,8 @@ public class RescanService {
         return jdbc.sql("""
                 SELECT id, floor_id, scan_id, version_number, parent_version_id, status, region_geometry,
                        alignment_method, alignment_confidence, alignment_residual_m, changed_artifact_kinds,
-                       processing_config, finalized_at, created_at, alignment_report, splice_report, created_by, rejected_at
+                       processing_config, finalized_at, created_at, alignment_report, splice_report, created_by, rejected_at,
+                       pipeline_run_id, coordinate_frame_id
                   FROM scan_version WHERE venue_id = :v AND floor_id = :f ORDER BY version_number DESC
                 """)
             .param("v", venueId).param("f", floorId).query(this::mapVersion).list();
@@ -171,13 +176,16 @@ public class RescanService {
         Double residual = rs.getObject("alignment_residual_m") == null ? null : rs.getDouble("alignment_residual_m");
         Timestamp finalizedAt = rs.getTimestamp("finalized_at");
         Timestamp rejectedAt = rs.getTimestamp("rejected_at");
+        UUID id = rs.getObject("id", UUID.class);
         return new RescanDtos.ScanVersionView(rs.getObject("id", UUID.class), rs.getObject("floor_id", UUID.class),
             rs.getObject("scan_id", UUID.class), rs.getInt("version_number"), rs.getObject("parent_version_id", UUID.class),
             rs.getString("status"), readJson(rs.getString("region_geometry")), rs.getString("alignment_method"), confidence,
             residual, List.of(kinds), readJson(rs.getString("processing_config")),
             finalizedAt == null ? null : finalizedAt.toInstant(), rs.getTimestamp("created_at").toInstant(),
             readJson(rs.getString("alignment_report")), readJson(rs.getString("splice_report")), rs.getString("created_by"),
-            rejectedAt == null ? null : rejectedAt.toInstant());
+            rejectedAt == null ? null : rejectedAt.toInstant(), rs.getObject("pipeline_run_id", UUID.class),
+            rs.getObject("coordinate_frame_id", UUID.class),
+            versions.pins(id).stream().map(p -> new RescanDtos.PinnedArtifact(p.artifactId(), p.kind(), p.ownerVersionId())).toList());
     }
 
     @SuppressWarnings("unchecked")
@@ -193,11 +201,13 @@ public class RescanService {
     }
 
     /**
-     * Bootstraps version 1 for a floor whose venue-wide reconstruction has already succeeded through the
-     * ordinary (non-incremental) pipeline, so there is something to select as the source of the first
-     * ever re-scan. Idempotent: re-finalizing the same underlying scan is refused rather than creating a
-     * duplicate. This is real, minimal infrastructure the incremental flow depends on -- it formalizes an
-     * already-completed reconstruction as a version record, it does not fabricate one.
+     * Formalizes the floor's latest successful full-venue reconstruction as a FINALIZED version, so there is something to
+     * select as the source of a re-scan. It does not fabricate one: the version is that run, pinned to the run's own
+     * published artifacts (viewer asset, cloud, planes, navmesh, detections) and to the ACTIVE canonical frame of its
+     * reconstruction (ScanVersionService#finalizeVersion) -- an uncalibrated reconstruction, or one with no viewer asset,
+     * is refused. The version takes the floor's next number and has no parent: a new full reconstruction is not derived
+     * from an earlier version's geometry. The run's navigation graphs baked in that frame, its detected POIs, and the MANUAL
+     * POIs and anchors already placed in that reconstruction's frames are bound to the new version. Idempotent per run.
      */
     @Transactional
     public RescanDtos.ScanVersionView finalizeCurrent(Actor actor, UUID venueId, UUID floorId) {
@@ -214,7 +224,8 @@ public class RescanService {
             .optional().orElseThrow(() -> new NotFoundException(
                 "no successful full-venue reconstruction exists yet for this floor to finalize as a version"));
 
-        UUID existing = jdbc.sql("SELECT id FROM scan_version WHERE scan_id = :s").param("s", latest.scanId())
+        int number = versions.nextVersionNumber(floorId);
+        UUID existing = jdbc.sql("SELECT id FROM scan_version WHERE pipeline_run_id = :r").param("r", latest.runId())
             .query(UUID.class).optional().orElse(null);
         UUID versionId;
         if (existing != null) {
@@ -222,14 +233,33 @@ public class RescanService {
         } else {
             versionId = jdbc.sql("""
                     INSERT INTO scan_version (organization_id, venue_id, scan_id, floor_id, version_number, status,
-                        provenance, finalized_at)
-                    VALUES (:o, :v, :s, :f, 1, 'FINALIZED', CAST(:p AS jsonb), now()) RETURNING id
+                        pipeline_run_id, created_by)
+                    VALUES (:o, :v, :s, :f, :n, 'DRAFT', :r, :by) RETURNING id
                     """)
                 .param("o", actor.organizationId()).param("v", venueId).param("s", latest.scanId()).param("f", floorId)
-                .param("p", toJson(Map.of("bootstrap", true, "runId", latest.runId().toString())))
+                .param("n", number).param("r", latest.runId()).param("by", actor.subject())
                 .query(UUID.class).single();
-            audit.success(actor, venueId, "rescan.version_bootstrapped", "scan_version", versionId,
-                Map.of("floorId", floorId.toString(), "runId", latest.runId().toString()));
+            UUID frameId = versions.finalizeVersion(versionId, Map.of("bootstrap", true, "runId", latest.runId().toString()));
+            int graphs = jdbc.sql("""
+                    UPDATE navigation_graph SET scan_version_id = :sv
+                     WHERE pipeline_run_id = :r AND scan_version_id IS NULL AND coordinate_frame_id = :frame
+                    """).param("sv", versionId).param("r", latest.runId()).param("frame", frameId).update();
+            // MANUAL POIs and anchors carry the frame they were placed in; a frame of this reconstruction ties them to it.
+            int pois = jdbc.sql("""
+                    UPDATE poi_version SET scan_version_id = :sv
+                     WHERE scan_version_id IS NULL AND venue_id = :v
+                       AND (pipeline_run_id = :r
+                            OR (source = 'MANUAL' AND coordinate_frame_id IN (SELECT id FROM coordinate_frame WHERE source_run_id = :r)))
+                    """).param("sv", versionId).param("v", venueId).param("r", latest.runId()).update();
+            int anchors = jdbc.sql("""
+                    UPDATE ar_anchor SET scan_version_id = :sv
+                     WHERE scan_version_id IS NULL AND floor_id = :f AND deleted_at IS NULL
+                       AND coordinate_frame_id IN (SELECT id FROM coordinate_frame WHERE source_run_id = :r)
+                    """).param("sv", versionId).param("f", floorId).param("r", latest.runId()).update();
+            audit.success(actor, venueId, "rescan.version_bootstrapped", "scan_version", versionId, Map.of(
+                "floorId", floorId.toString(), "runId", latest.runId().toString(), "versionNumber", number,
+                "coordinateFrameId", frameId.toString(), "navigationGraphsBound", graphs, "poiVersionsBound", pois,
+                "anchorsBound", anchors));
         }
         return listVersions(actor, venueId, floorId).stream().filter(v -> v.id().equals(versionId)).findFirst().orElseThrow();
     }

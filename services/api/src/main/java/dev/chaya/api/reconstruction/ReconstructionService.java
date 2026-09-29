@@ -2,6 +2,7 @@ package dev.chaya.api.reconstruction;
 
 import dev.chaya.api.frame.CoordinateFrameService;
 import dev.chaya.api.frame.FrameDtos.FrameView;
+import dev.chaya.api.rescan.ScanVersionService;
 import dev.chaya.api.security.Actor;
 import dev.chaya.api.security.TenantGuard;
 import dev.chaya.api.web.BadRequestException;
@@ -9,6 +10,7 @@ import dev.chaya.api.web.NotFoundException;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -44,26 +46,36 @@ public class ReconstructionService {
         "PLANE_MODEL", "application/json",
         "NAVMESH", "application/octet-stream");
 
-    public record ReconstructionVersion(UUID runId, UUID floorId, Instant generatedAt, String runStatus, String runQuality) {}
+    /** scanVersionId / versionNumber / parentVersionId: the FINALIZED ScanVersion this run is, or null for a reconstruction
+     * that was never formalized as a version. */
+    public record ReconstructionVersion(UUID runId, UUID floorId, Instant generatedAt, String runStatus, String runQuality,
+                                        UUID scanVersionId, Integer versionNumber, UUID parentVersionId) {}
 
     public record ArtifactRef(String kind, String contentType, long sizeBytes, String sha256, String url) {}
 
-    /** coordinateFrame: the ACTIVE calibration of the reconstruction frame the artifacts are in, or null when it has never
-     * been calibrated. The .ksplat is always in its reconstruction frame (arbitrary scale/rotation/origin); a viewer places
-     * it in canonical metres only through a canonical frame, and must not overlay canonical POIs or routes otherwise. */
+    /** coordinateFrame: how the artifacts (always in their reconstruction frame: arbitrary scale/rotation/origin) are placed
+     * in canonical metres; a viewer must not overlay canonical POIs or routes without a canonical one.
+     *
+     * <p>For a FINALIZED ScanVersion (scanVersionId set) everything is that version's own: the artifacts are exactly the ones
+     * it pinned (scan_version_artifact; served from /scan-versions/{id}/artifacts), and the frame is the one it recorded at
+     * finalization, never a later calibration or another version's asset. Otherwise (a reconstruction never formalized as
+     * a version) the artifacts are the run's and the frame is the reconstruction's ACTIVE calibration, or null. */
     public record Reconstruction(UUID runId, UUID scanId, UUID floorId, Instant generatedAt, String runStatus,
-                                 String runQuality, List<ArtifactRef> artifacts, FrameView coordinateFrame) {}
+                                 String runQuality, List<ArtifactRef> artifacts, FrameView coordinateFrame,
+                                 UUID scanVersionId, Integer versionNumber, UUID parentVersionId) {}
 
     public record StoredArtifact(String bucket, String objectKey, String contentType, long sizeBytes) {}
 
     private final JdbcClient jdbc;
     private final TenantGuard guard;
     private final CoordinateFrameService frames;
+    private final ScanVersionService versions;
 
-    public ReconstructionService(JdbcClient jdbc, TenantGuard guard, CoordinateFrameService frames) {
+    public ReconstructionService(JdbcClient jdbc, TenantGuard guard, CoordinateFrameService frames, ScanVersionService versions) {
         this.jdbc = jdbc;
         this.guard = guard;
         this.frames = frames;
+        this.versions = versions;
     }
 
     @Transactional(readOnly = true)
@@ -71,10 +83,13 @@ public class ReconstructionService {
         guard.requireVenue(actor, venueId);
         requireFloor(venueId, floorId);
         return jdbc.sql("""
-                SELECT r.id AS run_id, cs.floor_id, sr.finished_at, r.status, r.quality
+                SELECT r.id AS run_id, cs.floor_id, sr.finished_at, r.status, r.quality,
+                       sv.id AS scan_version_id, sv.version_number, sv.parent_version_id
                   FROM pipeline_stage_run sr
                   JOIN pipeline_run r ON r.id = sr.run_id
                   JOIN capture_session cs ON cs.id = r.capture_session_id
+                  LEFT JOIN scan_version sv ON sv.pipeline_run_id = r.id AND sv.status = 'FINALIZED'
+                                           AND sv.coordinate_frame_id IS NOT NULL
                  WHERE sr.stage = 'ARTIFACT_GENERATION' AND sr.status = 'SUCCEEDED'
                    AND cs.floor_id = :floor AND r.venue_id = :venue AND r.organization_id = :org
                    -- a re-scan's merged model is listed only once its version is FINALIZED: a re-scan that later failed or
@@ -86,7 +101,9 @@ public class ReconstructionService {
                 """)
             .param("floor", floorId).param("venue", venueId).param("org", actor.organizationId())
             .query((rs, i) -> new ReconstructionVersion(rs.getObject("run_id", UUID.class), rs.getObject("floor_id", UUID.class),
-                rs.getTimestamp("finished_at").toInstant(), rs.getString("status"), rs.getString("quality")))
+                rs.getTimestamp("finished_at").toInstant(), rs.getString("status"), rs.getString("quality"),
+                rs.getObject("scan_version_id", UUID.class), (Integer) rs.getObject("version_number"),
+                rs.getObject("parent_version_id", UUID.class)))
             .list();
     }
 
@@ -99,11 +116,66 @@ public class ReconstructionService {
         return get(actor, venueId, versions.get(0).runId());
     }
 
+    private record Row(UUID scanId, UUID floorId, Instant generatedAt, String status, String quality, UUID frameRunId) {}
+
+    /** The reconstruction a run produced. When the run is a FINALIZED ScanVersion, that version's view of it. */
     @Transactional(readOnly = true)
     public Reconstruction get(Actor actor, UUID venueId, UUID runId) {
         guard.requireVenue(actor, venueId);
-        record Row(UUID scanId, UUID floorId, Instant generatedAt, String status, String quality, UUID frameRunId) {}
-        Row row = jdbc.sql("""
+        Optional<UUID> version = versions.finalizedVersionOfRun(runId);
+        if (version.isPresent()) {
+            return getVersion(actor, venueId, version.get());
+        }
+        Row row = runRow(actor, venueId, runId);
+        List<ArtifactRef> artifacts = jdbc.sql("""
+                SELECT a.kind, a.size_bytes, a.checksum_sha256
+                  FROM processing_artifact a
+                  JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id
+                 WHERE sr.run_id = :run AND sr.status = 'SUCCEEDED' AND a.kind IN (:kinds) AND a.contains_pii = false
+                 ORDER BY a.kind
+                """)
+            .param("run", runId).param("kinds", VIEWER_ARTIFACT_KINDS)
+            .query((rs, i) -> new ArtifactRef(rs.getString("kind"), SERVED_CONTENT_TYPES.get(rs.getString("kind")), rs.getLong("size_bytes"),
+                rs.getString("checksum_sha256"),
+                "/api/v1/venues/" + venueId + "/reconstructions/" + runId + "/artifacts/" + rs.getString("kind")))
+            .list();
+        requireViewerAsset(artifacts);
+        return new Reconstruction(runId, row.scanId(), row.floorId(), row.generatedAt(), row.status(), row.quality(), artifacts,
+            frames.activeForRun(row.frameRunId()).orElse(null), null, null, null);
+    }
+
+    /** A FINALIZED ScanVersion's reconstruction: its pinned artifacts and its recorded frame, nothing else. */
+    @Transactional(readOnly = true)
+    public Reconstruction getVersion(Actor actor, UUID venueId, UUID scanVersionId) {
+        ScanVersionService.Scope scope = versions.requireFinalized(actor, venueId, scanVersionId);
+        Row row = runRow(actor, venueId, scope.runId());
+        List<ArtifactRef> artifacts = jdbc.sql("""
+                SELECT pin.kind, a.size_bytes, a.checksum_sha256
+                  FROM scan_version_artifact pin
+                  JOIN processing_artifact a ON a.id = pin.artifact_id
+                 WHERE pin.scan_version_id = :sv AND pin.kind IN (:kinds) AND a.contains_pii = false
+                 ORDER BY pin.kind
+                """)
+            .param("sv", scanVersionId).param("kinds", VIEWER_ARTIFACT_KINDS)
+            .query((rs, i) -> new ArtifactRef(rs.getString("kind"), SERVED_CONTENT_TYPES.get(rs.getString("kind")), rs.getLong("size_bytes"),
+                rs.getString("checksum_sha256"),
+                "/api/v1/venues/" + venueId + "/scan-versions/" + scanVersionId + "/artifacts/" + rs.getString("kind")))
+            .list();
+        requireViewerAsset(artifacts);
+        return new Reconstruction(scope.runId(), row.scanId(), row.floorId(), row.generatedAt(), row.status(), row.quality(),
+            artifacts, frames.load(scope.coordinateFrameId()).orElseThrow(), scope.id(), scope.versionNumber(),
+            scope.parentVersionId());
+    }
+
+    private static void requireViewerAsset(List<ArtifactRef> artifacts) {
+        if (artifacts.stream().noneMatch(a -> a.kind().equals("KSPLAT"))) {
+            // ARTIFACT_GENERATION succeeded but the .ksplat itself is missing/was never published: nothing to view.
+            throw new NotFoundException("reconstruction has no viewer asset (.ksplat) yet");
+        }
+    }
+
+    private Row runRow(Actor actor, UUID venueId, UUID runId) {
+        return jdbc.sql("""
                 SELECT r.scan_id, cs.floor_id, sr.finished_at, r.status, r.quality,
                        coalesce(r.reconstruction_frame_run_id, r.id) AS frame_run_id
                   FROM pipeline_stage_run sr
@@ -117,25 +189,6 @@ public class ReconstructionService {
                 rs.getTimestamp("finished_at").toInstant(), rs.getString("status"), rs.getString("quality"),
                 rs.getObject("frame_run_id", UUID.class)))
             .optional().orElseThrow(() -> new NotFoundException("reconstruction not found"));
-
-        List<ArtifactRef> artifacts = jdbc.sql("""
-                SELECT a.kind, a.size_bytes, a.checksum_sha256
-                  FROM processing_artifact a
-                  JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id
-                 WHERE sr.run_id = :run AND sr.status = 'SUCCEEDED' AND a.kind IN (:kinds) AND a.contains_pii = false
-                 ORDER BY a.kind
-                """)
-            .param("run", runId).param("kinds", VIEWER_ARTIFACT_KINDS)
-            .query((rs, i) -> new ArtifactRef(rs.getString("kind"), SERVED_CONTENT_TYPES.get(rs.getString("kind")), rs.getLong("size_bytes"),
-                rs.getString("checksum_sha256"),
-                "/api/v1/venues/" + venueId + "/reconstructions/" + runId + "/artifacts/" + rs.getString("kind")))
-            .list();
-        if (artifacts.stream().noneMatch(a -> a.kind().equals("KSPLAT"))) {
-            // ARTIFACT_GENERATION succeeded but the .ksplat itself is missing/was never published: nothing to view.
-            throw new NotFoundException("reconstruction has no viewer asset (.ksplat) yet");
-        }
-        return new Reconstruction(runId, row.scanId(), row.floorId(), row.generatedAt(), row.status(), row.quality(), artifacts,
-            frames.activeForRun(row.frameRunId()).orElse(null));
     }
 
     @Transactional(readOnly = true)
@@ -153,6 +206,25 @@ public class ReconstructionService {
                    AND r.venue_id = :venue AND r.organization_id = :org
                 """)
             .param("run", runId).param("kind", kind).param("venue", venueId).param("org", actor.organizationId())
+            .query((rs, i) -> new StoredArtifact(rs.getString("bucket"), rs.getString("object_key"),
+                SERVED_CONTENT_TYPES.get(kind), rs.getLong("size_bytes")))
+            .optional().orElseThrow(() -> new NotFoundException("artifact not found"));
+    }
+
+    /** The bytes of one artifact a FINALIZED version pinned -- the exact object, even when a later run of the same floor
+     * published another of that kind. */
+    @Transactional(readOnly = true)
+    public StoredArtifact versionArtifactBytes(Actor actor, UUID venueId, UUID scanVersionId, String kind) {
+        if (!VIEWER_ARTIFACT_KINDS.contains(kind)) {
+            throw new BadRequestException("unknown viewer artifact kind: " + kind);
+        }
+        versions.requireFinalized(actor, venueId, scanVersionId);
+        return jdbc.sql("""
+                SELECT a.bucket, a.object_key, a.size_bytes
+                  FROM scan_version_artifact pin JOIN processing_artifact a ON a.id = pin.artifact_id
+                 WHERE pin.scan_version_id = :sv AND pin.kind = :kind AND a.contains_pii = false
+                """)
+            .param("sv", scanVersionId).param("kind", kind)
             .query((rs, i) -> new StoredArtifact(rs.getString("bucket"), rs.getString("object_key"),
                 SERVED_CONTENT_TYPES.get(kind), rs.getLong("size_bytes")))
             .optional().orElseThrow(() -> new NotFoundException("artifact not found"));

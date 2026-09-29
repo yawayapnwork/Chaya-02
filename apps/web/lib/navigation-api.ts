@@ -53,6 +53,8 @@ export interface RouteRequest {
   /** "STANDARD" (default) or "STEP_FREE". */
   accessibility?: string;
   blockedRegions?: BlockedRegion[];
+  /** Route on this finalized scan version (its pinned navmesh graph and frame) instead of the floor's current state. */
+  scanVersionId?: string;
 }
 
 export const planRoute = (request: RouteRequest) => api<RouteResponse>("/navigation/routes", { method: "POST", body: JSON.stringify(request) });

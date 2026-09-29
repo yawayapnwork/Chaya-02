@@ -17,10 +17,20 @@ public final class NavigationDtos {
     public record BlockedRegion(@NotNull UUID floorId, double minX, double minY, double maxX, double maxY) {}
 
     /** accessibility: "STANDARD" (default) or "STEP_FREE". start: [x, y, z] in canonical venue metres (+Z up) on
-     * floorId, in the floor's current coordinate frame (RouteService; docs/coordinate-frames.md). */
+     * floorId, in the floor's current coordinate frame (RouteService; docs/coordinate-frames.md).
+     *
+     * <p>scanVersionId (optional): route on that FINALIZED scan version of floorId instead of the floor's current state --
+     * on the navigation graph of the navmesh the version pinned, to the destination POI as it is in that version, with
+     * start in the version's coordinate frame. What a viewer showing that version must use. */
     public record RouteRequest(@NotNull UUID venueId, @NotNull UUID floorId,
                                @NotNull @Size(min = 3, max = 3) List<Double> start, @NotNull UUID destinationPoiId,
-                               String accessibility, @Valid List<BlockedRegion> blockedRegions) {}
+                               String accessibility, @Valid List<BlockedRegion> blockedRegions, UUID scanVersionId) {
+
+        public RouteRequest(UUID venueId, UUID floorId, List<Double> start, UUID destinationPoiId, String accessibility,
+                            List<BlockedRegion> blockedRegions) {
+            this(venueId, floorId, start, destinationPoiId, accessibility, blockedRegions, null);
+        }
+    }
 
     public record Waypoint(double x, double y, double z, UUID floorId, String kind) {}
 

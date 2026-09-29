@@ -28,13 +28,19 @@ public final class RescanDtos {
     public record RescanInitiated(UUID captureId, UUID scanVersionId, UUID parentVersionId,
                                   boolean navigationRebuildRequired, double regionAreaSquareMeters) {}
 
-    /** docs/rescan.md "VERSIONING": every field here is written once and never changes after that --
+    /** One artifact a version is made of (scan_version_artifact). ownerVersionId is the version whose run produced it:
+     * the version itself, or the ancestor a re-scan inherited it from. */
+    public record PinnedArtifact(UUID artifactId, String kind, UUID ownerVersionId) {}
+
+    /** docs/rescan.md "VERSIONING": every field here is written once and never changes after finalization --
      * region/alignment/processing fields are null for a version that was never an incremental re-scan
-     * (e.g. a bootstrapped initial version, see RescanService#finalizeCurrent). */
+     * (e.g. a bootstrapped version, see RescanService#finalizeCurrent). pipelineRunId is the run the version is;
+     * coordinateFrameId (set at finalization) the frame its canonical data is in; artifacts what it is made of. */
     public record ScanVersionView(UUID id, UUID floorId, UUID scanId, int versionNumber, UUID parentVersionId,
                                   String status, Map<String, Object> regionGeometry, String alignmentMethod,
                                   Double alignmentConfidence, Double alignmentResidualM, List<String> changedArtifactKinds,
                                   Map<String, Object> processingConfig, Instant finalizedAt, Instant createdAt,
                                   Map<String, Object> alignmentReport, Map<String, Object> spliceReport, String createdBy,
-                                  Instant rejectedAt) {}
+                                  Instant rejectedAt, UUID pipelineRunId, UUID coordinateFrameId,
+                                  List<PinnedArtifact> artifacts) {}
 }

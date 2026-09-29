@@ -21,6 +21,8 @@ export interface Anchor {
   lastCalibratedAt: string | null;
   /** The coordinate frame digitalPose (canonical metres, +Z up) is expressed in. */
   coordinateFrameId: string | null;
+  /** The scan version the anchor was registered against; null while the floor's reconstruction has no version. */
+  scanVersionId?: string | null;
 }
 
 export interface AnchorRequest {

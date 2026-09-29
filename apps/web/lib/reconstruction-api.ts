@@ -5,13 +5,17 @@ import type { CoordinateFrame } from "./coordinate-frame";
 import { publicConfig } from "./env";
 import { currentAuthHeaders } from "./session";
 
-/** Mirrors dev.chaya.api.reconstruction.ReconstructionService.ReconstructionVersion. */
+/** Mirrors dev.chaya.api.reconstruction.ReconstructionService.ReconstructionVersion. scanVersionId / versionNumber /
+ * parentVersionId: the FINALIZED scan version this reconstruction is, or null when it was never made one. */
 export interface ReconstructionVersion {
   runId: string;
   floorId: string;
   generatedAt: string;
   runStatus: string;
   runQuality: string | null;
+  scanVersionId: string | null;
+  versionNumber: number | null;
+  parentVersionId: string | null;
 }
 
 /** Mirrors dev.chaya.api.reconstruction.ReconstructionService.ArtifactRef. `url` is a path on this
@@ -25,7 +29,9 @@ export interface ArtifactRef {
 }
 
 /** Mirrors dev.chaya.api.reconstruction.ReconstructionService.Reconstruction. The artifacts are in the
- * reconstruction's own frame; `coordinateFrame` (null until calibrated) is how they are placed in canonical metres. */
+ * reconstruction's own frame; `coordinateFrame` (null until calibrated) is how they are placed in canonical metres.
+ * For a finalized scan version (scanVersionId set) the artifacts are exactly the ones that version pinned and the frame
+ * is the one it recorded; its POIs, routes and search results must then be requested for that version too. */
 export interface Reconstruction {
   runId: string;
   scanId: string;
@@ -35,6 +41,9 @@ export interface Reconstruction {
   runQuality: string | null;
   artifacts: ArtifactRef[];
   coordinateFrame: CoordinateFrame | null;
+  scanVersionId: string | null;
+  versionNumber: number | null;
+  parentVersionId: string | null;
 }
 
 export const listReconstructions = (venueId: string, floorId: string) =>
@@ -45,6 +54,9 @@ export const getLatestReconstruction = (venueId: string, floorId: string) =>
 
 export const getReconstruction = (venueId: string, runId: string) =>
   api<Reconstruction>(`/venues/${venueId}/reconstructions/${runId}`);
+
+export const getVersionReconstruction = (venueId: string, scanVersionId: string) =>
+  api<Reconstruction>(`/venues/${venueId}/scan-versions/${scanVersionId}/reconstruction`);
 
 export interface PublicViewerToken {
   token: string;

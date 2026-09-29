@@ -56,12 +56,29 @@ public class ReconstructionController {
         return reconstructions.get(ActorAuthentication.currentActor(), venueId, runId);
     }
 
+    /** A FINALIZED ScanVersion's reconstruction: exactly its pinned artifacts and its recorded coordinate frame. */
+    @GetMapping("/venues/{venueId}/scan-versions/{scanVersionId}/reconstruction")
+    @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR','VIEWER','PUBLIC_VIEWER')")
+    public Reconstruction version(@PathVariable UUID venueId, @PathVariable UUID scanVersionId) {
+        return reconstructions.getVersion(ActorAuthentication.currentActor(), venueId, scanVersionId);
+    }
+
+    @GetMapping("/venues/{venueId}/scan-versions/{scanVersionId}/artifacts/{kind}")
+    @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR','VIEWER','PUBLIC_VIEWER')")
+    public ResponseEntity<StreamingResponseBody> versionArtifact(@PathVariable UUID venueId, @PathVariable UUID scanVersionId,
+                                                                 @PathVariable String kind) {
+        return stream(reconstructions.versionArtifactBytes(ActorAuthentication.currentActor(), venueId, scanVersionId, kind));
+    }
+
     /** Streams the artifact bytes through the backend rather than a presigned S3 URL, so venue/org scope and
      * the contains_pii check are enforced on every read, including for a short-lived public viewer token. */
     @GetMapping("/venues/{venueId}/reconstructions/{runId}/artifacts/{kind}")
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR','VIEWER','PUBLIC_VIEWER')")
     public ResponseEntity<StreamingResponseBody> artifact(@PathVariable UUID venueId, @PathVariable UUID runId, @PathVariable String kind) {
-        StoredArtifact a = reconstructions.artifactBytes(ActorAuthentication.currentActor(), venueId, runId, kind);
+        return stream(reconstructions.artifactBytes(ActorAuthentication.currentActor(), venueId, runId, kind));
+    }
+
+    private ResponseEntity<StreamingResponseBody> stream(StoredArtifact a) {
         StreamingResponseBody body = out -> {
             try (InputStream in = derivedStore.open(a.objectKey())) {
                 in.transferTo(out);

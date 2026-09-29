@@ -62,15 +62,17 @@ public struct Anchor: Codable, Equatable, Sendable {
     public var lastCalibratedAt: Date?
     /// The coordinate frame `digitalPose` is expressed in.
     public var coordinateFrameId: UUID?
+    /// The scan version the anchor was registered against; nil while the floor's reconstruction has no version.
+    public var scanVersionId: UUID?
 
     public init(id: UUID, venueId: UUID, floorId: UUID, markerType: MarkerType, markerIdentifier: String,
                 markerSizeMeters: Double?, physicalPose: Pose, digitalPose: Pose, calibrationStatus: CalibrationStatus,
-                lastCalibratedAt: Date?, coordinateFrameId: UUID?) {
+                lastCalibratedAt: Date?, coordinateFrameId: UUID?, scanVersionId: UUID? = nil) {
         self.id = id; self.venueId = venueId; self.floorId = floorId
         self.markerType = markerType; self.markerIdentifier = markerIdentifier; self.markerSizeMeters = markerSizeMeters
         self.physicalPose = physicalPose; self.digitalPose = digitalPose
         self.calibrationStatus = calibrationStatus; self.lastCalibratedAt = lastCalibratedAt
-        self.coordinateFrameId = coordinateFrameId
+        self.coordinateFrameId = coordinateFrameId; self.scanVersionId = scanVersionId
     }
 }
 

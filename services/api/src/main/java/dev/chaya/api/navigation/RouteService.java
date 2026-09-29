@@ -9,6 +9,7 @@ import dev.chaya.api.navigation.NavigationDtos.RouteRequest;
 import dev.chaya.api.navigation.NavigationDtos.RouteResponse;
 import dev.chaya.api.navigation.NavigationDtos.RoutingSource;
 import dev.chaya.api.navigation.NavigationDtos.Waypoint;
+import dev.chaya.api.rescan.ScanVersionService;
 import dev.chaya.api.security.Actor;
 import dev.chaya.api.security.TenantGuard;
 import dev.chaya.api.web.ApiException;
@@ -68,6 +69,11 @@ import org.springframework.transaction.annotation.Transactional;
  * database), every graph node inside them and every route segment -- graph edge, or the segment from the start or to the
  * destination -- whose horizontal footprint crosses them. The client observes something real and reports its region;
  * this service never invents one.
+ *
+ * <p>Scan versions: a request naming a FINALIZED scanVersionId routes on that version exactly -- the navigation graph of
+ * the navmesh the version pinned (its own, or the one it inherited when its re-scan did not re-bake navigation), in the
+ * coordinate frame the version recorded, to the destination POI as it is in that version -- never on the floor's ACTIVE
+ * graph, which may belong to a newer version. Such a route stays on the version's floor.
  *
  * <p>Distance and duration come from canonical geometry: an edge's weight is the 3-D distance between its two nodes'
  * canonical positions (never the stored length_m), a leg's distance is the length of its waypoint polyline, and a
@@ -142,12 +148,15 @@ public class RouteService {
     private final TenantGuard guard;
     private final NavigationProperties props;
     private final CoordinateFrameService frames;
+    private final ScanVersionService versions;
 
-    public RouteService(JdbcClient jdbc, TenantGuard guard, NavigationProperties props, CoordinateFrameService frames) {
+    public RouteService(JdbcClient jdbc, TenantGuard guard, NavigationProperties props, CoordinateFrameService frames,
+                        ScanVersionService versions) {
         this.jdbc = jdbc;
         this.guard = guard;
         this.props = props;
         this.frames = frames;
+        this.versions = versions;
     }
 
     @Transactional(readOnly = true)
@@ -155,6 +164,9 @@ public class RouteService {
         guard.requireVenue(actor, request.venueId());
         String profile = normalizeProfile(request.accessibility());
         requireFloor(request.venueId(), request.floorId());
+        if (request.scanVersionId() != null) {
+            return routeInVersion(actor, request, profile);
+        }
         PoiRow destination = loadPoi(actor.organizationId(), request.venueId(), request.destinationPoiId())
             .orElseThrow(() -> new NotFoundException("destination POI not found"));
         if (destination.floorId() == null) {
@@ -192,9 +204,70 @@ public class RouteService {
                     + (connectionProblems.isEmpty() ? "" : "; unusable connections: " + String.join("; ", connectionProblems)));
         }
 
-        Point startPoint = new Point("START", request.floorId(), start);
+        return solve(request.venueId(), profile, blocked, graphs, hops, request.floorId(), start, destination);
+    }
+
+    /** See the class comment, "Scan versions". */
+    private RouteResponse routeInVersion(Actor actor, RouteRequest request, String profile) {
+        ScanVersionService.Scope scope = versions.requireFinalized(actor, request.venueId(), request.scanVersionId());
+        if (!scope.floorId().equals(request.floorId())) {
+            throw new ApiException(HttpStatus.CONFLICT, "VERSION_WRONG_FLOOR",
+                "scan version " + scope.id() + " is a version of floor " + scope.floorId() + ", not " + request.floorId());
+        }
+        FrameView frame = frames.load(scope.coordinateFrameId()).filter(FrameView::canonical)
+            .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, "METRIC_CALIBRATION_REQUIRED",
+                "scan version " + scope.id() + " has no canonical coordinate frame"));
+        PoiRow destination = jdbc.sql("""
+                SELECT p.id, p.floor_id, v.x, v.y, v.z, v.coordinate_frame_id
+                  FROM poi p JOIN poi_version v ON v.id = scan_version_poi_version(p.id, :sv)
+                 WHERE p.id = :poi AND p.venue_id = :venue AND p.organization_id = :org
+                """)
+            .param("sv", scope.id()).param("poi", request.destinationPoiId()).param("venue", request.venueId())
+            .param("org", actor.organizationId())
+            .query((rs, i) -> new PoiRow(rs.getObject("id", UUID.class), rs.getObject("floor_id", UUID.class),
+                rs.getDouble("x"), rs.getDouble("y"), rs.getDouble("z"), rs.getObject("coordinate_frame_id", UUID.class)))
+            .optional().orElseThrow(() -> new NotFoundException("destination POI is not part of scan version " + scope.id()));
+        if (!scope.floorId().equals(destination.floorId())) {
+            throw new ApiException(HttpStatus.CONFLICT, "VERSION_WRONG_FLOOR",
+                "a route on a scan version stays on that version's floor; the destination POI is on floor " + destination.floorId());
+        }
+        if (!frame.id().equals(destination.frameId())) {
+            throw new ApiException(HttpStatus.CONFLICT, "METRIC_CALIBRATION_REQUIRED", "in scan version " + scope.id()
+                + " the destination POI is not placed in the version's coordinate frame " + frame.id());
+        }
+        List<BlockedRegion> blocked = request.blockedRegions() == null ? List.of() : request.blockedRegions();
+        validateBlocked(blocked);
+        double[] start = {request.start().get(0), request.start().get(1), request.start().get(2)};
+        if (!Double.isFinite(start[0]) || !Double.isFinite(start[1]) || !Double.isFinite(start[2])) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_START", "start must be three finite canonical coordinates");
+        }
+        ActiveGraph graph = jdbc.sql("""
+                SELECT g.id, g.coordinate_frame_id, g.source, g.navmesh_sha256, g.recastnavigation_version
+                  FROM navigation_graph g
+                  JOIN scan_version_artifact pin ON pin.artifact_id = g.navmesh_artifact_id
+                 WHERE pin.scan_version_id = :sv AND pin.kind = 'NAVMESH' AND g.floor_id = :f AND g.profile = :p
+                   AND g.source = 'RECAST_NAVMESH'
+                 ORDER BY g.created_at DESC LIMIT 1
+                """)
+            .param("sv", scope.id()).param("f", scope.floorId()).param("p", profile)
+            .query((rs, i) -> new ActiveGraph(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class), rs.getString(3),
+                rs.getString(4), rs.getString(5))).optional()
+            .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, "NAVMESH_NOT_READY", "scan version " + scope.id()
+                + " has no " + profile + " navigation graph baked from a Recast navmesh"));
+        if (!frame.id().equals(graph.frameId())) {
+            throw new ApiException(HttpStatus.CONFLICT, "NAVMESH_NOT_READY", "the " + profile + " navigation graph of scan version "
+                + scope.id() + " was baked in coordinate frame " + graph.frameId() + ", not the version's frame " + frame.id());
+        }
+        Map<UUID, FloorGraph> graphs = new HashMap<>();
+        graphs.put(scope.floorId(), buildFloorGraph(graph, scope.floorId(), profile, blocked));
+        return solve(request.venueId(), profile, blocked, graphs, List.of(), request.floorId(), start, destination);
+    }
+
+    private RouteResponse solve(UUID venueId, String profile, List<BlockedRegion> blocked, Map<UUID, FloorGraph> graphs,
+                                List<Hop> hops, UUID startFloor, double[] start, PoiRow destination) {
+        Point startPoint = new Point("START", startFloor, start);
         Point destPoint = new Point("DESTINATION", destination.floorId(), destination.position());
-        Map<String, Step> steps = search(request.venueId(), profile, blocked, graphs, hops, startPoint, destPoint);
+        Map<String, Step> steps = search(venueId, profile, blocked, graphs, hops, startPoint, destPoint);
         if (steps == null) {
             Set<String> excluded = new LinkedHashSet<>();
             for (FloorGraph g : graphs.values()) {
@@ -203,7 +276,7 @@ public class RouteService {
                     excluded.add("floor " + g.floorId() + d);
                 }
             }
-            String detail = (destination.floorId().equals(request.floorId())
+            String detail = (destination.floorId().equals(startFloor)
                     ? "no walkable path connects the start point to the destination on this floor"
                     : "no walkable path connects the start point, the usable floor connections and the destination")
                 + (excluded.isEmpty() ? "" : "; " + String.join("; ", excluded));
@@ -345,7 +418,11 @@ public class RouteService {
             throw new ApiException(HttpStatus.CONFLICT, "NAVMESH_NOT_READY", problem
                 + "; run NAVIGATION_BAKING on a calibrated reconstruction of this floor" + (required ? "" : " (intermediate floor)"));
         }
-        ActiveGraph active = activeGraph(venueId, floorId, profile);
+        return buildFloorGraph(activeGraph(venueId, floorId, profile), floorId, profile, blocked);
+    }
+
+    /** The routable graph of `active` with every exclusion for this query applied. */
+    private FloorGraph buildFloorGraph(ActiveGraph active, UUID floorId, String profile, List<BlockedRegion> blocked) {
         List<Box> boxes = blocked.stream().filter(r -> r.floorId().equals(floorId))
             .map(r -> new Box(r.minX(), r.minY(), r.maxX(), r.maxY())).toList();
         Exclusions exclusions = new Exclusions();

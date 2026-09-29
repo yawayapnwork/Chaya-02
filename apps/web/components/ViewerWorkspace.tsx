@@ -17,6 +17,7 @@ import {
 } from "@/lib/reconstruction-api";
 import { detectDeviceProfile, type DeviceProfile } from "@/lib/device-profile";
 import { formatBytes, formatDate } from "@/lib/viewer-format";
+import { type Scoped, forScene, sceneKey, versionLabel } from "@/lib/version-scope";
 import { type SearchResult } from "@/lib/search-api";
 import { type RouteResponse, planRoute } from "@/lib/navigation-api";
 import SplatViewerCanvas from "@/components/SplatViewerCanvas";
@@ -59,19 +60,22 @@ export default function ViewerWorkspace() {
   const [reconstruction, setReconstruction] = useState<Reconstruction | null>(null);
   const [reconstructionError, setReconstructionError] = useState<string | null>(null);
 
-  const [pois, setPois] = useState<Poi[]>([]);
+  // POIs, the route and the downloaded model are each stored with the scene they were loaded for (lib/version-scope),
+  // and only used while that scene is the one on screen: switching versions never mixes one version's model with
+  // another's POIs, route or frame.
+  const [loadedPois, setLoadedPois] = useState<Scoped<Poi[]> | null>(null);
   const [selectedPoiId, setSelectedPoiId] = useState<string | null>(null);
   const [routeFromId, setRouteFromId] = useState<string>("");
   const [routeToId, setRouteToId] = useState<string>("");
   const [accessibleRoute, setAccessibleRoute] = useState(false);
-  const [routeResponse, setRouteResponse] = useState<RouteResponse | null>(null);
+  const [loadedRoute, setLoadedRoute] = useState<Scoped<RouteResponse> | null>(null);
   const [routeError, setRouteError] = useState<string | null>(null);
   const [routeBusy, setRouteBusy] = useState(false);
 
   const [sceneLoad, setSceneLoad] = useState<SceneLoad>({ phase: "idle" });
   const blobUrlRef = useRef<string | null>(null);
   const floorPrefillConsumedRef = useRef(false);
-  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [blob, setBlob] = useState<Scoped<string> | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
 
   const deviceProfile: DeviceProfile = useMemo(() => detectDeviceProfile(), []);
@@ -170,14 +174,6 @@ export default function ViewerWorkspace() {
         if (!cancelled) setReconstructionError(message(e));
       },
     );
-    listPois(venueId).then(
-      (all) => {
-        if (!cancelled) setPois(all.filter((p) => p.floorId === floorId));
-      },
-      () => {
-        if (!cancelled) setPois([]); // POI overlays are a nice-to-have; never block the viewer over them
-      },
-    );
     return () => {
       cancelled = true;
     };
@@ -204,10 +200,34 @@ export default function ViewerWorkspace() {
     };
   }, [venueId, runId, reloadToken]);
 
+  const currentKey = sceneKey(reconstruction);
+  const scanVersionId = reconstruction?.scanVersionId ?? null;
+
+  // ---- the POIs of exactly this reconstruction: its version's, or (not a version) the floor's current ones -------------
+  useEffect(() => {
+    if (!venueId || !reconstruction) return;
+    const key = sceneKey(reconstruction)!;
+    const versionId = reconstruction.scanVersionId;
+    const floor = reconstruction.floorId;
+    let cancelled = false;
+    listPois(venueId, versionId).then(
+      (all) => {
+        if (!cancelled) setLoadedPois({ key, value: versionId ? all : all.filter((p) => p.floorId === floor) });
+      },
+      () => {
+        if (!cancelled) setLoadedPois({ key, value: [] }); // POI overlays are a nice-to-have; never block the viewer over them
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [venueId, reconstruction, reloadToken]);
+
   // ---- download the .ksplat once a reconstruction is known -------------------------------------
   useEffect(() => {
     const ksplat = reconstruction?.artifacts.find((a) => a.kind === "KSPLAT");
     if (!ksplat) return; // reconstruction is null: the effects above already reset sceneLoad to idle
+    const key = sceneKey(reconstruction)!;
     let cancelled = false;
     const run = async () => {
       setSceneLoad({ phase: "downloading", percent: 0 });
@@ -221,7 +241,7 @@ export default function ViewerWorkspace() {
         if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
         const url = URL.createObjectURL(blob);
         blobUrlRef.current = url;
-        setBlobUrl(url);
+        setBlob({ key, value: url });
         setSceneLoad({ phase: "preparing", percent: 0 });
       } catch (e) {
         if (!cancelled) setSceneLoad({ phase: "error", message: message(e) });
@@ -240,6 +260,9 @@ export default function ViewerWorkspace() {
     [],
   );
 
+  const pois = useMemo(() => forScene(loadedPois, currentKey) ?? [], [loadedPois, currentKey]);
+  const blobUrl = forScene(blob, currentKey);
+  const routeResponse = forScene(loadedRoute, currentKey);
   const routeFrom = pois.find((p) => p.id === routeFromId) ?? null;
   const routeTo = pois.find((p) => p.id === routeToId) ?? null;
   const selectedPoi = pois.find((p) => p.id === selectedPoiId) ?? null;
@@ -252,11 +275,13 @@ export default function ViewerWorkspace() {
   // Real routing (POST /api/v1/navigation/routes): "from" POI stands in for the traveller's current
   // position (a live AR client would send its own tracked position instead). No client-side fallback is
   // drawn when the call fails or no route exists -- see SplatViewerCanvas's route-overlay effect.
+  // On a finalized version the route is planned on that version (its pinned navmesh graph and frame), never on the
+  // floor's current graph, which may belong to a newer version.
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
-      if (!routeFrom || !routeTo || !venueId) {
-        setRouteResponse(null);
+      if (!routeFrom || !routeTo || !venueId || !currentKey) {
+        setLoadedRoute(null);
         setRouteError(null);
         return;
       }
@@ -269,11 +294,12 @@ export default function ViewerWorkspace() {
           start: [routeFrom.x, routeFrom.y, routeFrom.z],
           destinationPoiId: routeTo.id,
           accessibility: accessibleRoute ? "STEP_FREE" : "STANDARD",
+          scanVersionId: scanVersionId ?? undefined,
         });
-        if (!cancelled) setRouteResponse(response);
+        if (!cancelled) setLoadedRoute({ key: currentKey, value: response });
       } catch (e) {
         if (!cancelled) {
-          setRouteResponse(null);
+          setLoadedRoute(null);
           setRouteError(message(e));
         }
       } finally {
@@ -284,7 +310,7 @@ export default function ViewerWorkspace() {
     return () => {
       cancelled = true;
     };
-  }, [routeFrom, routeTo, venueId, floorId, accessibleRoute]);
+  }, [routeFrom, routeTo, venueId, floorId, accessibleRoute, currentKey, scanVersionId]);
 
   const routeWaypointsOnCurrentFloor = routeResponse ? routeResponse.waypoints.filter((w) => w.floorId === floorId) : null;
 
@@ -352,7 +378,7 @@ export default function ViewerWorkspace() {
             {versions.length === 0 && <option value="">No reconstructions</option>}
             {versions.map((v, i) => (
               <option key={v.runId} value={v.runId}>
-                {formatDate(v.generatedAt)} {i === 0 ? "(latest)" : ""}
+                {versionLabel(v, formatDate(v.generatedAt), i === 0)}
               </option>
             ))}
           </select>
@@ -421,12 +447,20 @@ export default function ViewerWorkspace() {
 
         {venueId && (
           <aside className="w-80 shrink-0 space-y-4 overflow-y-auto border-l bg-white p-4 text-sm">
-            <SemanticSearchPanel venueId={venueId} floorId={floorId} onSelectResult={onSelectSearchResult} />
+            <SemanticSearchPanel venueId={venueId} floorId={floorId} scanVersionId={scanVersionId} onSelectResult={onSelectSearchResult} />
 
             {reconstruction && (
               <section>
                 <h2 className="font-medium">Reconstruction</h2>
                 <dl className="mt-1 grid grid-cols-[6rem_1fr] gap-1 text-xs text-zinc-700">
+                  <dt>Version</dt>
+                  <dd data-testid="scan-version">
+                    {reconstruction.versionNumber != null
+                      ? `v${reconstruction.versionNumber}${reconstruction.parentVersionId
+                          ? ` (re-scan of v${versions.find((v) => v.scanVersionId === reconstruction.parentVersionId)?.versionNumber ?? "?"})`
+                          : ""}`
+                      : "Not a finalized version"}
+                  </dd>
                   <dt>Generated</dt><dd>{formatDate(reconstruction.generatedAt)}</dd>
                   <dt>Run status</dt><dd>{reconstruction.runStatus}</dd>
                   <dt>Quality</dt><dd>{reconstruction.runQuality ?? "—"}</dd>

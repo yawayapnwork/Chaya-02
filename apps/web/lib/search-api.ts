@@ -45,6 +45,8 @@ export interface SearchOptions {
   floorId?: string;
   topK?: number;
   accessible?: boolean;
+  /** Search only the POIs of this finalized scan version. */
+  scanVersionId?: string;
 }
 
 export function searchVenue(venueId: string, query: string, options: SearchOptions = {}): Promise<SearchResponse> {
@@ -52,5 +54,6 @@ export function searchVenue(venueId: string, query: string, options: SearchOptio
   if (options.floorId) params.set("floorId", options.floorId);
   if (options.topK) params.set("topK", String(options.topK));
   if (options.accessible) params.set("accessible", "true");
+  if (options.scanVersionId) params.set("scanVersionId", options.scanVersionId);
   return api<SearchResponse>(`/venues/${venueId}/search?${params.toString()}`);
 }

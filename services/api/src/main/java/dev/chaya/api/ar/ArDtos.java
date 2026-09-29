@@ -22,10 +22,12 @@ public final class ArDtos {
 
     /** digitalPose is in canonical venue metres, +Z up, in coordinateFrameId (the floor's current frame when it was set;
      * docs/coordinate-frames.md). For an IMAGE_TARGET it is the pose of the printed image's centre, with the image's own
-     * axes (docs/ar.md, "Marker pose convention"). */
+     * axes (docs/ar.md, "Marker pose convention"). scanVersionId: the ScanVersion the anchor was registered against
+     * (floor_current_scan_version when it was set, or bound by the bootstrap of that reconstruction's version); null while
+     * the floor's current reconstruction has no version. */
     public record Anchor(UUID id, UUID venueId, UUID floorId, String markerType, String markerIdentifier, Double markerSizeMeters,
                          Pose physicalPose, Pose digitalPose, String calibrationStatus, Instant lastCalibratedAt,
-                         UUID coordinateFrameId) {}
+                         UUID coordinateFrameId, UUID scanVersionId) {}
 
     /** A live detection of one already-registered marker, reported by an AR client attempting
      * relocalization. `observedPose` is the marker's pose as the device's own tracking frame currently

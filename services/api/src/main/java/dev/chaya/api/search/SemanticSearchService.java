@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.chaya.api.search.SearchDtos.SearchResponse;
 import dev.chaya.api.search.SearchDtos.SearchResult;
+import dev.chaya.api.rescan.ScanVersionService;
 import dev.chaya.api.security.Actor;
 import dev.chaya.api.security.TenantGuard;
 import dev.chaya.api.web.BadRequestException;
@@ -58,12 +59,17 @@ public class SemanticSearchService {
     private static final TypeReference<Map<String, Object>> MAP = new TypeReference<>() {};
 
     // Shared WHERE clause (venue/org/floor/accessibility scope); each query below prepends its own SELECT and appends its
-    // own extra predicate and ORDER BY.
+    // own extra predicate and ORDER BY. Without :sv the scope is every live POI at its latest version; with :sv (a
+    // FINALIZED ScanVersion) it is exactly that version's POIs, each as it is in that version (scan_version_poi_version).
     private static final String SCOPE_WHERE = """
               FROM poi p
               JOIN poi_version v ON v.poi_id = p.id
-             WHERE p.venue_id = :venue AND p.organization_id = :org AND p.deleted_at IS NULL
-               AND v.version_number = (SELECT max(version_number) FROM poi_version WHERE poi_id = p.id)
+             WHERE p.venue_id = :venue AND p.organization_id = :org
+               AND (CASE WHEN CAST(:sv AS uuid) IS NULL
+                         THEN p.deleted_at IS NULL
+                              AND v.version_number = (SELECT max(version_number) FROM poi_version WHERE poi_id = p.id)
+                         ELSE v.id = scan_version_poi_version(p.id, CAST(:sv AS uuid))
+                              AND p.floor_id = (SELECT floor_id FROM scan_version WHERE id = CAST(:sv AS uuid)) END)
                AND (CAST(:floor AS uuid) IS NULL OR p.floor_id = CAST(:floor AS uuid))
                AND (:accessible = false OR COALESCE((v.attributes->>'accessible')::boolean, false) = true)
             """;
@@ -134,19 +140,31 @@ public class SemanticSearchService {
     private final TextEmbeddingClient embeddings;
     private final SearchProperties props;
     private final ObjectMapper mapper;
+    private final ScanVersionService versions;
 
     public SemanticSearchService(JdbcClient jdbc, TenantGuard guard, TextEmbeddingClient embeddings, SearchProperties props,
-                                 ObjectMapper mapper) {
+                                 ObjectMapper mapper, ScanVersionService versions) {
         this.jdbc = jdbc;
         this.guard = guard;
         this.embeddings = embeddings;
         this.props = props;
         this.mapper = mapper;
+        this.versions = versions;
     }
 
     @Transactional
     public SearchResponse search(Actor actor, UUID venueId, String query, UUID floorId, Integer topK, Boolean accessibleOnly) {
+        return search(actor, venueId, query, floorId, topK, accessibleOnly, null);
+    }
+
+    /** scanVersionId: search only that FINALIZED version's POIs (what a viewer showing that version displays). */
+    @Transactional
+    public SearchResponse search(Actor actor, UUID venueId, String query, UUID floorId, Integer topK, Boolean accessibleOnly,
+                                 UUID scanVersionId) {
         guard.requireVenue(actor, venueId);
+        if (scanVersionId != null) {
+            versions.requireFinalized(actor, venueId, scanVersionId);
+        }
         String normalized = query == null ? "" : query.strip().toLowerCase(Locale.ROOT);
         if (normalized.isEmpty()) {
             throw new BadRequestException("q must not be blank");
@@ -163,6 +181,7 @@ public class SemanticSearchService {
             TextEmbeddingClient.Embedding queryEmbedding = embeddings.embedWithModel(normalized);
             List<Scored> scored = jdbc.sql(VECTOR_SQL)
                 .param("venue", venueId).param("org", actor.organizationId()).param("floor", floorId).param("accessible", accessible)
+                .param("sv", scanVersionId)
                 .param("qv", vectorLiteral(queryEmbedding.vector())).param("model", queryEmbedding.model())
                 .param("minPois", props.relevanceMinPois()).param("minMargin", props.relevanceMinMargin())
                 .param("limit", Math.max(k, props.closestMatches()))
@@ -179,6 +198,7 @@ public class SemanticSearchService {
             log.warn("embedding model unavailable, falling back to lexical search: {}", e.getMessage());
             results = jdbc.sql(LEXICAL_SQL)
                 .param("venue", venueId).param("org", actor.organizationId()).param("floor", floorId).param("accessible", accessible)
+                .param("sv", scanVersionId)
                 .param("q", normalized).param("k", k)
                 .query((rs, i) -> mapRow(rs, null, null, null)).list();
             matchType = "lexical_fallback";

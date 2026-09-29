@@ -3,6 +3,7 @@ package dev.chaya.api.poi;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.chaya.api.audit.AuditService;
+import dev.chaya.api.rescan.ScanVersionService;
 import dev.chaya.api.security.Actor;
 import dev.chaya.api.security.TenantGuard;
 import dev.chaya.api.web.NotFoundException;
@@ -23,6 +24,12 @@ import org.springframework.transaction.annotation.Transactional;
  * calibrated frame. frameStatus tells a reader whether the coordinates are in the floor's current frame (CURRENT), an
  * older one (STALE: the floor was re-reconstructed and the POI has not been re-placed), or none (UNBOUND). Routing only
  * accepts CURRENT POIs.
+ *
+ * <p>Every version also names the ScanVersion it was placed against (scanVersionId): a detected object, the version whose
+ * run detected it; a MANUAL one, the floor's newest FINALIZED version in the floor's current reconstruction
+ * (floor_current_scan_version, V23), or null when that reconstruction has no version yet (a bootstrap binds it later).
+ * {@link #list(Actor, UUID, UUID)} with a version returns exactly the POIs of that version (scan_version_poi_version),
+ * each at its position in that version's frame; frameStatus is then relative to the version's frame, not the floor's.
  */
 @Service
 public class PoiService {
@@ -32,11 +39,11 @@ public class PoiService {
 
     public record Poi(UUID id, UUID floorId, UUID spaceId, int version, String label, String category,
                       String description, List<String> tags, double x, double y, double z, UUID coordinateFrameId,
-                      String frameStatus) {}
+                      String frameStatus, UUID scanVersionId) {}
 
     private static final String LATEST = """
             SELECT p.id, p.floor_id, p.space_id, v.version_number, v.label, v.category, v.description,
-                   v.tags, v.x, v.y, v.z, v.coordinate_frame_id,
+                   v.tags, v.x, v.y, v.z, v.coordinate_frame_id, v.scan_version_id,
                    CASE WHEN v.coordinate_frame_id IS NULL THEN 'UNBOUND'
                         WHEN v.coordinate_frame_id = f.current_coordinate_frame_id THEN 'CURRENT'
                         ELSE 'STALE' END AS frame_status
@@ -47,16 +54,30 @@ public class PoiService {
                AND v.version_number = (SELECT max(version_number) FROM poi_version WHERE poi_id = p.id)
             """;
 
+    /** The POIs of one FINALIZED version (:sv, on floor :f, frame :frame): see scan_version_poi_version. */
+    private static final String IN_VERSION = """
+            SELECT p.id, p.floor_id, p.space_id, v.version_number, v.label, v.category, v.description,
+                   v.tags, v.x, v.y, v.z, v.coordinate_frame_id, v.scan_version_id,
+                   CASE WHEN v.coordinate_frame_id IS NULL THEN 'UNBOUND'
+                        WHEN v.coordinate_frame_id = :frame THEN 'CURRENT'
+                        ELSE 'STALE' END AS frame_status
+              FROM poi p
+              JOIN poi_version v ON v.id = scan_version_poi_version(p.id, :sv)
+             WHERE p.venue_id = :v AND p.organization_id = :o AND p.floor_id = :f
+            """;
+
     private final JdbcClient jdbc;
     private final TenantGuard guard;
     private final AuditService audit;
     private final ObjectMapper mapper;
+    private final ScanVersionService versions;
 
-    public PoiService(JdbcClient jdbc, TenantGuard guard, AuditService audit, ObjectMapper mapper) {
+    public PoiService(JdbcClient jdbc, TenantGuard guard, AuditService audit, ObjectMapper mapper, ScanVersionService versions) {
         this.jdbc = jdbc;
         this.guard = guard;
         this.audit = audit;
         this.mapper = mapper;
+        this.versions = versions;
     }
 
     private static Poi map(ResultSet rs, int i) throws SQLException {
@@ -65,13 +86,25 @@ public class PoiService {
             rs.getObject("space_id", UUID.class), rs.getInt("version_number"), rs.getString("label"),
             rs.getString("category"), rs.getString("description"), List.of(tags),
             rs.getDouble("x"), rs.getDouble("y"), rs.getDouble("z"), rs.getObject("coordinate_frame_id", UUID.class),
-            rs.getString("frame_status"));
+            rs.getString("frame_status"), rs.getObject("scan_version_id", UUID.class));
     }
 
     @Transactional(readOnly = true)
     public List<Poi> list(Actor actor, UUID venueId) {
+        return list(actor, venueId, null);
+    }
+
+    /** scanVersionId null: every live POI at its latest version. Otherwise exactly the POIs of that FINALIZED version. */
+    @Transactional(readOnly = true)
+    public List<Poi> list(Actor actor, UUID venueId, UUID scanVersionId) {
         guard.requireVenue(actor, venueId);
-        return jdbc.sql(LATEST + " ORDER BY v.label").param("v", venueId).param("o", actor.organizationId())
+        if (scanVersionId == null) {
+            return jdbc.sql(LATEST + " ORDER BY v.label").param("v", venueId).param("o", actor.organizationId())
+                .query(PoiService::map).list();
+        }
+        ScanVersionService.Scope scope = versions.requireFinalized(actor, venueId, scanVersionId);
+        return jdbc.sql(IN_VERSION + " ORDER BY v.label, p.id").param("v", venueId).param("o", actor.organizationId())
+            .param("sv", scope.id()).param("f", scope.floorId()).param("frame", scope.coordinateFrameId())
             .query(PoiService::map).list();
     }
 
@@ -137,9 +170,10 @@ public class PoiService {
 
     private void insertVersion(Actor actor, UUID venueId, UUID poi, int number, PoiData d) {
         jdbc.sql("INSERT INTO poi_version (organization_id, venue_id, poi_id, version_number, label, category, description, "
-                + "tags, x, y, z, coordinate_frame_id, created_by) VALUES (:o, :v, :p, :n, :label, :cat, :desc, "
+                + "tags, x, y, z, coordinate_frame_id, scan_version_id, created_by) VALUES (:o, :v, :p, :n, :label, :cat, :desc, "
                 + "ARRAY(SELECT jsonb_array_elements_text(CAST(:tags AS jsonb))), :x, :y, :z, "
-                + "(SELECT current_coordinate_frame_id FROM floor WHERE id = CAST(:floor AS uuid)), :by)")
+                + "(SELECT current_coordinate_frame_id FROM floor WHERE id = CAST(:floor AS uuid)), "
+                + "floor_current_scan_version(CAST(:floor AS uuid)), :by)")
             .param("o", actor.organizationId()).param("v", venueId).param("p", poi).param("n", number)
             .param("label", d.label()).param("cat", d.category()).param("desc", d.description())
             .param("tags", toJson(d.tags() == null ? List.of() : d.tags()))

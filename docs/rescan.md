@@ -9,11 +9,11 @@ pipeline run, not a separate system.
 ## The flow
 
 1. **Select an existing venue version** -- `GET /venues/{v}/floors/{f}/scan-versions` lists a floor's
-   `scan_version` history; the operator picks a `FINALIZED` one. If none exists yet (the floor has only
-   ever had a full reconstruction, never a `scan_version`), `POST
-   /venues/{v}/floors/{f}/scan-versions/finalize-current` bootstraps version 1 from the floor's latest
-   successful full-venue pipeline run (`dev.chaya.api.rescan.RescanService#finalizeCurrent`) -- it
-   formalizes an already-completed reconstruction as a version record, it does not fabricate one.
+   `scan_version` history; the operator picks a `FINALIZED` one. A full reconstruction becomes a version through `POST
+   /venues/{v}/floors/{f}/scan-versions/finalize-current`, which formalizes the floor's latest successful full-venue
+   pipeline run (`dev.chaya.api.rescan.RescanService#finalizeCurrent`). It does not fabricate one: the run must be
+   calibrated (a canonical frame, else `409 NOT_CALIBRATED`) and must have published its own viewer asset and cloud
+   (else `409 VERSION_INCOMPLETE`). See "VERSIONING".
 2. **Select the changed region** -- a simple polygon (`{"points": [[x, y], ...]}`, >= 3 vertices) in canonical
    venue metres (x, y horizontal; [coordinate-frames.md](coordinate-frames.md)). The parent version's reconstruction
    must have a canonical coordinate frame, or initiation is refused with `409 NOT_CALIBRATED` -- a polygon in metres
@@ -179,13 +179,78 @@ this.
 | Merged cloud (`SPLAT_MERGED`) | Only the region's volume is replaced (above). | With the version (new artifact under the re-scan's run). |
 | Planes (`PLANE_FITTING`) | **Whole floor**: refitted over the merged cloud. Not selective. | With the version. |
 | Viewer asset (`.ksplat`) | **Whole floor**: regenerated from the merged cloud. It is one file. Not selective. | Viewers list a re-scan's model only once its version is FINALIZED (`ReconstructionService#listForFloor`). A failed or rejected re-scan never replaces what they see. |
-| Navigation | **Skipped entirely** when no node of the floor's ACTIVE graph lies in the region (`RescanService#navigationIntersectsRegion`, decided before the run exists). **Otherwise the whole floor** is re-baked: Recast has no per-tile partial bake here. | The new graphs are ingested as DRAFT and activated only when the version finalizes (`activateRescanGraphs`). |
-| Semantic index / POIs | Only the region: SEMANTIC_INDEXING sees only the re-scan's frames, and only AUTO_DETECTED POIs inside the polygon are superseded. **MANUAL POIs are never touched.** | Only when the version finalizes (`applyRescanDetections`). A re-scan that fails or is rejected changes no POI (review V-6). |
+| Navigation | **Skipped entirely** when no node of the floor's ACTIVE graph lies in the region (`RescanService#navigationIntersectsRegion`, decided before the run exists); the version then inherits its parent's navmesh pins. **Otherwise the whole floor** is re-baked: Recast has no per-tile partial bake here. | The new graphs are ingested as DRAFT, tagged with the version, and activated only when the version finalizes (`activateRescanGraphs`). |
+| Semantic index / POIs | Only the region: SEMANTIC_INDEXING sees only the re-scan's frames, and only AUTO_DETECTED POIs inside the polygon are superseded. **MANUAL POIs are never touched.** | Only when the version finalizes (`applyRescanDetections`). A re-scan that fails or is rejected changes no POI (review V-6). A superseded POI is soft-deleted with `superseded_by_scan_version_id`, so the versions before the re-scan still show it. The version pins its own region-only DETECTED_OBJECTS next to the ones it inherits. |
 
 ## VERSIONING
 
-Old `scan_version` rows are immutable (`scan_version_guard`): a `FINALIZED` or `ALIGNMENT_REJECTED` row can never be
-updated or deleted. A re-scan's version records:
+A `scan_version` is one reconstruction of one floor. It is created DRAFT and becomes FINALIZED (or, for a re-scan,
+ALIGNMENT_REJECTED) exactly once; after that the row cannot be updated or deleted (`scan_version_guard`, V3/V19/V23).
+Inserting a row that is not DRAFT is refused.
+
+### What a version is made of (V23)
+
+| What | Where | Written |
+|---|---|---|
+| the run it is | `pipeline_run_id` | at creation (a re-scan: right after its run is started; a bootstrap: the full run it formalizes). Fixed once set. |
+| its coordinate frame | `coordinate_frame_id` | at finalization: the ACTIVE canonical calibration of that run's reconstruction frame (for a re-scan, the parent's reconstruction, since the splice writes into it) |
+| its artifacts | `scan_version_artifact` | at finalization (`ScanVersionService#finalizeVersion`), see below |
+
+Finalization is refused by the database unless the frame is a calibration of the run's own reconstruction frame and the
+version has pinned its own viewer asset (`KSPLAT`) and cloud (`SPLAT_MERGED` for a re-scan, `SPLAT_CLEAN` for a full
+reconstruction). The service refuses earlier with `NOT_CALIBRATED` or `VERSION_INCOMPLETE`, and with
+`VERSION_FRAME_MISMATCH` if one of the version's navigation graphs was baked in another frame.
+
+`scan_version_artifact` pins exact `processing_artifact` rows:
+
+- **own**: the latest published, non-PII `KSPLAT`, `ARTIFACT_MANIFEST`, `PLANE_MODEL`, `NAVMESH`, `NAVMESH_MANIFEST`,
+  `NAVIGATION_GRAPH`, `DETECTED_OBJECTS` and cloud of the version's own run;
+- **inherited** (re-scans only): the parent's `NAVMESH`, `NAVMESH_MANIFEST` and `NAVIGATION_GRAPH` when the re-scan did
+  not re-bake navigation, and the parent's `DETECTED_OBJECTS` (a re-scan's own detections cover only its region).
+
+`owner_version_id` names the version whose run produced each artifact. A trigger refuses a pin whose artifact is not
+from the version's own run (when claimed as its own) or not one of the parent's pins (when claimed as inherited), and
+refuses any pin, update or delete once the version is no longer DRAFT. A re-scan run's `processing_artifact` rows also
+carry its `scan_version_id` (V4's column).
+
+### What names its version
+
+| Data | Column | Set |
+|---|---|---|
+| POI version | `poi_version.scan_version_id` | detected: the version whose run detected it (a re-scan's at finalization; a full run's when it is bootstrapped). MANUAL: `floor_current_scan_version(floor)`, the floor's newest FINALIZED version in the floor's current reconstruction; null while that reconstruction has no version, and bound by its bootstrap. Set once (V23 relaxes the V5 guard for exactly that). |
+| superseded POI | `poi.superseded_by_scan_version_id` | when a re-scan finalizes and replaces a detected POI in its region |
+| navigation graph | `navigation_graph.scan_version_id` | a re-scan's graphs at ingestion; a full run's (those baked in the version's frame) at bootstrap. Fixed once set. |
+| AR anchor | `ar_anchor.scan_version_id` | on create and update: `floor_current_scan_version(floor)`; bound at bootstrap when still null |
+| splat / cloud / navmesh / detections | `scan_version_artifact` | at finalization (above) |
+
+### Numbering and lineage
+
+`version_number` is the floor's next number (`ScanVersionService#nextVersionNumber` locks the floor row;
+`UNIQUE (floor_id, version_number)`), never `parent + 1`. Two re-scans of the same parent get two numbers, and a
+DRAFT that never finalizes keeps its number (numbers are not reused). `parent_version_id` is the version a re-scan was
+derived from. A bootstrapped full reconstruction has no parent: its geometry is not derived from any earlier version,
+and a new reconstruction frame has no known relation to the old one (docs/coordinate-frames.md). V23 renumbered floors
+whose numbers collided, in creation order, recording the old number in `provenance.renumberedFrom`.
+
+### Reading one version
+
+Everything that shows or routes on a version resolves it through `dev.chaya.api.rescan.ScanVersionService` and
+refuses a version that is not FINALIZED (`409 VERSION_NOT_FINALIZED`):
+
+| Endpoint | With a version |
+|---|---|
+| `GET /venues/{v}/floors/{f}/reconstructions` | each entry names its `scanVersionId`, `versionNumber`, `parentVersionId` (null for a reconstruction that is not a version) |
+| `GET /venues/{v}/reconstructions/{runId}`, `GET /venues/{v}/scan-versions/{id}/reconstruction` | for a version's run: exactly its pinned artifacts, served from `/scan-versions/{id}/artifacts/{kind}`, and its recorded frame |
+| `GET /venues/{v}/pois?scanVersionId=` | the version's POIs (`scan_version_poi_version`): placed against it or an ancestor, and not deleted, unless the deletion was a re-scan outside its lineage. Each POI is shown as it is in the version's frame; `frameStatus` is relative to that frame. |
+| `POST /navigation/routes` with `scanVersionId` | on the graph of the navmesh the version pinned, in its frame, to the destination as it is in that version; single floor |
+| `GET /venues/{v}/search?scanVersionId=` | only the version's POIs |
+
+The web viewer (`ViewerWorkspace`) selects a reconstruction by version and requests its POIs, routes and search results
+for that version. Every result is stored with the scene it was requested for and drawn only while that scene is on
+screen (`lib/version-scope.ts`), so version N's model is never drawn with version N+1's frame, POIs or route, not even
+between a switch and the next response.
+
+### A re-scan's lineage record
 
 | Field | Column | Written |
 |---|---|---|
@@ -203,11 +268,23 @@ updated or deleted. A re-scan's version records:
 `status` is `DRAFT → FINALIZED` only when the run's last stage succeeds, and `DRAFT → ALIGNMENT_REJECTED` when the
 alignment is rejected. A run that fails for any other reason (or is PARTIAL or CANCELLED) leaves the version DRAFT.
 
-The parent's cloud (`GLOBAL_CLOUD`) is the SPLAT_MERGED, else SPLAT_CLEAN, of exactly the run the parent's provenance
-names, not any cloud of the same scan (review V-8).
+The parent's cloud (`GLOBAL_CLOUD`) is the cloud the parent version pinned, not any cloud of the same scan or run
+(review V-8).
 
-Not addressed here (review V-4): version numbers are still `parent + 1` with no per-floor uniqueness, and there is no
-"current version" pointer on the floor.
+### Not addressed
+
+- There is no `floor.current_scan_version_id`. `.../reconstructions/latest` and the viewer's default are still the
+  newest listed reconstruction (a re-scan only once FINALIZED; a full run once ARTIFACT_GENERATION succeeded, version or
+  not).
+- A full reconstruction that is never bootstrapped is not a version. Its graphs go live at ingestion and its detections
+  at SEMANTIC_INDEXING, as before; the viewer shows it as "not a finalized version", with the floor's current POIs in its
+  frame.
+- Versions finalized before V23 get their run from `provenance.runId` and their frame from the calibration in force at
+  `finalized_at`; one whose frame was never recorded stays without one (the constraint is `NOT VALID` for old rows) and
+  cannot be viewed as a version (`VERSION_INCOMPLETE`); the viewer lists its run as a reconstruction that is not a
+  version. Their pins are their own run's artifacts only; inheritance is not
+  reconstructed, and POIs they superseded before V23 were only soft-deleted, so older versions no longer show them.
+- A manual deletion removes a POI from every version, not only from the newer ones.
 
 ## AUDIT
 
@@ -231,7 +308,10 @@ not venue data.
 | Splice: overlapping-geometry replacement, re-scan beyond the polygon, unrelated geometry kept, no-op, visible seam refused, canonical-frame volume, exact index sets | `tests/unit/test_region_splice.py` | nothing |
 | Both stages through the orchestrator, in non-identity frames: successful merge, rejected merge (nothing published), no-op re-scan, Open3D requirement, uncalibrated re-scan | `tests/orchestration/test_rescan_stages.py` | nothing |
 | Real FPFH matching feeding the estimator | `tests/gpu/test_region_alignment.py` | Open3D (skipped without it; run in the `chaya-bench-open3d` image) |
-| Control plane: worker rejection, control-plane rejection, parent untouched, rejected version immutable and not retryable, full lineage on success, POIs and viewer only on finalization, MANUAL POIs survive | `RescanControlPlaneTest`, `RescanServiceTest`, `ScanVersionImmutabilityTest` | Testcontainers |
+| Control plane: worker rejection, control-plane rejection, parent untouched, rejected version immutable and not retryable, full lineage on success, POIs and viewer only on finalization, MANUAL POIs survive | `RescanControlPlaneTest`, `RescanServiceTest` | Testcontainers |
+| Version integrity in the database: created DRAFT only, finalization needs run, frame and own KSPLAT and cloud, pins only from the own run or the parent, nothing changes after finalization, numbers unique per floor | `ScanVersionImmutabilityTest` | Testcontainers |
+| Versions end to end over HTTP: v1 (full run, real Recast navmesh fixture, bootstrap), v2 (re-scan that re-bakes navigation), v3 (re-scan that inherits it); lineage and numbering, the run of every pinned artifact, the viewer switched between the three (model bytes, frame, POIs, routing graph), refusals for a DRAFT version and another venue | `ScanVersionLineageTest` | Testcontainers |
+| The viewer never uses one scene's POIs, route or model for another | `apps/web/lib/version-scope.test.ts` | nothing |
 
 B5 (docs/BENCHMARKS.md) measures the FEATURE_SIMILARITY path on a real COLMAP cloud with known similarity misalignments.
 

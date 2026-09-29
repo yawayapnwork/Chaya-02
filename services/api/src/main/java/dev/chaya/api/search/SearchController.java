@@ -21,11 +21,13 @@ public class SearchController {
     }
 
     /** q: natural-language query (required). floorId: restrict to one floor. topK: result count (server
-     * clamps to chaya.search.max-top-k). accessible: only POIs whose attributes mark them accessible. */
+     * clamps to chaya.search.max-top-k). accessible: only POIs whose attributes mark them accessible. scanVersionId: only
+     * the POIs of that FINALIZED scan version. */
     @GetMapping
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR','VIEWER','PUBLIC_VIEWER')")
     public SearchResponse search(@PathVariable UUID venueId, @RequestParam String q, @RequestParam(required = false) UUID floorId,
-                                 @RequestParam(required = false) Integer topK, @RequestParam(required = false) Boolean accessible) {
-        return search.search(ActorAuthentication.currentActor(), venueId, q, floorId, topK, accessible);
+                                 @RequestParam(required = false) Integer topK, @RequestParam(required = false) Boolean accessible,
+                                 @RequestParam(required = false) UUID scanVersionId) {
+        return search.search(ActorAuthentication.currentActor(), venueId, q, floorId, topK, accessible, scanVersionId);
     }
 }
