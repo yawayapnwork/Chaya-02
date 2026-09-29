@@ -2,6 +2,7 @@
 
 **Date:** 2026-09-25
 **Commit reviewed:** `cf92005` (clean working tree)
+**Superseded by:** [ADVERSARIAL_REVIEW_2026-09-29.md](ADVERSARIAL_REVIEW_2026-09-29.md) (second pass on `8fa1769`, including CI evidence). This document is kept as written.
 **Reviewer stance:** hostile senior engineer and technical judge. This review looks for reasons to reject or distrust the
 implementation. It does not list strengths.
 **Method:** I read the source, not the plans. Every finding cites the file (and line where useful) that shows the problem.
