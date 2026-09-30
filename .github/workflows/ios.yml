@@ -42,8 +42,11 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Generate the Xcode project
+        # project.yml pins projectFormat, so the (unpinned) Homebrew XcodeGen cannot write a newer format than this Xcode.
         run: |
+          xcodebuild -version
           brew install xcodegen
+          xcodegen --version
           xcodegen generate
       - name: Build for a physical iOS device (unsigned)
         run: >

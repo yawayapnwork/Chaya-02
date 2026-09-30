@@ -10,6 +10,9 @@
 name: ChayaAR
 options:
   bundleIdPrefix: dev.chaya
+  # Pinned: newer XcodeGen releases default to the Xcode 16.3 format (objectVersion 77), which the Xcode 15.4 on CI's
+  # macos-14 runner (and any Xcode before 16.3) refuses to open ("future Xcode project file format (77)").
+  projectFormat: xcode15_0
   deploymentTarget:
     iOS: "16.0"
   createIntermediateGroups: true

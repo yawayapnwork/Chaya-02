@@ -98,8 +98,9 @@ Model weights are downloaded at runtime and have their own licenses, separate fr
 
 ## Container base images
 
-`python:3.12-slim` (Debian), `pgvector/pgvector`, `quay.io/minio/minio` (AGPL-3.0: used unmodified, as a separate
-network service), `quay.io/keycloak/keycloak` (Apache-2.0), `clamav/clamav` (GPL-2.0: used unmodified, as a separate
+`python:3.12-slim` (Debian), `pgvector/pgvector`, `quay.io/minio/minio` and `quay.io/minio/mc` (AGPL-3.0: used unmodified, as a separate
+network service; redistributed unmodified from the project's public GHCR mirror, with the corresponding source named in
+`infra/mirror/README.md`), `quay.io/keycloak/keycloak` (Apache-2.0), `clamav/clamav` (GPL-2.0: used unmodified, as a separate
 service), `redis:7-alpine` (RSALv2/SSPL from Redis 7.4; this compose file uses 7.x, so check the exact tag),
 Prometheus, Loki (AGPL-3.0), Alloy, Grafana (AGPL-3.0), GlitchTip. Running AGPL services unmodified, as separate
 processes, is the common reading of their terms. It is still a decision to confirm, not something asserted here.

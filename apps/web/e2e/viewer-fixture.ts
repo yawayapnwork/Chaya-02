@@ -13,7 +13,9 @@ import type { Page } from "@playwright/test";
 // real GaussianSplats3D parses and renders. Real HTTP retrieval, storage and authorization of the same bytes through
 // the running API are checked separately against the full stack (scripts/e2e/viewer_format_check.cjs).
 
-const DIR = path.resolve(process.cwd(), "../../packages/contracts/fixtures/viewer-scene");
+// Relative to this file, not the working directory, so `npx playwright test -c apps/web/playwright.config.ts` from the
+// repository root finds it too.
+const DIR = path.resolve(__dirname, "../../../packages/contracts/fixtures/viewer-scene");
 export const KSPLAT = readFileSync(path.join(DIR, "scene.ksplat"));
 export const KSPLAT_SHA256 = createHash("sha256").update(KSPLAT).digest("hex");
 export const FIXTURE = JSON.parse(readFileSync(path.join(DIR, "fixture.json"), "utf8")) as {

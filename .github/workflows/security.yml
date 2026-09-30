@@ -86,10 +86,12 @@ jobs:
           java-version: "21"
           cache: maven
       - name: Vulnerabilities (OWASP Dependency-Check, CVSS >= 7 fails)
+        # >= 12.2.2: earlier releases crash while building their NVD database ("Value too long for column URL
+        # CHARACTER VARYING(1000)" on long Mozilla CVE reference URLs); 12.2.2 widened the column (upstream #8467).
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: >
-          mvn -B -ntp org.owasp:dependency-check-maven:12.1.0:check
+          mvn -B -ntp org.owasp:dependency-check-maven:12.2.2:check
           -DfailBuildOnCVSS=7 -Dformats=HTML,JSON -DnvdApiKey="$NVD_API_KEY"
       - name: Licenses (third-party report; missing license metadata fails)
         run: >

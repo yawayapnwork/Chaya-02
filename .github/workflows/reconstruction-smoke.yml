@@ -14,6 +14,7 @@ on:
       - "services/reconstruction/**"
       - "services/api/**"
       - "infra/docker/**"
+      - "infra/mirror/**"
       - "infra/ci/**"
       - "infra/keycloak/**"
       - "scripts/ci/**"
@@ -86,6 +87,8 @@ jobs:
           cache-dependency-path: services/reconstruction/pyproject.toml
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: pip install -e "services/reconstruction[dev]"
+      - name: MinIO preflight (fresh pull of the pinned GHCR mirror, digest check, start, S3 round trip)
+        run: bash scripts/ci/minio-preflight.sh
       - name: Stack smoke (API, Postgres, MinIO, ClamAV, Keycloak)
         run: bash scripts/ci/stack-smoke.sh
         env:

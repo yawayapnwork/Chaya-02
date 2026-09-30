@@ -19,3 +19,4 @@ cd services/api && mvn spring-boot:run     # needs JDK 21 and the POSTGRES_* var
 cd apps/web && npm install && CHAYA_API_BASE_URL=http://localhost:8080 npm run dev
 ```
 Checks: `cd apps/web && npm run lint && npm run typecheck && npm test && npm run build`; `cd services/api && mvn verify`.
+What a clean checkout runs, and what CI does not execute: [docs/TEST_REPRODUCIBILITY.md](docs/TEST_REPRODUCIBILITY.md).

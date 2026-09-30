@@ -1,13 +1,14 @@
 # Python services: lint (ruff: pyflakes, pycodestyle, bugbear, isort, pyupgrade, bandit) and tests.
-# The worker's GPU and live-stack suites skip themselves here (no GPU, no stack); the CPU stages run for real.
+# The CPU stages run for real and may not skip. The worker's `gpu` and `integration` tests cannot run here (no GPU, no
+# stack): they are selected separately, and the job summary lists each one as NOT executed, with its reason.
 name: python
 
 on:
   pull_request:
-    paths: ["services/reconstruction/**", "services/vision/**", "packages/contracts/fixtures/**", ".github/workflows/python.yml"]
+    paths: ["services/reconstruction/**", "services/vision/**", "packages/contracts/fixtures/**", "scripts/ci/check-fixtures.sh", ".github/workflows/python.yml"]
   push:
     branches: [main]
-    paths: ["services/reconstruction/**", "services/vision/**", "packages/contracts/fixtures/**", ".github/workflows/python.yml"]
+    paths: ["services/reconstruction/**", "services/vision/**", "packages/contracts/fixtures/**", "scripts/ci/check-fixtures.sh", ".github/workflows/python.yml"]
   workflow_dispatch:
 
 permissions:
@@ -48,10 +49,33 @@ jobs:
       - name: CPU PyTorch for the splat training tests (no GPU in CI; gsplat's CUDA training runs only on GPU hosts)
         if: matrix.service == 'reconstruction'
         run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Committed test fixtures are present (packages/contracts/fixtures/README.md)
+        run: bash "$GITHUB_WORKSPACE/scripts/ci/check-fixtures.sh"
       - name: Lint
         run: ruff check .
-      - name: Tests
-        run: python -m pytest -q -ra
+      - name: Tests (CPU; gpu- and integration-marked tests are excluded here and reported below)
+        # Nothing selected here may skip: a skip would mean a missing tool or fixture, i.e. a test that did not run.
+        # The one allowed skip is pytest's "got empty parameter set": test_unwritten_stages_never_succeed... is
+        # parametrized over the stages still marked planned, of which there are none today.
+        run: |
+          python -m pytest -q -rs -m "not gpu and not integration" | tee tests.txt
+          if grep "^SKIPPED" tests.txt | grep -v "got empty parameter set"; then
+            echo "::error::tests skipped in the CPU suite (see above)"; exit 1
+          fi
+      - name: Not executed in this job (needs a GPU/reconstruction toolchain or live services)
+        # These run (and skip themselves with a reason) so the reasons are in the log and the job summary. They are NOT
+        # passed: CPU execution here proves nothing about CUDA/gsplat/COLMAP. The integration tests run against a real
+        # stack in reconstruction-smoke's stack-smoke job (test_stack_e2e.py); test_minio_storage.py needs CHAYA_IT_S3_*.
+        if: matrix.service == 'reconstruction'
+        run: |
+          python -m pytest -q -rs -m "gpu or integration" | tee not-run.txt
+          {
+            echo "### Worker tests NOT executed in this job"
+            echo "| test | reason |"
+            echo "|---|---|"
+            grep "^SKIPPED" not-run.txt | sed -E 's/^SKIPPED \[[0-9]+\] ([^:]+:[0-9]+): (.*)$/| `\1` | \2 |/'
+            grep -E "[0-9]+ (passed|skipped)" not-run.txt | tail -1 | sed 's/^/Summary: /'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: The real navmesh fixture tests ran (a skip here means the tool was not found, and fails the job)
         if: matrix.service == 'reconstruction'
         run: |

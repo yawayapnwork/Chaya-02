@@ -1,0 +1,2 @@
+# Byte-exact registry manifests: their SHA-256 is their identity. Never convert line endings.
+*.json binary

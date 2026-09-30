@@ -42,8 +42,13 @@ def room(seed: int, density: int = 600) -> np.ndarray:
 
 
 def rotation_error_deg(a: Similarity, b: Similarity) -> float:
+    """Angle of the relative rotation, as atan2(sin, cos). Not arccos((tr - 1) / 2): near zero arccos turns a single
+    float64 rounding of the trace (~2e-16) into ~1.2e-6 degrees, so it cannot resolve the errors the exact-recovery
+    tests bound (it measured 1.7e-6 and 2.1e-6 degrees on the CI runner for estimates correct to ~1e-15)."""
     r = a.rotation @ b.rotation.T
-    return float(np.degrees(np.arccos(np.clip((np.trace(r) - 1) / 2, -1, 1))))
+    sin = np.linalg.norm([r[2, 1] - r[1, 2], r[0, 2] - r[2, 0], r[1, 0] - r[0, 1]]) / 2
+    cos = (np.trace(r) - 1) / 2
+    return float(np.degrees(np.arctan2(sin, cos)))
 
 
 def cloud(positions: np.ndarray, seed: int = 0) -> GaussianCloud:

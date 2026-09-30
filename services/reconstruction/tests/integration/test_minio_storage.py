@@ -1,6 +1,6 @@
 """Integration: the S3 storage adapter against a real MinIO. Skipped unless CHAYA_IT_S3_* are set:
 
-    docker run -d -p 9000:9000 -e MINIO_ROOT_USER=itaccess -e MINIO_ROOT_PASSWORD=itsecret123 quay.io/minio/minio server /data
+    docker run -d -p 9000:9000 -e MINIO_ROOT_USER=itaccess -e MINIO_ROOT_PASSWORD=itsecret123 ghcr.io/yawayapnwork/mirror/minio@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 server /data
     CHAYA_IT_S3_ENDPOINT=http://localhost:9000 CHAYA_IT_S3_ACCESS_KEY=itaccess CHAYA_IT_S3_SECRET_KEY=itsecret123 pytest -m integration
 """
 

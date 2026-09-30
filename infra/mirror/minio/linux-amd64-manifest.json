@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+  "config": {
+    "mediaType": "application/vnd.docker.container.image.v1+json",
+    "digest": "sha256:69b2ec208575b69597784255eec6fa6a2985ee9e1a47f4411a51f7f5fdd193a9",
+    "size": 8506
+  },
+  "layers": [
+    {
+      "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
+      "digest": "sha256:b83ce1c86227e7eb8f809d5634df70202a43b5a2a42ad5881de019c6e7bb77ab",
+      "size": 7240601
+    },
+    {
+      "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
+      "digest": "sha256:f94d28849fa387176d83fed06c02b5814597103420f929f8f74ad5c212e62a7a",
+      "size": 1637189
+    },
+    {
+      "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
+      "digest": "sha256:81260b1730768c85f8ebdba7d561c7189971d84eef7dc0ff2b03d83957dcdd4a",
+      "size": 122724
+    },
+    {
+      "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
+      "digest": "sha256:f9c0805c25ee5c0d375a9c16810eafb57cf658d7b6814c179d52496272bec8a4",
+      "size": 39450432
+    },
+    {
+      "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
+      "digest": "sha256:1008deaf6ec413772a3de8828d030bd6472ec80c59a8595f3f9fee2524576692",
+      "size": 11188523
+    },
+    {
+      "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
+      "digest": "sha256:71e9fc939447059a2e6b8db211155a6d0217582e6a93d13e53c111df359b05cf",
+      "size": 2401645
+    },
+    {
+      "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
+      "digest": "sha256:c1bc68842c41cb716734641f75dc37d629f05df5f812a8cc2e7e0370d4e833ec",
+      "size": 180305
+    },
+    {
+      "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
+      "digest": "sha256:0288b5a0d7e71a2cdbdf114cb9869ce2bc4b05adfd6aa5e3ee9fa4b3847e7b80",
+      "size": 11876
+    },
+    {
+      "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
+      "digest": "sha256:34013573f2786dfd3f6a542374c2bb7821fa6924de6ed320dc808582d50879d3",
+      "size": 496
+    }
+  ]
+}

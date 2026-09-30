@@ -53,6 +53,13 @@ work/
 *.mkv
 *.webm
 !/apps/web/public/**
+# Deterministic, synthetic test fixtures written by the production encoders (never captures or reconstructions).
+# The web and worker test suites load them; without them a clean checkout cannot run those tests.
+# See packages/contracts/fixtures/README.md.
+!/packages/contracts/fixtures/ksplat/scene.ksplat
+!/packages/contracts/fixtures/ksplat/scene.ply
+!/packages/contracts/fixtures/viewer-scene/scene.ksplat
+!/packages/contracts/fixtures/viewer-scene/scene.ply
 
 # Logs
 *.log

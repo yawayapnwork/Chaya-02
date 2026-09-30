@@ -251,11 +251,11 @@ can change under a deploy or a rollback. How each one is pinned:
 | Image | Pin | Why |
 |---|---|---|
 | `chaya-*` | `sha-<commit>` | Immutable by construction |
-| `quay.io/minio/minio`, `quay.io/minio/mc` | release tag **and** `@sha256` digest | `latest` would silently upgrade the object store holding every capture. Upstream's `latest` has not moved since `RELEASE.2025-09-07` (minio) / `RELEASE.2025-08-13` (mc), the versions pinned and tested; watch for security releases yourself, since Dependabot does not track quay.io digests in compose files. Same pins in `infra/docker` and `scripts/backup/common.sh`. |
+| `ghcr.io/yawayapnwork/mirror/minio`, `…/mirror/mc` | release tag **and** `@sha256` digest | The project's own byte-identical GHCR mirror of `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z` / `quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z` (linux/amd64), because the upstream registries no longer allow anonymous pulls; provenance and the update procedure are in [infra/mirror/README.md](infra/mirror/README.md). `latest` would silently upgrade the object store holding every capture. Watch for MinIO security releases yourself: nothing tracks them automatically. Same pins in `infra/docker`, `scripts/backup/common.sh` and the API's Testcontainers setup. |
 | `postgres` (`pgvector:pg17`), `keycloak:26.0`, `clamav:1.4`, `caddy:2.10-alpine` | major/minor tag | Patch releases (security fixes) are taken on the next deploy. A major upgrade (Postgres especially: a new major needs `pg_upgrade` or dump/restore) is a deliberate change to this file. |
 
-To upgrade MinIO: set `MINIO_IMAGE`/`MC_IMAGE` in the host `.env` on staging, deploy, run `verify.sh`, then move the
-pin in the compose file.
+To upgrade MinIO: mirror the new release (infra/mirror/README.md), set `MINIO_IMAGE`/`MC_IMAGE` in the host `.env` on
+staging, deploy, run `verify.sh`, then move the pins.
 
 ## 8. Backups
 

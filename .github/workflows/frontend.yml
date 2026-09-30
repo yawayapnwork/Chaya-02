@@ -5,10 +5,10 @@ name: frontend
 
 on:
   pull_request:
-    paths: ["apps/web/**", "packages/contracts/fixtures/**", "services/reconstruction/chaya_worker/ksplat.py", ".github/workflows/frontend.yml"]
+    paths: ["apps/web/**", "packages/contracts/fixtures/**", "services/reconstruction/chaya_worker/ksplat.py", "scripts/ci/check-fixtures.sh", ".github/workflows/frontend.yml"]
   push:
     branches: [main]
-    paths: ["apps/web/**", "packages/contracts/fixtures/**", "services/reconstruction/chaya_worker/ksplat.py", ".github/workflows/frontend.yml"]
+    paths: ["apps/web/**", "packages/contracts/fixtures/**", "services/reconstruction/chaya_worker/ksplat.py", "scripts/ci/check-fixtures.sh", ".github/workflows/frontend.yml"]
   workflow_dispatch:
 
 permissions:
@@ -33,6 +33,8 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
+      - name: Committed test fixtures are present (packages/contracts/fixtures/README.md)
+        run: bash "$GITHUB_WORKSPACE/scripts/ci/check-fixtures.sh"
       - run: npm ci --no-audit --no-fund
       - name: Lint
         run: npm run lint

@@ -48,7 +48,10 @@ abstract class AbstractIntegrationTest {
     static final PostgreSQLContainer<?> PG = new PostgreSQLContainer<>(
         DockerImageName.parse("pgvector/pgvector:pg17").asCompatibleSubstituteFor("postgres"));
 
-    static final GenericContainer<?> MINIO = new GenericContainer<>(DockerImageName.parse("quay.io/minio/minio:latest"))
+    // The project's GHCR mirror of quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z (linux/amd64), byte-identical and
+    // pinned by digest, as in infra/docker/docker-compose.yml (infra/mirror/README.md: upstream refuses anonymous pulls).
+    static final GenericContainer<?> MINIO = new GenericContainer<>(DockerImageName.parse(
+            "ghcr.io/yawayapnwork/mirror/minio@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2"))
         .withCommand("server", "/data")
         .withEnv("MINIO_ROOT_USER", "testaccess")
         .withEnv("MINIO_ROOT_PASSWORD", "testsecret123")

@@ -3,10 +3,10 @@ name: backend
 
 on:
   pull_request:
-    paths: ["services/api/**", ".github/workflows/backend.yml"]
+    paths: ["services/api/**", "infra/mirror/**", "scripts/ci/minio-preflight.sh", ".github/workflows/backend.yml"]
   push:
     branches: [main]
-    paths: ["services/api/**", ".github/workflows/backend.yml"]
+    paths: ["services/api/**", "infra/mirror/**", "scripts/ci/minio-preflight.sh", ".github/workflows/backend.yml"]
   workflow_dispatch:
 
 permissions:
@@ -30,6 +30,10 @@ jobs:
           distribution: temurin
           java-version: "21"
           cache: maven
+      - name: MinIO preflight (fresh pull of the pinned GHCR mirror, digest check, start, S3 round trip)
+        # The Testcontainers MinIO below is this image. A pull failure here is the real cause, stated once, instead of
+        # hundreds of integration-test errors (infra/mirror/README.md).
+        run: bash "$GITHUB_WORKSPACE/scripts/ci/minio-preflight.sh"
       - name: Test and package
         run: mvn -B -ntp verify
       - name: Integration tests actually ran
