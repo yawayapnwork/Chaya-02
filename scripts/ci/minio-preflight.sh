@@ -47,7 +47,8 @@ for ref in "$MINIO" "$MC"; do
   docker image inspect "$ref" >/dev/null 2>&1 && fail "$ref is still cached after removal; cannot prove the registry serves it"
   docker pull "$ref" || fail "cannot pull $ref. Is the GHCR package public and published? See infra/mirror/README.md"
   echo "== 3. digest"
-  digests=$(docker image inspect --format '{{join .RepoDigests " "}} {{.Id}}' "$ref")
+  # range, not join: Docker CLI 27/28 (GitHub runners) hand the template RepoDigests as []interface{}, which join rejects.
+  digests=$(docker image inspect --format '{{range .RepoDigests}}{{.}} {{end}}{{.Id}}' "$ref")
   case " $digests " in *"${ref#*@}"*) ;; *) fail "$ref pulled, but the image reports [$digests]";; esac
 done
 
