@@ -36,12 +36,12 @@ belongs to the artifact-generation milestone, and a `PARTIAL` result must be fin
 
 | # | Stage | What it does | Status on a machine with only FFmpeg + OpenCV |
 |---|---|---|---|
-| 1 | `INPUT_VALIDATION` | verifies every raw file against its recorded checksum, decodes video/images, parses metadata | **executes** |
-| 2 | `FFMPEG_PREPROCESS` | FFmpeg frame extraction (fps, max height, frame cap), image normalisation (drops EXIF) | **executes** |
+| 1 | `INPUT_VALIDATION` | verifies every raw file against its recorded checksum, decodes video/images, parses metadata, validates a declared camera calibration (see "Camera calibration and lens distortion") | **executes** |
+| 2 | `FFMPEG_PREPROCESS` | FFmpeg frame extraction (fps, max height, frame cap), image normalisation (drops EXIF); rescales a declared calibration to the frames and publishes it as `CAMERA_CALIBRATION` | **executes** |
 | 3 | `FRAME_QUALITY_FILTER` | drops blurred (Laplacian variance), under/over-exposed and near-duplicate frames, with reasons | **executes** |
 | 4 | `PRIVACY_PREPROCESS` | face and screen/document detection, blurring, verification pass; fails closed | **executes** |
-| 5 | `POSE_ESTIMATION` | COLMAP feature extraction + matching, GLOMAP mapper, COLMAP mapper fallback, poses.json | implemented; **needs COLMAP** (GLOMAP optional); fails with `DEPENDENCY_UNAVAILABLE` here |
-| 6 | `SPLAT_RECONSTRUCTION` | gsplat training (Adam, L1+D-SSIM) seeded from the SfM point cloud, with adaptive density control (clone/split/prune, capped), a time-boxed loop, resumable checkpoints and one colour convention to the viewer; see "Splat training" below | implemented; **needs torch + gsplat + CUDA + COLMAP**; fails with `DEPENDENCY_UNAVAILABLE` here. Training mechanics validated on CPU with a test renderer; **gsplat training has never run** |
+| 5 | `POSE_ESTIMATION` | COLMAP feature extraction (seeded with the declared calibration when there is one) + matching, GLOMAP mapper, COLMAP mapper fallback, poses.json with the model's cameras | implemented; **needs COLMAP** (GLOMAP optional); fails with `DEPENDENCY_UNAVAILABLE` here |
+| 6 | `SPLAT_RECONSTRUCTION` | gsplat training (Adam, L1+D-SSIM) on undistorted frames, seeded from the SfM point cloud, with adaptive density control (clone/split/prune, capped), a time-boxed loop, resumable checkpoints and one colour convention to the viewer; see "Splat training" below | implemented; **needs torch + gsplat + CUDA + COLMAP**; fails with `DEPENDENCY_UNAVAILABLE` here. Training mechanics validated on CPU with a test renderer; **gsplat training has never run** |
 | 7 | `SEMANTIC_SEGMENTATION` | per-frame SegFormer (or any configured HF model) segmentation, projected onto the splat and bucketed into floor/wall/furniture/clutter | implemented; **needs torch + transformers + the model cached locally + COLMAP**; fails with `DEPENDENCY_UNAVAILABLE` here |
 | 8 | `GEOMETRIC_CLEANUP` | Open3D statistical + radius outlier removal (radius a multiple of the cloud's own median nearest-neighbour spacing: scale-invariant, not metres), then semantic class-aware filtering (never opacity alone) | implemented; **needs Open3D**; fails with `DEPENDENCY_UNAVAILABLE` here |
 | 9 | `PLANE_FITTING` | iterative Open3D RANSAC plane extraction (spacing-relative inlier distance); floor/ceiling/wall classification against the calibrated frame's up or this reconstruction's `GRAVITY_ESTIMATE` (floor plane oriented by the cameras; [coordinate-frames.md](coordinate-frames.md)) | implemented; **needs Open3D**; fails with `DEPENDENCY_UNAVAILABLE` here |
@@ -99,6 +99,50 @@ The cleanup benchmark harness (`python -m chaya_worker.benchmarks.cleanup_benchm
 opacity-threshold, statistical-outlier, density/radius-outlier and semantic-aware cleanup on a trained
 splat; point counts and timings are always reported, PSNR/SSIM only when reference frames/poses and the
 GPU toolchain are available -- otherwise it says so instead of inventing a number.
+
+## Camera calibration and lens distortion
+
+This addresses review finding G-1 (training discarded lens distortion). `chaya_worker.camera_model` is the single
+camera description from ingestion to training. It holds a COLMAP model name, the image size and every parameter in
+COLMAP's order and pixel convention.
+
+**Supported models:** `SIMPLE_PINHOLE`, `PINHOLE`, `SIMPLE_RADIAL`, `RADIAL`, `OPENCV`, `FULL_OPENCV`. The distortion
+formulas are COLMAP's. The tests check them against OpenCV's `projectPoints`.
+
+**Refused:** the fisheye and field-of-view models (`SIMPLE_RADIAL_FISHEYE`, `RADIAL_FISHEYE`, `OPENCV_FISHEYE`, `FOV`,
+`THIN_PRISM_FISHEYE`, `RAD_TAN_THIN_PRISM_FISHEYE`) and any unknown name fail with `CAMERA_MODEL_UNSUPPORTED`. A
+distortion that folds over itself inside the image (non-positive Jacobian), or that cannot fill a same-size pinhole
+image from the photograph, fails with `CAMERA_CALIBRATION_INVALID`. Neither is approximated by another model.
+
+Where the camera comes from, stage by stage:
+
+| Stage | What happens to the camera |
+|---|---|
+| INPUT_VALIDATION | A `cameraCalibration` block in a metadata file ([capture-ingestion.md](capture-ingestion.md)) is parsed and validated. Every video and image must be exactly the calibrated size. Rotated videos are refused, and so is more than one declared calibration. `input-report.json` records `camera_calibration_status` (`DECLARED` / `NOT_PROVIDED`). |
+| FFMPEG_PREPROCESS | Frames are downscaled, so the calibration is rescaled per axis by the actual output/input size. Focal lengths and principal point scale; distortion coefficients do not change, since they act on normalised coordinates. A single-focal model rescaled non-uniformly (FFmpeg rounds widths to even) becomes its exact two-focal equivalent. The result is published as `CAMERA_CALIBRATION` (`camera-calibration.json`, not PII, so every later stage receives it). No later stage resizes frames. |
+| POSE_ESTIMATION | With `CAMERA_CALIBRATION`, the frames must be the calibrated size. `feature_extractor` gets `--ImageReader.camera_model <model> --ImageReader.camera_params <params>`. Without it, COLMAP self-calibrates `SIMPLE_RADIAL`, as before. The mappers' bundle adjustment may refine focal length and distortion in both cases (their defaults are not overridden), so the declared calibration is a starting value. `poses.json` records the reconstructed model's cameras with every parameter, `calibration_source` (`CAPTURE_METADATA` / `SFM_SELF_CALIBRATION`) and, for a declared calibration, how far SfM moved it. |
+| SPLAT_RECONSTRUCTION | gsplat renders a pinhole camera. Frames of a camera with non-zero distortion are undistorted first (`FrameRectifier`): bilinear resampling through the model's forward distortion to a `PINHOLE` camera of the same size and principal point, with focal lengths `focal_scale · (fx, fy)`. `focal_scale` is the smallest value that leaves no blank pixel. The pose is unchanged: undistortion is a 2D resampling, so the world-to-camera transform in `POSES` is the training camera's pose. Frames of a camera without distortion are used as they are. `TRAINING_CAMERAS` (`training-cameras.json`) records, per camera, the source camera (model, size, fx, fy, cx, cy, distortion model and coefficients), `undistorted`, the pinhole camera trained with, `focal_scale`, the mapping `x_source = K_source · distort(K_training⁻¹ · x_training)`, and the calibration source. |
+| SEMANTIC_SEGMENTATION, SEMANTIC_INDEXING | These also projected the splat through a pinhole `K` onto distorted frames. They now use the same undistorted frame and pinhole camera. Detection boxes (`bbox_px`) are therefore in undistorted-frame pixels, which have the same size as the frame. |
+
+**What exists and what does not.** No capture client (web capture page, iOS app) writes a `cameraCalibration` block
+today. Every real capture therefore still takes the `SFM_SELF_CALIBRATION` path: COLMAP estimates one radial
+coefficient, and training now undistorts with it instead of discarding it. Nothing in the pipeline claims a physical
+calibration unless the metadata declares one. The declared `source` text is recorded verbatim and not verified.
+
+**Validation.** The tests use synthetic parameters, not a measured lens:
+
+- `tests/unit/test_camera_model.py`: parameters survive parsing for every supported model; projection matches OpenCV;
+  rescaling; capture-metadata parsing and refusals; undistortion.
+- The review's required fixture: known 3D points photographed through a distorted `OPENCV` camera land within 0.5 px of
+  their blobs in the undistorted frame when projected through the training camera. The measured maximum is 0.04 px. The
+  old pinhole treatment is off by up to 53 px on the same fixture.
+- `tests/orchestration/test_camera_calibration.py`: the real INPUT_VALIDATION and FFMPEG_PREPROCESS stages carry a
+  declared calibration through a 2x downscale into `CAMERA_CALIBRATION`. From that artifact it builds the COLMAP command
+  and the training cameras on the extracted frames, again within 0.5 px.
+
+**Not verified.** COLMAP was not run: that test writes `cameras.txt` from the declared camera, as if bundle adjustment
+left it unchanged. gsplat has still never executed (see "Splat training"). No real capture has been trained with
+undistortion, and no accuracy improvement on real data has been measured.
 
 ## The stage contract
 Every attempt of every stage produces one immutable `pipeline_stage_run` row (returned by

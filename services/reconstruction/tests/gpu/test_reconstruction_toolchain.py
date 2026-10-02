@@ -97,7 +97,7 @@ def test_splat_reconstruction_trains_a_real_gaussian_splat_from_a_posed_dataset(
     report = h.run(h.order("SPLAT_RECONSTRUCTION", inputs))
     assert report["status"] == "SUCCEEDED", report["errorMessage"]
     kinds = {a["kind"] for a in report["artifacts"]}
-    assert kinds == {"SPLAT", "SPLAT_CHECKPOINT", "KEYFRAME_RENDERS", "SPLAT_TRAINING_REPORT"}
+    assert kinds == {"SPLAT", "SPLAT_CHECKPOINT", "KEYFRAME_RENDERS", "SPLAT_TRAINING_REPORT", "TRAINING_CAMERAS"}
     ply_artifact = next(a for a in report["artifacts"] if a["kind"] == "SPLAT")
     cloud = read_ply(h.storage.root / DERIVED_BUCKET / ply_artifact["key"])
     assert len(cloud) > 0
@@ -106,6 +106,12 @@ def test_splat_reconstruction_trains_a_real_gaussian_splat_from_a_posed_dataset(
     assert training["status"] == "COMPLETED" and training["completed_iterations"] == 50
     assert training["densification"], "density control ran"
     assert training["gaussian_count"] == len(cloud) != training["initial_gaussian_count"], "densification changed the count"
+    cameras = json.loads((h.storage.root / DERIVED_BUCKET / next(a for a in report["artifacts"]
+                                                                 if a["kind"] == "TRAINING_CAMERAS")["key"]).read_text())
+    assert cameras["calibration_source"] == "SFM_SELF_CALIBRATION"  # these photos come without a declared calibration
+    for cam in cameras["cameras"]:
+        assert cam["source_camera"]["model"] == "SIMPLE_RADIAL" and cam["training_camera"]["model"] == "PINHOLE"
+        assert cam["undistorted"] == (cam["source_camera"]["distortion_coefficients"]["k"] != 0.0)
 
 
 @needs_open3d

@@ -22,6 +22,12 @@ configuration and the identity of the inputs. A later SPLAT_RECONSTRUCTION job g
 only for the same inputs and compatible settings (CHECKPOINT_MISMATCH otherwise). The control plane does not yet offer
 a previous job's checkpoint to a new job (docs/pipeline.md).
 
+Lens distortion (review G-1): gsplat renders a pinhole camera, so every frame of a camera with non-zero distortion
+coefficients is undistorted first (chaya_worker.camera_model.FrameRectifier) with the camera the SfM model holds, and
+trained against the pinhole camera that undistortion produces. Frames of a distortion-free camera are used as they are.
+TRAINING_CAMERAS (training-cameras.json) records, per camera, the SfM camera (model, size, focal lengths, principal
+point, distortion model and coefficients), whether its frames were undistorted, and the pinhole camera trained with.
+
 Needs torch + gsplat + a CUDA device (gsplat's rasteriser is CUDA-only) and COLMAP (to convert the binary sparse model
 to TEXT). If any of that is missing the stage fails with DEPENDENCY_UNAVAILABLE and nothing is produced. There is no CPU
 or "fake" fallback path.
@@ -31,11 +37,13 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from .. import archive
+from ..camera_model import Camera, CameraModelError, FrameRectifier
 from ..colmap_txt import parse_cameras_txt, parse_points3d_txt
 from ..contract import ArtifactSpec, StageContext, StageError, StageResult
 from ..ply import write_ply
@@ -55,20 +63,55 @@ def quat_wxyz_to_rotmat(q: np.ndarray) -> np.ndarray:
     ])
 
 
-def build_cameras(poses: list[dict[str, Any]], camera_models: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
-    """Pure: viewmat (world-to-camera 4x4) and intrinsics 3x3 for every registered, decodable image."""
+def build_cameras(poses: list[dict[str, Any]], camera_models: dict[int, Camera]) -> list[dict[str, Any]]:
+    """Pure: viewmat (world-to-camera 4x4) and the full camera (distortion included) for every registered image. There
+    is deliberately no pinhole `K` here: one is only valid for a frame after FrameRectifier has undistorted it."""
     cams = []
     for p in poses:
-        model = camera_models.get(p["camera_id"])
-        if model is None:
+        camera = camera_models.get(p["camera_id"])
+        if camera is None:
             continue
         R = quat_wxyz_to_rotmat(np.array(p["rotation_wxyz"], dtype=np.float64))
         t = np.array(p["translation"], dtype=np.float64)
         viewmat = np.eye(4, dtype=np.float64)
         viewmat[:3, :3], viewmat[:3, 3] = R, t
-        K = np.array([[model["fx"], 0.0, model["cx"]], [0.0, model["fy"], model["cy"]], [0.0, 0.0, 1.0]])
-        cams.append({"name": p["name"], "viewmat": viewmat, "K": K, "width": model["width"], "height": model["height"]})
+        cams.append({"name": p["name"], "camera_id": p["camera_id"], "viewmat": viewmat, "camera": camera,
+                     "width": camera.width, "height": camera.height})
     return cams
+
+
+def prepare_training_cameras(cams: list[dict[str, Any]], images_dir: Path, rectifier: FrameRectifier) -> list[dict[str, Any]]:
+    """Loads each camera's frame, undistorts it if its camera has distortion, and sets the pinhole `K` and RGB `image`
+    (float32 sRGB values in [0, 1]) the rasteriser is trained against. Cameras without a frame on disk are dropped; a
+    frame whose size is not its camera's fails the stage."""
+    import cv2  # noqa: PLC0415
+
+    ready = []
+    for cam in cams:
+        path = images_dir / cam["name"]
+        if not path.is_file():
+            continue
+        img = cv2.imdecode(np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_COLOR)
+        if img is None:
+            continue
+        try:
+            img, pinhole = rectifier.rectify(cam["camera"], img)
+        except CameraModelError as exc:
+            raise StageError(f"frame {cam['name']}: {exc}", code=exc.code) from exc
+        cam["K"], cam["width"], cam["height"] = pinhole.K, pinhole.width, pinhole.height
+        cam["image"] = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0  # sRGB values in [0, 1]
+        ready.append(cam)
+    return ready
+
+
+def training_cameras_doc(rectifier: FrameRectifier, poses_doc: dict[str, Any]) -> dict[str, Any]:
+    """Pure: the TRAINING_CAMERAS document."""
+    return {
+        "calibration_source": poses_doc.get("calibration_source", "UNRECORDED (poses.json predates camera provenance)"),
+        "capture_calibration": poses_doc.get("capture_calibration"),
+        "cameras": rectifier.records(),
+        "pose_frame": "world-to-camera transforms are the POSES artifact's, unchanged; they are the training cameras' poses",
+    }
 
 
 def initial_scale_log(positions: np.ndarray, k: int = 4) -> np.ndarray:
@@ -93,7 +136,7 @@ def training_source(order: dict[str, Any], inputs: list) -> dict[str, Any]:
 
 
 def publish_outcome(ctx: StageContext, outcome, *, source: dict[str, Any], cameras_used: int, versions: dict[str, Any],
-                    keyframes_tar=None) -> StageResult:
+                    keyframes_tar=None, training_cameras: dict[str, Any] | None = None) -> StageResult:
     """Turns a training outcome into the stage result: COMPLETED -> SUCCEEDED with SPLAT; PARTIAL -> FAILED with
     TIME_LIMIT_EXCEEDED and SPLAT_PARTIAL (partial=True). The report and checkpoint go out either way. Pure apart from
     writing files into ctx.workdir, so it is tested without a GPU (tests/splat)."""
@@ -115,6 +158,9 @@ def publish_outcome(ctx: StageContext, outcome, *, source: dict[str, Any], camer
         artifacts.append(ArtifactSpec("SPLAT_CHECKPOINT", outcome.checkpoint_path, "splat-checkpoint.pt", "application/octet-stream"))
     if keyframes_tar is not None:
         artifacts.append(ArtifactSpec("KEYFRAME_RENDERS", keyframes_tar, "keyframes.tar", "application/x-tar"))
+    if training_cameras is not None:
+        artifacts.append(ArtifactSpec("TRAINING_CAMERAS", write_json(ctx.workdir / "training-cameras.json", training_cameras),
+                                      "training-cameras.json", "application/json"))
 
     summary = {
         "status": outcome.status, "stop_reason": outcome.stop_reason,
@@ -128,6 +174,10 @@ def publish_outcome(ctx: StageContext, outcome, *, source: dict[str, Any], camer
                        "checkpoint": {"artifact": "splat-checkpoint.pt" if checkpoint_sha else None, "sha256": checkpoint_sha},
                        "versions": versions},
         "cameras_used": cameras_used,
+        "camera_calibration": None if training_cameras is None else {
+            "calibration_source": training_cameras["calibration_source"],
+            "undistorted": [c["undistorted"] for c in training_cameras["cameras"]],
+            "artifact": "training-cameras.json"},
         "densification": [e.__dict__ for e in outcome.densify_events], "opacity_resets": outcome.opacity_resets,
         "loss_history": outcome.history[:: max(1, len(outcome.history) // 200)] + outcome.history[-1:],
         "colour_convention": "chaya_worker.splat_color: rgb = SH_C0 * f_dc + 0.5, sRGB-encoded values end to end",
@@ -171,23 +221,21 @@ class SplatReconstruction:
         colmap = ctx.toolchain.colmap().path
         ctx.runner.run([colmap, "model_converter", "--input_path", str(sparse_dir), "--output_path", str(txt_dir),
                         "--output_type", "TXT"], error_code="MODEL_CONVERSION_FAILED", timeout=600)
-        cameras_model = parse_cameras_txt((txt_dir / "cameras.txt").read_text(encoding="utf-8"))
+        try:
+            cameras_model = parse_cameras_txt((txt_dir / "cameras.txt").read_text(encoding="utf-8"))
+        except CameraModelError as exc:
+            raise StageError(f"the sparse model's camera cannot be used: {exc}", code=exc.code) from exc
         points = parse_points3d_txt((txt_dir / "points3D.txt").read_text(encoding="utf-8"))
         if len(points["ids"]) < 4:
             raise StageError(f"only {len(points['ids'])} 3D points from SfM; not enough to seed a splat",
                              code="SPLAT_INIT_INSUFFICIENT", details={"points": len(points["ids"])})
 
-        poses = json.loads(poses_inputs[0].path.read_text(encoding="utf-8"))["poses"]
-        cams = build_cameras(poses, cameras_model)
+        poses_doc = json.loads(poses_inputs[0].path.read_text(encoding="utf-8"))
+        cams = build_cameras(poses_doc["poses"], cameras_model)
         images_dir = ctx.workdir / "images"
         archive.unpack(frame_archives[0].path, images_dir)
-        for cam in cams:
-            path = images_dir / cam["name"]
-            if not path.is_file():
-                continue
-            img = cv2.imdecode(np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_COLOR)
-            cam["image"] = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0  # sRGB values in [0, 1]
-        cams = [c for c in cams if "image" in c]
+        rectifier = FrameRectifier()
+        cams = prepare_training_cameras(cams, images_dir, rectifier)
         if len(cams) < 3:
             raise StageError(f"only {len(cams)} posed frames could be matched to images; need at least 3 to train",
                              code="SPLAT_INIT_INSUFFICIENT", details={"posed_frames_with_images": len(cams)})
@@ -229,4 +277,5 @@ class SplatReconstruction:
         archive.pack(keyframes_dir, keyframes_tar)
         versions = {"torch": torch.__version__, "gsplat": getattr(gsplat, "__version__", None),
                     "cuda_devices": ctx.toolchain.cuda_devices()}
-        return publish_outcome(ctx, outcome, source=source, cameras_used=len(cams), versions=versions, keyframes_tar=keyframes_tar)
+        return publish_outcome(ctx, outcome, source=source, cameras_used=len(cams), versions=versions, keyframes_tar=keyframes_tar,
+                               training_cameras=training_cameras_doc(rectifier, poses_doc))

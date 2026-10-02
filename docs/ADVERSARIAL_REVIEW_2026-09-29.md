@@ -161,6 +161,12 @@ conditions; **MEDIUM** edge-case errors or misleading output; **LOW** hygiene.
   camera model with non-zero distortion until then.
 - **Required test:** a synthetic distorted-image fixture: projecting known 3D points through the training camera must
   land within 0.5 px of their distorted observations after undistortion.
+- **Status (2026-10-02):** addressed in code, verified on synthetic fixtures only.
+  - The full camera model is kept end to end, and training undistorts frames of any camera with distortion.
+  - Unsupported models are refused.
+  - The required test exists (`tests/unit/test_camera_model.py`, maximum 0.04 px).
+  - Not run with COLMAP or gsplat, and not run on a real capture. See docs/pipeline.md, "Camera calibration and lens
+    distortion".
 
 #### G-2 · HIGH · Privacy fills are trained as scene content
 - **Files:** `chaya_worker/stages/splat_reconstruction.py:156` (`FRAME_ARCHIVE_ANON`), `splat_training.py:393-452`

@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from chaya_worker.benchmarks.cleanup_benchmark import METHODS, run_methods
+from chaya_worker.camera_model import Camera
 from chaya_worker.colmap_txt import parse_cameras_txt, parse_points3d_txt
 from chaya_worker.geometry_cleanup import opacity_threshold_mask
 from chaya_worker.ksplat import KsplatUnsupported, decode, encode
@@ -109,11 +110,13 @@ def test_ksplat_refuses_unimplemented_compression_levels():
 def test_parse_cameras_txt_simple_radial():
     text = "# comment\n1 SIMPLE_RADIAL 640 480 500.0 320.0 240.0 0.01\n"
     cams = parse_cameras_txt(text)
-    assert cams[1] == {"model": "SIMPLE_RADIAL", "width": 640, "height": 480, "fx": 500.0, "fy": 500.0, "cx": 320.0, "cy": 240.0}
+    assert cams[1] == Camera("SIMPLE_RADIAL", 640, 480, (500.0, 320.0, 240.0, 0.01))
+    assert (cams[1].fx, cams[1].fy, cams[1].cx, cams[1].cy) == (500.0, 500.0, 320.0, 240.0)
+    assert cams[1].distortion == {"k": 0.01}, "the radial coefficient is kept (review G-1)"
 
 
 def test_parse_cameras_txt_rejects_unsupported_model():
-    with pytest.raises(ValueError, match="unsupported"):
+    with pytest.raises(ValueError, match="not supported"):
         parse_cameras_txt("1 OPENCV_FISHEYE 640 480 1 2 3 4 5 6 7 8\n")
 
 
@@ -156,11 +159,11 @@ def test_quat_wxyz_to_rotmat_identity_is_the_identity_matrix():
 def test_build_cameras_skips_poses_with_unknown_camera_id():
     poses = [{"name": "a.jpg", "camera_id": 1, "rotation_wxyz": [1, 0, 0, 0], "translation": [0, 0, 0]},
              {"name": "b.jpg", "camera_id": 99, "rotation_wxyz": [1, 0, 0, 0], "translation": [0, 0, 0]}]
-    models = {1: {"model": "SIMPLE_RADIAL", "width": 100, "height": 100, "fx": 50, "fy": 50, "cx": 50, "cy": 50}}
+    models = {1: Camera("SIMPLE_RADIAL", 100, 100, (50.0, 50.0, 50.0, 0.0))}
     cams = build_cameras(poses, models)
     assert len(cams) == 1 and cams[0]["name"] == "a.jpg"
     assert cams[0]["viewmat"].shape == (4, 4) and np.allclose(cams[0]["viewmat"], np.eye(4))
-    assert np.allclose(cams[0]["K"], [[50, 0, 50], [0, 50, 50], [0, 0, 1]])
+    assert cams[0]["camera"] is models[1] and "K" not in cams[0]
 
 
 def test_initial_scale_log_is_finite_and_grows_with_point_spacing():

@@ -20,6 +20,7 @@ import json
 import numpy as np
 
 from .. import archive
+from ..camera_model import CameraModelError, FrameRectifier
 from ..colmap_txt import parse_cameras_txt
 from ..contract import ArtifactSpec, StageContext, StageError, StageResult
 from ..model_loading import load_pretrained
@@ -84,7 +85,10 @@ class SemanticSegmentation:
         colmap = ctx.toolchain.colmap().path
         ctx.runner.run([colmap, "model_converter", "--input_path", str(sparse_dir), "--output_path", str(txt_dir),
                         "--output_type", "TXT"], error_code="MODEL_CONVERSION_FAILED", timeout=600)
-        cameras_model = parse_cameras_txt((txt_dir / "cameras.txt").read_text(encoding="utf-8"))
+        try:
+            cameras_model = parse_cameras_txt((txt_dir / "cameras.txt").read_text(encoding="utf-8"))
+        except CameraModelError as exc:
+            raise StageError(f"the sparse model's camera cannot be used: {exc}", code=exc.code) from exc
         poses = json.loads(poses_inputs[0].path.read_text(encoding="utf-8"))["poses"]
         cams = build_cameras(poses, cameras_model)[:: max(1, s.semantic_sample_every)]
         images_dir = ctx.workdir / "images"
@@ -102,6 +106,7 @@ class SemanticSegmentation:
         confidence_sum = np.zeros(n, dtype=np.float64)
         seen = np.zeros(n, dtype=bool)
         frames_processed = 0
+        rectifier = FrameRectifier()  # project through the pinhole camera of the undistorted frame (review G-1)
 
         with torch.no_grad():
             for cam in cams:
@@ -111,6 +116,10 @@ class SemanticSegmentation:
                 img_bgr = cv2.imdecode(np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_COLOR)
                 if img_bgr is None:
                     continue
+                try:
+                    img_bgr, pinhole = rectifier.rectify(cam["camera"], img_bgr)
+                except CameraModelError as exc:
+                    raise StageError(f"frame {cam['name']}: {exc}", code=exc.code) from exc
                 img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
                 inputs = processor(images=img_rgb, return_tensors="pt").to(device)
                 logits = model(**inputs).logits  # (1, num_classes, h, w)
@@ -119,7 +128,7 @@ class SemanticSegmentation:
                 confidence, class_id = probs.max(dim=0)
                 confidence, class_id = confidence.cpu().numpy(), class_id.cpu().numpy()
 
-                px, visible = project_points(cloud.positions, cam["viewmat"], cam["K"], cam["width"], cam["height"])
+                px, visible = project_points(cloud.positions, cam["viewmat"], pinhole.K, pinhole.width, pinhole.height)
                 idx = np.where(visible)[0]
                 if len(idx) == 0:
                     continue

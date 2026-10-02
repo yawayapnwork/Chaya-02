@@ -116,13 +116,13 @@ def _render_eval_factory(*, sparse_model: Path, poses_path: Path, frames_dir: Pa
     """Builds the render_eval callback, or returns (None, reason) if it cannot (honest degrade, per spec)."""
     if not all(toolchain.status(r).available for r in ("py:torch", "py:gsplat", "cuda")):
         return None, "torch/gsplat/CUDA are not all available to re-render the cleaned splats"
-    import cv2
     import torch
     from gsplat import rasterization
     from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 
+    from ..camera_model import FrameRectifier
     from ..colmap_txt import parse_cameras_txt
-    from ..stages.splat_reconstruction import build_cameras
+    from ..stages.splat_reconstruction import build_cameras, prepare_training_cameras
 
     cameras_model = parse_cameras_txt((sparse_model / "cameras.txt").read_text(encoding="utf-8"))
     poses = json.loads(poses_path.read_text(encoding="utf-8"))["poses"]
@@ -130,14 +130,7 @@ def _render_eval_factory(*, sparse_model: Path, poses_path: Path, frames_dir: Pa
     rng = np.random.default_rng(0)
     if len(cams) > sample_cameras:
         cams = [cams[i] for i in sorted(rng.choice(len(cams), size=sample_cameras, replace=False))]
-    loaded = []
-    for cam in cams:
-        path = frames_dir / cam["name"]
-        if not path.is_file():
-            continue
-        img = cv2.imdecode(np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_COLOR)
-        cam["image"] = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-        loaded.append(cam)
+    loaded = prepare_training_cameras(cams, frames_dir, FrameRectifier())  # undistorted, as training saw them
     if not loaded:
         return None, "none of the held-out camera poses matched a frame in --frames"
 

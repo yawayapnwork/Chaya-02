@@ -9,14 +9,27 @@ Nothing is simulated. If COLMAP is missing the stage fails with DEPENDENCY_UNAVA
 (COLMAP alone can map). Only command construction and the poses parser are unit-tested without the tools;
 executing the stage needs the toolchain and is covered by the gpu-marked tests, which skip when it is absent.
 COLMAP flag names follow the 3.9/3.10 CLI (--SiftExtraction.*); newer releases renamed some options.
+
+Camera model (review G-1). With a CAMERA_CALIBRATION input (a calibration declared in the capture metadata, rescaled
+to the frames by FFMPEG_PREPROCESS) the feature extractor is given that model and its parameters
+(--ImageReader.camera_model / --ImageReader.camera_params). Both mappers then use them as the starting point and may
+refine focal length and distortion in bundle adjustment (their defaults; not overridden). Without one, COLMAP
+self-calibrates a SIMPLE_RADIAL camera. Either way the camera that the poses belong to is read back from the model,
+every parameter kept, and recorded in poses.json with where it came from; an unsupported model fails the stage.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
+import cv2
+import numpy as np
+
 from .. import archive
+from ..camera_model import Camera, CameraModelError
+from ..colmap_txt import parse_cameras_txt
 from ..contract import ArtifactSpec, StageContext, StageError, StageResult
 from .base import command_record, write_json
 
@@ -24,14 +37,18 @@ EXHAUSTIVE_MAX_FRAMES = 300
 
 
 def build_pose_commands(*, colmap: str, glomap: str | None, database: Path, images: Path, sparse: Path, use_gpu: bool,
-                        frame_count: int, mapper: str, num_threads: int = -1) -> dict[str, list[str]]:
+                        frame_count: int, mapper: str, num_threads: int = -1,
+                        camera: Camera | None = None) -> dict[str, list[str]]:
     """Pure: the command lines of each step. mapper is 'glomap' or 'colmap'. num_threads > 0 bounds COLMAP's SIFT
-    extraction and matching threads (Settings.colmap_num_threads); otherwise COLMAP's own default applies."""
+    extraction and matching threads (Settings.colmap_num_threads); otherwise COLMAP's own default applies. camera is the
+    declared calibration of the frames, or None to let COLMAP self-calibrate a SIMPLE_RADIAL camera."""
     gpu = "1" if use_gpu else "0"
+    camera_args = (["--ImageReader.camera_model", camera.model, "--ImageReader.camera_params", camera.colmap_params()]
+                   if camera is not None else ["--ImageReader.camera_model", "SIMPLE_RADIAL"])
     matcher = "exhaustive_matcher" if frame_count <= EXHAUSTIVE_MAX_FRAMES else "sequential_matcher"
     commands = {
         "feature_extractor": [colmap, "feature_extractor", "--database_path", str(database), "--image_path", str(images),
-                              "--ImageReader.single_camera", "1", "--ImageReader.camera_model", "SIMPLE_RADIAL",
+                              "--ImageReader.single_camera", "1", *camera_args,
                               "--SiftExtraction.use_gpu", gpu],
         "matcher": [colmap, matcher, "--database_path", str(database), "--SiftMatching.use_gpu", gpu],
     }
@@ -61,6 +78,51 @@ def parse_images_txt(text: str) -> list[dict[str, Any]]:
     return poses
 
 
+def declared_camera(ctx: StageContext) -> tuple[Camera | None, dict[str, Any] | None]:
+    """The frames' calibrated camera from a CAMERA_CALIBRATION input, or (None, None)."""
+    inputs = ctx.inputs_of("CAMERA_CALIBRATION")
+    if not inputs:
+        return None, None
+    doc = json.loads(inputs[0].path.read_text(encoding="utf-8"))
+    try:
+        return Camera.from_record(doc["frame_camera"]), doc
+    except (CameraModelError, KeyError, TypeError) as exc:
+        raise StageError(f"CAMERA_CALIBRATION {inputs[0].artifact_id} is unusable: {exc}",
+                         code=getattr(exc, "code", "CAMERA_CALIBRATION_INVALID")) from exc
+
+
+def camera_metadata(cameras: dict[int, Camera], declared: Camera | None, declared_doc: dict[str, Any] | None) -> dict[str, Any]:
+    """Pure: what poses.json says about the cameras the poses belong to."""
+    out: dict[str, Any] = {
+        "calibration_source": "CAPTURE_METADATA" if declared is not None else "SFM_SELF_CALIBRATION",
+        "cameras": {str(cid): cam.record() for cid, cam in sorted(cameras.items())},
+        "capture_calibration": None,
+    }
+    if declared is not None:
+        refined = {str(cid): {"model_changed": cam.model != declared.model,
+                              "max_abs_param_change": (max(abs(a - b) for a, b in zip(cam.params, declared.params, strict=True))
+                                                       if cam.model == declared.model else None)}
+                   for cid, cam in sorted(cameras.items())}
+        out["capture_calibration"] = {"frame_camera": declared.record(),
+                                      "metadata_artifact_id": (declared_doc or {}).get("metadata_artifact_id"),
+                                      "declared_source": (declared_doc or {}).get("declared_source"),
+                                      "refinement_by_sfm": refined,
+                                      "note": "the declared calibration seeds SfM; the mapper may refine it, and the cameras "
+                                              "above (from the reconstructed model) are what the poses belong to"}
+    return out
+
+
+def _check_frame_sizes(frames: list[Path], camera: Camera) -> None:
+    wrong = []
+    for f in frames:
+        img = cv2.imdecode(np.fromfile(str(f), dtype=np.uint8), cv2.IMREAD_COLOR)
+        if img is None or img.shape[:2] != (camera.height, camera.width):
+            wrong.append(f.name)
+    if wrong:
+        raise StageError(f"{len(wrong)} frame(s) are not the calibrated {camera.width}x{camera.height}",
+                         code="CAMERA_CALIBRATION_INVALID", details={"frames": wrong[:20]})
+
+
 def _model_dirs(sparse: Path) -> list[Path]:
     return sorted(p for p in sparse.iterdir() if p.is_dir() and (p / "images.bin").is_file()) if sparse.is_dir() else []
 
@@ -77,6 +139,9 @@ class PoseEstimation:
         glomap = ctx.toolchain.glomap()
         images_dir = ctx.workdir / "images"
         frames = archive.unpack(archives[0].path, images_dir)
+        declared, declared_doc = declared_camera(ctx)
+        if declared is not None:
+            _check_frame_sizes(frames, declared)
         database, sparse = ctx.workdir / "database.db", ctx.workdir / "sparse"
         sparse.mkdir()
         use_gpu = ctx.toolchain.gpu_present()
@@ -84,7 +149,7 @@ class PoseEstimation:
         first_mapper = "glomap" if glomap.available else "colmap"
         steps = build_pose_commands(colmap=colmap, glomap=glomap.path, database=database, images=images_dir, sparse=sparse,
                                     use_gpu=use_gpu, frame_count=len(frames), mapper=first_mapper,
-                                    num_threads=ctx.settings.colmap_num_threads)
+                                    num_threads=ctx.settings.colmap_num_threads, camera=declared)
         ctx.runner.run(steps["feature_extractor"], error_code="FEATURE_EXTRACTION_FAILED", timeout=7200)
         ctx.runner.run(steps["matcher"], error_code="FEATURE_MATCHING_FAILED", timeout=7200)
 
@@ -98,7 +163,7 @@ class PoseEstimation:
                 ctx.logger.warning("GLOMAP failed; falling back to COLMAP mapper", extra={"reason": exc.message})
                 steps = build_pose_commands(colmap=colmap, glomap=None, database=database, images=images_dir, sparse=sparse,
                                             use_gpu=use_gpu, frame_count=len(frames), mapper="colmap",
-                                            num_threads=ctx.settings.colmap_num_threads)
+                                            num_threads=ctx.settings.colmap_num_threads, camera=declared)
                 ctx.runner.run(steps["mapper"], error_code="MAPPING_FAILED", timeout=14400)
                 used, fallback = "colmap", True
             else:
@@ -113,6 +178,11 @@ class PoseEstimation:
         ctx.runner.run([colmap, "model_converter", "--input_path", str(model), "--output_path", str(txt), "--output_type", "TXT"],
                        error_code="MODEL_CONVERSION_FAILED", timeout=600)
         poses = parse_images_txt((txt / "images.txt").read_text(encoding="utf-8"))
+        try:
+            cameras = parse_cameras_txt((txt / "cameras.txt").read_text(encoding="utf-8"))
+        except CameraModelError as exc:
+            raise StageError(f"the reconstructed model's camera cannot be used: {exc}", code=exc.code) from exc
+        cameras_doc = camera_metadata(cameras, declared, declared_doc)
         ratio = len(poses) / len(frames)
         if len(poses) < 3 or ratio < ctx.settings.min_registered_ratio:
             raise StageError(f"only {len(poses)} of {len(frames)} frames were registered ({ratio:.0%}); need at least "
@@ -121,9 +191,11 @@ class PoseEstimation:
         sparse_tar = ctx.workdir / "sparse-model.tar"
         archive.pack(model, sparse_tar)
         poses_json = write_json(ctx.workdir / "poses.json", {"mapper": used, "fallback_used": fallback, "frames": len(frames),
-                                                              "registered": len(poses), "poses": poses})
+                                                              "registered": len(poses), "poses": poses, **cameras_doc})
         return StageResult(
-            "SUCCEEDED", command_record(ctx, {"mapper_used": used, "fallback_used": fallback, "gpu": use_gpu}),
+            "SUCCEEDED", command_record(ctx, {"mapper_used": used, "fallback_used": fallback, "gpu": use_gpu,
+                                           "calibration_source": cameras_doc["calibration_source"],
+                                           "camera_models": sorted({c.model for c in cameras.values()})}),
             ctx.runner.last_exit_status(),
             [ArtifactSpec("SPARSE_MODEL", sparse_tar, "sparse-model.tar", "application/x-tar"),
              ArtifactSpec("POSES", poses_json, "poses.json", "application/json")])

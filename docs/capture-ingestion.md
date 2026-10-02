@@ -56,6 +56,27 @@ uploads can be repeated safely. Limit: 10 000 parts per file.
 7. **Restart safety:** files that were `VALIDATING` when the process stopped are validated again at startup.
 
 Allowed types: video `mp4, quicktime, webm, x-matroska`; image `jpeg, png, heic`; metadata `application/json`.
+
+**Camera calibration in a metadata file (optional).** The pipeline reads one top-level key from metadata files. The
+upload path does not interpret it; the worker's INPUT_VALIDATION stage does ([pipeline.md](pipeline.md), "Camera
+calibration and lens distortion"):
+
+```json
+{"cameraCalibration": {"model": "OPENCV", "width": 1920, "height": 1080,
+                       "params": [1450.2, 1449.8, 959.1, 541.7, -0.21, 0.05, 0.0004, -0.0002],
+                       "pixelCoordinateOrigin": "CENTER",
+                       "source": "how it was measured (free text, recorded verbatim, not verified)"}}
+```
+
+- `model` is a COLMAP camera model name. `params` are in COLMAP's order for that model; for `OPENCV` that is
+  fx, fy, cx, cy, k1, k2, p1, p2.
+- `pixelCoordinateOrigin` is required. `CORNER` is COLMAP's convention, where (0, 0) is the top-left corner of the
+  top-left pixel. `CENTER` is OpenCV's, where (0, 0) is that pixel's centre. The two differ by half a pixel.
+- `width`/`height` must equal the decoded size of every video and image in the capture. The calibration is never
+  rescaled or rotated to fit other media, and rotated videos are refused.
+- An unsupported model, a malformed block, or more than one calibration in a capture fails processing at
+  INPUT_VALIDATION.
+- No capture client writes this block yet.
 Default limits (config `chaya.uploads.*`): video 4 GiB, image 50 MiB, metadata 1 MiB, 5000 files per capture.
 ClamAV's stream limit defaults to 25 MB; Compose raises it to 4000M (clamd's maximum) so large videos can be scanned.
 

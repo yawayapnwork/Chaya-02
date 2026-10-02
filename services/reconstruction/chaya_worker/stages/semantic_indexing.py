@@ -31,6 +31,7 @@ from typing import Any
 import numpy as np
 
 from .. import archive
+from ..camera_model import CameraModelError, FrameRectifier
 from ..clip_embeddings import ClipEmbedder
 from ..colmap_txt import parse_cameras_txt
 from ..contract import ArtifactSpec, StageContext, StageError, StageResult
@@ -163,7 +164,10 @@ class SemanticIndexing:
         colmap = ctx.toolchain.colmap().path
         ctx.runner.run([colmap, "model_converter", "--input_path", str(sparse_dir), "--output_path", str(txt_dir),
                         "--output_type", "TXT"], error_code="MODEL_CONVERSION_FAILED", timeout=600)
-        cameras_model = parse_cameras_txt((txt_dir / "cameras.txt").read_text(encoding="utf-8"))
+        try:
+            cameras_model = parse_cameras_txt((txt_dir / "cameras.txt").read_text(encoding="utf-8"))
+        except CameraModelError as exc:
+            raise StageError(f"the sparse model's camera cannot be used: {exc}", code=exc.code) from exc
         poses = json.loads(poses_inputs[0].path.read_text(encoding="utf-8"))["poses"]
         cams = build_cameras(poses, cameras_model)[:: max(1, s.semantic_indexing_sample_every)]
         if region_to_parent is not None:
@@ -181,6 +185,9 @@ class SemanticIndexing:
         raw_objects: list[dict[str, Any]] = []
         crops: list[np.ndarray] = []
         frames_processed = 0
+        # Detection and projection both use the undistorted frame and its pinhole camera (review G-1), so bbox_px is in
+        # undistorted-frame pixels (same size as the frame).
+        rectifier = FrameRectifier()
 
         for cam in cams:
             path = images_dir / cam["name"]
@@ -189,6 +196,10 @@ class SemanticIndexing:
             img_bgr = cv2.imdecode(np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_COLOR)
             if img_bgr is None:
                 continue
+            try:
+                img_bgr, pinhole = rectifier.rectify(cam["camera"], img_bgr)
+            except CameraModelError as exc:
+                raise StageError(f"frame {cam['name']}: {exc}", code=exc.code) from exc
             img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
             h, w = img_rgb.shape[:2]
             detections = detector.detect(img_rgb, s.object_detection_prompt)
@@ -196,7 +207,7 @@ class SemanticIndexing:
                 frames_processed += 1
                 continue
 
-            px, visible = project_points(cloud.positions, cam["viewmat"], cam["K"], w, h)
+            px, visible = project_points(cloud.positions, cam["viewmat"], pinhole.K, w, h)
             for det in detections:
                 located = associate_detection_with_geometry(det, cloud.positions, px, visible)
                 if located is None:

@@ -1,4 +1,8 @@
-"""Stage 1: input validation. Every claimed raw file must be what the control plane says it is and decode."""
+"""Stage 1: input validation. Every claimed raw file must be what the control plane says it is and decode.
+
+A camera calibration declared in a metadata file (`cameraCalibration`, chaya_worker.camera_model) is validated here:
+a supported model, well-formed parameters, a distortion that can be undistorted over the image, and media of exactly
+the calibrated size. Anything else fails the stage; a calibration is never adapted to fit."""
 
 from __future__ import annotations
 
@@ -9,7 +13,7 @@ import cv2
 import numpy as np
 
 from ..contract import ArtifactSpec, StageContext, StageError, StageResult
-from .base import command_record, probe_video, sha256_file, write_json
+from .base import capture_calibration, check_media_matches_calibration, command_record, probe_video, sha256_file, write_json
 
 
 class InputValidation:
@@ -42,8 +46,17 @@ class InputValidation:
             raise StageError(f"need at least one video or {ctx.settings.min_frames} images (have {videos} videos, {images} images)",
                              code="INPUT_INSUFFICIENT", details={"videos": videos, "images": images})
 
+        calibration = capture_calibration(ctx)
+        if calibration is not None:
+            check_media_matches_calibration(calibration["camera"], [f for f in files if f["kind"] in ("RAW_VIDEO", "RAW_IMAGE")])
+            ctx.logger.info("camera calibration declared in capture metadata",
+                            extra={"model": calibration["camera"].model, "artifact_id": calibration["metadata_artifact_id"]})
         report = write_json(ctx.workdir / "input-report.json",
-                            {"files": files, "videos": videos, "images": images, "metadata_files": len(files) - videos - images})
+                            {"files": files, "videos": videos, "images": images, "metadata_files": len(files) - videos - images,
+                             "camera_calibration": None if calibration is None else {
+                                 "source": "CAPTURE_METADATA", "metadata_artifact_id": calibration["metadata_artifact_id"],
+                                 "declared_source": calibration["declared_source"], "camera": calibration["camera"].record()},
+                             "camera_calibration_status": "DECLARED" if calibration is not None else "NOT_PROVIDED"})
         return StageResult(
             "SUCCEEDED", command_record(ctx), ctx.runner.last_exit_status(),
             [ArtifactSpec("INPUT_REPORT", report, "input-report.json", "application/json")])

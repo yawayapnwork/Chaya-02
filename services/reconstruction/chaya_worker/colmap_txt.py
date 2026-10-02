@@ -8,29 +8,24 @@ from __future__ import annotations
 
 from typing import Any
 
+from .camera_model import Camera, CameraModelError
 
-def parse_cameras_txt(text: str) -> dict[int, dict[str, Any]]:
-    """`CAMERA_ID MODEL WIDTH HEIGHT PARAMS[]`. Only the pinhole-family models POSE_ESTIMATION can produce
-    (SIMPLE_RADIAL, SIMPLE_PINHOLE, PINHOLE) are supported; an unsupported model raises ValueError naming it."""
-    cameras: dict[int, dict[str, Any]] = {}
+
+def parse_cameras_txt(text: str) -> dict[int, Camera]:
+    """`CAMERA_ID MODEL WIDTH HEIGHT PARAMS[]`, every parameter kept, distortion coefficients included (review G-1:
+    this parser used to keep fx, fy, cx, cy and drop the rest). A model chaya_worker.camera_model does not support
+    raises UnsupportedCameraModel (a ValueError) naming it."""
+    cameras: dict[int, Camera] = {}
     for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
         parts = line.split()
-        camera_id, model, width, height = int(parts[0]), parts[1], int(parts[2]), int(parts[3])
-        params = [float(p) for p in parts[4:]]
-        if model == "SIMPLE_RADIAL":  # f, cx, cy, k
-            fx = fy = params[0]
-            cx, cy = params[1], params[2]
-        elif model == "SIMPLE_PINHOLE":  # f, cx, cy
-            fx = fy = params[0]
-            cx, cy = params[1], params[2]
-        elif model == "PINHOLE":  # fx, fy, cx, cy
-            fx, fy, cx, cy = params[0], params[1], params[2], params[3]
-        else:
-            raise ValueError(f"camera {camera_id}: unsupported COLMAP camera model {model!r} (expected a pinhole-family model)")
-        cameras[camera_id] = {"model": model, "width": width, "height": height, "fx": fx, "fy": fy, "cx": cx, "cy": cy}
+        camera_id = int(parts[0])
+        try:
+            cameras[camera_id] = Camera(parts[1], int(parts[2]), int(parts[3]), tuple(float(p) for p in parts[4:]))
+        except CameraModelError as exc:
+            raise type(exc)(f"camera {camera_id}: {exc}") from exc
     return cameras
 
 
