@@ -50,6 +50,7 @@ chaya:
     max-time-budget-seconds: 86400
     lease-seconds: 300
     deadline-grace-seconds: 60
+    pii-staging-retention: ${PII_STAGING_RETENTION:PT24H}  # FAILED runs only; see PipelineProperties
   clamav:
     enabled: ${CLAMAV_ENABLED:false}  # when false, uploads are quarantined, never accepted unscanned
     host: ${CLAMAV_HOST:localhost}

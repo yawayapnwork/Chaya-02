@@ -51,6 +51,11 @@ class Settings:
     # to fit the worker's memory limit. GPU hosts extract on the GPU and do not need this.
     colmap_num_threads: int = -1
     privacy_screen_detector: str = "heuristic-quad"
+    # Privacy masks (chaya_worker.privacy.masks). POSE_ESTIMATION keeps SIFT keypoints this many pixels away from any
+    # privacy-masked pixel, so no descriptor window reads a blurred or filled pixel. SEMANTIC_INDEXING drops a detection
+    # whose box is more than this fraction privacy-masked: what it "sees" there is the fill, not the scene.
+    privacy_sfm_mask_margin_px: int = 16
+    privacy_detection_max_masked_fraction: float = 0.25
     # SPLAT_RECONSTRUCTION (gsplat; chaya_worker.splat_training). Learning rates are the 3D Gaussian Splatting paper's
     # (position is scaled by the scene extent). Iteration counts are 1-based step numbers.
     gsplat_iterations: int = 7000  # the configured training target; stopping earlier is PARTIAL, never COMPLETED
@@ -231,6 +236,9 @@ class Settings:
             min_registered_ratio=_float(e, "MIN_REGISTERED_RATIO", d.min_registered_ratio),
             colmap_num_threads=_int(e, "COLMAP_NUM_THREADS", d.colmap_num_threads),
             privacy_screen_detector=e.get("PRIVACY_SCREEN_DETECTOR", d.privacy_screen_detector),
+            privacy_sfm_mask_margin_px=_int(e, "PRIVACY_SFM_MASK_MARGIN_PX", d.privacy_sfm_mask_margin_px),
+            privacy_detection_max_masked_fraction=_float(e, "PRIVACY_DETECTION_MAX_MASKED_FRACTION",
+                                                         d.privacy_detection_max_masked_fraction),
             gsplat_iterations=_int(e, "GSPLAT_ITERATIONS", d.gsplat_iterations),
             gsplat_lr_position=_float(e, "GSPLAT_LR_POSITION", d.gsplat_lr_position),
             gsplat_lr_scale=_float(e, "GSPLAT_LR_SCALE", d.gsplat_lr_scale),
@@ -339,6 +347,8 @@ class Settings:
             "duplicate_distance": self.duplicate_distance, "min_frames": self.min_frames,
             "min_registered_ratio": self.min_registered_ratio, "colmap_num_threads": self.colmap_num_threads,
             "privacy_screen_detector": self.privacy_screen_detector,
+            "privacy_sfm_mask_margin_px": self.privacy_sfm_mask_margin_px,
+            "privacy_detection_max_masked_fraction": self.privacy_detection_max_masked_fraction,
             "gsplat_iterations": self.gsplat_iterations, "gsplat_lr_position": self.gsplat_lr_position,
             "gsplat_lr_scale": self.gsplat_lr_scale, "gsplat_lr_rotation": self.gsplat_lr_rotation,
             "gsplat_lr_opacity": self.gsplat_lr_opacity, "gsplat_lr_color": self.gsplat_lr_color,

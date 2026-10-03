@@ -139,13 +139,21 @@ def _odd(n: int) -> int:
     return n if n % 2 == 1 else n + 1
 
 
+def covered_box(region: Region, height: int, width: int) -> tuple[int, int, int, int]:
+    """The pixels anonymize() rewrites for a region: the region padded by 25% of its longer side, clipped to the image.
+    (x0, y0, x1, y1), end-exclusive. Nothing outside this box is touched. chaya_worker.privacy.masks builds the
+    privacy mask from exactly these boxes."""
+    pad = int(0.25 * max(region.w, region.h))
+    return (max(0, region.x - pad), max(0, region.y - pad), min(width, region.x + region.w + pad),
+            min(height, region.y + region.h + pad))
+
+
 def anonymize(img_bgr: np.ndarray, regions: list[Region], *, solid: bool = False) -> np.ndarray:
-    """Return a copy with each region (padded by 25%) pixelated then blurred, or filled solid when solid=True."""
+    """Return a copy with each region's covered_box pixelated then blurred, or filled solid when solid=True."""
     out = img_bgr.copy()
     H, W = out.shape[:2]
     for r in regions:
-        pad = int(0.25 * max(r.w, r.h))
-        x0, y0, x1, y1 = max(0, r.x - pad), max(0, r.y - pad), min(W, r.x + r.w + pad), min(H, r.y + r.h + pad)
+        x0, y0, x1, y1 = covered_box(r, H, W)
         roi = out[y0:y1, x0:x1]
         if roi.size == 0:
             continue

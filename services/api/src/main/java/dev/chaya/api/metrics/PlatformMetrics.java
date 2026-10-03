@@ -1,5 +1,7 @@
 package dev.chaya.api.metrics;
 
+import dev.chaya.api.pipeline.PipelineProperties;
+import dev.chaya.api.pipeline.PipelineService;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.MultiGauge;
@@ -26,17 +28,20 @@ public class PlatformMetrics {
     private static final Logger log = LoggerFactory.getLogger(PlatformMetrics.class);
 
     private final JdbcClient jdbc;
+    private final PipelineProperties pipelineProps;
     private final MultiGauge jobs;
     private final MultiGauge stageRuns;
     private final MultiGauge stageDuration;
     private final MultiGauge runsFinished;
     private final MultiGauge storageBytes;
     private final AtomicReference<Double> oldestQueuedAge = new AtomicReference<>(Double.NaN);
+    private final AtomicReference<Double> piiOverdue = new AtomicReference<>(Double.NaN);
     private final AtomicReference<Double> refreshOk = new AtomicReference<>(0.0);
     private final AtomicReference<Double> refreshedAt = new AtomicReference<>(Double.NaN);
 
-    public PlatformMetrics(JdbcClient jdbc, MeterRegistry registry) {
+    public PlatformMetrics(JdbcClient jdbc, MeterRegistry registry, PipelineProperties pipelineProps) {
         this.jdbc = jdbc;
+        this.pipelineProps = pipelineProps;
         this.jobs = MultiGauge.builder("chaya.jobs").description("Processing jobs by current status").register(registry);
         this.stageRuns = MultiGauge.builder("chaya.stage.runs.24h")
             .description("Stage execution attempts finished in the last 24 h, by stage and outcome").register(registry);
@@ -48,6 +53,9 @@ public class PlatformMetrics {
             .description("Bytes recorded in the database for stored objects (store tag: raw_media, derived_artifacts)").register(registry);
         Gauge.builder("chaya.jobs.queued.oldest.age", oldestQueuedAge, AtomicReference::get).baseUnit("seconds")
             .description("Age of the oldest QUEUED job (NaN when none is queued)").register(registry);
+        Gauge.builder("chaya.pii.staging.overdue.artifacts", piiOverdue, AtomicReference::get)
+            .description("PII staging artifacts (unanonymised frames) the retention policy says must be deleted and are not; "
+                + "the sweep clears these within a minute, so a lasting non-zero value means deletions are failing").register(registry);
         Gauge.builder("chaya.metrics.refresh.ok", refreshOk, AtomicReference::get)
             .description("1 when the last refresh of the chaya_* gauges succeeded, 0 otherwise").register(registry);
         Gauge.builder("chaya.metrics.refreshed", refreshedAt, AtomicReference::get).baseUnit("seconds")
@@ -97,6 +105,8 @@ public class PlatformMetrics {
             Double oldest = jdbc.sql("SELECT CAST(EXTRACT(EPOCH FROM now() - min(queued_at)) AS double precision) FROM processing_job WHERE status = 'QUEUED'")
                 .query(Double.class).optional().orElse(null);
             oldestQueuedAge.set(oldest == null ? Double.NaN : oldest);
+            piiOverdue.set((double) jdbc.sql("SELECT count(*) " + PipelineService.PII_PURGE_DUE)
+                .param("retention", (double) pipelineProps.piiStagingRetention().toSeconds()).query(Long.class).single());
             refreshOk.set(1.0);
             refreshedAt.set(System.currentTimeMillis() / 1000.0);
         } catch (RuntimeException e) {
@@ -105,6 +115,7 @@ public class PlatformMetrics {
                 g.register(List.of(), true);
             }
             oldestQueuedAge.set(Double.NaN);
+            piiOverdue.set(Double.NaN);
             refreshOk.set(0.0);
         }
     }

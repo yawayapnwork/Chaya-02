@@ -53,11 +53,31 @@ def _anon_archive(h: Harness, tmp_path: Path) -> dict:
     return ref
 
 
+def _masks_archive(h: Harness, tmp_path: Path) -> dict:
+    """PRIVACY_MASKS for _anon_archive's frames: the public dataset was not anonymised, so every pixel is valid."""
+    from chaya_worker.privacy import masks as pm  # noqa: PLC0415
+
+    d = tmp_path / "masks"
+    d.mkdir(exist_ok=True)
+    for f in sorted((tmp_path / "ds").iterdir()):
+        h_, w_ = cv2.imread(str(f)).shape[:2]
+        pm.write_mask(d, f.name, pm.valid_mask([], h_, w_))
+    tar = tmp_path / "masks.tar"
+    archive.pack(d, tar)
+    ref = h.raw_input(pm.KIND, tar, "application/x-tar")
+    ref["containsPii"] = False
+    return ref
+
+
+def _frames(h: Harness, tmp_path: Path) -> list[dict]:
+    return [_anon_archive(h, tmp_path), _masks_archive(h, tmp_path)]
+
+
 @needs_colmap
 @needs_dataset
 def test_pose_estimation_registers_real_photographs(tmp_path):
     h = Harness(tmp_path)
-    report = h.run(h.order("POSE_ESTIMATION", [_anon_archive(h, tmp_path)]))
+    report = h.run(h.order("POSE_ESTIMATION", _frames(h, tmp_path)))
     assert report["status"] == "SUCCEEDED", report["errorMessage"]
     assert report["exitStatus"] == 0 and report["command"]["commands"], "the COLMAP/GLOMAP commands must have really run"
     kinds = {a["kind"] for a in report["artifacts"]}
@@ -71,7 +91,7 @@ def test_pose_estimation_registers_real_photographs(tmp_path):
 @needs_dataset
 def test_glomap_is_used_when_available_and_any_fallback_to_colmap_is_recorded(tmp_path):
     h = Harness(tmp_path)
-    report = h.run(h.order("POSE_ESTIMATION", [_anon_archive(h, tmp_path)]))
+    report = h.run(h.order("POSE_ESTIMATION", _frames(h, tmp_path)))
     assert report["status"] == "SUCCEEDED", report["errorMessage"]
     cfg = report["command"]["config"]
     assert cfg["mapper_used"] in ("glomap", "colmap")
@@ -88,12 +108,14 @@ def test_splat_reconstruction_trains_a_real_gaussian_splat_from_a_posed_dataset(
 
     h = Harness(tmp_path, gsplat_iterations=50, gsplat_keyframe_every=25, gsplat_densify_start=10, gsplat_densify_stop=40,
                 gsplat_densify_every=10)
-    pose_report = h.run(h.order("POSE_ESTIMATION", [_anon_archive(h, tmp_path)]))
+    pose_report = h.run(h.order("POSE_ESTIMATION", _frames(h, tmp_path)))
     assert pose_report["status"] == "SUCCEEDED", pose_report["errorMessage"]
 
     frame_archive = h.raw_input("FRAME_ARCHIVE_ANON", tmp_path / "anon.tar", "application/x-tar")
     frame_archive["containsPii"] = False
-    inputs = h.outputs_as_inputs(pose_report) + [frame_archive]
+    masks_archive = h.raw_input("PRIVACY_MASKS", tmp_path / "masks.tar", "application/x-tar")
+    masks_archive["containsPii"] = False
+    inputs = h.outputs_as_inputs(pose_report) + [frame_archive, masks_archive]
     report = h.run(h.order("SPLAT_RECONSTRUCTION", inputs))
     assert report["status"] == "SUCCEEDED", report["errorMessage"]
     kinds = {a["kind"] for a in report["artifacts"]}

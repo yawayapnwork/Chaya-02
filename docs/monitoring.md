@@ -40,6 +40,7 @@ Every port is bound to 127.0.0.1. Loki and Alloy have no published port.
 | Storage usage (recorded) | `chaya_storage_recorded_bytes{store="raw_media\|derived_artifacts"}` | sizes the database recorded at verification. **Not** a bucket listing: it cannot see `pii/` staging, logs or abandoned multipart uploads. |
 | Storage usage (physical) | `minio_cluster_capacity_usable_free_bytes`, `minio_cluster_capacity_usable_total_bytes`, `minio_bucket_usage_total_bytes{bucket}` | MinIO's own cluster metrics (`/minio/v2/metrics/cluster`, bearer token). Alerts: `ChayaStorageLow` (< 15% free), `ChayaStorageMetricsMissing`. Checked on 2026-09-24 against `quay.io/minio/minio:latest`: the two capacity series are exported and the endpoint answers 403 without the token. `minio_bucket_usage_total_bytes` did not appear on that empty instance (it follows MinIO's usage scan) and is **unconfirmed**. The alert uses only the capacity series. |
 | Reconstruction success rate | `chaya_pipeline_runs_finished_24h{status}`. Rate = SUCCEEDED / all finished | `pipeline_run`, last 24 h. PARTIAL is not counted as a success. |
+| PII staging past retention | `chaya_pii_staging_overdue_artifacts` | `processing_artifact` PII rows with no `pii_staging_purge` row whose run no longer needs them (`PipelineService.PII_PURGE_DUE`). The sweep clears these within a minute; a lasting non-zero value means deletions are failing. |
 | Freshness of the above | `chaya_metrics_refresh_ok`, `chaya_metrics_refreshed_seconds` | `PlatformMetrics` |
 
 The `chaya_*` gauges are recomputed from the database every 30 s (`dev.chaya.api.metrics.PlatformMetrics`). They are
@@ -56,7 +57,7 @@ ids) and no user data.
 `ChayaApiDown`, `ChayaApiHighErrorRate` (more than 5% 5xx), `ChayaApiSlow` (p95 above 2 s), `ChayaRateLimiting`,
 `ChayaMetricsRefreshFailing`, `ChayaQueueStalled` (oldest job waiting over 15 min with nothing running),
 `ChayaStageFailureRateHigh`, `ChayaReconstructionSuccessLow`, `ChayaStorageLow` (MinIO under 15% usable capacity),
-`ChayaStorageMetricsMissing` (MinIO not scraped, so storage usage is unknown rather than assumed fine). The thresholds are starting points and have not been
+`ChayaStorageMetricsMissing` (MinIO not scraped, so storage usage is unknown rather than assumed fine). `ChayaPiiStagingNotPurged` (unanonymised staging frames past their retention still stored for 15 min). The thresholds are starting points and have not been
 tuned against real traffic. No Alertmanager is configured: alerts show in Prometheus and Grafana only. Add
 Alertmanager with a receiver to get paged.
 

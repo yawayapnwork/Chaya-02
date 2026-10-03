@@ -331,6 +331,19 @@ class Undistortion:
                                    f"{self.source.width}x{self.source.height}")
         return cv2.remap(image, self.map_x, self.map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
 
+    def apply_mask(self, valid: np.ndarray) -> np.ndarray:
+        """A bool (H, W) source validity mask resampled like apply() resamples the frame: a target pixel is valid only
+        if every source pixel its bilinear sample reads is valid (no undistorted pixel mixes in a masked one), and
+        never when it samples outside the photograph."""
+        import cv2  # noqa: PLC0415
+
+        if valid.shape != (self.source.height, self.source.width):
+            raise CameraModelError(f"mask is {valid.shape[1]}x{valid.shape[0]}, the camera is "
+                                   f"{self.source.width}x{self.source.height}")
+        sampled = cv2.remap(valid.astype(np.float32), self.map_x, self.map_y, interpolation=cv2.INTER_LINEAR,
+                            borderMode=cv2.BORDER_CONSTANT, borderValue=0.0)
+        return sampled >= 1.0 - 1e-6
+
     def record(self) -> dict[str, Any]:
         return {"method": "bilinear resampling (cv2.remap) through the camera model's forward distortion",
                 "focal_scale": self.focal_scale,
@@ -405,6 +418,13 @@ class FrameRectifier:
             raise CameraModelError(f"frame is {image.shape[1]}x{image.shape[0]} but its camera is {camera.width}x{camera.height}")
         self._frames[camera] = self._frames.get(camera, 0) + 1
         return (image if plan is None else plan.apply(image)), self.pinhole(camera)
+
+    def rectify_mask(self, camera: Camera, valid: np.ndarray) -> np.ndarray:
+        """A frame's bool validity mask, as the pinhole camera of rectify() sees it (Undistortion.apply_mask)."""
+        plan = self.plan(camera)
+        if valid.shape != (camera.height, camera.width):
+            raise CameraModelError(f"mask is {valid.shape[1]}x{valid.shape[0]} but its camera is {camera.width}x{camera.height}")
+        return valid if plan is None else plan.apply_mask(valid)
 
     def records(self) -> list[dict[str, Any]]:
         out = []

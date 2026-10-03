@@ -409,7 +409,8 @@ conditions; **MEDIUM** edge-case errors or misleading output; **LOW** hygiene.
 | AR-3 `physicalPose` unused | Open (`AnchorService` stores it, nothing reads it). |
 | V-4, V-5 | Fixed in code and local tests (V23); V-1, V-2 here remain. |
 | S-1 single worker credential | Open (same design; one service account claims every tenant's jobs). |
-| S-2, S-6, S-7, S-8 | Open. |
+| S-2, S-8 | Open. |
+| S-6, S-7 | Fixed on 2026-10-03 after this review (see §5); local tests only. |
 | O-1, O-3 | Open. |
 | D-6 OpenAPI | Open. |
 
@@ -439,3 +440,32 @@ No milestone's status was changed. Checked against each row's own "Verified by" 
 - Anything requiring a GPU, a real indoor capture with measurements, an Android device with the WebXR flag, or a Mac.
 - The full-stack E2E harness (`scripts/e2e/e2e_validate.py`) was not re-run for this review.
 - Load, soak and multi-instance behaviour.
+
+---
+
+## 5. Addendum (2026-10-03): G-2, S-6, S-7
+
+This section was added after the review; the sections above are unchanged.
+
+- **G-2 fixed in code.** PRIVACY_PREPROCESS now publishes `PRIVACY_MASKS` (`chaya_worker/privacy/masks.py`): one PNG per
+  frame marking every pixel anonymisation rewrote, widened to whole JPEG MCUs plus one MCU of margin so the frame
+  archive's JPEG round trip cannot leak fill colour into a pixel marked valid. In a privacy-enabled run every stage
+  that learns from frames requires the masks (`PRIVACY_MASKS_MISSING` otherwise): COLMAP gets them as feature masks
+  (eroded by `privacy_sfm_mask_margin_px`); SPLAT_RECONSTRUCTION undistorts them with the frames, zeroes masked pixels
+  and drops them from L1 and D-SSIM; SEMANTIC_SEGMENTATION casts no vote from them; SEMANTIC_INDEXING drops mostly
+  masked detections and places detections only through unmasked pixels. The required test is
+  `tests/splat/test_privacy_masked_training.py` (CPU test renderer). It uses three views, not two: with only two
+  views, L1 outvotes a fill seen in one of them even without a mask, so the test could not tell the fix from no fix.
+  A control run with the mask removed shows the fill leaking. **gsplat has still never run** (G-4), so the masked loss
+  has not been run on CUDA.
+- **S-6 fixed.** `ReconstructionService` does not list or serve a run with `privacy_enabled = false` to a
+  PUBLIC_VIEWER actor (404). A pinned artifact is checked against the run that produced it.
+- **S-7 fixed.** PII staging is deleted when a run ends SUCCEEDED, PARTIAL or CANCELLED. A FAILED run keeps it for
+  `chaya.pipeline.pii-staging-retention` (default 24 h) so it can be retried. A sweep (`PipelineEnforcer`, every
+  minute) purges what is due and retries failed deletions. Purges are recorded in `pii_staging_purge` (V24). A retry
+  that would need purged frames gets 409 `PII_STAGING_PURGED`. New gauge and alert: `chaya_pii_staging_overdue_artifacts`,
+  `ChayaPiiStagingNotPurged`. **Residual:** after a purge, a run that failed at FRAME_QUALITY_FILTER or
+  PRIVACY_PREPROCESS cannot be reprocessed without uploading the capture again. Raw capture media are still kept indefinitely
+  (security-hardening finding 15).
+- **CV-6 is unchanged.** What gets masked is whatever the classical detectors find. A missed face is neither
+  anonymised nor masked.

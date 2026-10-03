@@ -71,6 +71,10 @@ import org.springframework.transaction.support.TransactionTemplate;
  *       and the failed stage can be retried.</li>
  *   <li>With privacy enabled, artifacts that may contain PII are never handed to stages after
  *       PRIVACY_PREPROCESS and their objects are deleted once that stage succeeds.</li>
+ *   <li>PII staging never outlives the run that needs it (review S-7): it is deleted when the run ends SUCCEEDED,
+ *       PARTIAL or CANCELLED, and {@link PipelineProperties#piiStagingRetention()} after it ended FAILED (kept that long
+ *       only so the run can be retried). {@link #sweepPiiStaging()} enforces this and retries failed deletions. A purged
+ *       artifact is never offered to a stage again, and a retry that would need one is refused.</li>
  * </ul>
  */
 @Service
@@ -187,6 +191,11 @@ public class PipelineService {
                     + "version is final; start a new re-scan (and re-capture or re-calibrate the region) instead");
             }
             JobStage stage = JobStage.valueOf(run.failureStage());
+            if (needsPurgedPii(run, stage)) {
+                throw new ApiException(HttpStatus.CONFLICT, "PII_STAGING_PURGED", "the unanonymised frames " + stage
+                    + " needs were deleted under the PII staging retention policy (chaya.pipeline.pii-staging-retention); "
+                    + "this stage can no longer be retried. Upload the capture again to reprocess it.");
+            }
             Optional<JobRow> last = latestJob(run.id(), stage);
             if (last.isPresent() && last.get().status().equals("FAILED")) {
                 jobs.retry(last.get().id()); // bounded by max_retries; 409 when exhausted
@@ -295,6 +304,7 @@ public class PipelineService {
             inputs.addAll(jdbc.sql("SELECT a.id, a.kind, a.stage, a.bucket, a.object_key, a.checksum_sha256, a.content_type, a.size_bytes, "
                     + "a.contains_pii FROM processing_artifact a JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id "
                     + "WHERE sr.run_id = :r AND sr.status = 'SUCCEEDED' AND left(a.kind, 4) <> 'LOG_' "
+                    + "AND NOT EXISTS (SELECT 1 FROM pii_staging_purge p WHERE p.artifact_id = a.id) "
                     + (afterPrivacy ? "AND NOT a.contains_pii " : "") + "ORDER BY sr.created_at, a.created_at")
                 .param("r", run.id())
                 .query((rs, i) -> new InputRef(rs.getObject("id", UUID.class), rs.getString("kind"), rs.getString("stage"),
@@ -454,9 +464,16 @@ public class PipelineService {
 
         boolean purge = ok && job.stage() == JobStage.PRIVACY_PREPROCESS && run.privacy();
         advance(actor, run, job.stage(), ok, failCode, failMessage, r);
+        // A run that ended SUCCEEDED or PARTIAL needs no PII staging any more (a privacy-disabled run still has all of it).
+        // A FAILED run keeps it for the retention period; sweepPiiStaging also catches anything purged late or not at all.
+        String ended = jdbc.sql("SELECT status FROM pipeline_run WHERE id = :r").param("r", run.id()).query(String.class).single();
+        boolean purgeEnded = ended.equals("SUCCEEDED") || ended.equals("PARTIAL");
         return () -> {
             if (purge) {
                 purgePii(run, "privacy-stage-complete");
+            }
+            if (purgeEnded) {
+                purgePii(run, "run-" + ended.toLowerCase(), false);
             }
         };
     }
@@ -756,19 +773,74 @@ public class PipelineService {
         }
     }
 
-    /** Deletes objects of artifacts flagged as possibly containing PII. Best effort, audited, idempotent. */
+    /**
+     * PII artifacts whose run no longer needs them (review S-7): the run ended SUCCEEDED, PARTIAL or CANCELLED; or ended
+     * FAILED more than {@code :retention} seconds ago; or its privacy preprocessing succeeded. Shared by
+     * {@link #sweepPiiStaging()} and the {@code chaya_pii_staging_overdue_artifacts} gauge.
+     */
+    public static final String PII_PURGE_DUE = """
+          FROM processing_artifact a
+          JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id
+          JOIN pipeline_run r ON r.id = sr.run_id
+         WHERE a.contains_pii
+           AND NOT EXISTS (SELECT 1 FROM pii_staging_purge p WHERE p.artifact_id = a.id)
+           AND (r.status IN ('SUCCEEDED', 'PARTIAL', 'CANCELLED')
+                OR (r.status = 'FAILED' AND r.finished_at < now() - make_interval(secs => :retention))
+                OR (r.privacy_enabled AND EXISTS (SELECT 1 FROM pipeline_stage_run ps WHERE ps.run_id = r.id
+                                                    AND ps.stage = 'PRIVACY_PREPROCESS' AND ps.status = 'SUCCEEDED')))
+        """;
+
+    /** Deletes the PII staging that is due (PII_PURGE_DUE), retrying deletions that failed before. Returns the number of
+     * runs it purged. Called periodically by PipelineEnforcer. */
+    public int sweepPiiStaging() {
+        List<UUID> runs = jdbc.sql("SELECT DISTINCT r.id " + PII_PURGE_DUE)
+            .param("retention", (double) props.piiStagingRetention().toSeconds()).query(UUID.class).list();
+        for (UUID id : runs) {
+            purgePii(loadRun(id), "retention-sweep", false);
+        }
+        return runs.size();
+    }
+
+    /** Whether retrying {@code stage} would need a PII staging artifact that has been purged. */
+    private boolean needsPurgedPii(RunRow run, JobStage stage) {
+        int idx = run.stages().indexOf(stage);
+        boolean afterPrivacy = run.privacy() && run.stages().indexOf(JobStage.PRIVACY_PREPROCESS) < idx;
+        if (idx <= 0 || afterPrivacy) {
+            return false; // the first stage reads raw media only; stages after privacy never read PII
+        }
+        return jdbc.sql("""
+                SELECT count(*) FROM processing_artifact a
+                  JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id
+                  JOIN pii_staging_purge p ON p.artifact_id = a.id
+                 WHERE sr.run_id = :r AND sr.status = 'SUCCEEDED' AND a.contains_pii
+                """).param("r", run.id()).query(Integer.class).single() > 0;
+    }
+
     private void purgePii(RunRow run, String reason) {
-        List<String> keys = jdbc.sql("SELECT a.object_key FROM processing_artifact a JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id "
-                + "WHERE sr.run_id = :r AND a.contains_pii").param("r", run.id()).query(String.class).list();
+        purgePii(run, reason, true);
+    }
+
+    /** Deletes the objects of the run's PII artifacts not purged yet, recording each deletion. Best effort, audited (when
+     * there was anything to delete, or always with {@code auditWhenNothing}), idempotent. */
+    private void purgePii(RunRow run, String reason, boolean auditWhenNothing) {
+        record Pii(UUID id, String key) {}
+        List<Pii> items = jdbc.sql("SELECT a.id, a.object_key FROM processing_artifact a JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id "
+                + "WHERE sr.run_id = :r AND a.contains_pii AND NOT EXISTS (SELECT 1 FROM pii_staging_purge p WHERE p.artifact_id = a.id)")
+            .param("r", run.id()).query((rs, i) -> new Pii(rs.getObject(1, UUID.class), rs.getString(2))).list();
+        if (items.isEmpty() && !auditWhenNothing) {
+            return;
+        }
         int deleted = 0;
         int failed = 0;
-        for (String key : keys) {
+        for (Pii item : items) {
             try {
-                derived.delete(key);
+                derived.delete(item.key());
+                jdbc.sql("INSERT INTO pii_staging_purge (artifact_id, run_id, reason) VALUES (:a, :r, :why) ON CONFLICT DO NOTHING")
+                    .param("a", item.id()).param("r", run.id()).param("why", reason).update();
                 deleted++;
             } catch (RuntimeException e) {
                 failed++;
-                log.error("could not delete PII staging object {}: {}", key, e.getMessage());
+                log.error("could not delete PII staging object {}: {}", item.key(), e.getMessage());
             }
         }
         final int d = deleted;

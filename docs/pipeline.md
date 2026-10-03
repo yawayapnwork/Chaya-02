@@ -208,11 +208,37 @@ words "not finalized"; a success without `FINAL` quality is flagged as inconsist
 - The privacy stage **fails closed**: missing detector, unreadable frame, or a face still detectable after
   anonymisation means no output. Blurred faces often remain detectable, so it verifies with the detector and
   keeps covering (pixelate+blur, then solid fill) until none is found or fails after 5 rounds.
-- Only an administrator may run a pipeline with privacy preprocessing disabled; it is recorded on the run.
+- **Privacy masks (review G-2).** A blurred or solid-filled region is not the scene, so it must not become learned
+  geometry or colour. `PRIVACY_PREPROCESS` publishes `PRIVACY_MASKS` (`chaya_worker.privacy.masks`): `<frame>.png`,
+  255 = reconstruction-valid, 0 = privacy-masked. A mask covers every pixel anonymisation rewrote (escalation rounds
+  included), widened to whole 16×16 JPEG MCUs plus one MCU of margin. That way the anonymised frame's JPEG encoding
+  cannot carry fill colour into a pixel marked valid: outside the mask, the decoded frame is bit-identical to the decoded
+  original. The mask holds rectangles only and is not PII. In a privacy-enabled run every stage that reads anonymised
+  frames requires it and fails with `PRIVACY_MASKS_MISSING` otherwise; a missing or malformed per-frame mask is
+  `PRIVACY_MASK_INVALID`.
+  - `POSE_ESTIMATION`: COLMAP `--ImageReader.mask_path`, with the masked area grown by `PRIVACY_SFM_MASK_MARGIN_PX`
+    (16), so no keypoint, descriptor, SfM point or seed colour comes from a fill.
+  - `SPLAT_RECONSTRUCTION`: masks are undistorted with their frames (a valid pixel never samples a masked one), masked
+    pixels are zeroed in the training image and excluded from L1 and D-SSIM (an SSIM window touching a masked pixel
+    is dropped), so they get no gradient and drive no densification. The masks are part of the checkpoint identity.
+    `splat-training-report.json` records `privacy_masks`.
+  - `SEMANTIC_SEGMENTATION`: no class vote from a masked pixel. `SEMANTIC_INDEXING`: detections whose box is more than
+    `PRIVACY_DETECTION_MAX_MASKED_FRACTION` (0.25) masked are dropped; geometry is associated only through unmasked pixels.
+- **PII staging retention (review S-7).** `pii/` objects are deleted when privacy preprocessing succeeds, and when a
+  run ends SUCCEEDED, PARTIAL or CANCELLED (including privacy-disabled runs). A FAILED run keeps them for
+  `PII_STAGING_RETENTION` (default `PT24H`) so it can be retried. After that a sweep (every minute) deletes them, and it
+  also retries deletions that failed. Each deletion is recorded in `pii_staging_purge` and audited. A retry that would
+  need purged frames is refused with 409 `PII_STAGING_PURGED`. Gauge `chaya_pii_staging_overdue_artifacts`, alert
+  `ChayaPiiStagingNotPurged`.
+- Only an administrator may run a pipeline with privacy preprocessing disabled; it is recorded on the run. Such a
+  reconstruction is never listed or served to a public viewer link (review S-6); signed-in venue members still see it.
 - **Limits, stated plainly:** detection is classical computer vision (OpenCV Haar cascades for faces; a quadrilateral
   heuristic for screens/documents that over-blurs and misses tilted or dim ones). It is a strong first line, not a
   guarantee; a learned detector can replace either behind the `RegionDetector` interface. Raw uploads in the raw
-  bucket are not touched by this stage.
+  bucket are not touched by this stage. Masks only cover what was detected: a missed face is neither anonymised nor
+  masked, and it is trained as scene content like any other pixel. Not detected at all: people and bodies other than
+  faces, licence plates, text on arbitrary surfaces (badges, whiteboards, labels), reflections of any of these, and
+  non-visual PII such as EXIF or GPS (frames are re-encoded by OpenCV, which writes no EXIF).
 
 ## Observability
 Worker logs are JSON, one object per line, with `ts, level, logger, msg, job_id, run_id, stage, attempt, worker_id`

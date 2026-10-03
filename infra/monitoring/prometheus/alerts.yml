@@ -73,3 +73,9 @@ groups:
         for: 1h
         annotations:
           summary: "Fewer than half of the reconstruction runs finished in the last 24 h succeeded"
+
+      - alert: ChayaPiiStagingNotPurged
+        expr: chaya_pii_staging_overdue_artifacts > 0
+        for: 15m
+        annotations:
+          summary: "Unanonymised PII staging frames past their retention are still stored: the purge sweep cannot delete them (review S-7)"

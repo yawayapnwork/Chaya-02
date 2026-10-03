@@ -19,6 +19,10 @@ while POSES and SPARSE_MODEL are the region capture's own. The cameras are moved
 REGION_ALIGNMENT's region-to-parent similarity (ALIGNMENT_REPORT) before any projection; without that report
 the stage refuses to project, rather than attach detections to unrelated geometry.
 
+Privacy masks (review G-2; chaya_worker.privacy.masks, required in a privacy-enabled run): a detection whose box is more
+than `privacy_detection_max_masked_fraction` anonymised is dropped (what the detector and CLIP see there is the fill),
+and a detection is placed only through splat points that project onto unmasked pixels.
+
 Needs torch + transformers (Grounding DINO) + open_clip (CLIP) + Pillow, the Grounding DINO checkpoint
 weights already cached locally, plus COLMAP to recover camera intrinsics like SEMANTIC_SEGMENTATION does.
 """
@@ -38,6 +42,7 @@ from ..contract import ArtifactSpec, StageContext, StageError, StageResult
 from ..frames import Similarity, frame_provenance, require_canonical
 from ..grounding_dino import Detection, GroundingDinoDetector
 from ..ply import read_ply
+from ..privacy import masks as privacy_masks
 from .base import command_record, write_json
 from .semantic_segmentation import project_points
 from .splat_reconstruction import build_cameras
@@ -53,6 +58,23 @@ def associate_detection_with_geometry(detection: Detection, positions: np.ndarra
     if count == 0:
         return None
     return np.median(positions[inside], axis=0), count
+
+
+def visible_through_valid(px: np.ndarray, visible: np.ndarray, valid: np.ndarray | None) -> np.ndarray:
+    """Pure: `visible` restricted to points that project onto a reconstruction-valid (not privacy-masked) pixel."""
+    if valid is None:
+        return visible
+    out = visible.copy()
+    ids = np.where(out)[0]
+    out[ids] = valid[px[ids, 1].astype(int), px[ids, 0].astype(int)]
+    return out
+
+
+def box_masked_fraction(valid: np.ndarray | None, x0: int, y0: int, x1: int, y1: int) -> float:
+    """Pure: the fraction of a pixel box (end-exclusive, inside the image) that is privacy-masked."""
+    if valid is None or x1 <= x0 or y1 <= y0:
+        return 0.0
+    return float((~valid[y0:y1, x0:x1]).mean())
 
 
 def viewmat_in_other_frame(viewmat: np.ndarray, region_to_other: Similarity) -> np.ndarray:
@@ -175,6 +197,7 @@ class SemanticIndexing:
                 cam["viewmat"] = viewmat_in_other_frame(cam["viewmat"], region_to_parent)
         images_dir = ctx.workdir / "images"
         archive.unpack(frame_archives[0].path, images_dir)
+        masks = privacy_masks.from_inputs(ctx)
 
         device = "cuda" if ctx.toolchain.cuda().available else "cpu"
         detector = GroundingDinoDetector(s.grounding_dino_model, device=device, box_threshold=s.object_detection_box_threshold,
@@ -185,6 +208,7 @@ class SemanticIndexing:
         raw_objects: list[dict[str, Any]] = []
         crops: list[np.ndarray] = []
         frames_processed = 0
+        dropped_privacy = 0
         # Detection and projection both use the undistorted frame and its pinhole camera (review G-1), so bbox_px is in
         # undistorted-frame pixels (same size as the frame).
         rectifier = FrameRectifier()
@@ -196,8 +220,11 @@ class SemanticIndexing:
             img_bgr = cv2.imdecode(np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_COLOR)
             if img_bgr is None:
                 continue
+            valid = masks.valid(cam["name"], img_bgr.shape[:2]) if masks is not None else None
             try:
                 img_bgr, pinhole = rectifier.rectify(cam["camera"], img_bgr)
+                if valid is not None:
+                    valid = rectifier.rectify_mask(cam["camera"], valid)
             except CameraModelError as exc:
                 raise StageError(f"frame {cam['name']}: {exc}", code=exc.code) from exc
             img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
@@ -208,15 +235,19 @@ class SemanticIndexing:
                 continue
 
             px, visible = project_points(cloud.positions, cam["viewmat"], pinhole.K, w, h)
+            visible = visible_through_valid(px, visible, valid)
             for det in detections:
-                located = associate_detection_with_geometry(det, cloud.positions, px, visible)
-                if located is None:
-                    continue
-                position, support = located
                 x0, y0, x1, y1 = (int(max(0, v)) for v in det.box_xyxy)
                 x1, y1 = min(w, x1), min(h, y1)
                 if x1 <= x0 or y1 <= y0:
                     continue
+                if box_masked_fraction(valid, x0, y0, x1, y1) > s.privacy_detection_max_masked_fraction:
+                    dropped_privacy += 1
+                    continue
+                located = associate_detection_with_geometry(det, cloud.positions, px, visible)
+                if located is None:
+                    continue
+                position, support = located
                 crops.append(img_rgb[y0:y1, x0:x1])
                 raw_objects.append({
                     "label": det.label, "confidence": det.confidence, "position": position.tolist(),
@@ -245,7 +276,8 @@ class SemanticIndexing:
             "frames_processed": frames_processed, "raw_detection_count": len(raw_objects), "objects": objects})
         report_path = write_json(ctx.workdir / "semantic-indexing-report.json", {
             "detector_model": detector.model_id, "detector_fine_tuned": detector.fine_tuned, "embedding_model": embedder.model_id,
-            "frames_processed": frames_processed, "raw_detection_count": len(raw_objects), "object_count": len(objects)})
+            "frames_processed": frames_processed, "raw_detection_count": len(raw_objects), "object_count": len(objects),
+            "dropped_as_privacy_masked": dropped_privacy, "privacy_masks_applied": masks is not None})
 
         return StageResult(
             "SUCCEEDED", command_record(ctx, {"detector_model": detector.model_id, "embedding_model": embedder.model_id,

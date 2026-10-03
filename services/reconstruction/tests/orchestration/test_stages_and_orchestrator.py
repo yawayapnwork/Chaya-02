@@ -395,7 +395,7 @@ def test_stages_one_to_four_chain_on_a_real_video_and_the_privacy_boundary_holds
     for k in pii_keys:
         h.storage.delete(DERIVED_BUCKET, k)
     later_inputs = h.outputs_as_inputs(privacy, drop_pii=True)
-    assert {i["kind"] for i in later_inputs} == {"FRAME_ARCHIVE_ANON", "PRIVACY_REPORT"}
+    assert {i["kind"] for i in later_inputs} == {"FRAME_ARCHIVE_ANON", "PRIVACY_MASKS", "PRIVACY_REPORT"}
     anon_frames = archive.unpack(h.storage.root / DERIVED_BUCKET / artifact(privacy, "FRAME_ARCHIVE_ANON")["key"], tmp_path / "final")
     detector = FaceDetector()
     assert anon_frames and all(detector.detect(cv2.imread(str(p))) == [] for p in anon_frames)

@@ -4,6 +4,7 @@ import dev.chaya.api.frame.CoordinateFrameService;
 import dev.chaya.api.frame.FrameDtos.FrameView;
 import dev.chaya.api.rescan.ScanVersionService;
 import dev.chaya.api.security.Actor;
+import dev.chaya.api.security.Role;
 import dev.chaya.api.security.TenantGuard;
 import dev.chaya.api.web.BadRequestException;
 import dev.chaya.api.web.NotFoundException;
@@ -28,6 +29,12 @@ import org.springframework.transaction.annotation.Transactional;
  * FAILED at NAVIGATION_BAKING while still holding a perfectly real, complete reconstruction from the
  * stage before it. Keying off the ARTIFACT_GENERATION stage_run directly is what lets the viewer show
  * that reconstruction instead of "No reconstruction available" for every run that exists today.
+ *
+ * <p>Privacy (review S-6): a run an administrator started with privacy preprocessing disabled was trained on frames whose
+ * faces, screens and documents were never anonymised, so its splat can show them. It is never served to a PUBLIC_VIEWER
+ * (an anonymous public link): it is not listed, and every read of it or of its artifacts is 404, as if it did not
+ * exist. Signed-in venue members still see it. A pinned artifact is checked against the run that produced it, so a
+ * re-scan cannot carry a privacy-disabled parent's splat onto a public link either.
  */
 @Service
 public class ReconstructionService {
@@ -92,6 +99,7 @@ public class ReconstructionService {
                                            AND sv.coordinate_frame_id IS NOT NULL
                  WHERE sr.stage = 'ARTIFACT_GENERATION' AND sr.status = 'SUCCEEDED'
                    AND cs.floor_id = :floor AND r.venue_id = :venue AND r.organization_id = :org
+                   AND (r.privacy_enabled OR NOT :anonymous)
                    -- a re-scan's merged model is listed only once its version is FINALIZED: a re-scan that later failed or
                    -- was rejected never replaces what viewers see (docs/rescan.md)
                    AND (r.scan_version_id IS NULL
@@ -100,6 +108,7 @@ public class ReconstructionService {
                  LIMIT 50
                 """)
             .param("floor", floorId).param("venue", venueId).param("org", actor.organizationId())
+            .param("anonymous", anonymous(actor))
             .query((rs, i) -> new ReconstructionVersion(rs.getObject("run_id", UUID.class), rs.getObject("floor_id", UUID.class),
                 rs.getTimestamp("finished_at").toInstant(), rs.getString("status"), rs.getString("quality"),
                 rs.getObject("scan_version_id", UUID.class), (Integer) rs.getObject("version_number"),
@@ -153,10 +162,13 @@ public class ReconstructionService {
                 SELECT pin.kind, a.size_bytes, a.checksum_sha256
                   FROM scan_version_artifact pin
                   JOIN processing_artifact a ON a.id = pin.artifact_id
+                  JOIN pipeline_stage_run asr ON asr.id = a.stage_run_id
+                  JOIN pipeline_run ar ON ar.id = asr.run_id
                  WHERE pin.scan_version_id = :sv AND pin.kind IN (:kinds) AND a.contains_pii = false
+                   AND (ar.privacy_enabled OR NOT :anonymous)
                  ORDER BY pin.kind
                 """)
-            .param("sv", scanVersionId).param("kinds", VIEWER_ARTIFACT_KINDS)
+            .param("sv", scanVersionId).param("kinds", VIEWER_ARTIFACT_KINDS).param("anonymous", anonymous(actor))
             .query((rs, i) -> new ArtifactRef(rs.getString("kind"), SERVED_CONTENT_TYPES.get(rs.getString("kind")), rs.getLong("size_bytes"),
                 rs.getString("checksum_sha256"),
                 "/api/v1/venues/" + venueId + "/scan-versions/" + scanVersionId + "/artifacts/" + rs.getString("kind")))
@@ -183,8 +195,9 @@ public class ReconstructionService {
                   JOIN capture_session cs ON cs.id = r.capture_session_id
                  WHERE sr.stage = 'ARTIFACT_GENERATION' AND sr.status = 'SUCCEEDED'
                    AND r.id = :run AND r.venue_id = :venue AND r.organization_id = :org
+                   AND (r.privacy_enabled OR NOT :anonymous)
                 """)
-            .param("run", runId).param("venue", venueId).param("org", actor.organizationId())
+            .param("run", runId).param("venue", venueId).param("org", actor.organizationId()).param("anonymous", anonymous(actor))
             .query((rs, i) -> new Row(rs.getObject("scan_id", UUID.class), rs.getObject("floor_id", UUID.class),
                 rs.getTimestamp("finished_at").toInstant(), rs.getString("status"), rs.getString("quality"),
                 rs.getObject("frame_run_id", UUID.class)))
@@ -204,8 +217,10 @@ public class ReconstructionService {
                   JOIN pipeline_run r ON r.id = sr.run_id
                  WHERE sr.run_id = :run AND sr.status = 'SUCCEEDED' AND a.kind = :kind AND a.contains_pii = false
                    AND r.venue_id = :venue AND r.organization_id = :org
+                   AND (r.privacy_enabled OR NOT :anonymous)
                 """)
             .param("run", runId).param("kind", kind).param("venue", venueId).param("org", actor.organizationId())
+            .param("anonymous", anonymous(actor))
             .query((rs, i) -> new StoredArtifact(rs.getString("bucket"), rs.getString("object_key"),
                 SERVED_CONTENT_TYPES.get(kind), rs.getLong("size_bytes")))
             .optional().orElseThrow(() -> new NotFoundException("artifact not found"));
@@ -218,16 +233,25 @@ public class ReconstructionService {
         if (!VIEWER_ARTIFACT_KINDS.contains(kind)) {
             throw new BadRequestException("unknown viewer artifact kind: " + kind);
         }
-        versions.requireFinalized(actor, venueId, scanVersionId);
+        ScanVersionService.Scope scope = versions.requireFinalized(actor, venueId, scanVersionId);
+        runRow(actor, venueId, scope.runId()); // 404 for a public viewer when the version's own run had privacy disabled
         return jdbc.sql("""
                 SELECT a.bucket, a.object_key, a.size_bytes
                   FROM scan_version_artifact pin JOIN processing_artifact a ON a.id = pin.artifact_id
+                  JOIN pipeline_stage_run asr ON asr.id = a.stage_run_id
+                  JOIN pipeline_run ar ON ar.id = asr.run_id
                  WHERE pin.scan_version_id = :sv AND pin.kind = :kind AND a.contains_pii = false
+                   AND (ar.privacy_enabled OR NOT :anonymous)
                 """)
-            .param("sv", scanVersionId).param("kind", kind)
+            .param("sv", scanVersionId).param("kind", kind).param("anonymous", anonymous(actor))
             .query((rs, i) -> new StoredArtifact(rs.getString("bucket"), rs.getString("object_key"),
                 SERVED_CONTENT_TYPES.get(kind), rs.getLong("size_bytes")))
             .optional().orElseThrow(() -> new NotFoundException("artifact not found"));
+    }
+
+    /** A public-link viewer: never served a reconstruction trained without privacy preprocessing. */
+    private static boolean anonymous(Actor actor) {
+        return actor.kind() == Actor.Kind.PUBLIC_VIEWER || actor.roles().contains(Role.PUBLIC_VIEWER);
     }
 
     private void requireFloor(UUID venueId, UUID floorId) {

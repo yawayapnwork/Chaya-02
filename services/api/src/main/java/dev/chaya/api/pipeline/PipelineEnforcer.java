@@ -6,7 +6,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-/** Periodically fails abandoned jobs and enforces run time budgets. The rules live in PipelineService. */
+/** Periodically fails abandoned jobs, enforces run time budgets and purges due PII staging. The rules live in PipelineService. */
 @Component
 @EnableScheduling
 public class PipelineEnforcer {
@@ -28,6 +28,19 @@ public class PipelineEnforcer {
             }
         } catch (RuntimeException e) {
             log.error("pipeline enforcer failed", e);
+        }
+    }
+
+    /** Deletes PII staging that is due under the retention policy and retries failed deletions (review S-7). */
+    @Scheduled(fixedDelayString = "${chaya.pipeline.pii-sweep-interval:PT1M}", initialDelayString = "PT45S")
+    void sweepPii() {
+        try {
+            int runs = pipeline.sweepPiiStaging();
+            if (runs > 0) {
+                log.info("PII staging sweep purged {} run(s)", runs);
+            }
+        } catch (RuntimeException e) {
+            log.error("PII staging sweep failed", e);
         }
     }
 }

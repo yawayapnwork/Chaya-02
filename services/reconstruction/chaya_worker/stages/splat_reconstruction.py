@@ -28,6 +28,14 @@ trained against the pinhole camera that undistortion produces. Frames of a disto
 TRAINING_CAMERAS (training-cameras.json) records, per camera, the SfM camera (model, size, focal lengths, principal
 point, distortion model and coefficients), whether its frames were undistorted, and the pinhole camera trained with.
 
+Privacy masks (review G-2). The frames are anonymised, and an anonymised region is a blur or a solid block, not the
+scene. In a privacy-enabled run PRIVACY_MASKS is a required input (chaya_worker.privacy.masks). Each frame's mask is
+undistorted with the frame (a training pixel is valid only if every source pixel it is resampled from is valid); the
+masked pixels are set to zero in the training image and carried as the camera's `valid` mask, which the loss honours
+(chaya_worker.splat_training.l1_dssim_loss). So the fills are neither colour nor geometry supervision: a region seen
+only through a fill keeps what the other views say about it, or nothing. The masks are part of the checkpoint's input
+identity. SPLAT_TRAINING_REPORT records how much of the training signal was masked.
+
 Needs torch + gsplat + a CUDA device (gsplat's rasteriser is CUDA-only) and COLMAP (to convert the binary sparse model
 to TEXT). If any of that is missing the stage fails with DEPENDENCY_UNAVAILABLE and nothing is produced. There is no CPU
 or "fake" fallback path.
@@ -47,6 +55,7 @@ from ..camera_model import Camera, CameraModelError, FrameRectifier
 from ..colmap_txt import parse_cameras_txt, parse_points3d_txt
 from ..contract import ArtifactSpec, StageContext, StageError, StageResult
 from ..ply import write_ply
+from ..privacy import masks as privacy_masks
 from ..splat_color import rgb_bytes_to_sh0
 from .base import command_record, sha256_file, write_json
 
@@ -80,10 +89,13 @@ def build_cameras(poses: list[dict[str, Any]], camera_models: dict[int, Camera])
     return cams
 
 
-def prepare_training_cameras(cams: list[dict[str, Any]], images_dir: Path, rectifier: FrameRectifier) -> list[dict[str, Any]]:
+def prepare_training_cameras(cams: list[dict[str, Any]], images_dir: Path, rectifier: FrameRectifier,
+                             masks: privacy_masks.FrameMasks | None = None) -> list[dict[str, Any]]:
     """Loads each camera's frame, undistorts it if its camera has distortion, and sets the pinhole `K` and RGB `image`
     (float32 sRGB values in [0, 1]) the rasteriser is trained against. Cameras without a frame on disk are dropped; a
-    frame whose size is not its camera's fails the stage."""
+    frame whose size is not its camera's fails the stage. With `masks`, each frame's privacy mask is undistorted with
+    it and set as the camera's `valid` (bool (H, W)); the image's masked pixels are zeroed, so no anonymised pixel
+    reaches the optimiser, and `masked_fraction` records how much was excluded."""
     import cv2  # noqa: PLC0415
 
     ready = []
@@ -94,12 +106,20 @@ def prepare_training_cameras(cams: list[dict[str, Any]], images_dir: Path, recti
         img = cv2.imdecode(np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_COLOR)
         if img is None:
             continue
+        valid = masks.valid(cam["name"], img.shape[:2]) if masks is not None else None
         try:
             img, pinhole = rectifier.rectify(cam["camera"], img)
+            if valid is not None:
+                valid = rectifier.rectify_mask(cam["camera"], valid)
         except CameraModelError as exc:
             raise StageError(f"frame {cam['name']}: {exc}", code=exc.code) from exc
         cam["K"], cam["width"], cam["height"] = pinhole.K, pinhole.width, pinhole.height
-        cam["image"] = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0  # sRGB values in [0, 1]
+        image = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0  # sRGB values in [0, 1]
+        if valid is not None:
+            image[~valid] = 0.0
+            cam["valid"] = valid
+            cam["masked_fraction"] = float((~valid).mean())
+        cam["image"] = image
         ready.append(cam)
     return ready
 
@@ -132,11 +152,23 @@ def training_source(order: dict[str, Any], inputs: list) -> dict[str, Any]:
 
     return source_identity(run_id=order.get("runId"), scan_id=order.get("scanId"), scan_version_id=order.get("scanVersionId"),
                            inputs=sorted(({"kind": i.kind, "artifact_id": i.artifact_id, "sha256": i.ref.get("sha256")} for i in inputs
-                                          if i.kind in ("SPARSE_MODEL", "POSES", "FRAME_ARCHIVE_ANON")), key=lambda d: d["kind"]))
+                                          if i.kind in ("SPARSE_MODEL", "POSES", "FRAME_ARCHIVE_ANON", privacy_masks.KIND)),
+                                         key=lambda d: d["kind"]))
+
+
+def privacy_mask_summary(cams: list[dict[str, Any]]) -> dict[str, Any]:
+    """Pure: how much of the training signal the privacy masks excluded."""
+    fractions = [c["masked_fraction"] for c in cams if "valid" in c]
+    if not fractions:
+        return {"applied": False}
+    return {"applied": True, "frames": len(fractions), "frames_with_masked_pixels": sum(1 for f in fractions if f > 0),
+            "masked_fraction": round(float(np.mean(fractions)), 6), "max_frame_masked_fraction": round(max(fractions), 6),
+            "policy": "masked pixels are zeroed and excluded from L1 and D-SSIM; they are not supervision"}
 
 
 def publish_outcome(ctx: StageContext, outcome, *, source: dict[str, Any], cameras_used: int, versions: dict[str, Any],
-                    keyframes_tar=None, training_cameras: dict[str, Any] | None = None) -> StageResult:
+                    keyframes_tar=None, training_cameras: dict[str, Any] | None = None,
+                    privacy: dict[str, Any] | None = None) -> StageResult:
     """Turns a training outcome into the stage result: COMPLETED -> SUCCEEDED with SPLAT; PARTIAL -> FAILED with
     TIME_LIMIT_EXCEEDED and SPLAT_PARTIAL (partial=True). The report and checkpoint go out either way. Pure apart from
     writing files into ctx.workdir, so it is tested without a GPU (tests/splat)."""
@@ -174,6 +206,7 @@ def publish_outcome(ctx: StageContext, outcome, *, source: dict[str, Any], camer
                        "checkpoint": {"artifact": "splat-checkpoint.pt" if checkpoint_sha else None, "sha256": checkpoint_sha},
                        "versions": versions},
         "cameras_used": cameras_used,
+        "privacy_masks": privacy if privacy is not None else {"applied": False},
         "camera_calibration": None if training_cameras is None else {
             "calibration_source": training_cameras["calibration_source"],
             "undistorted": [c["undistorted"] for c in training_cameras["cameras"]],
@@ -234,8 +267,9 @@ class SplatReconstruction:
         cams = build_cameras(poses_doc["poses"], cameras_model)
         images_dir = ctx.workdir / "images"
         archive.unpack(frame_archives[0].path, images_dir)
+        masks = privacy_masks.from_inputs(ctx)
         rectifier = FrameRectifier()
-        cams = prepare_training_cameras(cams, images_dir, rectifier)
+        cams = prepare_training_cameras(cams, images_dir, rectifier, masks)
         if len(cams) < 3:
             raise StageError(f"only {len(cams)} posed frames could be matched to images; need at least 3 to train",
                              code="SPLAT_INIT_INSUFFICIENT", details={"posed_frames_with_images": len(cams)})
@@ -278,4 +312,4 @@ class SplatReconstruction:
         versions = {"torch": torch.__version__, "gsplat": getattr(gsplat, "__version__", None),
                     "cuda_devices": ctx.toolchain.cuda_devices()}
         return publish_outcome(ctx, outcome, source=source, cameras_used=len(cams), versions=versions, keyframes_tar=keyframes_tar,
-                               training_cameras=training_cameras_doc(rectifier, poses_doc))
+                               training_cameras=training_cameras_doc(rectifier, poses_doc), privacy=privacy_mask_summary(cams))

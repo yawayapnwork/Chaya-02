@@ -8,6 +8,9 @@ one hardcoded label table. A Gaussian's class is the confidence-weighted majorit
 that sees it; a Gaussian no camera sees clearly enough (below `semantic_confidence_min`) is left "unknown"
 rather than guessed.
 
+Privacy masks (review G-2): a pixel inside an anonymised region shows a blur or a solid block, so it casts no vote
+(chaya_worker.privacy.masks; required in a privacy-enabled run). A Gaussian seen only through fills stays "unknown".
+
 Needs torch + transformers, and the configured model weights already present in the local Hugging Face
 cache (no implicit download at run time -- see Toolchain.huggingface_model), plus COLMAP to recover camera
 intrinsics from the sparse model already computed by POSE_ESTIMATION.
@@ -25,6 +28,7 @@ from ..colmap_txt import parse_cameras_txt
 from ..contract import ArtifactSpec, StageContext, StageError, StageResult
 from ..model_loading import load_pretrained
 from ..ply import read_ply
+from ..privacy import masks as privacy_masks
 from ..semantic_classes import CLUTTER, FLOOR, FURNITURE, UNKNOWN, WALL, bucket_all
 from .base import command_record, write_json
 from .splat_reconstruction import build_cameras
@@ -93,6 +97,7 @@ class SemanticSegmentation:
         cams = build_cameras(poses, cameras_model)[:: max(1, s.semantic_sample_every)]
         images_dir = ctx.workdir / "images"
         archive.unpack(frame_archives[0].path, images_dir)
+        masks = privacy_masks.from_inputs(ctx)
 
         device = "cuda" if ctx.toolchain.cuda().available else "cpu"
         rev = s.semantic_segmentation_revision
@@ -116,8 +121,11 @@ class SemanticSegmentation:
                 img_bgr = cv2.imdecode(np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_COLOR)
                 if img_bgr is None:
                     continue
+                valid = masks.valid(cam["name"], img_bgr.shape[:2]) if masks is not None else None
                 try:
                     img_bgr, pinhole = rectifier.rectify(cam["camera"], img_bgr)
+                    if valid is not None:
+                        valid = rectifier.rectify_mask(cam["camera"], valid)
                 except CameraModelError as exc:
                     raise StageError(f"frame {cam['name']}: {exc}", code=exc.code) from exc
                 img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
@@ -133,6 +141,11 @@ class SemanticSegmentation:
                 if len(idx) == 0:
                     continue
                 cols, rows = px[idx, 0].astype(int), px[idx, 1].astype(int)
+                if valid is not None:  # no vote from an anonymised pixel
+                    keep = valid[rows, cols]
+                    idx, cols, rows = idx[keep], cols[keep], rows[keep]
+                    if len(idx) == 0:
+                        continue
                 conf, cls = confidence[rows, cols], class_id[rows, cols]
                 bucket_names = np.array([buckets.get(int(c), CLUTTER) for c in cls])
                 for bucket_idx, name in enumerate(CLASSES[:4]):

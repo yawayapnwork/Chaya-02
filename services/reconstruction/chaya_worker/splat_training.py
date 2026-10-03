@@ -26,6 +26,12 @@ DefaultStrategy follows it too, and this module uses the same NDC gradient norma
     * `max_gaussians` caps growth: when there are more candidates than room, the highest-gradient candidates win.
 Adam moments of new Gaussians start at zero; those of removed Gaussians are dropped.
 
+Privacy masks (review G-2). A camera may carry `valid`, a bool (H, W) mask of the pixels that are the captured scene.
+Pixels outside it were rewritten by privacy anonymisation (chaya_worker.privacy.masks): they are not ground truth, so
+the loss ignores them (masked L1, D-SSIM only over windows that contain no masked pixel) and they contribute no
+gradient, and so no densification either. SPLAT_RECONSTRUCTION also zeroes them in the image, so the fill colours never
+reach the optimiser at all.
+
 Randomness (which camera, where a split child lands) is derived from (seed, iteration) alone. So a run resumed from a
 checkpoint takes exactly the steps an uninterrupted run would have taken, without saving RNG state.
 """
@@ -427,9 +433,11 @@ def train(*, params: dict, cams: Sequence[dict[str, Any]], rasterize: Rasterizer
         t0 = clock()
         cam = cams[int(np.random.default_rng((config.seed, it)).integers(0, len(cams)))]
         gt = torch.as_tensor(cam["image"], device=device, dtype=torch.float32)
+        valid = cam.get("valid")
+        valid = None if valid is None else torch.as_tensor(valid, device=device, dtype=torch.bool)
         out = rasterize(*render_inputs(params), cam)
         pred = out.image.clamp(0.0, 1.0)
-        loss, parts = loss_fn(pred, gt, config)
+        loss, parts = loss_fn(pred, gt, config, valid=valid)
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         grad = out.means2d.grad
@@ -466,6 +474,14 @@ def _gaussian_window(size: int, sigma: float, device, dtype):
 
 def ssim(pred_chw: torch.Tensor, gt_chw: torch.Tensor, window_size: int = 11) -> torch.Tensor:
     """Differentiable single-scale SSIM (Gaussian window, depthwise), the 3DGS regulariser. (C, H, W) in [0, 1]."""
+    return ssim_map(pred_chw, gt_chw, window_size).mean()
+
+
+SSIM_WINDOW = 11
+
+
+def ssim_map(pred_chw: torch.Tensor, gt_chw: torch.Tensor, window_size: int = SSIM_WINDOW) -> torch.Tensor:
+    """The per-pixel, per-channel SSIM map (C, H, W) whose mean is ssim()."""
     import torch.nn.functional as F  # noqa: PLC0415
 
     c = pred_chw.shape[0]
@@ -479,12 +495,37 @@ def ssim(pred_chw: torch.Tensor, gt_chw: torch.Tensor, window_size: int = 11) ->
     var_g = F.conv2d(gt * gt, window, padding=pad, groups=c) - mu_g2
     cov_pg = F.conv2d(pred * gt, window, padding=pad, groups=c) - mu_pg
     c1, c2 = 0.01**2, 0.03**2
-    return (((2 * mu_pg + c1) * (2 * cov_pg + c2)) / ((mu_p2 + mu_g2 + c1) * (var_p + var_g + c2))).mean()
+    return (((2 * mu_pg + c1) * (2 * cov_pg + c2)) / ((mu_p2 + mu_g2 + c1) * (var_p + var_g + c2)))[0]
 
 
-def l1_dssim_loss(pred_hwc: torch.Tensor, gt_hwc: torch.Tensor, config: TrainingConfig):
-    """(1 - w) * L1 + w * (1 - SSIM), the 3DGS objective."""
-    l1 = (pred_hwc - gt_hwc).abs().mean()
-    d_ssim = 1.0 - ssim(pred_hwc.permute(2, 0, 1), gt_hwc.permute(2, 0, 1))
+def ssim_support(valid_hw: torch.Tensor, window_size: int = SSIM_WINDOW) -> torch.Tensor:
+    """Pure: bool (H, W), the pixels whose whole SSIM window lies on valid pixels. The image border is not invalid:
+    ssim() zero-pads there for every pixel alike."""
+    import torch.nn.functional as F  # noqa: PLC0415
+
+    invalid = (~valid_hw).to(torch.float32)[None, None]
+    reached = F.max_pool2d(invalid, window_size, stride=1, padding=window_size // 2)[0, 0]
+    return reached < 0.5
+
+
+def l1_dssim_loss(pred_hwc: torch.Tensor, gt_hwc: torch.Tensor, config: TrainingConfig, valid: torch.Tensor | None = None):
+    """(1 - w) * L1 + w * (1 - SSIM), the 3DGS objective. With `valid` (bool (H, W)), only valid pixels count: L1 is the
+    mean over valid pixels and D-SSIM the mean over pixels whose window holds no invalid pixel, so an invalid
+    ground-truth pixel has no influence on the loss or its gradient. A view with no valid pixel contributes nothing."""
+    pred_chw, gt_chw = pred_hwc.permute(2, 0, 1), gt_hwc.permute(2, 0, 1)
+    if valid is None:
+        l1 = (pred_hwc - gt_hwc).abs().mean()
+        d_ssim = 1.0 - ssim(pred_chw, gt_chw)
+    else:
+        weight = valid.to(pred_hwc.dtype)[..., None]
+        n_valid = weight.sum() * pred_hwc.shape[-1]
+        # torch.where, not a product: the gradient through an excluded pixel is exactly zero whatever it holds
+        diff = torch.where(valid[..., None], (pred_hwc - gt_hwc).abs(), torch.zeros_like(pred_hwc))
+        l1 = diff.sum() / n_valid.clamp_min(1.0)
+        support = ssim_support(valid)
+        n_support = support.sum() * pred_hwc.shape[-1]
+        smap = ssim_map(pred_chw, gt_chw)
+        kept = torch.where(support[None], smap, torch.ones_like(smap))  # an excluded window counts as a perfect match
+        d_ssim = (1.0 - kept).sum() / n_support.clamp_min(1)
     loss = (1 - config.ssim_weight) * l1 + config.ssim_weight * d_ssim
     return loss, {"l1": l1.detach(), "d_ssim": d_ssim.detach(), "loss": loss.detach()}

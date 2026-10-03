@@ -58,7 +58,7 @@ STAGE_REQUIREMENTS = {
 }
 # The upstream artifact each later stage cannot run without, and whether it needs a calibrated canonical frame.
 STAGE_UPSTREAM = {
-    "SPLAT_RECONSTRUCTION": (["SPARSE_MODEL", "POSES", "FRAME_ARCHIVE_ANON"], False),
+    "SPLAT_RECONSTRUCTION": (["SPARSE_MODEL", "POSES", "FRAME_ARCHIVE_ANON", "PRIVACY_MASKS"], False),
     "SEMANTIC_SEGMENTATION": (["SPLAT"], False), "GEOMETRIC_CLEANUP": (["SPLAT"], False),
     "PLANE_FITTING": (["SPLAT_CLEAN"], False), "ARTIFACT_GENERATION": (["SPLAT_CLEAN or SPLAT"], False),
     "SEMANTIC_INDEXING": (["SPLAT_CLEAN or SPLAT"], True), "NAVIGATION_BAKING": (["SPLAT_CLEAN or SPLAT", "PLANE_MODEL"], True),

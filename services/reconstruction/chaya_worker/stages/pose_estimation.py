@@ -16,6 +16,12 @@ to the frames by FFMPEG_PREPROCESS) the feature extractor is given that model an
 refine focal length and distortion in bundle adjustment (their defaults; not overridden). Without one, COLMAP
 self-calibrates a SIMPLE_RADIAL camera. Either way the camera that the poses belong to is read back from the model,
 every parameter kept, and recorded in poses.json with where it came from; an unsupported model fails the stage.
+
+Privacy masks (review G-2). The frames are anonymised: faces and screens are blurred or solid-filled blocks. Those
+blocks have strong edges that belong to no surface, so in a privacy-enabled run the run's PRIVACY_MASKS are required
+and given to the feature extractor (--ImageReader.mask_path), with the masked area grown by
+`privacy_sfm_mask_margin_px` so that no keypoint's descriptor window reaches into a fill. No keypoint, match or SfM point
+(and so no seed colour of the splat) comes from an anonymised pixel.
 """
 
 from __future__ import annotations
@@ -31,6 +37,7 @@ from .. import archive
 from ..camera_model import Camera, CameraModelError
 from ..colmap_txt import parse_cameras_txt
 from ..contract import ArtifactSpec, StageContext, StageError, StageResult
+from ..privacy import masks as privacy_masks
 from .base import command_record, write_json
 
 EXHAUSTIVE_MAX_FRAMES = 300
@@ -38,10 +45,11 @@ EXHAUSTIVE_MAX_FRAMES = 300
 
 def build_pose_commands(*, colmap: str, glomap: str | None, database: Path, images: Path, sparse: Path, use_gpu: bool,
                         frame_count: int, mapper: str, num_threads: int = -1,
-                        camera: Camera | None = None) -> dict[str, list[str]]:
+                        camera: Camera | None = None, mask_path: Path | None = None) -> dict[str, list[str]]:
     """Pure: the command lines of each step. mapper is 'glomap' or 'colmap'. num_threads > 0 bounds COLMAP's SIFT
     extraction and matching threads (Settings.colmap_num_threads); otherwise COLMAP's own default applies. camera is the
-    declared calibration of the frames, or None to let COLMAP self-calibrate a SIMPLE_RADIAL camera."""
+    declared calibration of the frames, or None to let COLMAP self-calibrate a SIMPLE_RADIAL camera. mask_path is a
+    directory of COLMAP feature masks (<image name>.png, 0 = no features), or None."""
     gpu = "1" if use_gpu else "0"
     camera_args = (["--ImageReader.camera_model", camera.model, "--ImageReader.camera_params", camera.colmap_params()]
                    if camera is not None else ["--ImageReader.camera_model", "SIMPLE_RADIAL"])
@@ -49,6 +57,7 @@ def build_pose_commands(*, colmap: str, glomap: str | None, database: Path, imag
     commands = {
         "feature_extractor": [colmap, "feature_extractor", "--database_path", str(database), "--image_path", str(images),
                               "--ImageReader.single_camera", "1", *camera_args,
+                              *(["--ImageReader.mask_path", str(mask_path)] if mask_path is not None else []),
                               "--SiftExtraction.use_gpu", gpu],
         "matcher": [colmap, matcher, "--database_path", str(database), "--SiftMatching.use_gpu", gpu],
     }
@@ -123,6 +132,21 @@ def _check_frame_sizes(frames: list[Path], camera: Camera) -> None:
                          code="CAMERA_CALIBRATION_INVALID", details={"frames": wrong[:20]})
 
 
+def write_sfm_masks(frames: list[Path], masks: privacy_masks.FrameMasks, out_dir: Path, margin_px: int) -> dict[str, Any]:
+    """COLMAP feature masks for every frame (privacy_masks.sfm_mask), and what they cover."""
+    out_dir.mkdir()
+    masked = total = 0
+    for f in frames:
+        img = cv2.imdecode(np.fromfile(str(f), dtype=np.uint8), cv2.IMREAD_COLOR)
+        if img is None:
+            raise StageError(f"frame {f.name} cannot be read", code="INPUT_INVALID", details={"frame": f.name})
+        mask = privacy_masks.sfm_mask(masks.valid(f.name, img.shape[:2]), margin_px)
+        privacy_masks.write_mask(out_dir, f.name, mask)
+        masked += int((mask == privacy_masks.MASKED).sum())
+        total += mask.size
+    return {"applied": True, "sfm_margin_px": margin_px, "feature_masked_fraction": round(masked / max(1, total), 6)}
+
+
 def _model_dirs(sparse: Path) -> list[Path]:
     return sorted(p for p in sparse.iterdir() if p.is_dir() and (p / "images.bin").is_file()) if sparse.is_dir() else []
 
@@ -142,6 +166,10 @@ class PoseEstimation:
         declared, declared_doc = declared_camera(ctx)
         if declared is not None:
             _check_frame_sizes(frames, declared)
+        masks = privacy_masks.from_inputs(ctx)
+        mask_dir = ctx.workdir / "sfm-masks" if masks is not None else None
+        mask_doc = (write_sfm_masks(frames, masks, mask_dir, ctx.settings.privacy_sfm_mask_margin_px) if masks is not None
+                    else {"applied": False, "reason": "privacy preprocessing was not part of this run"})
         database, sparse = ctx.workdir / "database.db", ctx.workdir / "sparse"
         sparse.mkdir()
         use_gpu = ctx.toolchain.gpu_present()
@@ -149,7 +177,7 @@ class PoseEstimation:
         first_mapper = "glomap" if glomap.available else "colmap"
         steps = build_pose_commands(colmap=colmap, glomap=glomap.path, database=database, images=images_dir, sparse=sparse,
                                     use_gpu=use_gpu, frame_count=len(frames), mapper=first_mapper,
-                                    num_threads=ctx.settings.colmap_num_threads, camera=declared)
+                                    num_threads=ctx.settings.colmap_num_threads, camera=declared, mask_path=mask_dir)
         ctx.runner.run(steps["feature_extractor"], error_code="FEATURE_EXTRACTION_FAILED", timeout=7200)
         ctx.runner.run(steps["matcher"], error_code="FEATURE_MATCHING_FAILED", timeout=7200)
 
@@ -163,7 +191,7 @@ class PoseEstimation:
                 ctx.logger.warning("GLOMAP failed; falling back to COLMAP mapper", extra={"reason": exc.message})
                 steps = build_pose_commands(colmap=colmap, glomap=None, database=database, images=images_dir, sparse=sparse,
                                             use_gpu=use_gpu, frame_count=len(frames), mapper="colmap",
-                                            num_threads=ctx.settings.colmap_num_threads, camera=declared)
+                                            num_threads=ctx.settings.colmap_num_threads, camera=declared, mask_path=mask_dir)
                 ctx.runner.run(steps["mapper"], error_code="MAPPING_FAILED", timeout=14400)
                 used, fallback = "colmap", True
             else:
@@ -191,11 +219,13 @@ class PoseEstimation:
         sparse_tar = ctx.workdir / "sparse-model.tar"
         archive.pack(model, sparse_tar)
         poses_json = write_json(ctx.workdir / "poses.json", {"mapper": used, "fallback_used": fallback, "frames": len(frames),
-                                                              "registered": len(poses), "poses": poses, **cameras_doc})
+                                                              "registered": len(poses), "poses": poses, **cameras_doc,
+                                                              "privacy_masks": mask_doc})
         return StageResult(
             "SUCCEEDED", command_record(ctx, {"mapper_used": used, "fallback_used": fallback, "gpu": use_gpu,
                                            "calibration_source": cameras_doc["calibration_source"],
-                                           "camera_models": sorted({c.model for c in cameras.values()})}),
+                                           "camera_models": sorted({c.model for c in cameras.values()}),
+                                           "privacy_masks_applied": mask_doc["applied"]}),
             ctx.runner.last_exit_status(),
             [ArtifactSpec("SPARSE_MODEL", sparse_tar, "sparse-model.tar", "application/x-tar"),
              ArtifactSpec("POSES", poses_json, "poses.json", "application/json")])
