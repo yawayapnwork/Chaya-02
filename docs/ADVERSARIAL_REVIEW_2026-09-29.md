@@ -410,7 +410,7 @@ conditions; **MEDIUM** edge-case errors or misleading output; **LOW** hygiene.
 | V-4, V-5 | Fixed in code and local tests (V23); V-1, V-2 here remain. |
 | S-1 single worker credential | Open (same design; one service account claims every tenant's jobs). |
 | S-2, S-8 | Open. |
-| S-6, S-7 | Fixed on 2026-10-03 after this review (see §5); local tests only. |
+| S-6, S-7 | Fixed on 2026-10-03 after this review (see §6); local tests only. |
 | O-1, O-3 | Open. |
 | D-6 OpenAPI | Open. |
 
@@ -443,7 +443,7 @@ No milestone's status was changed. Checked against each row's own "Verified by" 
 
 ---
 
-## 5. Addendum (2026-10-03): G-2, S-6, S-7
+## 6. Addendum (2026-10-03): G-2, G-3, S-6, S-7
 
 This section was added after the review; the sections above are unchanged.
 
@@ -467,5 +467,13 @@ This section was added after the review; the sections above are unchanged.
   `ChayaPiiStagingNotPurged`. **Residual:** after a purge, a run that failed at FRAME_QUALITY_FILTER or
   PRIVACY_PREPROCESS cannot be reprocessed without uploading the capture again. Raw capture media are still kept indefinitely
   (security-hardening finding 15).
+- **G-3 partly addressed (2026-10-03).** The position learning rate now follows the reference schedule (1.6e-4 →
+  1.6e-6 over 30 000 steps, log-linear, resume-exact). SH degree 0 is kept on purpose: the KSplat level-0 viewer asset
+  and the re-scan splice rotation both handle only degree 0. It is now explicit (`SH_DEGREE`, checkpoint, report) and
+  enforced (`read_ply` refuses `f_rest_*`). gsplat is pinned to 1.5.3, and the adapter was checked against that
+  version's source. Also new: camera-convention checks, divergence detection, checkpoint format 2 with consistency
+  checks, and no `SPLAT` unless the trained state and its PLY validate. **Still open from G-3:** all frames are still
+  held as float32 in RAM (R-6). Densification still stops at 3 500 (gsplat: 15 000). **The required GPU convergence test
+  still cannot run:** `tests/gpu/test_gsplat_cuda.py` exists, uses a synthetic scene, and has never executed.
 - **CV-6 is unchanged.** What gets masked is whatever the classical detectors find. A missed face is neither
   anonymised nor masked.

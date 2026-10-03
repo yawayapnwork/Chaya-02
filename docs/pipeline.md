@@ -300,7 +300,35 @@ This fixes review R-3: training used to render `sigmoid(f_dc)`, so 0.8 was shown
 - Growth never exceeds `GSPLAT_MAX_GAUSSIANS`. When there are more candidates than room, the highest-gradient ones win.
 - Adam moments follow their Gaussians: new Gaussians start at zero, and removed ones are dropped.
 - Every event (before, cloned, split, pruned, capped, after) is in the training report.
-- Not implemented from the reference: position learning-rate decay, higher SH degrees, and screen-size pruning.
+- Screen-size pruning is not implemented; gsplat 1.5.3's `DefaultStrategy` leaves it off by default too
+  (`refine_scale2d_stop_iter = 0`). Departure from gsplat's defaults: densification stops at step 3 500
+  (`GSPLAT_DENSIFY_STOP`), where `refine_stop_iter` is 15 000. This was not changed here.
+
+**Position learning rate** (review G-3). This is the reference schedule (INRIA `get_expon_lr_func`): log-linear from
+`GSPLAT_LR_POSITION` (1.6e-4) to `GSPLAT_LR_POSITION_FINAL` (1.6e-6) over `GSPLAT_LR_POSITION_DECAY_STEPS` (30 000),
+then held, multiplied by the scene extent. A 7 000-iteration run therefore ends at 1.6e-4·0.01^(7/30), as the
+reference's 7k snapshot does. The rate depends only on the iteration number (`splat_training.position_lr`), so a resume
+follows the uninterrupted schedule exactly. That is why the horizon and the final rate cannot change on resume. Each
+iteration's rate is in the report's loss history (`lr_position`).
+
+**SH degree 0, deliberately.** The viewer asset (KSplat level 0) holds degree 0 only, so higher bands would be trained
+and then dropped, and the viewer would show a colour no camera was fitted against. A re-scan splice also rotates
+Gaussians, and the higher bands would need a Wigner-D rotation that does not exist here. The degree is fixed
+(`SH_DEGREE = 0`). It is recorded in the checkpoint and the report. `read_ply` refuses a PLY carrying `f_rest_*`
+rather than dropping the bands silently; the cleanup benchmark opts in. gsplat receives RGB (`sh_degree=None`).
+gsplat 1.5.3 evaluates SH as `clamp_min(SH + 0.5, 0)`, so for degree 0 this is the same colour;
+`tests/gpu/test_gsplat_cuda.py` checks it on CUDA.
+
+**gsplat version.** The adapter (`splat_training.gsplat_rasterizer`) was written against gsplat **1.5.3**'s
+`rasterization()`, read from its source distribution (PyPI sha256 `343f080c…a906`). The `reconstruction` extra pins
+`gsplat==1.5.3`. The adapter checks the output shapes (`renders [1, H, W, 3]`, `means2d [1, N, 2]`, `radii [1, N, …]`)
+and fails loudly on a mismatch. The report records the installed and the validated version.
+
+**Conventions and divergence.** Before the first iteration every training camera is checked: a 4×4 world-to-camera
+matrix with a proper rotation (det +1; OpenCV/COLMAP axes), a pinhole K with no skew and the principal point inside
+the image, and an sRGB float32 image of the camera's size. Otherwise the stage fails with `CAMERA_CONVENTION_INVALID`.
+A non-finite loss or parameter stops training with `SPLAT_TRAINING_DIVERGED`. Nothing from the diverged state is
+checkpointed or published.
 
 **Time budget and status.** Before each iteration the loop checks the work order's deadline. It stops when the time
 left is below `GSPLAT_STOP_MARGIN_SECONDS` (time reserved for writing and uploading outputs) plus the slowest iteration
@@ -310,6 +338,11 @@ so far.
 - **PARTIAL**, stopped early: the stage FAILS with `TIME_LIMIT_EXCEEDED`, `SPLAT_PARTIAL` (`partial=true`), and error
   details carrying the completed and target iterations and the Gaussian count. The run becomes PARTIAL (above).
 - If zero iterations ran, no splat is published.
+- Nothing is published as a splat unless it is a valid trained state. That means: at least one iteration ran, and
+  every configured iteration ran for `SPLAT`; parameters are finite with consistent shapes and non-zero quaternions,
+  with at least one Gaussian left; and the PLY reads back bit-identical to the trained cloud. Otherwise the stage
+  fails with `SPLAT_NOT_TRAINED`, `SPLAT_INVALID` or `SPLAT_EXPORT_INVALID`. It then publishes only the report, with no
+  splat and no checkpoint, and the report's `validation` field says why.
 
 In both cases `splat-training-report.json` records the status, stop reason, completed and target iterations, initial
 and final Gaussian count, densification events, loss history, and provenance: the input identity, the splat and
@@ -322,11 +355,14 @@ always at the end, atomically. They hold:
 - all parameters;
 - the Adam state (moments and step counts) for each parameter;
 - the density-control accumulators and history;
-- the configuration;
+- the configuration, including the position learning-rate schedule;
+- the format (`chaya-splat-checkpoint/2`) and the SH degree;
 - the source identity: the run, scan, scan version, and the input artifacts with their SHA-256, plus a digest.
 
 A SPLAT_RECONSTRUCTION job given a `SPLAT_CHECKPOINT` input resumes from it. Only the iteration target and checkpoint
-cadence may differ; different inputs or other settings are refused with `CHECKPOINT_MISMATCH`. Randomness is derived
+cadence may differ. The stage refuses with `CHECKPOINT_MISMATCH`: different inputs or other settings; a format-1
+checkpoint (written with a constant position rate); and an internally inconsistent one (non-finite values, row counts
+that disagree, density statistics of the wrong length). Randomness is derived
 from (seed, iteration), so a resumed run takes the same steps an uninterrupted one would have. The test asserts the
 parameters are bit-identical on CPU.
 
@@ -338,7 +374,7 @@ be retried. So in production a checkpoint is recorded, but nothing resumes it au
 | Level | Status |
 |---|---|
 | Pipeline implemented | Yes: the loop, density control, checkpoints, budget, PARTIAL reporting and colour convention are in the stage. |
-| Local fixture validated | **Mechanics only, on CPU.** `tests/splat` runs the real training loop with a small CPU test renderer (`tests/splat/renderer.py`: isotropic, not gsplat). It checks colour round trip through the viewer bytes, Gaussian count changes, clone/split/prune/cap, bit-exact resume, deadline stop, PARTIAL status, artifacts and provenance, and the report the control plane receives through the orchestrator. `tests/unit/test_splat_color.py` checks the colour chain without training. **gsplat's CUDA rasteriser has not been executed**: no NVIDIA GPU was available, and gsplat has no CPU path (its PyTorch reference still calls CUDA kernels). The GPU-marked test (`tests/gpu`, now also asserting that densification changed the count) was skipped. |
+| Local fixture validated | **Mechanics only, on CPU.** `tests/splat` (including `test_training_lifecycle.py`: LR schedule, resume across a time-box stop, checkpoint format/consistency, camera conventions, divergence, publish validation) runs the real training loop with a small CPU test renderer (`tests/splat/renderer.py`: isotropic, not gsplat). It checks colour round trip through the viewer bytes, Gaussian count changes, clone/split/prune/cap, bit-exact resume, deadline stop, PARTIAL status, artifacts and provenance, and the report the control plane receives through the orchestrator. `tests/unit/test_splat_color.py` checks the colour chain without training. **gsplat's CUDA rasteriser has not been executed**: no NVIDIA GPU was available, and gsplat has no CPU path (its PyTorch reference still calls CUDA kernels). The GPU-marked tests were skipped: `tests/gpu/test_reconstruction_toolchain.py`, which asserts that densification changed the count, and `tests/gpu/test_gsplat_cuda.py`, which checks the gsplat version, the degree-0 colour against gsplat's own SH path, the adapter contract, and a short synthetic training run with resume on CUDA (synthetic, not a reconstruction). They have never run. |
 | Real venue reconstruction validated | **No.** No capture has been reconstructed end to end (docs/E2E_VALIDATION.md). |
 
 ## Tests (three separate tiers)

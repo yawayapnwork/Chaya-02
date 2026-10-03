@@ -23,8 +23,10 @@ ffmpeg-bundled = ["imageio-ffmpeg>=0.5"]
 # DependencyError when absent; they are never required just to import chaya_worker.
 # torch>=2.6: torch.load defaults to weights_only=True from 2.6, and <=2.5.1 is exploitable even with it
 # (CVE-2025-32434). open_clip loads its CLIP checkpoint through torch.load (docs/security-hardening.md, "Model files").
+# gsplat==1.5.3: chaya_worker.splat_training.gsplat_rasterizer was written against this version's rasterization() (its
+# source, sha256 343f080c...a906 on PyPI); the adapter checks the output shapes and fails loudly on an incompatible one.
 reconstruction = [
-  "torch>=2.6", "gsplat>=1.0", "open3d>=0.18", "transformers>=4.40", "huggingface-hub>=0.23",
+  "torch>=2.6", "gsplat==1.5.3", "open3d>=0.18", "transformers>=4.40", "huggingface-hub>=0.23",
   "open_clip_torch>=2.24", "pillow>=10.0",
 ]
 dev = ["pytest>=8", "scikit-image>=0.22", "imageio-ffmpeg>=0.5", "ruff>=0.6"]

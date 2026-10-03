@@ -60,6 +60,8 @@ class Settings:
     # (position is scaled by the scene extent). Iteration counts are 1-based step numbers.
     gsplat_iterations: int = 7000  # the configured training target; stopping earlier is PARTIAL, never COMPLETED
     gsplat_lr_position: float = 1.6e-4
+    gsplat_lr_position_final: float = 1.6e-6  # the reference schedule's end value (chaya_worker.splat_training.position_lr)
+    gsplat_lr_position_decay_steps: int = 30_000  # the reference horizon; not changeable on resume
     gsplat_lr_scale: float = 5e-3
     gsplat_lr_rotation: float = 1e-3
     gsplat_lr_opacity: float = 5e-2
@@ -241,6 +243,8 @@ class Settings:
                                                          d.privacy_detection_max_masked_fraction),
             gsplat_iterations=_int(e, "GSPLAT_ITERATIONS", d.gsplat_iterations),
             gsplat_lr_position=_float(e, "GSPLAT_LR_POSITION", d.gsplat_lr_position),
+            gsplat_lr_position_final=_float(e, "GSPLAT_LR_POSITION_FINAL", d.gsplat_lr_position_final),
+            gsplat_lr_position_decay_steps=_int(e, "GSPLAT_LR_POSITION_DECAY_STEPS", d.gsplat_lr_position_decay_steps),
             gsplat_lr_scale=_float(e, "GSPLAT_LR_SCALE", d.gsplat_lr_scale),
             gsplat_lr_rotation=_float(e, "GSPLAT_LR_ROTATION", d.gsplat_lr_rotation),
             gsplat_lr_opacity=_float(e, "GSPLAT_LR_OPACITY", d.gsplat_lr_opacity),
@@ -350,6 +354,8 @@ class Settings:
             "privacy_sfm_mask_margin_px": self.privacy_sfm_mask_margin_px,
             "privacy_detection_max_masked_fraction": self.privacy_detection_max_masked_fraction,
             "gsplat_iterations": self.gsplat_iterations, "gsplat_lr_position": self.gsplat_lr_position,
+            "gsplat_lr_position_final": self.gsplat_lr_position_final,
+            "gsplat_lr_position_decay_steps": self.gsplat_lr_position_decay_steps,
             "gsplat_lr_scale": self.gsplat_lr_scale, "gsplat_lr_rotation": self.gsplat_lr_rotation,
             "gsplat_lr_opacity": self.gsplat_lr_opacity, "gsplat_lr_color": self.gsplat_lr_color,
             "gsplat_ssim_weight": self.gsplat_ssim_weight,

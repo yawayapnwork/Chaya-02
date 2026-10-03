@@ -54,7 +54,7 @@ from .. import archive
 from ..camera_model import Camera, CameraModelError, FrameRectifier
 from ..colmap_txt import parse_cameras_txt, parse_points3d_txt
 from ..contract import ArtifactSpec, StageContext, StageError, StageResult
-from ..ply import write_ply
+from ..ply import read_ply, write_ply
 from ..privacy import masks as privacy_masks
 from ..splat_color import rgb_bytes_to_sh0
 from .base import command_record, sha256_file, write_json
@@ -166,26 +166,56 @@ def privacy_mask_summary(cams: list[dict[str, Any]]) -> dict[str, Any]:
             "policy": "masked pixels are zeroed and excluded from L1 and D-SSIM; they are not supervision"}
 
 
+def export_mismatch(cloud, ply_path: Path) -> str | None:
+    """Pure apart from reading the file: None when the PLY reads back bit-identical to `cloud`, else what differs."""
+    back = read_ply(ply_path)
+    if len(back) != len(cloud):
+        return f"{len(back)} Gaussians read back, {len(cloud)} written"
+    for name in ("positions", "scales_log", "rotations_wxyz", "opacity_logit", "colors_dc"):
+        if not np.array_equal(getattr(back, name), getattr(cloud, name)):
+            return f"{name} differs"
+    return None
+
+
 def publish_outcome(ctx: StageContext, outcome, *, source: dict[str, Any], cameras_used: int, versions: dict[str, Any],
                     keyframes_tar=None, training_cameras: dict[str, Any] | None = None,
                     privacy: dict[str, Any] | None = None) -> StageResult:
     """Turns a training outcome into the stage result: COMPLETED -> SUCCEEDED with SPLAT; PARTIAL -> FAILED with
     TIME_LIMIT_EXCEEDED and SPLAT_PARTIAL (partial=True). The report and checkpoint go out either way. Pure apart from
-    writing files into ctx.workdir, so it is tested without a GPU (tests/splat)."""
-    from ..splat_training import STATUS_COMPLETED, STATUS_PARTIAL, to_cloud  # noqa: PLC0415
+    writing files into ctx.workdir, so it is tested without a GPU (tests/splat).
+
+    Nothing is published as a splat unless it is a valid trained state: at least one iteration ran, every configured
+    iteration for SPLAT, the parameters pass validate_trained_state, and the written PLY reads back bit-identical. A
+    COMPLETED outcome that fails any of that is FAILED (SPLAT_NOT_TRAINED / SPLAT_INVALID / SPLAT_EXPORT_INVALID) with
+    the report only: no splat and no checkpoint of an invalid state."""
+    from ..splat_training import SH_DEGREE, STATUS_COMPLETED, STATUS_PARTIAL, to_cloud, validate_trained_state  # noqa: PLC0415
 
     artifacts: list[ArtifactSpec] = []
     splat_name = splat_sha = None
-    if outcome.completed_iterations > 0:  # a cloud that was never optimised is the SfM seed, not a reconstruction
+    invalid: tuple[str, str] | None = None
+    if outcome.status == STATUS_COMPLETED and outcome.completed_iterations < outcome.target_iterations:
+        invalid = ("SPLAT_INVALID", f"training reported COMPLETED after {outcome.completed_iterations} of "
+                                    f"{outcome.target_iterations} iterations")
+    elif outcome.completed_iterations == 0 and outcome.status == STATUS_COMPLETED:
+        invalid = ("SPLAT_NOT_TRAINED", "no training iteration ran (0 configured iterations): the SfM seed is not a reconstruction")
+    elif outcome.completed_iterations > 0:
+        problems = validate_trained_state(outcome.params)
+        if problems:
+            invalid = ("SPLAT_INVALID", "the trained state is not a usable cloud: " + "; ".join(problems))
+    if invalid is None and outcome.completed_iterations > 0:  # a cloud that was never optimised is the SfM seed, not a reconstruction
         cloud = to_cloud(outcome.params)
         partial = outcome.status == STATUS_PARTIAL
         splat_name = "splat-partial.ply" if partial else "splat.ply"
         ply_path = write_ply(cloud, ctx.workdir / splat_name)
-        splat_sha = sha256_file(ply_path)
-        artifacts.append(ArtifactSpec("SPLAT_PARTIAL" if partial else "SPLAT", ply_path, splat_name, "application/octet-stream",
-                                      partial=partial))
+        mismatch = export_mismatch(cloud, ply_path)
+        if mismatch:
+            invalid, splat_name = ("SPLAT_EXPORT_INVALID", f"the written PLY does not read back as the trained cloud: {mismatch}"), None
+        else:
+            splat_sha = sha256_file(ply_path)
+            artifacts.append(ArtifactSpec("SPLAT_PARTIAL" if partial else "SPLAT", ply_path, splat_name, "application/octet-stream",
+                                          partial=partial))
     checkpoint_sha = None
-    if outcome.checkpoint_path is not None and outcome.checkpoint_path.is_file():
+    if invalid is None and outcome.checkpoint_path is not None and outcome.checkpoint_path.is_file():
         checkpoint_sha = sha256_file(outcome.checkpoint_path)
         artifacts.append(ArtifactSpec("SPLAT_CHECKPOINT", outcome.checkpoint_path, "splat-checkpoint.pt", "application/octet-stream"))
     if keyframes_tar is not None:
@@ -214,10 +244,18 @@ def publish_outcome(ctx: StageContext, outcome, *, source: dict[str, Any], camer
         "densification": [e.__dict__ for e in outcome.densify_events], "opacity_resets": outcome.opacity_resets,
         "loss_history": outcome.history[:: max(1, len(outcome.history) // 200)] + outcome.history[-1:],
         "colour_convention": "chaya_worker.splat_color: rgb = SH_C0 * f_dc + 0.5, sRGB-encoded values end to end",
+        "sh_degree": SH_DEGREE,
+        "position_lr_schedule": {"initial": outcome.config.get("lr_position"), "final": outcome.config.get("lr_position_final"),
+                                 "decay_steps": outcome.config.get("lr_position_decay_steps"),
+                                 "form": "log-linear (INRIA get_expon_lr_func), times the scene extent, held after decay_steps"},
+        "validation": {"valid": invalid is None, "code": invalid[0] if invalid else None,
+                       "message": invalid[1] if invalid else None},
     })
     artifacts.append(ArtifactSpec("SPLAT_TRAINING_REPORT", report, "splat-training-report.json", "application/json"))
     command = command_record(ctx, {**summary, "cameras_used": cameras_used})
 
+    if invalid is not None:
+        return StageResult("FAILED", command, ctx.runner.last_exit_status(), artifacts, invalid[0], invalid[1], summary)
     if outcome.status == STATUS_COMPLETED:
         return StageResult("SUCCEEDED", command, ctx.runner.last_exit_status(), artifacts)
     message = (f"the time budget stopped training after {outcome.completed_iterations} of {outcome.target_iterations} iterations; "
@@ -306,10 +344,16 @@ class SplatReconstruction:
                                is_cancelled=ctx.cancelled.is_set, resume=resume, on_iteration=keyframe)
         except InterruptedError as exc:
             raise StageError("cancelled by the control plane", code="CANCELLED") from exc
+        except st.CameraConventionError as exc:
+            raise StageError(str(exc), code="CAMERA_CONVENTION_INVALID") from exc
+        except st.TrainingDiverged as exc:
+            raise StageError(f"training diverged: {exc}; no splat or checkpoint of the diverged state is published",
+                             code="SPLAT_TRAINING_DIVERGED") from exc
 
         keyframes_tar = ctx.workdir / "keyframes.tar"
         archive.pack(keyframes_dir, keyframes_tar)
         versions = {"torch": torch.__version__, "gsplat": getattr(gsplat, "__version__", None),
+                    "gsplat_validated": st.GSPLAT_VALIDATED_VERSION,
                     "cuda_devices": ctx.toolchain.cuda_devices()}
         return publish_outcome(ctx, outcome, source=source, cameras_used=len(cams), versions=versions, keyframes_tar=keyframes_tar,
                                training_cameras=training_cameras_doc(rectifier, poses_doc), privacy=privacy_mask_summary(cams))

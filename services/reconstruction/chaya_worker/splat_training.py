@@ -32,6 +32,28 @@ the loss ignores them (masked L1, D-SSIM only over windows that contain no maske
 gradient, and so no densification either. SPLAT_RECONSTRUCTION also zeroes them in the image, so the fill colours never
 reach the optimiser at all.
 
+Position learning rate (review G-3). The reference schedule (INRIA 3DGS `get_expon_lr_func`, as gsplat's trainer does
+too): log-linear from `lr_position` to `lr_position_final` over `lr_position_decay_steps` iterations, then held, times
+the scene extent. The defaults are the reference's (1.6e-4 -> 1.6e-6 over 30 000 steps), so a 7 000-iteration run ends
+where the reference's 7k snapshot does. The rate is a function of the iteration number alone (`position_lr`), so a
+resumed run follows exactly the schedule an uninterrupted one would; the horizon is therefore not a setting a resume
+may change.
+
+Spherical harmonics: degree 0 only, deliberately (`SH_DEGREE`). The viewer asset (chaya_worker.ksplat, KSplat level 0)
+carries degree 0 only, so higher bands trained here would be dropped and the viewer would show the DC term alone: a
+colour no camera was fitted against. And a re-scan splice rotates Gaussians into the parent frame
+(chaya_worker.region_splice), which would need a Wigner-D rotation of every higher band that does not exist. Degree 0
+is the one degree every consumer handles exactly. gsplat is given RGB (`sh_degree=None`): gsplat 1.5.3 evaluates SH as
+`clamp_min(SH + 0.5, 0)`, so for degree 0 that is the same colour (chaya_worker.splat_color), checked on CUDA by
+tests/gpu/test_gsplat_cuda.py.
+
+Conventions are checked, not assumed (`validate_camera`): world-to-camera 4x4 view matrices with a proper rotation
+(det +1, OpenCV/COLMAP axes: x right, y down, z forward), a pinhole K without skew whose principal point lies in the
+image, and an sRGB float image of the camera's size. A camera that breaks one fails training before any iteration.
+
+A non-finite loss or parameter stops training with TrainingDiverged; nothing from the diverged state is checkpointed.
+`validate_trained_state` is what the stage checks before it publishes a cloud as SPLAT.
+
 Randomness (which camera, where a split child lands) is derived from (seed, iteration) alone. So a run resumed from a
 checkpoint takes exactly the steps an uninterrupted run would have taken, without saving RNG state.
 """
@@ -54,7 +76,10 @@ from .ply import GaussianCloud
 from .splat_color import sh0_to_rgb
 
 PARAM_NAMES = ("means", "scales_log", "quats", "opacity_logit", "sh0")
-CHECKPOINT_FORMAT = "chaya-splat-checkpoint/1"
+PARAM_WIDTHS = {"means": 3, "scales_log": 3, "quats": 4, "opacity_logit": None, "sh0": 3}  # None: shape (N,)
+SH_DEGREE = 0  # see the module docstring: every consumer of the cloud handles degree 0 exactly, and only degree 0
+# 2: the position learning-rate schedule (format 1 trained with a constant position rate; it cannot be resumed here).
+CHECKPOINT_FORMAT = "chaya-splat-checkpoint/2"
 
 STATUS_COMPLETED = "COMPLETED"  # every configured iteration ran
 STATUS_PARTIAL = "PARTIAL"  # stopped early by the time budget; the cloud is usable but not the configured result
@@ -64,6 +89,8 @@ STATUS_PARTIAL = "PARTIAL"  # stopped early by the time budget; the cloud is usa
 class TrainingConfig:
     iterations: int = 7000
     lr_position: float = 1.6e-4
+    lr_position_final: float = 1.6e-6
+    lr_position_decay_steps: int = 30_000
     lr_scale: float = 5e-3
     lr_rotation: float = 1e-3
     lr_opacity: float = 5e-2
@@ -83,13 +110,21 @@ class TrainingConfig:
 
     @classmethod
     def from_settings(cls, s: Any) -> TrainingConfig:
-        return cls(iterations=s.gsplat_iterations, lr_position=s.gsplat_lr_position, lr_scale=s.gsplat_lr_scale,
+        return cls(iterations=s.gsplat_iterations, lr_position=s.gsplat_lr_position,
+                   lr_position_final=s.gsplat_lr_position_final, lr_position_decay_steps=s.gsplat_lr_position_decay_steps,
+                   lr_scale=s.gsplat_lr_scale,
                    lr_rotation=s.gsplat_lr_rotation, lr_opacity=s.gsplat_lr_opacity, lr_color=s.gsplat_lr_color,
                    ssim_weight=s.gsplat_ssim_weight, densify_start=s.gsplat_densify_start, densify_stop=s.gsplat_densify_stop,
                    densify_every=s.gsplat_densify_every, densify_grad_threshold=s.gsplat_densify_grad_threshold,
                    percent_dense=s.gsplat_percent_dense, prune_opacity=s.gsplat_prune_opacity,
                    prune_scale_fraction=s.gsplat_prune_scale_fraction, opacity_reset_every=s.gsplat_opacity_reset_every,
                    max_gaussians=s.gsplat_max_gaussians, checkpoint_every=s.gsplat_checkpoint_every, seed=s.gsplat_seed)
+
+    def __post_init__(self) -> None:
+        if not 0 < self.lr_position_final <= self.lr_position:
+            raise ValueError("lr_position_final must be positive and at most lr_position")
+        if self.lr_position_decay_steps < 0:
+            raise ValueError("lr_position_decay_steps must not be negative")
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -102,6 +137,72 @@ class TrainingConfig:
     def resets_opacity_at(self, iteration: int) -> bool:
         step = iteration + 1
         return self.opacity_reset_every > 0 and step < self.densify_stop and step % self.opacity_reset_every == 0
+
+
+def position_lr(config: TrainingConfig, iteration: int, scene_extent: float) -> float:
+    """Pure: the position learning rate for 0-based `iteration` (module docstring). Log-linear from lr_position to
+    lr_position_final over lr_position_decay_steps, then held; 0 decay steps means constant. Scaled by the scene extent."""
+    if config.lr_position_decay_steps == 0:
+        return config.lr_position * scene_extent
+    t = min(max(iteration / config.lr_position_decay_steps, 0.0), 1.0)
+    return math.exp((1.0 - t) * math.log(config.lr_position) + t * math.log(config.lr_position_final)) * scene_extent
+
+
+class CameraConventionError(ValueError):
+    """A training camera is not in the convention the rasteriser expects (validate_camera)."""
+
+
+class TrainingDiverged(RuntimeError):
+    """The loss or a parameter became non-finite."""
+
+
+def validate_camera(cam: dict[str, Any]) -> None:
+    """Raises CameraConventionError unless `cam` is a world-to-camera pinhole camera in the OpenCV/COLMAP convention with
+    an image of its size (module docstring)."""
+    name = cam.get("name", "?")
+
+    def fail(why: str) -> None:
+        raise CameraConventionError(f"camera {name}: {why}")
+
+    v = np.asarray(cam["viewmat"], dtype=np.float64)
+    if v.shape != (4, 4) or not np.allclose(v[3], [0.0, 0.0, 0.0, 1.0]):
+        fail("the view matrix is not a 4x4 rigid transform")
+    r = v[:3, :3]
+    if not np.allclose(r.T @ r, np.eye(3), atol=1e-4) or np.linalg.det(r) <= 0:
+        fail("the view matrix's rotation is not a proper rotation (orthonormal, det +1); a reflection would flip handedness")
+    k = np.asarray(cam["K"], dtype=np.float64)
+    w, h = int(cam["width"]), int(cam["height"])
+    if k.shape != (3, 3) or not np.allclose(k[2], [0.0, 0.0, 1.0]) or k[1, 0] != 0 or k[0, 1] != 0:
+        fail("K is not a pinhole intrinsic matrix without skew")
+    if k[0, 0] <= 0 or k[1, 1] <= 0 or not (0 < k[0, 2] < w and 0 < k[1, 2] < h):
+        fail("K needs positive focal lengths and a principal point inside the image")
+    image = cam["image"]
+    if image.shape != (h, w, 3) or image.dtype != np.float32:
+        fail(f"the image is {image.shape} {image.dtype}, expected ({h}, {w}, 3) float32")
+    if not np.isfinite(image).all() or image.min() < 0.0 or image.max() > 1.0:
+        fail("the image is not sRGB values in [0, 1]")
+    valid = cam.get("valid")
+    if valid is not None and (valid.shape != (h, w) or valid.dtype != bool):
+        fail("the validity mask is not a bool (H, W) array")
+
+
+def validate_trained_state(params: dict) -> list[str]:
+    """Pure: why a parameter set is not a usable trained cloud (empty when it is): no Gaussians, inconsistent shapes,
+    non-finite values, or a degenerate rotation."""
+    problems = []
+    n = len(params["means"])
+    if n == 0:
+        return ["no Gaussian is left"]
+    for k in PARAM_NAMES:
+        t = params[k].detach()
+        width = PARAM_WIDTHS[k]
+        if t.shape != ((n,) if width is None else (n, width)):
+            problems.append(f"{k} has shape {tuple(t.shape)}, expected {n} rows")
+        elif not torch.isfinite(t).all():
+            problems.append(f"{k} holds non-finite values")
+    if not problems and (params["quats"].detach().norm(dim=-1) <= 1e-8).any():
+        problems.append("a rotation quaternion has zero length")
+    return problems
 
 
 # ---- parameters and optimiser ----------------------------------------------------------------------------------------
@@ -121,8 +222,8 @@ def init_params(xyz: np.ndarray, sh0: np.ndarray, scales_log: np.ndarray, device
 
 def make_optimizer(params: dict[str, torch.nn.Parameter], config: TrainingConfig, scene_extent: float) -> torch.optim.Adam:
     """One Adam param group per parameter (named), so density control can edit each group's state. The position
-    learning rate is scaled by the scene extent, as in 3DGS."""
-    lrs = {"means": config.lr_position * scene_extent, "scales_log": config.lr_scale, "quats": config.lr_rotation,
+    learning rate starts at position_lr(iteration 0); train() follows the schedule from there."""
+    lrs = {"means": position_lr(config, 0, scene_extent), "scales_log": config.lr_scale, "quats": config.lr_rotation,
            "opacity_logit": config.lr_opacity, "sh0": config.lr_color}
     return torch.optim.Adam([{"params": [params[k]], "lr": lrs[k], "name": k} for k in PARAM_NAMES], eps=1e-15)
 
@@ -299,7 +400,7 @@ def save_checkpoint(path: Path, *, iteration: int, params: dict, optimizer: torc
         st = optimizer.state.get(params[name], {})
         optim_state[name] = {k: (v.detach().cpu() if torch.is_tensor(v) else v) for k, v in st.items()}
     payload = {
-        "format": CHECKPOINT_FORMAT, "iteration": iteration, "config": config.as_dict(), "source": source,
+        "format": CHECKPOINT_FORMAT, "sh_degree": SH_DEGREE, "iteration": iteration, "config": config.as_dict(), "source": source,
         "scene_extent": scene_extent, "params": {k: params[k].detach().cpu() for k in PARAM_NAMES},
         "optimizer": optim_state, "lrs": {g["name"]: g["lr"] for g in optimizer.param_groups},
         "density": {"grad2d": density.grad2d.cpu(), "count": density.count.cpu(),
@@ -324,12 +425,19 @@ RESUMABLE_CONFIG_CHANGES = {"iterations", "checkpoint_every"}
 def load_checkpoint(path: Path, *, config: TrainingConfig, source: dict[str, Any], device: torch.device):
     payload = torch.load(path, map_location="cpu", weights_only=True)
     if payload.get("format") != CHECKPOINT_FORMAT:
-        raise CheckpointMismatch(f"{path.name} is not a {CHECKPOINT_FORMAT} checkpoint")
+        raise CheckpointMismatch(f"{path.name} is a {payload.get('format')!r} checkpoint, not {CHECKPOINT_FORMAT}: it was written "
+                                 "by a training loop with another schedule or layout and cannot be resumed exactly")
+    if payload.get("sh_degree") != SH_DEGREE:
+        raise CheckpointMismatch(f"the checkpoint holds SH degree {payload.get('sh_degree')}, this worker trains {SH_DEGREE}")
     if payload["source"].get("digest") != source.get("digest"):
         raise CheckpointMismatch("the checkpoint was trained from different inputs", )
     differing = {k for k, v in config.as_dict().items() if payload["config"].get(k) != v} - RESUMABLE_CONFIG_CHANGES
     if differing:
         raise CheckpointMismatch(f"the checkpoint was trained with different settings: {sorted(differing)}")
+    problems = validate_trained_state(payload["params"])
+    d = payload["density"]
+    if problems or len(d["grad2d"]) != len(payload["params"]["means"]) or len(d["count"]) != len(payload["params"]["means"]):
+        raise CheckpointMismatch(f"the checkpoint is not a consistent training state: {problems or 'density statistics do not match'}")
     params = {k: torch.nn.Parameter(payload["params"][k].to(device)) for k in PARAM_NAMES}
     optimizer = make_optimizer(params, config, payload["scene_extent"])
     for g in optimizer.param_groups:
@@ -338,7 +446,6 @@ def load_checkpoint(path: Path, *, config: TrainingConfig, source: dict[str, Any
         st = payload["optimizer"][name]
         if st:
             optimizer.state[params[name]] = {k: (v.to(device) if torch.is_tensor(v) else v) for k, v in st.items()}
-    d = payload["density"]
     density = DensityControl(d["grad2d"].to(device), d["count"].to(device), [DensifyEvent(**e) for e in d["events"]], list(d["resets"]))
     return payload["iteration"], params, optimizer, density, payload["scene_extent"], list(payload["history"])
 
@@ -355,9 +462,16 @@ class RenderOutput(NamedTuple):
 Rasterizer = Callable[[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]], RenderOutput]
 
 
+GSPLAT_VALIDATED_VERSION = "1.5.3"  # the API this adapter was written against (pyproject.toml pins it)
+
+
 def gsplat_rasterizer(device: torch.device) -> Rasterizer:
-    """gsplat's CUDA rasteriser, the production renderer. Unpacked output, so means2d is (1, N, 2) and its gradient
-    lines up with the Gaussians."""
+    """gsplat's CUDA rasteriser, the production renderer, per gsplat 1.5.3's `rasterization` (read from its source):
+    world-to-camera `viewmats` [C, 4, 4] and pinhole `Ks` [C, 3, 3] (OpenCV axes), wxyz quaternions, linear scales,
+    opacities in [0, 1], and colours as post-activation RGB (`sh_degree=None`). Unpacked output, so `meta["means2d"]` is
+    [C, N, 2] and its gradient lines up with the Gaussians; `meta["radii"]` is [C, N, 2] (1.5) or [C, N] (earlier).
+    The output is checked against that contract, so an incompatible gsplat fails loudly rather than training wrongly."""
+    import gsplat  # noqa: PLC0415
     from gsplat import rasterization  # noqa: PLC0415
 
     def render(means, quats, scales, opacities, rgb, cam):
@@ -365,9 +479,15 @@ def gsplat_rasterizer(device: torch.device) -> Rasterizer:
         K = torch.as_tensor(cam["K"], device=device, dtype=torch.float32)[None]
         renders, _alphas, meta = rasterization(means, quats, scales, opacities, rgb, viewmat, K, cam["width"], cam["height"],
                                                packed=False)
+        n = len(means)
         means2d = meta["means2d"]
-        means2d.retain_grad()
         radii = meta["radii"]
+        if (tuple(renders.shape) != (1, cam["height"], cam["width"], 3) or tuple(means2d.shape) != (1, n, 2)
+                or tuple(radii.shape[:2]) != (1, n)):
+            raise RuntimeError(f"gsplat {getattr(gsplat, '__version__', '?')} returned renders {tuple(renders.shape)}, means2d "
+                               f"{tuple(means2d.shape)}, radii {tuple(radii.shape)}; this adapter expects gsplat "
+                               f"{GSPLAT_VALIDATED_VERSION}'s unpacked shapes")
+        means2d.retain_grad()
         visible = (radii > 0).all(dim=-1) if radii.dim() == 3 else radii > 0
         return RenderOutput(renders[0], means2d, visible[0])
 
@@ -388,6 +508,7 @@ class TrainingOutcome:
     opacity_resets: list[int]
     checkpoint_path: Path | None
     params: dict = field(repr=False, default_factory=dict)
+    config: dict[str, Any] = field(default_factory=dict)  # the TrainingConfig this outcome was trained with
 
 
 def scene_extent_of(cams: Sequence[dict[str, Any]]) -> float:
@@ -407,6 +528,8 @@ def train(*, params: dict, cams: Sequence[dict[str, Any]], rasterize: Rasterizer
     outputs and upload them. A checkpoint is written every `checkpoint_every` iterations and always at the end, whatever
     the status, so an early stop leaves a resumable state. Cancellation raises; nothing is returned for a cancelled job.
     """
+    for cam in cams:
+        validate_camera(cam)
     device = next(iter(params.values())).device
     if resume is not None:
         start, params, optimizer, density, scene_extent, history = resume
@@ -438,19 +561,26 @@ def train(*, params: dict, cams: Sequence[dict[str, Any]], rasterize: Rasterizer
         out = rasterize(*render_inputs(params), cam)
         pred = out.image.clamp(0.0, 1.0)
         loss, parts = loss_fn(pred, gt, config, valid=valid)
+        if not torch.isfinite(loss):
+            raise TrainingDiverged(f"the loss became {float(loss.detach())} at iteration {it + 1}")
+        lr_means = position_lr(config, it, scene_extent)
+        _group(optimizer, "means")["lr"] = lr_means
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         grad = out.means2d.grad
         if grad is not None:
             density.accumulate(grad.reshape(-1, 2), out.visible, cam["width"], cam["height"])
         optimizer.step()
+        if not torch.stack([torch.isfinite(params[k]).all() for k in PARAM_NAMES]).all():
+            raise TrainingDiverged(f"a parameter became non-finite at iteration {it + 1}")
         if on_iteration is not None:
             on_iteration(it, pred.detach())
         if config.densifies_at(it):
             density.densify(it, params, optimizer, config, scene_extent)
         if config.resets_opacity_at(it):
             density.reset_opacity(it, params, optimizer)
-        history.append({"iteration": it + 1, "gaussians": len(params["means"]), **{k: float(v) for k, v in parts.items()}})
+        history.append({"iteration": it + 1, "gaussians": len(params["means"]), "lr_position": lr_means,
+                        **{k: float(v) for k, v in parts.items()}})
         it += 1
         slowest = max(slowest, clock() - t0)
         if config.checkpoint_every > 0 and it % config.checkpoint_every == 0 and it < config.iterations:
@@ -459,7 +589,8 @@ def train(*, params: dict, cams: Sequence[dict[str, Any]], rasterize: Rasterizer
     path = checkpoint(it)
     status = STATUS_COMPLETED if it >= config.iterations else STATUS_PARTIAL
     return TrainingOutcome(status, it, config.iterations, start, len(params["means"]), initial_count, stop_reason, history,
-                           list(density.events), list(density.resets), path, params)
+                           list(density.events), list(density.resets), path, params,
+                           config.as_dict())
 
 
 # ---- the photometric loss ----------------------------------------------------------------------------------------------

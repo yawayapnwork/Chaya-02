@@ -93,7 +93,10 @@ def write_ply(cloud: GaussianCloud, path: Path) -> Path:
 _HEADER_LINE = re.compile(rb"[^\n]*\n")
 
 
-def read_ply(path: Path) -> GaussianCloud:
+def read_ply(path: Path, *, drop_higher_sh: bool = False) -> GaussianCloud:
+    """Reads a degree-0 Gaussian PLY. A PLY with higher SH bands (f_rest_*: from another trainer) is refused unless
+    `drop_higher_sh`: this pipeline is degree 0 throughout (chaya_worker.splat_training.SH_DEGREE), and silently
+    dropping the bands would change every view-dependent colour."""
     with open(path, "rb") as f:
         raw = f.read()
     header_end = raw.find(b"end_header\n")
@@ -110,6 +113,10 @@ def read_ply(path: Path) -> GaussianCloud:
     missing = [p for p in GAUSSIAN_PROPERTIES if p not in props]
     if missing:
         raise ValueError(f"{path}: missing PLY properties {missing}")
+    higher = [p for p in props if p.startswith("f_rest_")]
+    if higher and not drop_higher_sh:
+        raise ValueError(f"{path}: holds {len(higher)} higher-order SH coefficients (f_rest_*); this pipeline is SH degree 0 "
+                         "and will not drop them silently (read_ply(..., drop_higher_sh=True) to do so knowingly)")
     body = raw[header_end + len(b"end_header\n"):]
     dtype = np.dtype([(name, "<f4") for name in props])
     data = np.frombuffer(body, dtype=dtype, count=n)

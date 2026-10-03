@@ -170,7 +170,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args(argv)
 
-    cloud = read_ply(args.ply)
+    cloud = read_ply(args.ply, drop_higher_sh=True)  # a benchmark input may come from another trainer; every method sees the same DC cloud
     labels = np.array(json.loads(args.labels.read_text(encoding="utf-8"))["labels"], dtype=object) if args.labels else None
     settings = Settings()
     toolchain = Toolchain()
