@@ -12,19 +12,25 @@ Published:
   * SPLICE_REPORT: the replaced volume, the counts, the seam measurement, and the exact inputs and output (artifact ids
     and SHA-256);
   * SPLICE_INDEX (`splice-index.npz`): the indices of the removed venue Gaussians and the added region Gaussians, so
-    exactly what was replaced can be reconstructed or audited.
+    exactly what was replaced can be reconstructed or audited;
+  * SEMANTIC_LABELS_MERGED: the merged cloud's semantic labels, spliced with the same indices from the venue's labels
+    (GLOBAL_LABELS) and the region's (SEMANTIC_LABELS_CLEAN). NAVIGATION_BAKING needs them to keep the venue's walls
+    and furniture outside the region in the re-baked navmesh (review N-1). When either input is missing or does not
+    match its cloud, no merged labels are published and the report says why; NAVIGATION_BAKING then refuses to bake.
 
 A visible seam or nothing to add fails the stage with SPLICE_REJECTED, and nothing is published.
 """
 
 from __future__ import annotations
 
+import json
+
 import numpy as np
 
 from ..contract import ArtifactSpec, StageContext, StageError, StageResult
 from ..frames import require_canonical
 from ..ply import read_ply, write_ply
-from ..region_splice import SpliceRejected, splice_region
+from ..region_splice import SpliceRejected, splice_labels, splice_region
 from .base import command_record, sha256_file, write_json
 
 
@@ -67,13 +73,33 @@ class RegionSplice:
             "index": {"artifact": "splice-index.npz", "sha256": sha256_file(index_path),
                       "arrays": ["removed_global_indices", "added_region_indices"]},
         }
+        labels_artifact, report["labels"] = _merged_labels(ctx, global_cloud, aligned_cloud, result)
         report_path = write_json(ctx.workdir / "splice-report.json", report)
         ctx.logger.info("region spliced", extra={k: v for k, v in report.items() if isinstance(v, int)})
         return StageResult("SUCCEEDED", command_record(ctx, {"splice": report}), ctx.runner.last_exit_status(), [
             ArtifactSpec("SPLAT_MERGED", merged_path, "splat-merged.ply", "application/octet-stream"),
             ArtifactSpec("SPLICE_REPORT", report_path, "splice-report.json", "application/json"),
             ArtifactSpec("SPLICE_INDEX", index_path, "splice-index.npz", "application/octet-stream"),
+            *([labels_artifact] if labels_artifact else []),
         ])
+
+
+def _merged_labels(ctx: StageContext, global_cloud, aligned_cloud, result) -> tuple[ArtifactSpec | None, dict]:
+    """SEMANTIC_LABELS_MERGED, or None with the reason, for the report."""
+    global_in, region_in = ctx.inputs_of("GLOBAL_LABELS"), ctx.inputs_of("SEMANTIC_LABELS_CLEAN")
+    if not global_in or not region_in:
+        missing = [k for k, v in (("GLOBAL_LABELS", global_in), ("SEMANTIC_LABELS_CLEAN", region_in)) if not v]
+        return None, {"spliced": False, "reason": f"missing {', '.join(missing)}"}
+    g = json.loads(global_in[0].path.read_text(encoding="utf-8"))["labels"]
+    r = json.loads(region_in[0].path.read_text(encoding="utf-8"))["labels"]
+    if len(g) != len(global_cloud) or len(r) != len(aligned_cloud):
+        return None, {"spliced": False, "reason": f"labels do not match their clouds (venue {len(g)} labels / {len(global_cloud)} "
+                                                  f"Gaussians, region {len(r)} / {len(aligned_cloud)})"}
+    merged = splice_labels(np.array(g, dtype=object), np.array(r, dtype=object), result)
+    path = write_json(ctx.workdir / "semantic-labels-merged.json", {"labels": [str(v) for v in merged]})
+    return (ArtifactSpec("SEMANTIC_LABELS_MERGED", path, "semantic-labels-merged.json", "application/json"),
+            {"spliced": True, "artifact": "semantic-labels-merged.json", "venue_labels": _ref(global_in[0], len(g)),
+             "region_labels": _ref(region_in[0], len(r))})
 
 
 def _ref(f, gaussians: int) -> dict:

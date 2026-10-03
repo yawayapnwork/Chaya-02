@@ -1,5 +1,5 @@
 """Stage 7: semantic segmentation of the registered frames, projected onto the trained Gaussian splat so
-every Gaussian gets a scene-cleanup class: floor, wall, furniture or clutter (chaya_worker.semantic_classes).
+every Gaussian gets a scene-cleanup class: floor, wall, furniture, clutter or stairs (chaya_worker.semantic_classes).
 
 Real per-pixel inference with a Hugging Face semantic segmentation model (default: SegFormer fine-tuned on
 ADE20K), not a heuristic. The model's own (dataset-specific) label set is bucketed into the four classes by
@@ -29,11 +29,12 @@ from ..contract import ArtifactSpec, StageContext, StageError, StageResult
 from ..model_loading import load_pretrained
 from ..ply import read_ply
 from ..privacy import masks as privacy_masks
-from ..semantic_classes import CLUTTER, FLOOR, FURNITURE, UNKNOWN, WALL, bucket_all
+from ..semantic_classes import CLUTTER, FLOOR, FURNITURE, STAIRS, UNKNOWN, WALL, bucket_all
 from .base import command_record, write_json
 from .splat_reconstruction import build_cameras
 
-CLASSES = [FLOOR, WALL, FURNITURE, CLUTTER, UNKNOWN]
+CLASSES = [FLOOR, WALL, FURNITURE, CLUTTER, STAIRS, UNKNOWN]
+VOTED = CLASSES[:-1]  # every class a pixel can vote for; UNKNOWN is what no vote decided
 
 
 def project_points(positions: np.ndarray, viewmat: np.ndarray, K: np.ndarray, width: int, height: int) -> tuple[np.ndarray, np.ndarray]:
@@ -51,7 +52,7 @@ def project_points(positions: np.ndarray, viewmat: np.ndarray, K: np.ndarray, wi
 
 
 def vote_labels(class_votes: np.ndarray, confidence_sum: np.ndarray, seen: np.ndarray, min_confidence: float) -> list[str]:
-    """Pure: given per-point [floor,wall,furniture,clutter] accumulated confidence, pick the winner."""
+    """Pure: given per-point accumulated confidence per VOTED class, pick the winner."""
     labels = []
     for i in range(len(class_votes)):
         if not seen[i] or confidence_sum[i] < min_confidence:
@@ -107,7 +108,7 @@ class SemanticSegmentation:
         buckets = bucket_all(model.config.id2label)
 
         n = len(cloud)
-        class_votes = np.zeros((n, 4), dtype=np.float64)  # floor, wall, furniture, clutter
+        class_votes = np.zeros((n, len(VOTED)), dtype=np.float64)  # one column per VOTED class
         confidence_sum = np.zeros(n, dtype=np.float64)
         seen = np.zeros(n, dtype=bool)
         frames_processed = 0
@@ -148,7 +149,7 @@ class SemanticSegmentation:
                         continue
                 conf, cls = confidence[rows, cols], class_id[rows, cols]
                 bucket_names = np.array([buckets.get(int(c), CLUTTER) for c in cls])
-                for bucket_idx, name in enumerate(CLASSES[:4]):
+                for bucket_idx, name in enumerate(VOTED):
                     hit = (bucket_names == name) & (conf >= s.semantic_confidence_min)
                     class_votes[idx[hit], bucket_idx] += conf[hit]
                 confidence_sum[idx] += np.where(conf >= s.semantic_confidence_min, conf, 0.0)

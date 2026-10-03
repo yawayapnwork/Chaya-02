@@ -3,13 +3,33 @@
  "navmesh": {
   "artifact": "navmesh.bin",
   "format": "detour-tile",
-  "sha256": "f5fe42dd40ed32a5ab0c529f5f3b5cbc59db9a9ccfba2cde1261755dd4b3cb01",
-  "bytes": 1784,
-  "polygon_count": 11
+  "sha256": "366f3c51b109e70faddf08617188e8405c0956fd6682bc88c5e45916813b01f0",
+  "bytes": 4364,
+  "polygon_count": 27
  },
  "source": {
-  "fixture": "services/reconstruction/tests/fixtures/navmesh/room_with_doorway.obj",
-  "note": "fixture geometry, not a reconstruction"
+  "fixture": "services/reconstruction/tests/navmesh/venue_scene.py",
+  "note": "synthetic venue geometry, not a reconstruction",
+  "input_geometry": {
+   "representation": "canonical-frame triangle soup (metres, +Z up), converted to Recast's +Y-up frame only by chaya_worker.recast_boundary: one quad per observed ground cell of the surface model (corners at the mean height of level neighbouring cells, so ramps are continuous slopes and steps stay discontinuities), groups walkable_candidates / level_change (cells beside a step); and one closed box per obstacle cell (group obstacle), from below the ground to the top of the obstacle geometry in the agent's height band. Unobserved cells have no geometry.",
+   "surface_model": {
+    "cell_m": 0.1,
+    "cells": 8400,
+    "ground_cells": 8103,
+    "obstacle_cells": 293,
+    "free_cells": 8103,
+    "level_change_cells": 60,
+    "narrow_cells_below_accessible_width": 2460,
+    "accessible_width_m": 0.9,
+    "width_cap_m": 2.0,
+    "ground_z_min_m": 0.0,
+    "ground_z_max_m": 0.17,
+    "step_min_rise_m": 0.03
+   },
+   "triangles": 19722,
+   "obstacle_triangles": 3516,
+   "level_change_triangles": 120
+  }
  },
  "coordinate_frame": {
   "id": "FIXTURE_FRAME_ID",
@@ -56,38 +76,40 @@
    "maxVertsPerPoly": 6,
    "detailSampleDist": 0.6,
    "detailSampleMaxError": 0.05,
-   "width": 80,
-   "height": 40
+   "width": 120,
+   "height": 70
   }
  },
  "tool": {
   "tool": "chaya-navmesh",
-  "tool_version": "1.0.0",
+  "tool_version": "1.1.0",
   "recastnavigation_version": "1.6.0"
  },
  "build": {
   "stages": {
-   "walkable_triangles": 4,
-   "compact_spans": 2697,
-   "walkable_spans_after_erosion": 1352,
-   "regions": 3,
-   "contours": 2,
-   "polymesh_vertices": 22,
-   "polygons": 11,
-   "detail_triangles": 20
+   "walkable_triangles": 16206,
+   "level_change_walkable_triangles": 120,
+   "compact_spans": 7658,
+   "walkable_spans_after_erosion": 5227,
+   "regions": 9,
+   "contours": 8,
+   "polymesh_vertices": 53,
+   "polygons": 27,
+   "detail_triangles": 58
   },
   "input": {
-   "vertices": 26,
-   "triangles": 32,
-   "obstacle_triangles": 12,
+   "vertices": 34756,
+   "triangles": 19722,
+   "obstacle_triangles": 3516,
+   "level_change_triangles": 120,
    "bounds_min": [
     0.0,
-    0.0,
-    -4.0
+    -0.1,
+    -7.0
    ],
    "bounds_max": [
-    8.0,
-    2.5,
+    12.0,
+    1.75,
     0.0
    ]
   }

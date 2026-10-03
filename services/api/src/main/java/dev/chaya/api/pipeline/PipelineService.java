@@ -314,7 +314,35 @@ public class PipelineService {
         if (run.scanVersionId() != null && (stage == JobStage.REGION_ALIGNMENT || stage == JobStage.REGION_SPLICE)) {
             globalCloudInput(run.scanVersionId()).ifPresent(inputs::add);
         }
+        if (run.scanVersionId() != null && stage == JobStage.REGION_SPLICE) {
+            globalLabelsInput(run.scanVersionId()).ifPresent(inputs::add);
+        }
         return inputs;
+    }
+
+    /**
+     * The semantic labels of exactly the cloud {@link #globalCloudInput} hands out, as kind GLOBAL_LABELS: the labels
+     * artifact the same stage run published next to the parent's pinned cloud (GEOMETRIC_CLEANUP publishes SPLAT_CLEAN with
+     * SEMANTIC_LABELS_CLEAN, REGION_SPLICE publishes SPLAT_MERGED with SEMANTIC_LABELS_MERGED). REGION_SPLICE splices them
+     * into SEMANTIC_LABELS_MERGED; without them it publishes none and NAVIGATION_BAKING refuses to re-bake (review N-1).
+     */
+    private Optional<InputRef> globalLabelsInput(UUID incrementalScanVersionId) {
+        return jdbc.sql("""
+                SELECT l.id, l.bucket, l.object_key, l.checksum_sha256, l.content_type, l.size_bytes
+                  FROM scan_version incoming
+                  JOIN scan_version parent ON parent.id = incoming.parent_version_id
+                  JOIN scan_version_artifact pin ON pin.scan_version_id = parent.id AND pin.kind IN ('SPLAT_MERGED', 'SPLAT_CLEAN')
+                  JOIN processing_artifact cloud ON cloud.id = pin.artifact_id
+                  JOIN processing_artifact l ON l.stage_run_id = cloud.stage_run_id AND NOT l.contains_pii
+                   AND l.kind = CASE pin.kind WHEN 'SPLAT_MERGED' THEN 'SEMANTIC_LABELS_MERGED' ELSE 'SEMANTIC_LABELS_CLEAN' END
+                 WHERE incoming.id = :v AND parent.status = 'FINALIZED'
+                 ORDER BY l.created_at DESC LIMIT 1
+                """)
+            .param("v", incrementalScanVersionId)
+            .query((rs, i) -> new InputRef(rs.getObject("id", UUID.class), "GLOBAL_LABELS", null,
+                rs.getString("bucket"), rs.getString("object_key"), rs.getString("checksum_sha256"),
+                rs.getString("content_type"), rs.getLong("size_bytes"), false))
+            .optional();
     }
 
     /**
@@ -1070,6 +1098,28 @@ public class PipelineService {
             (String) binding.get("tool_version"), (String) binding.get("recastnavigation_version"));
     }
 
+    /** A graph edge's "portal": [[x, y, z], [x, y, z]] in canonical metres, as {ax, ay, az, bx, by, bz}; null unless both
+     * points are three finite numbers and distinct. */
+    static double[] portal(Object raw) {
+        if (!(raw instanceof List<?> points) || points.size() != 2) {
+            return null;
+        }
+        double[] out = new double[6];
+        for (int p = 0; p < 2; p++) {
+            if (!(points.get(p) instanceof List<?> xyz) || xyz.size() != 3) {
+                return null;
+            }
+            for (int k = 0; k < 3; k++) {
+                if (!(xyz.get(k) instanceof Number n) || !Double.isFinite(n.doubleValue())) {
+                    return null;
+                }
+                out[3 * p + k] = n.doubleValue();
+            }
+        }
+        boolean distinct = out[0] != out[3] || out[1] != out[4] || out[2] != out[5];
+        return distinct ? out : null;
+    }
+
     private UUID artifactIdByKey(String key) {
         return jdbc.sql("SELECT id FROM processing_artifact WHERE bucket = :b AND object_key = :k")
             .param("b", derivedBucketName).param("k", key).query(UUID.class).single();
@@ -1125,10 +1175,20 @@ public class PipelineService {
             Object slopeRaw = e.get("max_slope_deg");
             Double slope = slopeRaw instanceof Number n && Double.isFinite(n.doubleValue()) && n.doubleValue() >= 0
                 && n.doubleValue() <= 90 ? n.doubleValue() : null;
+            // The Detour portal (V25): routes are string-pulled through it. A Recast graph edge without one cannot be routed
+            // along the navmesh, so the report is refused rather than stored half-usable.
+            double[] portal = portal(e.get("portal"));
+            if (portal == null) {
+                throw new ApiException(HttpStatus.CONFLICT, "NAVIGATION_GRAPH_INVALID",
+                    "edge " + e.get("from") + "-" + e.get("to") + " of the " + profile + " graph has no portal (two finite canonical points)");
+            }
             jdbc.sql("INSERT INTO navigation_edge (organization_id, venue_id, graph_id, from_node_id, to_node_id, length_m, step_free, "
-                    + "bidirectional, min_clearance_m, max_slope_deg) VALUES (:o, :v, :g, :from, :to, :len, :sf, true, :clear, :slope)")
+                    + "bidirectional, min_clearance_m, max_slope_deg, portal_ax, portal_ay, portal_az, portal_bx, portal_by, portal_bz) "
+                    + "VALUES (:o, :v, :g, :from, :to, :len, :sf, true, :clear, :slope, :ax, :ay, :az, :bx, :by, :bz)")
                 .param("o", run.orgId()).param("v", run.venueId()).param("g", graphId).param("from", from).param("to", to)
-                .param("len", lengthNumber.doubleValue()).param("sf", stepFree).param("clear", clearance).param("slope", slope).update();
+                .param("len", lengthNumber.doubleValue()).param("sf", stepFree).param("clear", clearance).param("slope", slope)
+                .param("ax", portal[0]).param("ay", portal[1]).param("az", portal[2])
+                .param("bx", portal[3]).param("by", portal[4]).param("bz", portal[5]).update();
         }
         if (activate) {
             activateGraph(run.venueId(), floorId, profile, graphId);

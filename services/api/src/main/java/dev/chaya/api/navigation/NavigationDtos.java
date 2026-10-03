@@ -43,7 +43,11 @@ public final class NavigationDtos {
     /** What one floor's leg was routed on: the navigation graph, and the navmesh it was derived from (source
      * RECAST_NAVMESH, with that navmesh's SHA-256 and the recastnavigation version that built it). SYNTHETIC only ever
      * appears when chaya.navigation.accept-synthetic-graphs is set (tests). */
-    public record RoutingSource(UUID floorId, UUID graphId, String source, String navmeshSha256, String recastnavigationVersion) {}
+    /** pathMethod: how the leg's waypoints were made -- STRING_PULLED (the funnel through the Detour portals of the polygon
+     * corridor), PORTAL_MIDPOINTS (when the string-pulled path crosses a reported obstacle), or POLYGON_CENTROIDS (graphs
+     * without portals, which only SYNTHETIC test graphs are, or when both of the above cross a reported obstacle). */
+    public record RoutingSource(UUID floorId, UUID graphId, String source, String navmeshSha256, String recastnavigationVersion,
+                                String pathMethod) {}
 
     /** distanceMeters: the 3-D length of the waypoint polyline of every floor leg, in canonical metres, plus the
      * registered walked length of every stairs/ramp connection. estimatedDurationSeconds: each walked length divided by

@@ -443,7 +443,7 @@ No milestone's status was changed. Checked against each row's own "Verified by" 
 
 ---
 
-## 6. Addendum (2026-10-03): G-2, G-3, S-6, S-7
+## 6. Addendum (2026-10-03): G-2, G-3, S-6, S-7, N-1, N-2, N-3
 
 This section was added after the review; the sections above are unchanged.
 
@@ -477,3 +477,22 @@ This section was added after the review; the sections above are unchanged.
   still cannot run:** `tests/gpu/test_gsplat_cuda.py` exists, uses a synthetic scene, and has never executed.
 - **CV-6 is unchanged.** What gets masked is whatever the classical detectors find. A missed face is neither
   anonymised nor masked.
+- **N-2 fixed in code (2026-10-03).** Recast's input is now a surface model of the whole cleaned, labelled splat
+  (`chaya_worker.navmesh.build_surface_model`), not one floor plane's inliers:
+  - each cell's ground at its own height, with stairs bucketed as walkable `stairs` (they were `furniture`);
+  - ramps as continuous slopes;
+  - steps as their own Recast area, flagged in Detour and excluded from STEP_FREE;
+  - wall/furniture/clutter/unknown points blocking relative to their local ground.
+
+  Slopes and grades are measured on the reconstructed heights, not Recast's 0.05 m-quantised polygons. The required
+  test (a 0.17 m step and a ramp; STANDARD crosses both, STEP_FREE only the ramp) is
+  `tests/navmesh/test_venue_navigation.py`. It uses a 1:14 ramp, because 1:12 is exactly the API's 4.76° limit.
+- **N-1 fixed.** The incremental plan now includes SEMANTIC_SEGMENTATION. REGION_SPLICE splices the parent's labels
+  (`GLOBAL_LABELS`, from the same stage run as the pinned cloud) with the region's, publishing
+  `SEMANTIC_LABELS_MERGED`. NAVIGATION_BAKING refuses any splat without labels for exactly that cloud
+  (`NAVMESH_LABELS_UNAVAILABLE`). Test: `tests/navmesh/test_venue_stage.py`, where a re-bake keeps the sofa and wall
+  outside the region.
+- **N-3 fixed.** Graph edges carry their Detour portals (V25). RouteService string-pulls the corridor
+  (`CorridorPath`, the funnel algorithm of `findStraightPath`). The L-shaped-corridor test is `CorridorPathTest`.
+  Clearance is no longer the portal length: it is the bottleneck width on the reconstruction's obstacle geometry.
+- **Still synthetic only:** none of this has met a real reconstruction (G-4).

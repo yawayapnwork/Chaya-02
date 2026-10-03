@@ -1,5 +1,5 @@
 """NAVIGATION_BAKING end to end through the orchestrator with the real Recast/Detour tool, on cleaned reconstruction
-outputs: a splat PLY, PLANE_FITTING's PLANE_MODEL and SEMANTIC_LABELS_CLEAN, in a reconstruction frame that is NOT the
+outputs: a cleaned splat (SPLAT_CLEAN), PLANE_FITTING's PLANE_MODEL and SEMANTIC_LABELS_CLEAN, in a reconstruction frame that is NOT the
 canonical one (half scale and +Y up, as SfM output typically is). The stage must move everything into canonical metres,
 bake it with Recast, and publish a navmesh whose provenance, checksum and routing graph all agree.
 
@@ -42,11 +42,11 @@ def _scene(tmp_path: Path) -> tuple[Path, Path, Path]:
     furniture = np.vstack([_grid(1.0, 2.0, 1.0, 2.0, z, step=0.1) for z in (0.3, 0.6, 0.9)])
     ceiling = _grid(0, 6, 0, 6, 2.8, step=0.1)
     canonical = np.vstack([floor, furniture, ceiling])
-    labels = ["floor"] * len(floor) + ["furniture"] * len(furniture) + ["ceiling"] * len(ceiling)
+    labels = ["floor"] * len(floor) + ["furniture"] * len(furniture) + ["wall"] * len(ceiling)  # the ceiling bucket is wall
     positions = TO_CANONICAL.inverse().apply(canonical)  # what the reconstruction actually holds
     n = len(positions)
     splat = write_ply(GaussianCloud(positions.astype(np.float32), np.zeros((n, 3), np.float32), np.tile([1, 0, 0, 0], (n, 1)).astype(np.float32),
-                                    np.zeros(n, np.float32), np.zeros((n, 3), np.float32)), tmp_path / "splat_merged.ply")
+                                    np.zeros(n, np.float32), np.zeros((n, 3), np.float32)), tmp_path / "splat_clean.ply")
     up_in_reconstruction = TO_CANONICAL.inverse().apply_direction(np.array([0.0, 0.0, 1.0]))
     planes = tmp_path / "planes.json"
     planes.write_text(json.dumps({"planes": [
@@ -61,7 +61,7 @@ def _scene(tmp_path: Path) -> tuple[Path, Path, Path]:
 @pytest.fixture
 def baked(harness, navmesh_tool, tmp_path):
     splat, planes, labels = _scene(tmp_path)
-    inputs = [_derived(harness, "SPLAT_MERGED", splat), _derived(harness, "PLANE_MODEL", planes, "application/json"),
+    inputs = [_derived(harness, "SPLAT_CLEAN", splat), _derived(harness, "PLANE_MODEL", planes, "application/json"),
               _derived(harness, "SEMANTIC_LABELS_CLEAN", labels, "application/json")]
     order = harness.order("NAVIGATION_BAKING", inputs)
     order["coordinateFrame"] = FRAME
@@ -103,7 +103,9 @@ def test_stage_publishes_a_real_navmesh_with_full_provenance(harness, baked, nav
     assert manifest["coordinate_frame"]["id"] == FRAME["id"] and manifest["coordinate_frame"]["up_axis"] == "+Z"
     assert manifest["recast_frame"]["up_axis"] == "+Y"
     assert manifest["recast_config"]["metres"]["agent_radius_m"] == 0.35 and manifest["recast_config"]["voxels"]["walkableRadius"] == 4
-    assert manifest["tool"] == {"tool": "chaya-navmesh", "tool_version": "1.0.0", "recastnavigation_version": "1.6.0"}
+    assert manifest["tool"] == {"tool": "chaya-navmesh", "tool_version": "1.1.0", "recastnavigation_version": "1.6.0"}
+    assert manifest["source"]["semantic_labels"]["artifactId"] == inputs[2]["artifactId"]
+    assert "surface model" in manifest["source"]["input_geometry"]["representation"]
     assert manifest["build"]["stages"]["polygons"] > 0
     assert manifest["source"]["input_geometry"]["obstacle_triangles"] > 0, "the furniture labels became blocked geometry"
 
@@ -141,8 +143,9 @@ def test_stage_reports_no_walkable_surface_when_there_is_no_floor(harness, navme
     splat, _, labels = _scene(tmp_path)
     walls_only = tmp_path / "walls.json"
     walls_only.write_text(json.dumps({"planes": [{"equation": [1.0, 0.0, 0.0, 0.0], "inlier_indices": [0, 1, 2, 3]}]}))
-    order = harness.order("NAVIGATION_BAKING", [_derived(harness, "SPLAT_MERGED", splat),
-                                                _derived(harness, "PLANE_MODEL", walls_only, "application/json")])
+    order = harness.order("NAVIGATION_BAKING", [_derived(harness, "SPLAT_CLEAN", splat),
+                                                _derived(harness, "PLANE_MODEL", walls_only, "application/json"),
+                                                _derived(harness, "SEMANTIC_LABELS_CLEAN", labels, "application/json")])
     order["coordinateFrame"] = FRAME
     report = harness.run(order, toolchain=Toolchain(env={"CHAYA_NAVMESH_BIN": navmesh_tool}))
     assert report["status"] == "FAILED" and report["errorCode"] == "NO_WALKABLE_SURFACE" and report["artifacts"] == []
@@ -150,9 +153,26 @@ def test_stage_reports_no_walkable_surface_when_there_is_no_floor(harness, navme
 
 def test_stage_reports_navmesh_tool_unavailable_and_publishes_nothing(harness, tmp_path):
     splat, planes, _ = _scene(tmp_path)
-    order = harness.order("NAVIGATION_BAKING", [_derived(harness, "SPLAT_MERGED", splat), _derived(harness, "PLANE_MODEL", planes)])
+    order = harness.order("NAVIGATION_BAKING", [_derived(harness, "SPLAT_CLEAN", splat), _derived(harness, "PLANE_MODEL", planes)])
     order["coordinateFrame"] = FRAME
     report = harness.run(order, toolchain=Toolchain(env={}, which=lambda _n: None))
     assert report["status"] == "FAILED" and report["errorCode"] == "NAVMESH_TOOL_UNAVAILABLE" and report["artifacts"] == []
     assert report["errorDetails"]["missing"] == ["chaya-navmesh"]
 
+
+@pytest.mark.parametrize("variant", ["no labels", "labels of another cloud", "merged splat with the region's labels"])
+def test_stage_refuses_to_bake_without_labels_for_the_cloud_it_bakes(harness, navmesh_tool, tmp_path, variant):
+    """Review N-1: without semantic labels for exactly this cloud, walls and furniture cannot be told from the floor; an
+    obstacle-free navmesh is never baked."""
+    splat, planes, labels = _scene(tmp_path)
+    inputs = [_derived(harness, "SPLAT_CLEAN", splat), _derived(harness, "PLANE_MODEL", planes, "application/json")]
+    if variant == "labels of another cloud":
+        short = tmp_path / "short.json"
+        short.write_text(json.dumps({"labels": json.loads(labels.read_text())["labels"][:-5]}))
+        inputs.append(_derived(harness, "SEMANTIC_LABELS_CLEAN", short, "application/json"))
+    elif variant == "merged splat with the region's labels":
+        inputs = [_derived(harness, "SPLAT_MERGED", splat), inputs[1], _derived(harness, "SEMANTIC_LABELS_CLEAN", labels, "application/json")]
+    order = harness.order("NAVIGATION_BAKING", inputs)
+    order["coordinateFrame"] = FRAME
+    report = harness.run(order, toolchain=Toolchain(env={"CHAYA_NAVMESH_BIN": navmesh_tool}))
+    assert report["status"] == "FAILED" and report["errorCode"] == "NAVMESH_LABELS_UNAVAILABLE" and report["artifacts"] == []

@@ -38,8 +38,10 @@ import org.springframework.transaction.annotation.Transactional;
  * Real pedestrian routing over the navigation graph NAVIGATION_BAKING produces (see
  * dev.chaya.api.pipeline.PipelineService#ingestNavigationGraph and chaya_worker.navmesh). That graph is the polygon
  * graph of a Detour navmesh the real Recast/Detour library built from the reconstruction (nodes are navmesh polygon
- * centroids, edges are Detour links); pathfinding here is Dijkstra over it -- the same polygon-corridor search Detour's
- * findPath does, without its string-pulling, so waypoints are polygon centroids rather than a smoothed path.
+ * centroids, edges are Detour links with their portals); pathfinding here is Dijkstra over it -- the same polygon-corridor
+ * search Detour's findPath does -- and the waypoints are that corridor string-pulled through its portals (CorridorPath, the
+ * funnel algorithm of Detour's findStraightPath), so the reported path stays inside the navmesh (review N-3). A
+ * RECAST_NAVMESH graph baked before portals were recorded is not routable (NAVMESH_NOT_READY: bake again).
  *
  * <p>Failure states, each a distinct code (docs/navigation.md):
  * <ul>
@@ -86,7 +88,8 @@ public class RouteService {
     private static final Set<String> PROFILES = Set.of("STANDARD", "STEP_FREE");
     private static final String STEP_FREE = "STEP_FREE";
 
-    private record EdgeRow(UUID from, UUID to, boolean bidirectional, boolean stepFree, Double minClearanceM, Double maxSlopeDeg) {}
+    private record EdgeRow(UUID from, UUID to, boolean bidirectional, boolean stepFree, Double minClearanceM, Double maxSlopeDeg,
+                           double[][] portal) {}
 
     private record ActiveGraph(UUID id, UUID frameId, String source, String navmeshSha256, String recastVersion) {}
 
@@ -132,7 +135,7 @@ public class RouteService {
     }
 
     private record FloorGraph(UUID floorId, Map<UUID, double[]> positions, Map<UUID, List<UUID>> adjacency,
-                              List<Box> boxes, RoutingSource source, Exclusions exclusions) {}
+                              Map<List<UUID>, double[][]> portals, List<Box> boxes, RoutingSource source, Exclusions exclusions) {}
 
     private record RouteLeg(List<double[]> waypoints, double distanceMeters, UUID floorId, RoutingSource source) {}
 
@@ -258,6 +261,10 @@ public class RouteService {
             throw new ApiException(HttpStatus.CONFLICT, "NAVMESH_NOT_READY", "the " + profile + " navigation graph of scan version "
                 + scope.id() + " was baked in coordinate frame " + graph.frameId() + ", not the version's frame " + frame.id());
         }
+        if (missingPortals(graph.id())) {
+            throw new ApiException(HttpStatus.CONFLICT, "NAVMESH_NOT_READY", "the " + profile + " navigation graph of scan version "
+                + scope.id() + " was baked before navmesh portals were recorded, so no route along the navmesh can be drawn on it");
+        }
         Map<UUID, FloorGraph> graphs = new HashMap<>();
         graphs.put(scope.floorId(), buildFloorGraph(graph, scope.floorId(), profile, blocked));
         return solve(request.venueId(), profile, blocked, graphs, List.of(), request.floorId(), start, destination);
@@ -310,8 +317,9 @@ public class RouteService {
             constraints.add("uses only edges of the STEP_FREE graph baked from the navmesh");
             constraints.add("uses only edges whose measured slope against canonical +Z is at most "
                 + round(props.maxAccessibleSlopeDeg()) + " degrees; edges with no measured slope are excluded");
-            constraints.add("uses only edges whose measured clearance (Detour portal width, already eroded by the agent radius) "
-                + "is at least " + props.minAccessibleClearanceM() + " m; edges with no measured clearance are excluded");
+            constraints.add("uses only edges whose measured clear width (the corridor at the Detour portal, measured on the "
+                + "reconstruction's obstacle geometry) is at least " + props.minAccessibleClearanceM() + " m; edges with no measured "
+                + "clearance are excluded");
             constraints.add("crosses floors only by registered elevators or ramps with a registered clear width of at least "
                 + props.minAccessibleClearanceM() + " m (and, for a ramp, a registered slope within the limit); never stairs");
         }
@@ -403,7 +411,17 @@ public class RouteService {
             return "the " + profile + " navigation graph of floor " + floorId + " was baked in coordinate frame " + graph.frameId()
                 + ", not the floor's current frame " + frame.get().id() + ", and must be baked again";
         }
+        if ("RECAST_NAVMESH".equals(graph.source()) && missingPortals(graph.id())) {
+            return "the " + profile + " navigation graph of floor " + floorId + " was baked before navmesh portals were recorded, so "
+                + "no route along the navmesh can be drawn on it, and must be baked again";
+        }
         return null;
+    }
+
+    /** Whether any edge of the graph lacks its Detour portal (V25). */
+    private boolean missingPortals(UUID graphId) {
+        return jdbc.sql("SELECT EXISTS (SELECT 1 FROM navigation_edge WHERE graph_id = :g AND portal_ax IS NULL)")
+            .param("g", graphId).query(Boolean.class).single();
     }
 
     /** Loads the floor's routable graph with every exclusion for this query applied. `required` floors (start and
@@ -440,13 +458,18 @@ public class RouteService {
         });
 
         boolean stepFree = profile.equals(STEP_FREE);
-        List<EdgeRow> edgeRows = jdbc.sql("SELECT from_node_id, to_node_id, bidirectional, step_free, min_clearance_m, max_slope_deg "
-                + "FROM navigation_edge WHERE graph_id = :g").param("g", active.id())
+        List<EdgeRow> edgeRows = jdbc.sql("SELECT from_node_id, to_node_id, bidirectional, step_free, min_clearance_m, max_slope_deg, "
+                + "portal_ax, portal_ay, portal_az, portal_bx, portal_by, portal_bz FROM navigation_edge WHERE graph_id = :g")
+            .param("g", active.id())
             .query((rs, i) -> new EdgeRow(rs.getObject("from_node_id", UUID.class), rs.getObject("to_node_id", UUID.class),
                 rs.getBoolean("bidirectional"), rs.getBoolean("step_free"), nullableDouble(rs.getObject("min_clearance_m")),
-                nullableDouble(rs.getObject("max_slope_deg"))))
+                nullableDouble(rs.getObject("max_slope_deg")),
+                rs.getObject("portal_ax") == null ? null : new double[][]{
+                    {rs.getDouble("portal_ax"), rs.getDouble("portal_ay"), rs.getDouble("portal_az")},
+                    {rs.getDouble("portal_bx"), rs.getDouble("portal_by"), rs.getDouble("portal_bz")}}))
             .list();
         Map<UUID, List<UUID>> adjacency = new HashMap<>();
+        Map<List<UUID>, double[][]> portals = new HashMap<>();
         for (EdgeRow e : edgeRows) {
             double[] a = positions.get(e.from());
             double[] b = positions.get(e.to());
@@ -464,9 +487,14 @@ public class RouteService {
             if (e.bidirectional()) {
                 adjacency.computeIfAbsent(e.to(), k -> new ArrayList<>()).add(e.from());
             }
+            if (e.portal() != null) {
+                portals.put(List.of(e.from(), e.to()), e.portal());
+                portals.put(List.of(e.to(), e.from()), e.portal());
+            }
         }
-        RoutingSource source = new RoutingSource(floorId, active.id(), active.source(), active.navmeshSha256(), active.recastVersion());
-        return new FloorGraph(floorId, positions, adjacency, boxes, source, exclusions);
+        RoutingSource source = new RoutingSource(floorId, active.id(), active.source(), active.navmeshSha256(), active.recastVersion(),
+            null);
+        return new FloorGraph(floorId, positions, adjacency, portals, boxes, source, exclusions);
     }
 
     /** STEP_FREE fails closed: every constraint needs a measured value, and the value must pass. */
@@ -545,14 +573,48 @@ public class RouteService {
         if (!dist.containsKey(endNode)) {
             return null;
         }
-        List<double[]> waypoints = new ArrayList<>();
+        List<UUID> corridor = new ArrayList<>();
         for (UUID cur = endNode; cur != null; cur = prev.get(cur)) {
-            waypoints.add(graph.positions().get(cur));
+            corridor.add(cur);
         }
-        waypoints.add(from);
-        Collections.reverse(waypoints);
-        waypoints.add(to);
-        return new RouteLeg(waypoints, polylineLength(waypoints), graph.floorId(), graph.source());
+        Collections.reverse(corridor);
+        List<double[]> centroids = new ArrayList<>();
+        centroids.add(from);
+        corridor.forEach(id -> centroids.add(graph.positions().get(id)));
+        centroids.add(to);
+
+        // The reported path: the corridor string-pulled through its portals; if that crosses a reported obstacle, the
+        // portal midpoints; failing that the centroids, whose segments were already checked against every obstacle.
+        List<double[]> waypoints = centroids;
+        String method = "POLYGON_CENTROIDS";
+        List<double[][]> portals = new ArrayList<>();
+        for (int i = 1; i < corridor.size(); i++) {
+            portals.add(graph.portals().get(List.of(corridor.get(i - 1), corridor.get(i))));
+        }
+        if (!portals.contains(null)) {
+            List<CorridorPath.Portal> oriented = CorridorPath.orient(corridor.stream().map(graph.positions()::get).toList(), portals);
+            List<double[]> pulled = CorridorPath.pull(from, to, oriented);
+            List<double[]> mids = CorridorPath.midpoints(from, to, oriented);
+            if (!polylineCrossesAny(pulled, graph.boxes())) {
+                waypoints = pulled;
+                method = "STRING_PULLED";
+            } else if (!polylineCrossesAny(mids, graph.boxes())) {
+                waypoints = mids;
+                method = "PORTAL_MIDPOINTS";
+            }
+        }
+        RoutingSource s = graph.source();
+        RoutingSource source = new RoutingSource(s.floorId(), s.graphId(), s.source(), s.navmeshSha256(), s.recastnavigationVersion(), method);
+        return new RouteLeg(waypoints, polylineLength(waypoints), graph.floorId(), source);
+    }
+
+    private static boolean polylineCrossesAny(List<double[]> points, List<Box> boxes) {
+        for (int i = 1; i < points.size(); i++) {
+            if (crossesAny(points.get(i - 1), points.get(i), boxes)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** The nearest graph node within nodeSnapMaxDistanceMeters whose straight segment to the point crosses no reported

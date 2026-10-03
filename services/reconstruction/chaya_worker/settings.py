@@ -145,12 +145,23 @@ class Settings:
     navmesh_verts_per_poly: int = 6  # a count, not a length; Detour's maximum is 6
     navmesh_detail_sample_dist_m: float = 0.6  # height-detail sampling spacing
     navmesh_detail_sample_max_error_m: float = 0.05  # how far the detail mesh may deviate from the heightfield
-    # Recast's input geometry from a reconstruction (chaya_worker.navmesh.geometry_from_reconstruction): floor
-    # occupancy-grid cell size, how many floor-plane inliers make a cell observed floor, and the least height an
-    # obstacle box is given above the floor (so a detected wall/furniture cell always blocks).
-    navmesh_floor_grid_m: float = 0.2
+    # Recast's input geometry from a reconstruction (chaya_worker.navmesh.build_surface_model / geometry_from_surface):
+    # the surface grid's cell size (also the resolution of step detection and of measured clearance), how many
+    # floor/stairs points in one band of navmesh_ground_band_m make a cell observed ground, the least height an obstacle
+    # box is given above its ground, the smallest rise between neighbouring cells that counts as a step (a 1:12 ramp
+    # rises 8 mm per 0.1 m cell; reconstruction noise is assumed to stay below this), and how far above the floor plane
+    # a walkable level (landing, raised area, stair tread) of the same floor may be.
+    navmesh_floor_grid_m: float = 0.1
     navmesh_floor_min_points_per_cell: int = 3
+    navmesh_ground_band_m: float = 0.05
     navmesh_obstacle_min_height_m: float = 1.0
+    navmesh_step_min_rise_m: float = 0.03
+    navmesh_max_level_above_floor_m: float = 2.0
+    # Clear width (chaya_worker.navmesh.centred_width): measured up to navmesh_width_cap_m; cells where a body
+    # navmesh_accessible_width_m wide cannot be centred are counted in the report. The API's STEP_FREE limit is
+    # chaya.navigation.min-accessible-clearance-m, also 0.9 m, applied to each edge's measured width.
+    navmesh_accessible_width_m: float = 0.9
+    navmesh_width_cap_m: float = 2.0
     # ADA-inspired accessible-ramp threshold (1:12 rise:run ~= 4.8 degrees); a polygon steeper than this
     # is excluded from the STEP_FREE routing graph regardless of whether Recast still considers it walkable.
     navmesh_max_ramp_slope_deg: float = 5.0
@@ -310,6 +321,11 @@ class Settings:
             navmesh_floor_grid_m=_float(e, "NAVMESH_FLOOR_GRID_M", d.navmesh_floor_grid_m),
             navmesh_floor_min_points_per_cell=_int(e, "NAVMESH_FLOOR_MIN_POINTS_PER_CELL", d.navmesh_floor_min_points_per_cell),
             navmesh_obstacle_min_height_m=_float(e, "NAVMESH_OBSTACLE_MIN_HEIGHT_M", d.navmesh_obstacle_min_height_m),
+            navmesh_ground_band_m=_float(e, "NAVMESH_GROUND_BAND_M", d.navmesh_ground_band_m),
+            navmesh_step_min_rise_m=_float(e, "NAVMESH_STEP_MIN_RISE_M", d.navmesh_step_min_rise_m),
+            navmesh_max_level_above_floor_m=_float(e, "NAVMESH_MAX_LEVEL_ABOVE_FLOOR_M", d.navmesh_max_level_above_floor_m),
+            navmesh_accessible_width_m=_float(e, "NAVMESH_ACCESSIBLE_WIDTH_M", d.navmesh_accessible_width_m),
+            navmesh_width_cap_m=_float(e, "NAVMESH_WIDTH_CAP_M", d.navmesh_width_cap_m),
             navmesh_max_ramp_slope_deg=_float(e, "NAVMESH_MAX_RAMP_SLOPE_DEG", d.navmesh_max_ramp_slope_deg),
             navmesh_floor_max_tilt_deg=_float(e, "NAVMESH_FLOOR_MAX_TILT_DEG", d.navmesh_floor_max_tilt_deg),
             alignment_voxel_size_m=_float(e, "ALIGNMENT_VOXEL_SIZE_M", d.alignment_voxel_size_m),
@@ -398,6 +414,9 @@ class Settings:
             "navmesh_detail_sample_max_error_m": self.navmesh_detail_sample_max_error_m, "navmesh_floor_grid_m": self.navmesh_floor_grid_m,
             "navmesh_floor_min_points_per_cell": self.navmesh_floor_min_points_per_cell, "navmesh_obstacle_min_height_m": self.navmesh_obstacle_min_height_m,
             "navmesh_max_ramp_slope_deg": self.navmesh_max_ramp_slope_deg,
+            "navmesh_ground_band_m": self.navmesh_ground_band_m, "navmesh_step_min_rise_m": self.navmesh_step_min_rise_m,
+            "navmesh_max_level_above_floor_m": self.navmesh_max_level_above_floor_m,
+            "navmesh_accessible_width_m": self.navmesh_accessible_width_m, "navmesh_width_cap_m": self.navmesh_width_cap_m,
             "navmesh_floor_max_tilt_deg": self.navmesh_floor_max_tilt_deg,
             "alignment_voxel_size_m": self.alignment_voxel_size_m,
             "alignment_max_scale_correction": self.alignment_max_scale_correction,

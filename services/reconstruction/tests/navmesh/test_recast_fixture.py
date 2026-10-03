@@ -84,7 +84,7 @@ def built(navmesh_tool, tmp_path_factory):
 
 
 def test_the_real_tool_is_recastnavigation(navmesh_tool):
-    assert tool_version(navmesh_tool) == {"tool": "chaya-navmesh", "tool_version": "1.0.0", "recastnavigation_version": "1.6.0"}
+    assert tool_version(navmesh_tool) == {"tool": "chaya-navmesh", "tool_version": "1.1.0", "recastnavigation_version": "1.6.0"}
 
 
 def test_navmesh_is_produced_as_a_detour_tile(built):

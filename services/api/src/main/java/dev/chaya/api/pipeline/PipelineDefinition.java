@@ -43,6 +43,10 @@ public final class PipelineDefinition {
         JobStage.PRIVACY_PREPROCESS,
         JobStage.POSE_ESTIMATION,
         JobStage.SPLAT_RECONSTRUCTION,
+        // The region's own labels: GEOMETRIC_CLEANUP cleans them with the cloud, REGION_SPLICE splices them into the
+        // venue's (GLOBAL_LABELS) as SEMANTIC_LABELS_MERGED, and NAVIGATION_BAKING refuses to bake without labels for the
+        // cloud it bakes -- so a re-bake keeps every wall and piece of furniture outside the region (review N-1).
+        JobStage.SEMANTIC_SEGMENTATION,
         JobStage.GEOMETRIC_CLEANUP,
         JobStage.REGION_ALIGNMENT,
         JobStage.REGION_SPLICE,

@@ -23,14 +23,16 @@ mismatch; `-DFETCHCONTENT_SOURCE_DIR_RECASTNAVIGATION=<dir>` builds offline from
 calls the library in the order of recastnavigation's own `Sample_SoloMesh`, and serialises the result:
 
 ```
-chaya-navmesh --version                     # "chaya-navmesh 1.0.0 recastnavigation 1.6.0"
+chaya-navmesh --version                     # "chaya-navmesh 1.1.0 recastnavigation 1.6.0"
 chaya-navmesh bake --input g.obj --navmesh out.bin --report out.json  --cell-size-m ... (every setting, no defaults)
-chaya-navmesh path --navmesh out.bin --start X Y Z --end X Y Z --half-extents X Y Z --output path.json
+chaya-navmesh path --navmesh out.bin --start X Y Z --end X Y Z --half-extents X Y Z --output path.json [--step-free]
 ```
 
 - `bake` runs the full solo-mesh pipeline:
   - walkable-triangle marking by slope (`rcMarkWalkableTriangles`). Faces in an OBJ group named `obstacle*` are forced
-    unwalkable but still solid.
+    unwalkable but still solid. Walkable faces in a group named `level_change*` (the ground beside a step) get their own
+    Recast area, `AREA_LEVEL_CHANGE` (1). Recast keeps an area in regions and polygons of its own, and those polygons
+    carry the Detour flag `POLYFLAG_LEVEL_CHANGE` (0x02) as well as `POLYFLAG_WALK`.
   - rasterisation; the low-hanging-obstacle, ledge and low-height span filters (agent climb and height).
   - compact heightfield, then erosion by the agent radius (`rcErodeWalkableArea`).
   - watershed regions (`rcBuildDistanceField`, `rcBuildRegions`), contours (`rcBuildContours`), polygons
@@ -43,6 +45,7 @@ chaya-navmesh path --navmesh out.bin --start X Y Z --end X Y Z --half-extents X 
   query traverses.
 - `path` runs Detour's own query: `findNearestPoly`, `findPath`, then `findStraightPath` (string pulling). A start or
   end off the navmesh, or disconnected from the other, is `PATH_NOT_FOUND`. A partial path is never returned.
+  `--step-free` excludes `POLYFLAG_LEVEL_CHANGE` polygons from the query filter.
 - Exit status (also the report's `status`): 0 OK, 2 INVALID_ARGUMENTS, 3 INVALID_GEOMETRY, 4 NO_WALKABLE_SURFACE,
   5 NAVMESH_BUILD_FAILED, 6 PATH_NOT_FOUND, 7 IO_ERROR.
 
@@ -70,19 +73,49 @@ the stage and everything downstream only ever hold canonical coordinates.
 
 ### The stage
 
-1. **Cleaned geometry → canonical metres.** Requires the work order's canonical coordinate frame (otherwise
-   `NOT_CALIBRATED`). Its inputs are the cleaned splat (SPLAT_MERGED / SPLAT_CLEAN / SPLAT), PLANE_FITTING's planes and
-   SEMANTIC_SEGMENTATION's cleaned labels, all moved into canonical metres. The floor is the lowest horizontal plane
-   (within `navmesh_floor_max_tilt_deg` of +Z) with at least a quarter of the best-supported horizontal plane's inliers.
-2. **Recast input geometry** (`chaya_worker.navmesh.geometry_from_reconstruction`):
-   - Floor: an occupancy grid of `navmesh_floor_grid_m` cells over the floor inliers. Only cells with at least
-     `navmesh_floor_min_points_per_cell` real floor points become walkable candidates, so unscanned gaps and the outside
-     of an L-shaped room stay holes. This replaces the old convex-hull Delaunay step (review N-2).
-   - Obstacles: wall/furniture points between the agent's climb height and its height become closed boxes, marked
-     blocked.
+1. **Cleaned geometry → canonical metres.** The stage requires the work order's canonical coordinate frame (otherwise
+   `NOT_CALIBRATED`). Its inputs are moved into canonical metres:
+   - the cleaned splat (SPLAT_MERGED / SPLAT_CLEAN / SPLAT);
+   - the semantic labels of **exactly that splat** (SEMANTIC_LABELS_MERGED / SEMANTIC_LABELS_CLEAN / SEMANTIC_LABELS);
+   - PLANE_FITTING's planes.
 
-   The geometry is published as **NAVMESH_INPUT_GEOMETRY** (a canonical-frame OBJ).
-3. **Recast bake** (`chaya_worker.recast.bake`). Every setting comes from `RecastConfig`, and every field is named by its
+   Labels are required: without them a wall or a sofa cannot be told from the floor. A missing labels artifact, or
+   one whose length is not the splat's, fails with `NAVMESH_LABELS_UNAVAILABLE` rather than baking an obstacle-free
+   floor (review N-1; re-scans splice their labels, see docs/rescan.md). The floor plane is the lowest horizontal
+   plane (within `navmesh_floor_max_tilt_deg` of +Z) with at least a quarter of the best-supported horizontal plane's
+   inliers. It is only the **reference height**: ground is looked for from 0.5 m below it to
+   `navmesh_max_level_above_floor_m` above it.
+2. **The surface model** (`chaya_worker.navmesh.build_surface_model`). This is a horizontal grid of
+   `navmesh_floor_grid_m` cells over the cleaned points (review N-2: no longer the inliers of one floor plane).
+   - **Ground**: points labelled `floor` or `stairs` (`GROUND_LABELS`; `semantic_classes` buckets stairs, staircases
+     and steps as `stairs`, never as furniture). Per cell, ground is the median height of the **lowest** band of at
+     least `navmesh_floor_min_points_per_cell` ground points no thicker than `navmesh_ground_band_m`. Floors, stair
+     treads, landings and ramps are each a surface at its own height. A stray point below the floor or a table top
+     above it does not decide the height. A cell with no such band is a **hole** and gets no geometry: never the
+     convex hull.
+   - **Obstacles**: points labelled `wall`, `furniture`, `clutter` or `unknown` (`OBSTACLE_LABELS`; unclassified
+     geometry where people walk is not assumed passable). A point blocks when it is between the agent's climb
+     (0.4 m) and its height (1.8 m) above the **local** ground: the cell's own, else the lowest observed
+     neighbour's (a sofa hides the floor under it), else the reference height. Low clutter is stepped over. A lintel,
+     the ceiling, or anything above head height does not block.
+   - **Level changes**: 4-neighbour cells whose ground heights differ by more than `navmesh_step_min_rise_m` and at
+     most the climb. Both cells are marked. A larger difference is a ledge, which Recast's climb filter already
+     refuses to connect.
+   - **Width**: for each free cell, the clear width available to a body centred there:
+     `2 × distance to the nearest obstacle or hole − one cell` (a scipy distance transform; the cell is subtracted so
+     the width is never overstated), capped at `navmesh_width_cap_m`.
+3. **Recast input geometry** (`geometry_from_surface`), published as **NAVMESH_INPUT_GEOMETRY** (a canonical-frame
+   OBJ). This is exactly what Recast is given, after `chaya_worker.recast_boundary` rotates it to +Y up:
+   - `walkable_candidates`: one quad per ground cell. Each corner sits at the mean height of the cells sharing it
+     that are level with this one, within `navmesh_step_min_rise_m`. A ramp is therefore one continuous sloped
+     surface whose real slope Recast's slope test sees, and a step stays a discontinuity.
+   - `level_change`: the quads of level-change cells.
+   - `obstacle`: one closed box per obstacle cell, from 0.1 m below the lowest ground to the top of the obstacle
+     geometry in the band (at least `navmesh_obstacle_min_height_m` above its local ground).
+   - Nothing at all over holes.
+
+   Units are metres from start to finish. No coordinate leaves the canonical frame except at the boundary.
+4. **Recast bake** (`chaya_worker.recast.bake`). Every setting comes from `RecastConfig`, and every field is named by its
    unit. Defaults are in `chaya_worker.settings`, each overridable by an env var of the same name upper-cased:
 
    | Setting | Default | Setting | Default |
@@ -93,40 +126,53 @@ the stage and everything downstream only ever hold canonical coordinates.
    | `navmesh_agent_radius_m` | 0.35 | `navmesh_edge_max_error_m` | 0.13 |
    | `navmesh_agent_max_climb_m` | 0.4 | `navmesh_verts_per_poly` | 6 (a count) |
    | `navmesh_agent_max_slope_deg` | 45 | `navmesh_detail_sample_dist_m` / `_max_error_m` | 0.6 / 0.05 |
+   | `navmesh_floor_grid_m` (surface cell) | 0.1 | `navmesh_floor_min_points_per_cell` | 3 (a count) |
+   | `navmesh_ground_band_m` | 0.05 | `navmesh_step_min_rise_m` | 0.03 |
+   | `navmesh_max_level_above_floor_m` | 2.0 | `navmesh_accessible_width_m` / `navmesh_width_cap_m` | 0.9 / 2.0 |
 
    The old settings were Recast-demo voxel counts labelled as metres (for example `edge_max_len = 12`), and have been
    replaced.
-4. **NAVMESH** (`navmesh.bin`, the Detour tile) and **NAVMESH_MANIFEST** (`navmesh-manifest.json`). The manifest
+5. **NAVMESH** (`navmesh.bin`, the Detour tile) and **NAVMESH_MANIFEST** (`navmesh-manifest.json`). The manifest
    records:
    - `status: READY`;
    - the navmesh's SHA-256, size and polygon count;
    - the source run, scan and scan version;
    - the splat, plane-model and label input artifacts (id, key, SHA-256);
-   - the input-geometry checksum;
+   - the input geometry: checksum, triangle counts (obstacle, level change), the representation and the surface
+     model's summary (cells, ground/obstacle/level-change cells, height range);
    - the canonical frame and the Recast frame with its conversion;
    - the Recast configuration in metres and in voxels;
    - the tool and recastnavigation versions;
    - per-stage build counts.
-5. **NAVIGATION_GRAPH** (`chaya_worker.stages.navigation_baking.navigation_graph_document`): the Detour polygon graph.
-   - Nodes are polygon centroids (canonical metres). Edges are Detour links.
+6. **NAVIGATION_GRAPH** (`chaya_worker.stages.navigation_baking.navigation_graph_document`): the Detour polygon graph.
+   - Nodes are polygon centroids: horizontal position from Detour, height from the reconstructed surface where there
+     is one. Edges are Detour links.
    - Every edge records what was measured on the canonical geometry (`chaya_worker.navmesh.build_routing_graphs`):
      - `length_m`: the 3-D centroid-to-centroid distance.
      - `rise_m`: the signed rise along canonical +Z (`CANONICAL_UP`) between the centroids.
-     - `max_slope_deg`: the steepest of both polygons' face slopes and the centroid-to-centroid grade, each measured
-       against `CANONICAL_UP`. The grade catches a step between two level polygons: two flat treads 0.17 m apart with
-       centroids 0.3 m apart are each 0° but joined by a 29.5° edge. Rise and run are projections onto and off the up
-       axis (`edge_rise_run`), never a coordinate index.
-     - `min_clearance_m`: the length of the Detour portal. Recast has already eroded the walkable area by the agent
-       radius, so it is not the wall-to-wall width (review N-3). It is the only clearance measured.
+     - `max_slope_deg`: the steepest of the reconstructed surface slope under both polygons and the
+       centroid-to-centroid grade. Both use the surface model's heights (medians of real points), not Recast's
+       polygons. Recast's heights are quantised to the 0.05 m cell height and would turn a gentle ramp into false
+       5–10° grades. Recast's polygon geometry is used only where the surface has no ground. Rise and run are
+       projections onto and off the up axis (`edge_rise_run`), never a coordinate index.
+     - `level_change`: either polygon is over a step (`POLYFLAG_LEVEL_CHANGE`).
+     - `min_clearance_m`: the clear width along the edge, measured on the obstacle and hole geometry
+       (`SurfaceModel.edge_clear_width_m`). It is the bottleneck of the widest path from the roomiest cell of one
+       polygon to the roomiest cell of the other, through the cells of both. A doorway Recast left inside one
+       polygon is crossed by that path, wherever the polygon boundaries lie (review N-3). In the venue fixture the
+       1.1 m doorway measures 1.1 m and the 1.6 m one 1.5 m.
+     - `portal_width_m`: the Detour portal's own length, after agent-radius erosion. Recorded, not used for routing.
+     - `portal`: the portal's two endpoints in canonical metres. The API string-pulls routes through them.
    - **STANDARD**: every link.
-   - **STEP_FREE**: only links whose `max_slope_deg` is within `navmesh_max_ramp_slope_deg` (5°).
+   - **STEP_FREE**: only links over no level change and with `max_slope_deg` within `navmesh_max_ramp_slope_deg` (5°).
    - The graph carries an `edge_measurements` block naming the units, the up axis and how each field was measured, and
      a `navmesh` block: `source: RECAST_NAVMESH`, `status: READY`, the navmesh SHA-256, and the tool and library
      versions.
 
 Failure states, each a structured stage failure with nothing published: `NAVMESH_TOOL_UNAVAILABLE` (no chaya-navmesh
-on the worker), `INVALID_GEOMETRY` (non-finite, out-of-range or empty geometry, or a plane referencing missing
-Gaussians), `NO_WALKABLE_SURFACE` (no floor plane, no observed floor cell, or nothing left after slope, clearance and
+on the worker), `NAVMESH_LABELS_UNAVAILABLE` (no semantic labels for exactly the splat being baked), `INVALID_GEOMETRY`
+(non-finite, out-of-range or empty geometry, or a plane referencing missing Gaussians), `NO_WALKABLE_SURFACE` (no floor
+plane, no ground in the floor's height range or no dense ground cell, or nothing left after slope, clearance and
 erosion), `NAVMESH_BUILD_FAILED` (Recast/Detour failure, or more cells than one tile holds). Missing inputs remain
 `INPUT_INVALID`, and a missing frame remains `NOT_CALIBRATED`.
 
@@ -146,33 +192,56 @@ nodes and edges. V18 stores the binding on the graph: `source = 'RECAST_NAVMESH'
 (hand-inserted, benchmark self-tests, test fixtures, anything from before V18) is `SYNTHETIC`, the column default.
 
 Ingestion stores `max_slope_deg` and `min_clearance_m` on `navigation_edge` (V22 added `max_slope_deg`). A missing
-or invalid value is stored as NULL, meaning "not measured". STEP_FREE routing refuses NULL (below).
+or invalid value is stored as NULL, meaning "not measured". STEP_FREE routing refuses NULL (below). It also stores each
+edge's portal (V25: `portal_ax` … `portal_bz`, all or none). A graph with an edge lacking a valid portal is refused
+with `409 NAVIGATION_GRAPH_INVALID`.
 
-Stairs, ramps and elevators between floors are not detected from geometry: each floor is reconstructed on its own, and
-a hallway scan cannot see inside an elevator. Floor-to-floor travel uses registered floor connections (below), not any
+Steps, stairs and ramps **within** a floor's height range are in the navmesh: treads and ramps are ground at their own
+heights, risers are level changes (above). Stairs, ramps and elevators **between floors** are not detected from
+geometry: each floor is reconstructed on its own, and a hallway scan cannot see inside an elevator. Floor-to-floor travel uses registered floor connections (below), not any
 floor's graph. `navigation_edge` can never span two `graph_id`s anyway (its foreign keys are scoped to one graph).
 
 ### What has and has not been validated
 
-- **Validated with the real library:**
-  - `services/reconstruction/tests/navmesh` runs chaya-navmesh (recastnavigation 1.6.0) over a tiny hand-made mesh,
-    `tests/fixtures/navmesh/room_with_doorway.obj`, and asserts:
-    - a Detour tile is produced;
-    - walkable polygons exist at canonical floor height;
-    - the blocked furniture, the wall and a 59.5° wedge are excluded (Euclidean clearance ≥ agent radius − edge
-      error);
-    - Detour routes around the furniture and through the doorway;
-    - the path comes back in canonical coordinates;
-    - every failure state is produced by the real tool.
-  - The same package runs the whole stage through the orchestrator on a synthetic cleaned splat. That splat is an
-    L-shaped floor with furniture, in a half-scale, +Y-up reconstruction frame. The tests assert that nothing is
-    walkable in the unscanned quadrant and that Detour's path bends at the corner.
-  - `PipelineControlPlaneTest` ingests the tool's real output for the fixture (`packages/contracts/fixtures/navmesh`)
-    and routes on it through `RouteService`.
-  - These tests pass on Windows (MinGW GCC 6.3) and on Linux (Debian bookworm GCC, the worker image's build stage).
+- **Validated with the real library, on synthetic geometry:**
+  - `services/reconstruction/tests/navmesh/test_venue_navigation.py` builds the deterministic venue of
+    `tests/navmesh/venue_scene.py` (labelled points, as GEOMETRIC_CLEANUP leaves them):
+    - a 12 × 7 m floor split by a wall with a 1.1 m and a 1.6 m doorway (lintels above head height);
+    - a sofa with the floor under it unseen, a column and a railing;
+    - a platform 0.17 m up, reached over a step or up a 1:14 ramp.
+
+    It then runs it through the surface model, Recast (chaya-navmesh 1.1.0, recastnavigation 1.6.0) and Detour, and
+    asserts that:
+    - the Recast input holds both levels, every obstacle, level changes only at the riser, and the ramp as a
+      4.1° slope;
+    - the wall blocks except through its doorways;
+    - the sofa, the column and the railing block, and a Detour route goes round the sofa;
+    - every point of a string-pulled path is on the navmesh;
+    - STANDARD crosses the step and STEP_FREE takes the ramp, in the Detour query and in the graphs under the API's
+      rules;
+    - without the ramp, STEP_FREE fails closed while STANDARD still routes;
+    - the measured clearance decides the doorway: 0.9 m required uses the 1.1 m door, 1.3 m uses only the 1.6 m one,
+      1.8 m has no route, and with the wide door walled up 1.3 m has no route;
+    - the bake is deterministic.
+  - `test_venue_stage.py` runs the same venue through NAVIGATION_BAKING with the orchestrator, in a scaled, rotated,
+    +Y-up reconstruction frame, and routes on the result. It also runs a re-scan (review N-1): REGION_SPLICE splices
+    the venue's and the region's labels, and NAVIGATION_BAKING on the merged cloud still keeps the sofa and the wall
+    outside the region. Without the venue's labels no merged labels are published and the re-bake is refused.
+  - `test_recast_fixture.py` covers the hand-made `room_with_doorway.obj` and every failure state of the tool.
+  - `test_navigation_baking_stage.py` covers the L-shaped floor (nothing walkable in the unscanned quadrant) and
+    `NAVMESH_LABELS_UNAVAILABLE`.
+  - `PipelineControlPlaneTest` ingests the tool's real output for the venue (`packages/contracts/fixtures/navmesh`,
+    generated by `generate_navmesh_fixture.py` through the stage's own geometry code). It then routes on it through
+    `RouteService`, asserting that:
+    - routes are string-pulled, and no point of any segment is in the wall or the sofa;
+    - STANDARD climbs the step and STEP_FREE goes up the ramp;
+    - the required clear width picks the doorway or fails with `NO_ACCESSIBLE_ROUTE`;
+    - a graph edge without a portal is refused.
+  - These tests ran on Windows (MinGW GCC 6.3) on 2026-10-03. The worker image and CI build the tool from the same
+    source on Linux.
 - **Not validated:** no real reconstructed venue has been through NAVIGATION_BAKING. The stages before it need a CUDA
-  GPU and Open3D (docs/E2E_VALIDATION.md), so nothing here shows routing quality on real scans. The splat-to-geometry
-  step (occupancy grid, obstacle boxes) has only met synthetic point clouds.
+  GPU and Open3D (docs/E2E_VALIDATION.md). Nothing here shows routing quality on real scans: label quality, point
+  density on floors and stairs, and reconstruction height noise against `navmesh_step_min_rise_m` are all unmeasured.
 
 ## Floor connections: `/api/v1/venues/{venueId}/floor-connections`
 
@@ -201,9 +270,17 @@ INVALID_FLOOR_CONNECTION` for:
 
 `dev.chaya.api.navigation.RouteService` runs Dijkstra over `navigation_node`/`navigation_edge`. On a floor that is
 routable, those rows are the Detour polygon graph of the navmesh Recast baked. This is the same polygon-corridor
-search as Detour's `findPath`. It does not do Detour's string pulling (`findStraightPath`), so intermediate waypoints
-are polygon centroids, not a smoothed path. Detour's own string-pulled query exists in the tool (`chaya-navmesh path`)
-and is exercised by the worker tests, but the API does not run it at request time.
+search as Detour's `findPath`. The corridor found is then **string-pulled** through the stored portals
+(`CorridorPath`, the funnel algorithm of Detour's `findStraightPath`), so the reported path stays inside the navmesh
+polygons and turns only at portal corners, keeping their heights (review N-3). Each leg's routing source names its
+`pathMethod`:
+
+- `STRING_PULLED`: the normal case.
+- `PORTAL_MIDPOINTS`: when the string-pulled path would cross a reported obstacle. Still inside the corridor.
+- `POLYGON_CENTROIDS`: SYNTHETIC test graphs without portals, or when both of the above cross a reported obstacle.
+  The centroid segments are the ones checked against obstacles.
+
+A RECAST_NAVMESH graph ingested before portals were recorded is not routable: `NAVMESH_NOT_READY`, bake again.
 
 - **Navmesh only**: a floor is routed on only if its ACTIVE graph for the requested profile has `source =
   'RECAST_NAVMESH'` and was baked in the floor's current frame. There is no fallback to any other graph.
@@ -239,9 +316,10 @@ and is exercised by the worker tests, but the API does not run it at request tim
   - every edge whose segment crosses it (Liang–Barsky segment/box clipping), even with both endpoints outside;
   - a start or destination snap segment that crosses it.
 
-  A start or destination inside a box has no route. Blocking is tested on the centroid-to-centroid segments the route
-  reports, not on Detour's polygon interiors: a box that clips a polygon without crossing any of its edge segments does
-  not block it.
+  A start or destination inside a box has no route. An edge is excluded when its centroid-to-centroid segment crosses
+  a box, not when a box merely clips a polygon. The reported path is checked as well: if the string-pulled path
+  crosses a box, the route falls back to portal midpoints, then to the checked centroid segments, and never reports a
+  path through a reported obstacle.
 - **Distance and time**:
   - An edge's routing weight is the 3-D distance between its nodes' canonical positions. The stored `length_m` is
     not read.
@@ -293,10 +371,11 @@ or `INVALID_START` (non-finite). The worker's own Detour query (`chaya_worker.re
 | Quantity | Status | Source and limits |
 |---|---|---|
 | Canonical frame: metres, +Z against gravity | **measured** at calibration | Known distances or control points give scale. The floor plane, operator floor points or control points give gravity ([coordinate-frames.md](coordinate-frames.md)). |
-| Walkable surface, obstacles, erosion | **measured** from the reconstruction, then Recast | Observed floor cells, and wall/furniture points in the agent's height band. Recast applies its slope, climb, height and radius filters. |
+| Walkable surface, obstacles, erosion | **measured** from the reconstruction, then Recast | The surface model: the lowest dense band of floor/stairs points per cell (multi-level), and wall/furniture/clutter/unknown points in the agent's band above their local ground. Recast applies its slope, climb, height and radius filters. Depends on the semantic labels being right: a sofa labelled floor is ground. |
+| Steps (level changes) | **measured** | Neighbouring ground cells more than `navmesh_step_min_rise_m` (0.03 m) apart. A smaller lip is not detected. Reconstruction height noise above 0.03 m would mark false steps, which makes STEP_FREE fail closed more often. Neither has been measured on real data. |
 | Node positions, edge 3-D length, route distance on a floor | **measured** (derived from the canonical geometry) | Polygon centroids and polyline length. |
-| Edge slope (`max_slope_deg`) | **measured** against canonical +Z | Polygon face normals and the centroid grade. These come from the coarse Detour polygons, not the detail mesh, so a step smaller than what the coarse polygons show is not seen. |
-| Edge clearance (`min_clearance_m`) | **measured**, conservatively | The Detour portal length after agent-radius erosion. The true corridor is wider by about two agent radii. A portal can also cross the corridor at an angle. |
+| Edge slope (`max_slope_deg`) | **measured** against canonical +Z | The reconstructed surface slope under both polygons, and the centroid grade on reconstructed heights. Steps are caught by the level-change flag as well as the grade. |
+| Edge clearance (`min_clearance_m`) | **measured** on the obstacle geometry | The bottleneck of the widest path between the two polygons, where width is what a body centred at a cell has (2 × distance to the nearest obstacle or hole − one cell). Resolution is one 0.1 m cell, conservatively. Measured on the reconstruction's obstacles and holes, so an unscanned area beside a corridor narrows it. |
 | Agent size: radius 0.35 m, height 1.8 m, climb 0.4 m, max slope 45° | **assumed** | Worker settings (`chaya_worker.settings`). |
 | Accessibility limits: 0.9 m clear width, 4.76° slope | **assumed** (ADA-derived) | `chaya.navigation.*`. The worker bakes STEP_FREE at 5° (`navmesh_max_ramp_slope_deg`); the API then applies 4.76°. |
 | Floor connections: existence, landings, stairs/ramp walked length, ramp slope, clear width | **registered by staff**, not reconstructed | `floor_connection`. Chaya cannot check them against geometry. |
@@ -317,10 +396,11 @@ or `INVALID_START` (non-finite). The worker's own Detour query (`chaya_worker.re
     - metric distance and duration from the geometry rather than stored lengths;
     - every failure code.
   - `RouteGeometryTest` covers segment/box blocking and polyline length.
+  - `CorridorPathTest` covers string-pulling: on an L-shaped corridor every segment lies inside the polygons and the path
+    turns exactly at the inner corner; a jogging corridor that the centroid polyline leaves, but the pulled path does not.
   - `tests/unit/test_navigation_baking.py` covers slope, rise and run against canonical +Z, and a step between two
     level polygons.
 - **Not validated:**
   - No real venue has been routed on.
   - No real multi-floor venue has registered connections.
-  - No reconstruction has put a stair or ramp into the navmesh input. The input is still the single floor plane, so a
-    floor's STEP_FREE and STANDARD graphs differ only where that one plane's polygons do.
+  - No real reconstruction has put a stair or ramp into the navmesh input. The synthetic venue fixture does (above).

@@ -32,6 +32,7 @@ from .navmesh import (
     NavmeshError,
     NavmeshToolUnavailable,
     Polygon,
+    obj_groups,
 )
 from .recast_boundary import CONVERSION, RECAST_UP_AXIS, canonical_half_extents_to_recast, canonical_to_recast, recast_to_canonical
 
@@ -132,10 +133,11 @@ def resolve_tool(toolchain: Any) -> tuple[str, dict[str, str]]:
 
 
 def write_recast_obj(path: Path, geometry: NavGeometry) -> None:
-    """The geometry as the tool reads it: Recast-frame vertices, blocked triangles under `g obstacle`."""
+    """The geometry as the tool reads it: Recast-frame vertices, in the groups of navmesh.obj_groups (`level_change`,
+    `obstacle`)."""
     recast = canonical_to_recast(geometry.vertices)
     lines = [f"v {v[0]:.6f} {v[1]:.6f} {v[2]:.6f}" for v in recast]
-    for group, mask in (("walkable_candidates", ~geometry.obstacle), ("obstacle", geometry.obstacle)):
+    for group, mask in obj_groups(geometry):
         if mask.any():
             lines.append(f"g {group}")
             lines += [f"f {t[0] + 1} {t[1] + 1} {t[2] + 1}" for t in geometry.triangles[mask]]
@@ -156,7 +158,7 @@ def polygons_from_report(report: dict[str, Any]) -> list[Polygon]:
             raise NavmeshError(f"navmesh polygon {raw.get('id')} has fewer than 3 vertices", code=NAVMESH_BUILD_FAILED)
         links = [Link(int(link["neighbor"]), (_canonical_point(link["portal"][0]), _canonical_point(link["portal"][1])))
                  for link in raw.get("links", [])]
-        polygons.append(Polygon(int(raw["id"]), vertices, links))
+        polygons.append(Polygon(int(raw["id"]), vertices, links, int(raw.get("area", 63)), int(raw.get("flags", 1))))
     return polygons
 
 
@@ -203,15 +205,17 @@ def bake(tool_path: str, geometry: NavGeometry, config: RecastConfig, workdir: P
 
 
 def find_path(tool_path: str, navmesh_path: Path, start: np.ndarray, end: np.ndarray, workdir: Path, runner: Runner, *,
-              snap_horizontal_m: float, snap_vertical_m: float) -> dict[str, Any]:
+              snap_horizontal_m: float, snap_vertical_m: float, step_free: bool = False) -> dict[str, Any]:
     """Detour's own query (findNearestPoly, findPath, findStraightPath) between two canonical points. Returns the
     straight path and the snapped endpoints in canonical coordinates, and the polygon corridor. NO_ROUTE when
-    either point is off the navmesh or they are not connected -- never a partial path."""
+    either point is off the navmesh or they are not connected -- never a partial path. `step_free` excludes the
+    level-change polygons (POLYFLAG_LEVEL_CHANGE) from the query."""
     out = workdir / "navmesh-path.json"
     s, e = canonical_to_recast(np.asarray(start, dtype=np.float64)), canonical_to_recast(np.asarray(end, dtype=np.float64))
     ext = canonical_half_extents_to_recast(snap_horizontal_m, snap_vertical_m)
     argv = [tool_path, "path", "--navmesh", str(navmesh_path), "--output", str(out),
-            "--start", *(repr(float(c)) for c in s), "--end", *(repr(float(c)) for c in e), "--half-extents", *(repr(float(c)) for c in ext)]
+            "--start", *(repr(float(c)) for c in s), "--end", *(repr(float(c)) for c in e), "--half-extents", *(repr(float(c)) for c in ext),
+            *(["--step-free"] if step_free else [])]
     proc = runner.run(argv, check=False, error_code=NAVMESH_BUILD_FAILED, timeout=120)
     report = _read_report(out)
     if proc.returncode != 0:

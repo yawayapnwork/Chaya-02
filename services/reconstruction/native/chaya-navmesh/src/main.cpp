@@ -8,11 +8,15 @@
 //
 //   chaya-navmesh --version
 //   chaya-navmesh bake --input geometry.obj --navmesh out.navmesh --report out.json <config flags, all required>
-//   chaya-navmesh path --navmesh in.navmesh --start X Y Z --end X Y Z --half-extents X Y Z --output path.json
+//   chaya-navmesh path --navmesh in.navmesh --start X Y Z --end X Y Z --half-extents X Y Z --output path.json [--step-free]
 //
 // Input OBJ: `v x y z` and `f a b c ...` lines (polygons are fan-triangulated; `a/b/c` and negative indices are
 // accepted). Faces under a group or object whose name starts with "obstacle" are blocked geometry: they are rasterised
-// as solid, never walkable, whatever their slope. All other faces are walkable only if Recast's own slope test passes.
+// as solid, never walkable, whatever their slope. Faces under a group whose name starts with "level_change" are walkable
+// surface next to a step (a discontinuity in height the agent can climb but a step-free route must not cross): if they
+// pass Recast's slope test they get their own area, AREA_LEVEL_CHANGE, which Recast keeps in regions and polygons of
+// their own, and their polygons carry POLYFLAG_LEVEL_CHANGE. All other faces are walkable only if Recast's own slope test
+// passes. `path --step-free` excludes POLYFLAG_LEVEL_CHANGE polygons from the Detour query.
 //
 // Exit status (also written to the report as "status"):
 //   0 OK   2 INVALID_ARGUMENTS   3 INVALID_GEOMETRY   4 NO_WALKABLE_SURFACE   5 NAVMESH_BUILD_FAILED
@@ -56,6 +60,8 @@ const char* statusName(int code) {
 }
 
 const unsigned short POLYFLAG_WALK = 0x01;
+const unsigned short POLYFLAG_LEVEL_CHANGE = 0x02;
+const unsigned char AREA_LEVEL_CHANGE = 1;  // RC_WALKABLE_AREA (63) is every other walkable surface
 
 // ---- small JSON writer ------------------------------------------------------------------------------------------
 
@@ -144,6 +150,7 @@ struct Geometry {
     std::vector<float> verts;
     std::vector<int> tris;
     std::vector<unsigned char> obstacle;  // per triangle
+    std::vector<unsigned char> levelChange;  // per triangle
 };
 
 // Returns an empty string on success, otherwise why the geometry is invalid.
@@ -158,6 +165,7 @@ std::string readObj(const std::string& path, Geometry& g, bool& ioError) {
     fclose(fp);
 
     bool inObstacle = false;
+    bool inLevelChange = false;
     size_t pos = 0;
     int lineNo = 0;
     while (pos < content.size()) {
@@ -171,6 +179,7 @@ std::string readObj(const std::string& path, Geometry& g, bool& ioError) {
         if ((line[0] == 'g' || line[0] == 'o') && line[1] == ' ') {
             const std::string name = line.substr(2);
             inObstacle = name.compare(0, 8, "obstacle") == 0;
+            inLevelChange = name.compare(0, 12, "level_change") == 0;
         } else if (line[0] == 'v' && line[1] == ' ') {
             float x, y, z;
             if (sscanf(line.c_str() + 2, "%f %f %f", &x, &y, &z) != 3)
@@ -198,6 +207,7 @@ std::string readObj(const std::string& path, Geometry& g, bool& ioError) {
             for (size_t k = 2; k < idx.size(); ++k) {
                 g.tris.push_back(idx[0]); g.tris.push_back(idx[k - 1]); g.tris.push_back(idx[k]);
                 g.obstacle.push_back(inObstacle ? 1 : 0);
+                g.levelChange.push_back(inLevelChange ? 1 : 0);
             }
         }
     }
@@ -276,10 +286,11 @@ int bake(const Args& a) {
 
     float bmin[3], bmax[3];
     rcCalcBounds(&g.verts[0], nverts, bmin, bmax);
-    int obstacleTris = 0;
-    for (int i = 0; i < ntris; ++i) obstacleTris += g.obstacle[i];
+    int obstacleTris = 0, levelChangeTris = 0;
+    for (int i = 0; i < ntris; ++i) { obstacleTris += g.obstacle[i]; levelChangeTris += g.levelChange[i]; }
     r.add("input", "{" + jstr("vertices") + ":" + fmt("%d", nverts) + "," + jstr("triangles") + ":" + fmt("%d", ntris) + ","
-        + jstr("obstacle_triangles") + ":" + fmt("%d", obstacleTris) + "," + jstr("bounds_min") + ":" + jvec(bmin) + ","
+        + jstr("obstacle_triangles") + ":" + fmt("%d", obstacleTris) + "," + jstr("level_change_triangles") + ":"
+        + fmt("%d", levelChangeTris) + "," + jstr("bounds_min") + ":" + jvec(bmin) + ","
         + jstr("bounds_max") + ":" + jvec(bmax) + "}");
     if (bmax[0] - bmin[0] <= 0 || bmax[2] - bmin[2] <= 0)
         return finish(r, reportPath, INVALID_GEOMETRY, "the geometry has no horizontal extent");
@@ -323,12 +334,14 @@ int bake(const Args& a) {
     // 1. Walkable surface filtering: Recast's slope test, then blocked geometry forced solid-but-unwalkable.
     std::vector<unsigned char> areas(ntris, 0);
     rcMarkWalkableTriangles(&ctx, cfg.walkableSlopeAngle, &g.verts[0], nverts, &g.tris[0], ntris, &areas[0]);
-    int walkableTris = 0;
+    int walkableTris = 0, levelChangeWalkable = 0;
     for (int i = 0; i < ntris; ++i) {
         if (g.obstacle[i]) areas[i] = RC_NULL_AREA;
+        if (areas[i] != RC_NULL_AREA && g.levelChange[i]) { areas[i] = AREA_LEVEL_CHANGE; ++levelChangeWalkable; }
         if (areas[i] != RC_NULL_AREA) ++walkableTris;
     }
-    stages += jstr("walkable_triangles") + ":" + fmt("%d", walkableTris);
+    stages += jstr("walkable_triangles") + ":" + fmt("%d", walkableTris) + "," + jstr("level_change_walkable_triangles") + ":"
+        + fmt("%d", levelChangeWalkable);
     if (walkableTris == 0) {
         r.add("stages", stages + "}");
         return finish(r, reportPath, NO_WALKABLE_SURFACE, "no triangle is within the agent's maximum slope");
@@ -388,7 +401,10 @@ int bake(const Args& a) {
         return finish(r, reportPath, NAVMESH_BUILD_FAILED, "too many vertices for one Detour tile");
 
     // 7. Detour navmesh data (Detour's own serialised tile format).
-    for (int i = 0; i < pmesh->npolys; ++i) pmesh->flags[i] = pmesh->areas[i] == RC_WALKABLE_AREA ? POLYFLAG_WALK : 0;
+    for (int i = 0; i < pmesh->npolys; ++i) {
+        const unsigned char area = pmesh->areas[i];
+        pmesh->flags[i] = area == RC_NULL_AREA ? 0 : (unsigned short)(POLYFLAG_WALK | (area == AREA_LEVEL_CHANGE ? POLYFLAG_LEVEL_CHANGE : 0));
+    }
     dtNavMeshCreateParams params;
     memset(&params, 0, sizeof(params));
     params.verts = pmesh->verts;
@@ -491,9 +507,11 @@ int path(const Args& a) {
     dtNavMeshQuery* query = dtAllocNavMeshQuery();
     if (!query || dtStatusFailed(query->init(nav, 4096)))
         return finish(r, outputPath, NAVMESH_BUILD_FAILED, "could not initialise the Detour query");
+    const bool stepFree = a.find("--step-free") >= 0;
     dtQueryFilter filter;
     filter.setIncludeFlags(POLYFLAG_WALK);
-    filter.setExcludeFlags(0);
+    filter.setExcludeFlags(stepFree ? POLYFLAG_LEVEL_CHANGE : 0);
+    r.add("filter", "{" + jstr("step_free") + ":" + (stepFree ? "true" : "false") + "}");
 
     dtPolyRef startRef = 0, endRef = 0;
     float startPt[3], endPt[3];

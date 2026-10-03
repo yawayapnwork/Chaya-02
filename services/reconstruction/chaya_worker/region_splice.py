@@ -125,6 +125,18 @@ def seam_step(added_canonical: np.ndarray, kept_canonical: np.ndarray, polygon_x
             "step_m": float(np.median(step))}
 
 
+def splice_labels(global_labels: np.ndarray, region_labels: np.ndarray, result: SpliceResult) -> np.ndarray:
+    """Pure: the semantic labels of `result.merged`, Gaussian for Gaussian -- the kept venue Gaussians' labels, then the
+    added region Gaussians' -- with exactly the index sets splice_region used for the Gaussians themselves."""
+    global_labels, region_labels = np.asarray(global_labels, dtype=object), np.asarray(region_labels, dtype=object)
+    kept = np.ones(len(global_labels), dtype=bool)
+    kept[result.removed_global_indices] = False
+    merged = np.concatenate([global_labels[kept], region_labels[result.added_region_indices]])
+    if len(merged) != len(result.merged):
+        raise ValueError(f"spliced labels ({len(merged)}) do not match the spliced cloud ({len(result.merged)})")
+    return merged
+
+
 def splice_region(global_cloud: GaussianCloud, aligned_region_cloud: GaussianCloud, polygon_xy: np.ndarray,
                   to_canonical: Similarity, *, z_margin_m: float, seam_band_m: float, max_seam_step_m: float) -> SpliceResult:
     """Replaces the venue's geometry in the region volume with the aligned region's (see the module docstring).

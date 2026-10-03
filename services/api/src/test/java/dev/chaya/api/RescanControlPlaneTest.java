@@ -45,6 +45,7 @@ class RescanControlPlaneTest extends PipelineTestSupport {
     /** The parent reconstruction's canonical frame (an identity fixture frame), set by finalizedParentWithGlobalCloud. */
     private UUID parentFrame;
     private UUID parentRun;
+    private UUID parentLabels;
 
     /** A FINALIZED parent ScanVersion of a full run: the run's real GEOMETRIC_CLEANUP output (kind SPLAT_CLEAN) in the
      * derived bucket and a KSPLAT row, both pinned by the version, and the run's canonical frame recorded on it --
@@ -89,6 +90,20 @@ class RescanControlPlaneTest extends PipelineTestSupport {
                 """)
             .param("o", c.org()).param("v", c.venue()).param("s", scan).param("j", job).param("key", key)
             .param("sha", sha256(data)).param("sz", data.length).param("sr", stageRun).query(UUID.class).single();
+        // GEOMETRIC_CLEANUP publishes the cleaned labels with the cloud, in the same stage run (chaya_worker.stages.geometric_cleanup)
+        String labelsKey = key.replace("splat-clean.ply", "semantic-labels-clean.json");
+        byte[] labels = "{\"labels\":[\"floor\"]}".getBytes(StandardCharsets.UTF_8);
+        String labelsUpload = derived.beginMultipart(labelsKey, "application/json");
+        String labelsEtag = derived.uploadPart(labelsKey, labelsUpload, 1, labels);
+        derived.completeMultipart(labelsKey, labelsUpload, List.of(new ObjectStore.PartEtag(1, labelsEtag)));
+        parentLabels = jdbc.sql("""
+                INSERT INTO processing_artifact (id, organization_id, venue_id, scan_id, job_id, stage, bucket, object_key,
+                    checksum_sha256, content_type, size_bytes, kind, stage_run_id, contains_pii, partial)
+                VALUES (gen_random_uuid(), :o, :v, :s, :j, 'GEOMETRIC_CLEANUP', 'chaya-derived-test', :key, :sha,
+                    'application/json', :sz, 'SEMANTIC_LABELS_CLEAN', :sr, false, false) RETURNING id
+                """)
+            .param("o", c.org()).param("v", c.venue()).param("s", scan).param("j", job).param("key", labelsKey)
+            .param("sha", sha256(labels)).param("sz", labels.length).param("sr", stageRun).query(UUID.class).single();
         UUID ksplat = fx.publishedArtifact(c.org(), c.venue(), scan, run, "ARTIFACT_GENERATION", "KSPLAT");
 
         UUID version = jdbc.sql("""
@@ -125,7 +140,8 @@ class RescanControlPlaneTest extends PipelineTestSupport {
     /** Drives claim/succeed through every stage up to (not including) REGION_ALIGNMENT. */
     private void runThroughGeometricCleanup() throws Exception {
         for (JobStage stage : List.of(JobStage.INPUT_VALIDATION, JobStage.FFMPEG_PREPROCESS, JobStage.FRAME_QUALITY_FILTER,
-                JobStage.PRIVACY_PREPROCESS, JobStage.POSE_ESTIMATION, JobStage.SPLAT_RECONSTRUCTION, JobStage.GEOMETRIC_CLEANUP)) {
+                JobStage.PRIVACY_PREPROCESS, JobStage.POSE_ESTIMATION, JobStage.SPLAT_RECONSTRUCTION, JobStage.SEMANTIC_SEGMENTATION,
+                JobStage.GEOMETRIC_CLEANUP)) {
             succeed(claimExpecting(stage.name()));
         }
     }
@@ -186,7 +202,8 @@ class RescanControlPlaneTest extends PipelineTestSupport {
         // the parent version is exactly as it was
         assertThat(versionRow(parent)).isEqualTo(parentBefore);
         assertThat(jdbc.sql("SELECT count(*) FROM processing_artifact a JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id "
-            + "WHERE sr.run_id = :r").param("r", parentRun).query(Integer.class).single()).isEqualTo(2);
+            + "WHERE sr.run_id = :r").param("r", parentRun).query(Integer.class).single())
+            .as("the parent's cloud, its labels and its KSPLAT, nothing added").isEqualTo(3);
     }
 
     @Test
@@ -246,7 +263,17 @@ class RescanControlPlaneTest extends PipelineTestSupport {
         assertThat(alignOrder.get("parentCoordinateFrame").get("id").asText()).isEqualTo(parentFrame.toString());
         send(alignOrder, acceptedAlignmentReport(alignOrder, alignment(0.9, true, 1.01)), svc).andExpect(status().isOk());
 
+        assertThat(alignOrder.get("inputs").findValuesAsText("kind")).doesNotContain("GLOBAL_LABELS");
         JsonNode spliceOrder = claimExpecting("REGION_SPLICE");
+        // Review N-1: the splice gets the parent's labels -- exactly those published with the pinned cloud -- so it can
+        // carry every wall and piece of furniture outside the region into SEMANTIC_LABELS_MERGED for NAVIGATION_BAKING.
+        List<String> globalLabels = new java.util.ArrayList<>();
+        for (JsonNode in : spliceOrder.get("inputs")) {
+            if (in.get("kind").asText().equals("GLOBAL_LABELS")) {
+                globalLabels.add(in.get("artifactId").asText());
+            }
+        }
+        assertThat(globalLabels).containsExactly(parentLabels.toString());
         assertThat(spliceOrder.get("coordinateFrame").get("id").asText())
             .as("from the splice on, the run's geometry is in the parent reconstruction's frame").isEqualTo(parentFrame.toString());
         Map<String, Object> splice = new LinkedHashMap<>();

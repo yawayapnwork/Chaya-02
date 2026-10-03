@@ -7,7 +7,7 @@ configured model changes. Pure function, no ML dependency, unit-testable on its 
 
 from __future__ import annotations
 
-FLOOR, WALL, FURNITURE, CLUTTER, UNKNOWN = "floor", "wall", "furniture", "clutter", "unknown"
+FLOOR, WALL, FURNITURE, CLUTTER, STAIRS, UNKNOWN = "floor", "wall", "furniture", "clutter", "stairs", "unknown"
 
 # Longest/most specific keywords first within a bucket only matters for readability; matching is
 # substring-based over the lower-cased label name, checked in a fixed bucket order (floor/wall are
@@ -15,11 +15,14 @@ FLOOR, WALL, FURNITURE, CLUTTER, UNKNOWN = "floor", "wall", "furniture", "clutte
 _FLOOR_KEYWORDS = ("floor", "rug", "carpet", "mat", "runway", "road", "sidewalk", "pavement", "ground", "grass", "field")
 _WALL_KEYWORDS = ("wall", "fence", "wall-", "partition", "column", "pillar")
 _CEILING_AS_WALL = ("ceiling",)
+# Stairs and steps are walkable surface at their own heights (chaya_worker.navmesh.GROUND_LABELS), not furniture: NAVIGATION_BAKING
+# needs their treads as ground to put a step into the navmesh. Railings and escalators stay obstacles.
+_STAIRS_KEYWORDS = ("stairs", "staircase", "stairway", "step")
 _FURNITURE_KEYWORDS = (
     "chair", "table", "sofa", "couch", "bed", "desk", "cabinet", "shelf", "shelving", "bookcase", "wardrobe",
     "armchair", "bench", "counter", "cupboard", "chest of drawers", "ottoman", "stool", "sink", "toilet",
     "bathtub", "refrigerator", "stove", "oven", "microwave", "dishwasher", "wardrobe", "door", "window",
-    "stairs", "staircase", "railing", "fireplace", "bar", "pool table", "buffet", "dresser",
+    "railing", "fireplace", "bar", "pool table", "buffet", "dresser",
 )
 
 
@@ -29,6 +32,8 @@ def bucket_label(model_label: str) -> str:
         return FLOOR
     if any(k in name for k in _WALL_KEYWORDS) or any(k in name for k in _CEILING_AS_WALL):
         return WALL
+    if any(k in name for k in _STAIRS_KEYWORDS) and "escalator" not in name:
+        return STAIRS
     if any(k in name for k in _FURNITURE_KEYWORDS):
         return FURNITURE
     return CLUTTER

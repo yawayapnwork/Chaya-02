@@ -32,6 +32,9 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
 
     @Autowired PipelineService pipeline;
     @Autowired RouteService routes;
+    @Autowired dev.chaya.api.security.TenantGuard guard;
+    @Autowired dev.chaya.api.frame.CoordinateFrameService frames;
+    @Autowired dev.chaya.api.rescan.ScanVersionService versions;
 
     // ---- success only when every stage succeeded --------------------------------------------
 
@@ -494,6 +497,37 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
         return poi;
     }
 
+    private RouteService routesNeeding(double clearanceM) {
+        return new RouteService(jdbc, guard, new dev.chaya.api.navigation.NavigationProperties(0, 0, 0, clearanceM, 0, 0, 0, false),
+            frames, versions);
+    }
+
+    private static List<double[]> segmentSamples(RouteResponse route) {
+        List<double[]> out = new java.util.ArrayList<>();
+        for (int i = 1; i < route.waypoints().size(); i++) {
+            var a = route.waypoints().get(i - 1);
+            var b = route.waypoints().get(i);
+            for (int k = 0; k <= 200; k++) {
+                double t = k / 200.0;
+                out.add(new double[]{a.x() + (b.x() - a.x()) * t, a.y() + (b.y() - a.y()) * t});
+            }
+        }
+        return out;
+    }
+
+    /** Which doorway of the fixture's wall (x = 4) the route crosses. */
+    private static String doorwayCrossed(RouteResponse route) {
+        for (int i = 1; i < route.waypoints().size(); i++) {
+            var a = route.waypoints().get(i - 1);
+            var b = route.waypoints().get(i);
+            if ((a.x() - 4.0) * (b.x() - 4.0) <= 0 && a.x() != b.x()) {
+                double y = a.y() + (b.y() - a.y()) * (4.0 - a.x()) / (b.x() - a.x());
+                return y > 2.0 && y < 3.1 ? "NARROW" : y > 5.0 && y < 6.6 ? "WIDE" : "WALL at y=" + y;
+            }
+        }
+        return "NONE";
+    }
+
     private UUID insertNode(Started s, UUID graph, UUID floor, double x) {
         return jdbc.sql("INSERT INTO navigation_node (organization_id, venue_id, graph_id, floor_id, x, y, z) "
                 + "VALUES (:o, :v, :g, :f, :x, 0, 0) RETURNING id")
@@ -529,6 +563,13 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
                 graph.replace(navmeshSha, "0".repeat(64)));
             send(order, report("SUCCEEDED", List.of(nav, man, unbound), null, null), svc).andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("NAVMESH_BINDING_INVALID"));
+            // A graph whose edge lost its Detour portal cannot be string-pulled along the navmesh: refused (V25, review N-3).
+            JsonNode portalless = mapper.readTree(graph);
+            ((com.fasterxml.jackson.databind.node.ObjectNode) portalless.get("graphs").get("STANDARD").get("edges").get(0)).remove("portal");
+            var noPortal = artifact(order, "navigation-graph-no-portal.json", "NAVIGATION_GRAPH", false, false,
+                mapper.writeValueAsString(portalless));
+            send(order, report("SUCCEEDED", List.of(nav, man, noPortal), null, null), svc).andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("NAVIGATION_GRAPH_INVALID"));
             // So is a graph published without the NAVMESH artifact itself.
             var graphOnly = artifact(order, "navigation-graph.json", "NAVIGATION_GRAPH", false, false, graph);
             send(order, report("SUCCEEDED", List.of(graphOnly), null, null), svc).andExpect(status().isConflict())
@@ -562,6 +603,9 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
             .param("v", s.c().venue()).query(Integer.class).single();
         assertThat(unmeasured).as("every edge of the real Recast graph carries a measured slope and clearance").isZero();
 
+        // The fixture is the synthetic venue of services/reconstruction/tests/navmesh/venue_scene.py: a wall at x 3.9-4.1
+        // with doorways at y 2.0-3.1 (1.1 m) and y 5.0-6.6 (1.6 m), a sofa at x 1-2 / y 3.6-4.8, and a platform 0.17 m up
+        // at x >= 9.5, reached over a step (y < 3.0) or up a 1:14 ramp (y > 3.3), the lanes split by a railing.
         // Route across the wall, from the left room to the right one, on the ingested navmesh graph.
         Actor viewer = new Actor(Actor.Kind.USER, "viewer", s.c().org(), Set.of(s.c().venue()), Set.of(Role.VIEWER));
         UUID farRoom = insertPoiInCurrentFrame(s, s.c().floor(), 6.0, 3.0, 0.05);
@@ -570,14 +614,37 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
             assertThat(src.source()).isEqualTo("RECAST_NAVMESH");
             assertThat(src.navmeshSha256()).isEqualTo(navmeshSha);
             assertThat(src.recastnavigationVersion()).isEqualTo("1.6.0");
+            assertThat(src.pathMethod()).as("string-pulled through the Detour portals (review N-3)").isEqualTo("STRING_PULLED");
         });
-        assertThat(route.distanceMeters()).isBetween(5.0, 10.0);
-        assertThat(route.waypoints()).allSatisfy(w -> {
-            assertThat(w.z()).as("canonical z-up floor height").isBetween(-0.2, 0.2);
-            boolean inWall = w.x() > 3.9 && w.x() < 4.1 && w.y() < 2.6;
-            boolean inFurniture = w.x() > 1.5 && w.x() < 2.5 && w.y() > 1.0 && w.y() < 2.0;
-            assertThat(inWall || inFurniture).as("no waypoint inside blocked geometry: " + w).isFalse();
+        assertThat(route.distanceMeters()).isBetween(5.0, 7.0);
+        assertThat(route.waypoints()).allSatisfy(w -> assertThat(w.z()).as("canonical z-up floor height").isBetween(-0.2, 0.2));
+        // Not just the waypoints: every point of every segment stays out of the wall and the sofa.
+        assertThat(segmentSamples(route)).allSatisfy(p -> {
+            boolean inWall = p[0] > 3.9 && p[0] < 4.1 && !(p[1] > 2.0 && p[1] < 3.1) && !(p[1] > 5.0 && p[1] < 6.6);
+            boolean inSofa = p[0] > 1.0 && p[0] < 2.0 && p[1] > 3.6 && p[1] < 4.8;
+            assertThat(inWall || inSofa).as("the route crosses blocked geometry at (%.2f, %.2f)", p[0], p[1]).isFalse();
         });
+
+        // A step and a ramp: STANDARD climbs the 0.17 m step; STEP_FREE goes round the railing and up the ramp.
+        UUID platform = insertPoiInCurrentFrame(s, s.c().floor(), 11.0, 1.5, 0.17);
+        List<Double> stepLane = List.of(8.5, 1.5, 0.0);
+        RouteResponse standard = routes.route(viewer, new RouteRequest(s.c().venue(), s.c().floor(), stepLane, platform, null, null));
+        RouteResponse stepFree = routes.route(viewer, new RouteRequest(s.c().venue(), s.c().floor(), stepLane, platform, "STEP_FREE", null));
+        assertThat(standard.distanceMeters()).isLessThan(3.5);
+        assertThat(standard.waypoints()).allSatisfy(w -> assertThat(w.y()).isLessThan(3.0));
+        assertThat(stepFree.waypoints()).anySatisfy(w -> assertThat(w.y()).as("up the ramp lane").isGreaterThan(3.3));
+        assertThat(stepFree.distanceMeters()).isGreaterThan(standard.distanceMeters() + 3.0);
+        assertThat(stepFree.waypoints().get(stepFree.waypoints().size() - 1).z()).isCloseTo(0.17, org.assertj.core.api.Assertions.within(0.02));
+
+        // Clearance, measured on the reconstruction's walls, decides which doorway an accessible route may use.
+        UUID east = insertPoiInCurrentFrame(s, s.c().floor(), 6.0, 2.5, 0.0);
+        RouteRequest acrossTheWall = new RouteRequest(s.c().venue(), s.c().floor(), List.of(1.0, 2.5, 0.0), east, "STEP_FREE", null);
+        assertThat(doorwayCrossed(routes.route(viewer, acrossTheWall))).as("1.1 m doorway, 0.9 m needed").isEqualTo("NARROW");
+        assertThat(doorwayCrossed(routesNeeding(1.3).route(viewer, acrossTheWall))).as("1.3 m needed: only the 1.6 m doorway")
+            .isEqualTo("WIDE");
+        assertThatThrownBy(() -> routesNeeding(1.8).route(viewer, acrossTheWall))
+            .as("nothing on the floor is 1.8 m wide: fails closed")
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.code()).isEqualTo("NO_ACCESSIBLE_ROUTE"));
 
         // A floor whose only graph was hand-inserted is never routed on: NAVMESH_NOT_READY, not a fallback.
         UUID floor2 = fx.floor(s.c().org(), s.c().venue(), 7);

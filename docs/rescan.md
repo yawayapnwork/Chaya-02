@@ -39,12 +39,17 @@ pipeline run, not a separate system.
 
 ```
 INPUT_VALIDATION -> FFMPEG_PREPROCESS -> FRAME_QUALITY_FILTER -> PRIVACY_PREPROCESS -> POSE_ESTIMATION ->
-SPLAT_RECONSTRUCTION -> GEOMETRIC_CLEANUP -> REGION_ALIGNMENT -> REGION_SPLICE ->
+SPLAT_RECONSTRUCTION -> SEMANTIC_SEGMENTATION -> GEOMETRIC_CLEANUP -> REGION_ALIGNMENT -> REGION_SPLICE ->
 PLANE_FITTING -> ARTIFACT_GENERATION -> SEMANTIC_INDEXING -> [NAVIGATION_BAKING]
 ```
 
-The first seven stages are identical to the full-venue plan, run against only the newly captured region's
-media -- the worker never sees the rest of the venue's frames. `PLANE_FITTING`, `ARTIFACT_GENERATION`,
+The first eight stages are identical to the full-venue plan, run against only the newly captured region's
+media -- the worker never sees the rest of the venue's frames. `SEMANTIC_SEGMENTATION` labels the region
+(review N-1): `GEOMETRIC_CLEANUP` cleans the labels with the cloud, and `REGION_SPLICE` splices them into the
+venue's labels -- the control plane hands it the parent's `SEMANTIC_LABELS_CLEAN`/`_MERGED` from the same stage
+run as the pinned cloud, as `GLOBAL_LABELS` -- with exactly the index sets it uses for the Gaussians, publishing
+`SEMANTIC_LABELS_MERGED`. `NAVIGATION_BAKING` refuses to bake a splat without labels for exactly that cloud
+(`NAVMESH_LABELS_UNAVAILABLE`), so a re-bake never drops the walls and furniture outside the region. `PLANE_FITTING`, `ARTIFACT_GENERATION`,
 `SEMANTIC_INDEXING` and (when included) `NAVIGATION_BAKING` all run on `REGION_SPLICE`'s output (kind
 `SPLAT_MERGED`) rather than the region alone, because they need the whole venue's up-to-date geometry, not
 just the part that changed (`chaya_worker` stages prefer `SPLAT_MERGED` over `SPLAT_CLEAN`/`SPLAT` when

@@ -12,7 +12,7 @@
 # the same release) and nothing is downloaded.
 
 cmake_minimum_required(VERSION 3.16)
-project(chaya_navmesh VERSION 1.0.0 LANGUAGES CXX)
+project(chaya_navmesh VERSION 1.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
