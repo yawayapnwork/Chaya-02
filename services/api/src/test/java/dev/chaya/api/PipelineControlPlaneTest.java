@@ -424,7 +424,12 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
             + "\"objects\":[{\"label\":\"" + label + "\",\"confidence\":" + confidence + ",\"position\":[" + x + "," + y + "," + z + "],"
             + "\"embedding\":[" + embedding + "],"
             + "\"bbox_px\":{\"x\":10,\"y\":20,\"width\":50,\"height\":80,\"frameWidth\":640,\"frameHeight\":480},"
-            + "\"source_frame\":\"000012.jpg\",\"detections_merged\":3,\"support_points\":9}]}";
+            + "\"source_frame\":\"000012.jpg\",\"detections_merged\":3,\"support_points\":9,"
+            + "\"localization\":{\"method\":\"ZBUFFERED_NEAREST_COVERING_LAYER\",\"status\":\"MULTI_VIEW\",\"views\":3,"
+            + "\"view_spread_m\":0.12,\"depth_spread_m\":0.05,\"uncertainty_m\":0.12,\"coverage\":0.6}},"
+            // a claimed localization that is not well-formed is never stored as evidence: this object is skipped
+            + "{\"label\":\"bench\",\"confidence\":0.9,\"position\":[0,0,0],\"embedding\":[" + embedding + "],"
+            + "\"localization\":{\"status\":\"SOMEWHERE\",\"uncertainty_m\":-1}}]}";
     }
 
     @Test
@@ -451,7 +456,8 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
 
         List<Map<String, Object>> rows = jdbc.sql(
                 "SELECT p.floor_id, v.label, v.x, v.y, v.z, v.source, v.detection_confidence, v.image_embedding_model, "
-                    + "v.embedding IS NULL AS text_pending, v.bounding_box, v.pipeline_run_id FROM poi p JOIN poi_version v ON v.poi_id = p.id "
+                    + "v.embedding IS NULL AS text_pending, v.bounding_box, v.pipeline_run_id, v.localization_status, "
+                    + "v.localization_uncertainty_m FROM poi p JOIN poi_version v ON v.poi_id = p.id "
                     + "WHERE p.venue_id = :v AND v.source = 'AUTO_DETECTED'")
             .param("v", s.c().venue())
             .query((rs, i) -> Map.<String, Object>ofEntries(
@@ -459,11 +465,15 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
                 Map.entry("x", rs.getDouble("x")), Map.entry("y", rs.getDouble("y")), Map.entry("z", rs.getDouble("z")),
                 Map.entry("source", rs.getString("source")), Map.entry("confidence", rs.getDouble("detection_confidence")),
                 Map.entry("imageModel", rs.getString("image_embedding_model")), Map.entry("textPending", rs.getBoolean("text_pending")),
-                Map.entry("boundingBox", rs.getString("bounding_box")), Map.entry("runId", rs.getObject("pipeline_run_id", UUID.class))))
+                Map.entry("boundingBox", rs.getString("bounding_box")), Map.entry("runId", rs.getObject("pipeline_run_id", UUID.class)),
+                Map.entry("localizationStatus", rs.getString("localization_status")),
+                Map.entry("localizationUncertaintyM", rs.getDouble("localization_uncertainty_m"))))
             .list();
 
-        assertThat(rows).hasSize(1);
+        assertThat(rows).as("the object with a malformed localization was skipped").hasSize(1);
         Map<String, Object> row = rows.get(0);
+        assertThat(row.get("localizationStatus")).isEqualTo("MULTI_VIEW");
+        assertThat(row.get("localizationUncertaintyM")).isEqualTo(0.12);
         assertThat(row.get("floorId")).isEqualTo(s.c().floor());
         assertThat(row.get("label")).isEqualTo("reception chair");
         assertThat((Double) row.get("x")).isCloseTo(1.5, org.assertj.core.data.Offset.offset(1e-6));

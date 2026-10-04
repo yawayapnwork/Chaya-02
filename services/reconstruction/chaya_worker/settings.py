@@ -127,6 +127,14 @@ class Settings:
     clip_pretrained: str = "openai"  # 512-d, matches poi_version.embedding vector(512)
     semantic_indexing_sample_every: int = 3
     object_cluster_distance_m: float = 0.75  # canonical metres (SEMANTIC_INDEXING requires a calibrated frame)
+    # Placing a detection in 3D (chaya_worker.object_localization, review CV-1): z-buffer cell, depth tolerance
+    # (absolute + relative to depth), the centres a surface needs to count as depth evidence, and the fraction of the box
+    # the object's surface must cover. Chosen on synthetic scenes only; not calibrated on real reconstructions.
+    localization_zbuffer_cell_px: int = 16
+    localization_depth_band_m: float = 0.15
+    localization_depth_band_rel: float = 0.05
+    localization_min_support: int = 12
+    localization_min_coverage: float = 0.25
     # NAVIGATION_BAKING (Recast/Detour via services/reconstruction/native/chaya-navmesh; see chaya_worker.recast). Every value is in canonical
     # physical units, named by its unit: lengths in metres, heights along canonical +Z (Recast's +Y after
     # chaya_worker.recast_boundary), areas in square metres, slopes in degrees. The tool converts them to Recast's voxel
@@ -199,6 +207,13 @@ class Settings:
     splice_z_margin_m: float = 0.2
     splice_seam_band_m: float = 0.15
     splice_max_seam_step_m: float = 0.03
+
+    def localization_params(self):
+        from .object_localization import LocalizationParams  # noqa: PLC0415
+
+        return LocalizationParams(cell_px=self.localization_zbuffer_cell_px, depth_band_m=self.localization_depth_band_m,
+                                  depth_band_rel=self.localization_depth_band_rel, min_support=self.localization_min_support,
+                                  min_coverage=self.localization_min_coverage)
 
     def alignment_gates(self):
         from .similarity_registration import AlignmentGates  # noqa: PLC0415 - avoid a settings -> scipy import at load
@@ -305,6 +320,11 @@ class Settings:
             clip_pretrained=e.get("CLIP_PRETRAINED", d.clip_pretrained),
             semantic_indexing_sample_every=_int(e, "SEMANTIC_INDEXING_SAMPLE_EVERY", d.semantic_indexing_sample_every),
             object_cluster_distance_m=_float(e, "OBJECT_CLUSTER_DISTANCE_M", d.object_cluster_distance_m),
+            localization_zbuffer_cell_px=_int(e, "LOCALIZATION_ZBUFFER_CELL_PX", d.localization_zbuffer_cell_px),
+            localization_depth_band_m=_float(e, "LOCALIZATION_DEPTH_BAND_M", d.localization_depth_band_m),
+            localization_depth_band_rel=_float(e, "LOCALIZATION_DEPTH_BAND_REL", d.localization_depth_band_rel),
+            localization_min_support=_int(e, "LOCALIZATION_MIN_SUPPORT", d.localization_min_support),
+            localization_min_coverage=_float(e, "LOCALIZATION_MIN_COVERAGE", d.localization_min_coverage),
             navmesh_cell_size_m=_float(e, "NAVMESH_CELL_SIZE_M", d.navmesh_cell_size_m),
             navmesh_cell_height_m=_float(e, "NAVMESH_CELL_HEIGHT_M", d.navmesh_cell_height_m),
             navmesh_agent_height_m=_float(e, "NAVMESH_AGENT_HEIGHT_M", d.navmesh_agent_height_m),
@@ -405,6 +425,7 @@ class Settings:
             "clip_model_name": self.clip_model_name, "clip_pretrained": self.clip_pretrained,
             "semantic_indexing_sample_every": self.semantic_indexing_sample_every,
             "object_cluster_distance_m": self.object_cluster_distance_m,
+            "localization": self.localization_params().__dict__,
             "navmesh_cell_size_m": self.navmesh_cell_size_m, "navmesh_cell_height_m": self.navmesh_cell_height_m,
             "navmesh_agent_height_m": self.navmesh_agent_height_m, "navmesh_agent_radius_m": self.navmesh_agent_radius_m,
             "navmesh_agent_max_climb_m": self.navmesh_agent_max_climb_m, "navmesh_agent_max_slope_deg": self.navmesh_agent_max_slope_deg,

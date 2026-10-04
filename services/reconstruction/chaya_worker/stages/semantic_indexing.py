@@ -2,9 +2,11 @@
 
 For a representative sample of registered frames: run open-vocabulary object detection (Grounding DINO,
 chaya_worker.grounding_dino -- the stock public checkpoint, not fine-tuned; see that module's docstring),
-localise each detection in 3D by finding where the trained splat's own points land inside its 2D box
-(reusing the exact camera-projection math chaya_worker.stages.semantic_segmentation already uses and
-tests), crop the detection and embed it with real CLIP image embeddings (chaya_worker.clip_embeddings),
+localise each detection in 3D on the surface its box actually shows: the splat's centres are projected into the frame
+(the camera-projection math chaya_worker.stages.semantic_segmentation uses and tests), centres hidden behind nearer
+geometry are discarded, and the object is the nearest depth layer in the box that covers it
+(chaya_worker.object_localization, review CV-1). A detection without that depth evidence is not placed at all; the
+report counts it by reason. Crop the detection and embed it with real CLIP image embeddings (chaya_worker.clip_embeddings),
 then cluster detections of the same physical object seen from multiple frames: same detector label AND 3D
 proximity (cluster_by_distance), so neighbouring but different objects are never fused into one. The result is written as a DETECTED_OBJECTS artifact; this worker has
 no database access (see ARCHITECTURE.md), so turning these into `poi`/`poi_version` rows with pgvector
@@ -40,24 +42,14 @@ from ..clip_embeddings import ClipEmbedder
 from ..colmap_txt import parse_cameras_txt
 from ..contract import ArtifactSpec, StageContext, StageError, StageResult
 from ..frames import Similarity, frame_provenance, require_canonical
-from ..grounding_dino import Detection, GroundingDinoDetector
+from ..grounding_dino import GroundingDinoDetector
+from ..object_localization import METHOD as LOCALIZATION_METHOD
+from ..object_localization import REJECTIONS, Localized, camera_depth, localize_detection
 from ..ply import read_ply
 from ..privacy import masks as privacy_masks
 from .base import command_record, run_provenance, venue_cloud, write_json
 from .semantic_segmentation import project_points
 from .splat_reconstruction import build_cameras
-
-
-def associate_detection_with_geometry(detection: Detection, positions: np.ndarray, px: np.ndarray,
-                                      visible: np.ndarray) -> tuple[np.ndarray, int] | None:
-    """Pure: which reconstructed 3D points reproject inside this 2D detection box, and their centroid.
-    Returns None if no splat point localises the detection (nothing to place in 3D)."""
-    x0, y0, x1, y1 = detection.box_xyxy
-    inside = visible & (px[:, 0] >= x0) & (px[:, 0] < x1) & (px[:, 1] >= y0) & (px[:, 1] < y1)
-    count = int(inside.sum())
-    if count == 0:
-        return None
-    return np.median(positions[inside], axis=0), count
 
 
 def visible_through_valid(px: np.ndarray, visible: np.ndarray, valid: np.ndarray | None) -> np.ndarray:
@@ -110,7 +102,12 @@ def cluster_by_distance(objects: list[dict[str, Any]], distance: float) -> list[
 
     Each output's `embedding` is the mean of its members' (already L2-normalised) CLIP image embeddings, re-normalised;
     `position` is the members' centroid; `confidence` is the max over members; `bbox_px` and `source_frame` come together
-    from the single most confident member, so the box always refers to the frame it was measured in."""
+    from the single most confident member, so the box always refers to the frame it was measured in.
+
+    `localization` keeps how well the position is supported (docs/search.md, "Localization"): MULTI_VIEW when members
+    come from at least two frames, else SINGLE_VIEW; `view_spread_m`, the RMS distance of the members from the centroid
+    (how much independent views disagree; 0 for one view); `depth_spread_m`, the median of the members' surface
+    thickness; `uncertainty_m`, the larger of the two. Measured spreads, not errors against ground truth."""
     clusters: list[dict[str, Any]] = []
     for obj in objects:
         key = normalized_label(obj["label"])
@@ -137,6 +134,11 @@ def cluster_by_distance(objects: list[dict[str, Any]], distance: float) -> list[
         if norm > 1e-9:
             mean_embedding = mean_embedding / norm
         best_member = max(members, key=lambda m: m["confidence"])
+        positions = np.array([m["position"] for m in members], dtype=np.float64)
+        views = len({m["source_frame"] for m in members})
+        view_spread = float(np.sqrt(np.mean(np.sum((positions - c["centroid"]) ** 2, axis=1)))) if len(members) > 1 else 0.0
+        depth_spreads = [m["localization"]["depth_spread_m"] for m in members if m.get("localization")]
+        depth_spread = float(np.median(depth_spreads)) if depth_spreads else None
         merged.append({
             "label": best_member["label"],
             "confidence": best_member["confidence"],
@@ -146,6 +148,12 @@ def cluster_by_distance(objects: list[dict[str, Any]], distance: float) -> list[
             "source_frame": best_member["source_frame"],
             "detections_merged": len(members),
             "support_points": max(m["support_points"] for m in members),
+            "localization": {
+                "method": LOCALIZATION_METHOD, "status": "MULTI_VIEW" if views >= 2 else "SINGLE_VIEW", "views": views,
+                "view_spread_m": view_spread, "depth_spread_m": depth_spread,
+                "uncertainty_m": max(view_spread, depth_spread or 0.0),
+                "coverage": (best_member.get("localization") or {}).get("coverage"),
+            },
         })
     return merged
 
@@ -209,6 +217,9 @@ class SemanticIndexing:
         crops: list[np.ndarray] = []
         frames_processed = 0
         dropped_privacy = 0
+        rejected = dict.fromkeys(REJECTIONS, 0)
+        params = s.localization_params()
+        metres_per_unit = to_canonical.scale  # the cloud's frame -> canonical: camera depths in metres
         # Detection and projection both use the undistorted frame and its pinhole camera (review G-1), so bbox_px is in
         # undistorted-frame pixels (same size as the frame).
         rectifier = FrameRectifier()
@@ -236,6 +247,7 @@ class SemanticIndexing:
 
             px, visible = project_points(cloud.positions, cam["viewmat"], pinhole.K, w, h)
             visible = visible_through_valid(px, visible, valid)
+            depth_m = camera_depth(cloud.positions, cam["viewmat"]) * metres_per_unit
             for det in detections:
                 x0, y0, x1, y1 = (int(max(0, v)) for v in det.box_xyxy)
                 x1, y1 = min(w, x1), min(h, y1)
@@ -244,15 +256,17 @@ class SemanticIndexing:
                 if box_masked_fraction(valid, x0, y0, x1, y1) > s.privacy_detection_max_masked_fraction:
                     dropped_privacy += 1
                     continue
-                located = associate_detection_with_geometry(det, cloud.positions, px, visible)
-                if located is None:
+                located = localize_detection((x0, y0, x1, y1), cloud.positions, px, depth_m, visible, params)
+                if not isinstance(located, Localized):  # no depth evidence: never placed (review CV-1)
+                    rejected[located.reason] += 1
                     continue
-                position, support = located
                 crops.append(img_rgb[y0:y1, x0:x1])
                 raw_objects.append({
-                    "label": det.label, "confidence": det.confidence, "position": position.tolist(),
+                    "label": det.label, "confidence": det.confidence, "position": located.position.tolist(),
                     "bbox_px": {"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0, "frameWidth": w, "frameHeight": h},
-                    "source_frame": cam["name"], "support_points": support,
+                    "source_frame": cam["name"], "support_points": located.support_points,
+                    "localization": {"depth_m": located.depth_m, "depth_spread_m": located.depth_spread_m,
+                                     "coverage": located.coverage, "layers": located.layers, "hidden_in_box": located.hidden_in_box},
                 })
             frames_processed += 1
 
@@ -273,11 +287,14 @@ class SemanticIndexing:
             "coordinate_frame": frame_provenance(frame), "source": run_provenance(ctx, frame.id),
             "detector_model": detector.model_id, "detector_fine_tuned": detector.fine_tuned,
             "embedding_model": embedder.model_id, "embedding_dim": len(embeddings[0]) if len(embeddings) else 0,
-            "frames_processed": frames_processed, "raw_detection_count": len(raw_objects), "objects": objects})
+            "frames_processed": frames_processed, "raw_detection_count": len(raw_objects),
+            "localization": {"method": LOCALIZATION_METHOD, "rejected": rejected}, "objects": objects})
         report_path = write_json(ctx.workdir / "semantic-indexing-report.json", {
             "detector_model": detector.model_id, "detector_fine_tuned": detector.fine_tuned, "embedding_model": embedder.model_id,
             "frames_processed": frames_processed, "raw_detection_count": len(raw_objects), "object_count": len(objects),
-            "dropped_as_privacy_masked": dropped_privacy, "privacy_masks_applied": masks is not None})
+            "dropped_as_privacy_masked": dropped_privacy, "privacy_masks_applied": masks is not None,
+            "localization": {"method": LOCALIZATION_METHOD, "params": params.__dict__, "rejected": rejected,
+                             "multi_view_objects": sum(1 for o in objects if o["localization"]["status"] == "MULTI_VIEW")}})
 
         return StageResult(
             "SUCCEEDED", command_record(ctx, {"detector_model": detector.model_id, "embedding_model": embedder.model_id,

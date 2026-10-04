@@ -89,16 +89,23 @@ class SemanticSearchRankingTest extends AbstractIntegrationTest {
 
     /** A manual POI with the text embedding the backfill would give it (PoiEmbeddingService.embeddingText, CLIP text tower). */
     private UUID manual(Fixtures.Tree tree, String label, String category, List<String> tags, double x, double z, String textModel) {
+        return manual(tree, label, category, tags, x, z, textModel, null);
+    }
+
+    /** As above, placed in coordinate frame `frame` (null: none, as on an uncalibrated floor). */
+    private UUID manual(Fixtures.Tree tree, String label, String category, List<String> tags, double x, double z, String textModel,
+                        UUID frame) {
         UUID id = poi(tree);
         String text = PoiEmbeddingService.embeddingText(label, category, tags);
         jdbc.sql("""
                 INSERT INTO poi_version (organization_id, venue_id, poi_id, version_number, label, category, tags, x, y, z,
-                                         embedding, embedding_model, source, created_by)
-                VALUES (:o, :v, :p, 1, :label, :cat, CAST(:tags AS text[]), :x, 0, :z, CAST(:e AS vector), :m, 'MANUAL', 'test')""")
+                                         embedding, embedding_model, source, created_by, coordinate_frame_id)
+                VALUES (:o, :v, :p, 1, :label, :cat, CAST(:tags AS text[]), :x, 0, :z, CAST(:e AS vector), :m, 'MANUAL', 'test',
+                        :frame)""")
             .param("o", tree.org()).param("v", tree.venue()).param("p", id).param("label", label).param("cat", category)
             .param("tags", "{" + String.join(",", tags.stream().map(s -> "\"" + s + "\"").toList()) + "}")
             .param("x", x).param("z", z).param("e", TestEmbeddingConfig.vectorLiteral(TestEmbeddingConfig.clipText(text)))
-            .param("m", textModel).update();
+            .param("m", textModel).param("frame", frame).update();
         return id;
     }
 
@@ -108,20 +115,30 @@ class SemanticSearchRankingTest extends AbstractIntegrationTest {
      */
     private UUID detected(Fixtures.Tree tree, UUID pipelineRun, String crop, String label, double x, double y, double z,
                           String textModel, String imageModel) {
+        return detected(tree, pipelineRun, crop, label, x, y, z, textModel, imageModel, null, 0.83, null, null);
+    }
+
+    /** As above, in coordinate frame `frame`, with its detector confidence and its localization (null: placed before
+     * depth-tested localization existed, as every detection was before V27). */
+    private UUID detected(Fixtures.Tree tree, UUID pipelineRun, String crop, String label, double x, double y, double z,
+                          String textModel, String imageModel, UUID frame, double confidence, String localizationStatus,
+                          Double uncertaintyM) {
         UUID id = poi(tree);
         jdbc.sql("""
                 INSERT INTO poi_version (organization_id, venue_id, poi_id, version_number, label, tags, x, y, z,
                                          embedding, embedding_model, image_embedding, image_embedding_model, source,
-                                         detection_confidence, bounding_box, pipeline_run_id, created_by)
+                                         detection_confidence, bounding_box, pipeline_run_id, created_by, coordinate_frame_id,
+                                         localization_status, localization_uncertainty_m)
                 VALUES (:o, :v, :p, 1, :label, '{}', :x, :y, :z, CAST(:e AS vector), :tm, CAST(:img AS vector), :im,
-                        'AUTO_DETECTED', 0.83, CAST(:bbox AS jsonb), :run, 'system:semantic-indexing')""")
+                        'AUTO_DETECTED', :conf, CAST(:bbox AS jsonb), :run, 'system:semantic-indexing', :frame, :loc, :unc)""")
             .param("o", tree.org()).param("v", tree.venue()).param("p", id).param("label", label)
             .param("x", x).param("y", y).param("z", z)
             .param("e", TestEmbeddingConfig.vectorLiteral(TestEmbeddingConfig.clipText(label))).param("tm", textModel)
             .param("img", TestEmbeddingConfig.vectorLiteral(crop(crop))).param("im", imageModel)
             .param("bbox", "{\"x\": 10, \"y\": 20, \"width\": 300, \"height\": 280, \"frameWidth\": 640, \"frameHeight\": 480, "
                 + "\"sourceFrame\": \"" + crop + ".jpg\"}")
-            .param("run", pipelineRun).update();
+            .param("run", pipelineRun).param("conf", confidence).param("frame", frame).param("loc", localizationStatus)
+            .param("unc", uncertaintyM).update();
         return id;
     }
 
@@ -219,6 +236,115 @@ class SemanticSearchRankingTest extends AbstractIntegrationTest {
         // One ordering, by one comparable score.
         List<Double> sims = r.results().stream().map(SearchResult::similarity).toList();
         assertThat(sims).isSortedAccordingTo(java.util.Comparator.reverseOrder());
+    }
+
+    // ---- lexical / fuzzy and synonyms -------------------------------------------------------------------------------
+
+    @Test
+    void aMisspeltNameIsFoundByItsWholeWordTrigramsWhereClipAloneDoesNotRankIt() {
+        // Real CLIP puts "recepton" closer to "plant" (0.873) than to the reception desk's text (0.869): by similarity alone
+        // the desk would be fourth and below the relevance margin. The whole-word trigram match admits it and ranks it.
+        SearchResponse r = query("recepton");
+        assertThat(r.results()).isNotEmpty();
+        SearchResult desk = r.results().get(0);
+        assertThat(desk.poiId()).isEqualTo(id("Reception desk"));
+        assertThat(desk.matchedBy()).isEqualTo("LEXICAL");
+        assertThat(desk.lexicalSimilarity()).isGreaterThanOrEqualTo(0.5);
+
+        for (String[] typo : new String[][]{{"fire extingusher", "Fire extinguisher"}, {"elevater", "Elevator A"}}) {
+            SearchResponse t2 = query(typo[0]);
+            assertThat(t2.results()).as(typo[0]).isNotEmpty();
+            assertThat(t2.results().get(0).poiId()).as(typo[0]).isEqualTo(id(typo[1]));
+        }
+    }
+
+    @Test
+    void aWordInsideAnotherWordIsNotAFuzzyMatch() {
+        // pg_trgm's plain word_similarity scores "sign" in "design" 0.8; the strict, whole-word form 0.33.
+        UUID studio = manual(t, "Design studio", null, List.of("studio"), 20, 0, model);
+        SearchResponse r = query("sign");
+        assertThat(poiIds(r.results())).doesNotContain(studio);
+        SearchResult asCandidate = java.util.stream.Stream.concat(r.results().stream(), r.closestMatches().stream())
+            .filter(x -> x.poiId().equals(studio)).findFirst().orElse(null);
+        if (asCandidate != null) {
+            assertThat(asCandidate.lexicalSimilarity()).isLessThan(0.5);
+        }
+    }
+
+    @Test
+    void synonymsAreFoundThroughClipNotThroughASynonymTable() {
+        // "sofa" and "settee" share no trigram with "couch"; only CLIP's text geometry relates them.
+        for (String q : List.of("sofa", "settee", "couch")) {
+            SearchResponse r = query(q);
+            assertThat(r.results().get(0).poiId()).as(q).isEqualTo(id("couch-3"));
+        }
+        assertThat(poiIds(query("sofa").results())).as("and the lounge, whose tags say sofas").contains(id("Lounge"));
+        assertThat(query("settee").results().get(0).lexicalSimilarity()).isZero();
+    }
+
+    // ---- spatial validity (review CV-1) ------------------------------------------------------------------------------
+
+    @Test
+    void aPositionThatCannotBeTrustedNeverOutranksATrustedOneOnTextSimilarity() {
+        UUID frame = fx.calibratedFloor(t.org(), t.venue(), t.floor(), "FLOOR_LOCAL");
+        // A detected couch placed before depth-tested localization (CV-1: it may sit on the wall behind the couch), in the
+        // floor's frame, and a staff-placed lounge in the same frame.
+        UUID unverified = detected(t, run, "couch-3", "couch", 30, 0, 0.4, model, model, frame, 0.95, null, null);
+        UUID lounge = manual(t, "Lounge", "seating area", List.of("sofas", "armchairs"), 31, 0, model, frame);
+
+        SearchResponse r = query("couch");
+        SearchResult couch = r.results().stream().filter(x -> x.poiId().equals(unverified)).findFirst().orElseThrow();
+        SearchResult valid = r.results().stream().filter(x -> x.poiId().equals(lounge)).findFirst().orElseThrow();
+        assertThat(couch.similarity()).as("the text match alone favours the couch").isGreaterThan(valid.similarity() + 0.1);
+        assertThat(couch.spatialStatus()).isEqualTo("UNVERIFIED");
+        assertThat(valid.spatialStatus()).isEqualTo("VALID");
+        assertThat(r.results().get(0).poiId()).as("but its position is unverified").isEqualTo(lounge);
+        // Every VALID result precedes every other relevant one; the fixture's own POIs have no frame at all.
+        List<String> statuses = r.results().stream().map(SearchResult::spatialStatus).toList();
+        assertThat(statuses.indexOf("VALID")).isZero();
+        assertThat(statuses.lastIndexOf("VALID")).isLessThan(statuses.indexOf("UNVERIFIED"));
+        assertThat(r.results()).filteredOn(x -> x.poiId().equals(id("couch-3"))).extracting(SearchResult::spatialStatus)
+            .containsExactly("UNBOUND");
+    }
+
+    @Test
+    void aDetectionPlacedWithDepthEvidenceRanksOnItsTextAndKeepsItsUncertainty() {
+        UUID frame = fx.calibratedFloor(t.org(), t.venue(), t.floor(), "FLOOR_LOCAL");
+        UUID placed = detected(t, run, "couch-3", "couch", 30, 0, 0.4, model, model, frame, 0.95, "MULTI_VIEW", 0.12);
+        UUID lounge = manual(t, "Lounge", "seating area", List.of("sofas", "armchairs"), 31, 0, model, frame);
+
+        SearchResponse r = query("couch");
+        assertThat(poiIds(r.results()).subList(0, 2)).containsExactly(placed, lounge);
+        SearchResult couch = r.results().get(0);
+        assertThat(couch.spatialStatus()).isEqualTo("VALID");
+        assertThat(couch.localizationStatus()).isEqualTo("MULTI_VIEW");
+        assertThat(couch.localizationUncertaintyM()).isEqualTo(0.12);
+        assertThat(couch.detectionConfidence()).isEqualTo(0.95);
+        assertThat(couch.rankScore()).isGreaterThan(r.results().get(1).rankScore());
+    }
+
+    @Test
+    void amongValidDetectionsOfTheSameThingConfidenceAndViewSupportDecide() {
+        UUID frame = fx.calibratedFloor(t.org(), t.venue(), t.floor(), "FLOOR_LOCAL");
+        UUID weak = detected(t, run, "chair-3", "chair", 40, 0, 0.4, model, model, frame, 0.55, "SINGLE_VIEW", 0.3);
+        UUID strong = detected(t, run, "chair-1", "chair", 41, 0, 0.4, model, model, frame, 0.9, "MULTI_VIEW", 0.1);
+
+        SearchResponse r = query("chair");
+        assertThat(poiIds(r.results()).subList(0, 2)).containsExactly(strong, weak);
+        assertThat(r.results().get(0).similarity()).isEqualTo(r.results().get(1).similarity());
+    }
+
+    @Test
+    void aPositionInAnOlderFrameIsStale() {
+        UUID old = fx.calibratedFloor(t.org(), t.venue(), t.floor(), "FLOOR_LOCAL");
+        UUID cafe2 = manual(t, "Cafe", "food", List.of("coffee", "snacks"), 50, 0, model, old);
+        UUID current = fx.calibratedFloor(t.org(), t.venue(), t.floor(), "FLOOR_LOCAL");  // re-reconstructed: a new frame
+        UUID cafe3 = manual(t, "Cafe", "food", List.of("coffee", "snacks"), 51, 0, model, current);
+
+        SearchResponse r = query("coffee");
+        assertThat(r.results()).filteredOn(x -> x.poiId().equals(cafe2)).extracting(SearchResult::spatialStatus)
+            .containsExactly("STALE_FRAME");
+        assertThat(r.results().get(0).poiId()).isEqualTo(cafe3);
     }
 
     // ---- embedding spaces ------------------------------------------------------------------------------------------

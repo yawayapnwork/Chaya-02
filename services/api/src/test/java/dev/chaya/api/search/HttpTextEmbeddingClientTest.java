@@ -44,7 +44,7 @@ class HttpTextEmbeddingClientTest {
         });
         server.start();
         SearchProperties props = new SearchProperties("http://127.0.0.1:" + server.getAddress().getPort(), Duration.ofSeconds(2),
-            10, 50, Duration.ofMillis(100), null, 0, 0);
+            10, 50, Duration.ofMillis(100), null, 0, 0, null, null, null);
         client = new HttpTextEmbeddingClient(RestClient.builder(), props);
     }
 

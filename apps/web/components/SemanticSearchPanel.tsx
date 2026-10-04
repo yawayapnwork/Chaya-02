@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createSpeechRecognizer, speechRecognitionSupported } from "@/lib/voice-input";
-import { type SearchResponse, type SearchResult, searchVenue } from "@/lib/search-api";
+import { type SearchResponse, type SearchResult, locationNote, searchVenue } from "@/lib/search-api";
 
 interface SemanticSearchPanelProps {
   venueId: string;
@@ -137,6 +137,12 @@ export default function SemanticSearchPanel({ venueId, floorId, scanVersionId, o
                   <span className="ml-2 text-xs text-zinc-500">{Math.round(r.similarity * 100)}% match</span>
                   {r.source === "AUTO_DETECTED" && (
                     <span className="ml-2 rounded bg-blue-50 px-1 text-xs text-blue-700">detected</span>
+                  )}
+                  {locationNote(r) && (
+                    <span data-testid="search-location-note"
+                      className={`block text-xs ${r.spatialStatus && r.spatialStatus !== "VALID" ? "text-amber-700" : "text-zinc-500"}`}>
+                      {locationNote(r)}
+                    </span>
                   )}
                 </button>
               </li>

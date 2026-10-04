@@ -49,8 +49,21 @@ import org.springframework.transaction.annotation.Transactional;
  * times. When nothing clears it, results is empty and the nearest candidates are returned as closestMatches. Scopes
  * with fewer than chaya.search.relevance-min-pois distinct texts are not judged.
  *
+ * <p><b>Lexical / fuzzy.</b> A misspelt name ("fire extingusher") is also relevant if pg_trgm's strict_word_similarity
+ * between the query and the POI's text reaches chaya.search.lexical-min-similarity. Strict: whole words, so "sign" does
+ * not match inside "design".
+ *
+ * <p><b>Spatial validity</b> (review CV-1; docs/search.md, "Ranking"). Every result says whether its position can be shown:
+ * VALID (in the frame being viewed, and, for a detected object, placed with depth evidence), UNVERIFIED (a detected object
+ * placed before depth-tested localization), STALE_FRAME (in an older coordinate frame) or UNBOUND (in none). Among
+ * relevant results every VALID one comes before every other, so no amount of text similarity lifts a position that
+ * cannot be trusted above one that can. Within a tier the rank score is
+ * {@code similarity + lexicalWeight * lexical + evidenceWeight * (evidence - 1)}, evidence being 1 for a manual POI and
+ * detection confidence x view support (1 multi-view, 0.75 single-view, 0.5 unverified) for a detected object.
+ *
  * <p>If the embedding model is unavailable the search degrades to Postgres trigram similarity on the label text
- * (pg_trgm), reported as such via SearchResponse.matchType so a caller never mistakes it for semantic matching.
+ * (pg_trgm), reported as such via SearchResponse.matchType so a caller never mistakes it for semantic matching. Its
+ * results keep the same spatial tiers.
  */
 @Service
 public class SemanticSearchService {
@@ -74,6 +87,28 @@ public class SemanticSearchService {
                AND (:accessible = false OR COALESCE((v.attributes->>'accessible')::boolean, false) = true)
             """;
 
+    // Where a POI's position stands relative to what is being viewed: the floor's current frame, or the selected version's.
+    private static final String SPATIAL_STATUS = """
+            CASE WHEN v.coordinate_frame_id IS NULL THEN 'UNBOUND'
+                 WHEN v.coordinate_frame_id IS DISTINCT FROM (CASE WHEN CAST(:sv AS uuid) IS NULL
+                          THEN (SELECT current_coordinate_frame_id FROM floor WHERE id = p.floor_id)
+                          ELSE (SELECT coordinate_frame_id FROM scan_version WHERE id = CAST(:sv AS uuid)) END) THEN 'STALE_FRAME'
+                 WHEN v.source = 'AUTO_DETECTED' AND v.localization_status IS NULL THEN 'UNVERIFIED'
+                 ELSE 'VALID' END""";
+
+    // A manual POI: 1 (staff placed it). A detected object: its detector confidence, times how its position is supported.
+    private static final String EVIDENCE = """
+            CASE WHEN v.source = 'AUTO_DETECTED'
+                 THEN COALESCE(v.detection_confidence, 0)
+                      * CASE v.localization_status WHEN 'MULTI_VIEW' THEN 1.0 WHEN 'SINGLE_VIEW' THEN 0.75 ELSE 0.5 END
+                 ELSE 1.0 END""";
+
+    private static final String LEXICAL_SIMILARITY =
+        "CAST(strict_word_similarity(:q, lower(concat_ws(' ', v.label, v.category, array_to_string(v.tags, ' ')))) AS double precision)";
+
+    private static final String RESULT_COLUMNS = ", v.localization_status, v.localization_uncertainty_m, "
+        + SPATIAL_STATUS + " AS spatial_status, " + EVIDENCE + " AS evidence, " + LEXICAL_SIMILARITY + " AS lexical_similarity";
+
     // Every POI in scope is scored (not only the index's top k): the relevance statistics need all of them, and the image
     // channel can admit a detected object whose text score alone would not reach the top k. A venue's POIs number in the
     // hundreds to thousands, so this exact scan replaces the HNSW lookup at no practical cost.
@@ -83,15 +118,18 @@ public class SemanticSearchService {
     //   relevant_image   CLIP zero-shot: the crop is at least as close to the query as to every detector label in scope
     //                    (needs >= 2 labels: against a single class the test says nothing)
     //
-    // Relevant rows sort first, then by text similarity (the one space every row shares), then, among rows with the same
-    // text similarity, by image similarity (CLIP text-to-image retrieval), then by id for a stable order.
+    //   relevant_lexical a misspelt or partial name: whole-word trigram similarity with the POI's text
+    //
+    // Relevant rows sort first; then spatially VALID rows before every other; then by the rank score (CLIP text similarity,
+    // the one space every row shares, nudged by lexical similarity and detection evidence); then, among rows with the same
+    // score, by image similarity (CLIP text-to-image retrieval); then by id for a stable order.
     private static final String VECTOR_SQL = """
             WITH q AS (SELECT CAST(:qv AS vector) AS v),
             scope AS (
             SELECT p.id AS poi_id, p.floor_id, v.label, v.category, v.tags, v.x, v.y, v.z, v.detection_confidence,
                    v.bounding_box, v.source, v.embedding,
                    CASE WHEN v.image_embedding_model = :model THEN v.image_embedding END AS image_embedding
-            """ + SCOPE_WHERE + """
+            """ + RESULT_COLUMNS + SCOPE_WHERE + """
                AND v.embedding IS NOT NULL AND v.embedding_model = :model),
             vocabulary AS (SELECT DISTINCT embedding FROM scope),
             stats AS (SELECT avg(1 - (vo.embedding <=> q.v)) AS mean_similarity, count(*) AS peers FROM vocabulary vo, q),
@@ -99,7 +137,7 @@ public class SemanticSearchService {
             label_count AS (SELECT count(*) AS n FROM detector_labels),
             scored AS (
             SELECT s.poi_id, s.floor_id, s.label, s.category, s.tags, s.x, s.y, s.z, s.detection_confidence, s.bounding_box,
-                   s.source,
+                   s.source, s.localization_status, s.localization_uncertainty_m, s.spatial_status, s.evidence, s.lexical_similarity,
                    1 - (s.embedding <=> q.v) AS similarity,
                    1 - (s.image_embedding <=> q.v) AS image_similarity,
                    CASE WHEN s.image_embedding IS NOT NULL
@@ -109,11 +147,14 @@ public class SemanticSearchService {
             SELECT sc.*, sc.similarity - st.mean_similarity AS margin, st.peers,
                    st.peers >= :minPois AS judged,
                    sc.similarity - st.mean_similarity >= :minMargin AS relevant_text,
-                   COALESCE(lc.n >= 2 AND sc.image_similarity >= sc.best_label_image_similarity, false) AS relevant_image
+                   COALESCE(lc.n >= 2 AND sc.image_similarity >= sc.best_label_image_similarity, false) AS relevant_image,
+                   sc.lexical_similarity >= :lexMin AS relevant_lexical,
+                   sc.similarity + :wLex * sc.lexical_similarity + :wEv * (sc.evidence - 1) AS rank_score
               FROM scored sc, stats st, label_count lc)
-            SELECT j.*, (NOT j.judged OR j.relevant_text OR j.relevant_image) AS relevant
+            SELECT j.*, (NOT j.judged OR j.relevant_text OR j.relevant_image OR j.relevant_lexical) AS relevant
               FROM judged j
-             ORDER BY relevant DESC, j.similarity DESC, j.image_similarity DESC NULLS LAST, j.poi_id
+             ORDER BY relevant DESC, (j.spatial_status = 'VALID') DESC, j.rank_score DESC, j.image_similarity DESC NULLS LAST,
+                      j.poi_id
              LIMIT :limit
             """;
 
@@ -125,14 +166,15 @@ public class SemanticSearchService {
     static final String BY_TEXT = "TEXT";
     static final String BY_IMAGE = "IMAGE";
     static final String BY_TEXT_AND_IMAGE = "TEXT_AND_IMAGE";
+    static final String BY_LEXICAL = "LEXICAL";
 
     private record Scored(SearchResult result, boolean judged, boolean relevant) {}
 
     private static final String LEXICAL_SQL =
-        "SELECT p.id AS poi_id, p.floor_id, v.label, v.category, v.tags, v.x, v.y, v.z, v.detection_confidence, "
-        + "v.bounding_box, v.source, similarity(v.label, :q) AS similarity\n" + SCOPE_WHERE
-        + "   AND (v.label ILIKE ('%' || :q || '%') OR similarity(v.label, :q) > 0.2)\n"
-        + " ORDER BY similarity(v.label, :q) DESC\n"
+        "SELECT * FROM (SELECT p.id AS poi_id, p.floor_id, v.label, v.category, v.tags, v.x, v.y, v.z, v.detection_confidence, "
+        + "v.bounding_box, v.source, similarity(v.label, :q) AS similarity" + RESULT_COLUMNS + "\n" + SCOPE_WHERE
+        + "   AND (v.label ILIKE ('%' || :q || '%') OR similarity(v.label, :q) > 0.2)) r\n"
+        + " ORDER BY (r.spatial_status = 'VALID') DESC, r.similarity DESC, r.poi_id\n"
         + " LIMIT :k";
 
     private final JdbcClient jdbc;
@@ -183,6 +225,8 @@ public class SemanticSearchService {
                 .param("venue", venueId).param("org", actor.organizationId()).param("floor", floorId).param("accessible", accessible)
                 .param("sv", scanVersionId)
                 .param("qv", vectorLiteral(queryEmbedding.vector())).param("model", queryEmbedding.model())
+                .param("q", normalized).param("lexMin", props.lexicalMinSimilarity())
+                .param("wLex", props.lexicalWeight()).param("wEv", props.evidenceWeight())
                 .param("minPois", props.relevanceMinPois()).param("minMargin", props.relevanceMinMargin())
                 .param("limit", Math.max(k, props.closestMatches()))
                 .query(this::mapScored).list();
@@ -200,7 +244,7 @@ public class SemanticSearchService {
                 .param("venue", venueId).param("org", actor.organizationId()).param("floor", floorId).param("accessible", accessible)
                 .param("sv", scanVersionId)
                 .param("q", normalized).param("k", k)
-                .query((rs, i) -> mapRow(rs, null, null, null)).list();
+                .query((rs, i) -> mapRow(rs, null, null, null, null)).list();
             matchType = "lexical_fallback";
             relevance = LEXICAL;
         }
@@ -216,13 +260,14 @@ public class SemanticSearchService {
         if (judged && relevant) {
             boolean text = rs.getBoolean("relevant_text");
             boolean image = rs.getBoolean("relevant_image");
-            matchedBy = text && image ? BY_TEXT_AND_IMAGE : text ? BY_TEXT : BY_IMAGE;
+            matchedBy = text && image ? BY_TEXT_AND_IMAGE : text ? BY_TEXT : image ? BY_IMAGE : BY_LEXICAL;
         }
         Double imageSimilarity = rs.getObject("image_similarity", Double.class);
-        return new Scored(mapRow(rs, rs.getDouble("margin"), imageSimilarity, matchedBy), judged, relevant);
+        return new Scored(mapRow(rs, rs.getDouble("margin"), imageSimilarity, matchedBy, rs.getDouble("rank_score")), judged, relevant);
     }
 
-    private SearchResult mapRow(ResultSet rs, Double margin, Double imageSimilarity, String matchedBy) throws SQLException {
+    private SearchResult mapRow(ResultSet rs, Double margin, Double imageSimilarity, String matchedBy, Double rankScore)
+            throws SQLException {
         String[] tagsArr = (String[]) rs.getArray("tags").getArray();
         Object bboxRaw = rs.getObject("bounding_box");
         Map<String, Object> bbox = bboxRaw == null ? null : parseJson(bboxRaw.toString());
@@ -232,7 +277,8 @@ public class SemanticSearchService {
         return new SearchResult(rs.getObject("poi_id", UUID.class), rs.getObject("floor_id", UUID.class), rs.getString("label"),
             rs.getString("category"), List.of(tagsArr), rs.getDouble("x"), rs.getDouble("y"), rs.getDouble("z"),
             rs.getDouble("similarity"), confidence, rs.getString("source"), bbox, margin, imageSimilarity, matchedBy,
-            sourceFrame instanceof String s ? s : null);
+            sourceFrame instanceof String s ? s : null, rs.getString("spatial_status"), rs.getString("localization_status"),
+            rs.getObject("localization_uncertainty_m", Double.class), rs.getObject("lexical_similarity", Double.class), rankScore);
     }
 
     private Map<String, Object> parseJson(String json) {

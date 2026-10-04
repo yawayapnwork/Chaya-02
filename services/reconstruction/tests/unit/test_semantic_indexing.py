@@ -11,36 +11,35 @@ import pytest
 from chaya_worker.datasets import Annotation, BoundingBox, ImageRecord, Provenance
 from chaya_worker.datasets.jsonl import append_annotations, append_images, read_annotations, read_images, validate_dataset
 from chaya_worker.datasets.scaffold import scaffold_dataset
-from chaya_worker.grounding_dino import Detection
-from chaya_worker.stages.semantic_indexing import associate_detection_with_geometry, cluster_by_distance
+from chaya_worker.stages.semantic_indexing import cluster_by_distance
 
 # ---- semantic_indexing.py geometry/clustering -----------------------------------------------------
 
-def test_associate_detection_with_geometry_needs_a_reprojected_point_inside_the_box():
-    positions = np.array([[0.0, 0.0, 5.0], [10.0, 10.0, 5.0]])
-    px = np.array([[50.0, 50.0], [900.0, 900.0]])
-    visible = np.array([True, True])
-    inside_box = Detection("chair", 0.9, (0, 0, 100, 100))
-    result = associate_detection_with_geometry(inside_box, positions, px, visible)
-    assert result is not None
-    position, support = result
-    assert support == 1 and np.allclose(position, [0.0, 0.0, 5.0])
-
-    nothing_there = Detection("chair", 0.9, (500, 500, 600, 600))
-    assert associate_detection_with_geometry(nothing_there, positions, px, visible) is None
-
-
-def test_associate_detection_with_geometry_ignores_points_the_camera_cannot_see():
-    positions = np.array([[0.0, 0.0, 5.0]])
-    px = np.array([[50.0, 50.0]])
-    visible = np.array([False])  # e.g. behind the camera
-    det = Detection("chair", 0.9, (0, 0, 100, 100))
-    assert associate_detection_with_geometry(det, positions, px, visible) is None
-
-
-def _det(label, position, embedding, confidence=0.8, frame="a.jpg", support=1, bbox=None):
+def _det(label, position, embedding, confidence=0.8, frame="a.jpg", support=1, bbox=None, depth_spread=0.05):
     return {"label": label, "confidence": confidence, "position": list(position), "embedding": list(embedding),
-            "bbox_px": bbox or {}, "source_frame": frame, "support_points": support}
+            "bbox_px": bbox or {}, "source_frame": frame, "support_points": support,
+            "localization": {"depth_spread_m": depth_spread, "coverage": 0.6}}
+
+
+def test_a_cluster_keeps_how_well_its_position_is_supported():
+    """Two frames that agree: MULTI_VIEW, with their disagreement and the surfaces' thickness as the uncertainty. One
+    frame: SINGLE_VIEW, a downgrade the search ranks below multi-view evidence (docs/search.md, "Ranking")."""
+    clusters = cluster_by_distance([_det("chair", [0, 0, 0], [1.0], frame="a.jpg", depth_spread=0.04),
+                                    _det("chair", [0.3, 0, 0], [1.0], frame="b.jpg", depth_spread=0.08),
+                                    _det("bench", [9, 0, 0], [1.0], frame="a.jpg", depth_spread=0.02)], distance=0.75)
+    chair, bench = sorted(clusters, key=lambda c: c["label"], reverse=True)
+    assert chair["localization"]["status"] == "MULTI_VIEW" and chair["localization"]["views"] == 2
+    assert chair["localization"]["view_spread_m"] == pytest.approx(0.15)
+    assert chair["localization"]["depth_spread_m"] == pytest.approx(0.06)
+    assert chair["localization"]["uncertainty_m"] == pytest.approx(0.15)
+    assert bench["localization"]["status"] == "SINGLE_VIEW" and bench["localization"]["views"] == 1
+    assert bench["localization"]["view_spread_m"] == 0.0 and bench["localization"]["uncertainty_m"] == pytest.approx(0.02)
+
+
+def test_two_detections_in_one_frame_are_one_view():
+    clusters = cluster_by_distance([_det("chair", [0, 0, 0], [1.0], frame="a.jpg"), _det("chair", [0.1, 0, 0], [1.0], frame="a.jpg")],
+                                   distance=0.75)
+    assert clusters[0]["localization"]["status"] == "SINGLE_VIEW" and clusters[0]["localization"]["views"] == 1
 
 
 def test_cluster_by_distance_merges_the_same_object_seen_from_several_frames():
@@ -84,8 +83,7 @@ def test_cluster_by_distance_joins_the_nearest_same_label_cluster():
 
 
 def test_cluster_by_distance_keeps_isolated_detections_separate():
-    objects = [{"label": "table", "confidence": 0.8, "position": [float(i) * 10, 0, 0], "embedding": [1.0],
-               "bbox_px": {}, "source_frame": f"{i}.jpg", "support_points": 1} for i in range(3)]
+    objects = [_det("table", [float(i) * 10, 0, 0], [1.0], frame=f"{i}.jpg") for i in range(3)]
     clusters = cluster_by_distance(objects, distance=0.5)
     assert len(clusters) == 3
     assert all(c["detections_merged"] == 1 for c in clusters)

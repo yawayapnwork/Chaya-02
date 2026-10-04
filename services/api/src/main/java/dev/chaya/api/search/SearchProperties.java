@@ -13,10 +13,19 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *                                 0.078 was chosen on a calibration venue (benchmarks/b3_semantic_search/calibrate.py,
  *                                 docs/BENCHMARKS.md) and never tuned on the test set
  * @param relevanceMinPois         fewer distinct POI texts than this and the mean is not meaningful: results are unfiltered
- * @param closestMatches           how many below-threshold candidates to return when nothing clears it */
+ * @param closestMatches           how many below-threshold candidates to return when nothing clears it
+ * @param lexicalMinSimilarity     a POI whose text (label, category, tags) has pg_trgm strict_word_similarity with the query of
+ *                                 at least this is also relevant (a misspelt name: "fire extingusher" 0.75, "elevater" 0.5;
+ *                                 a word inside another, "sign" in "design", 0.33). Chosen on a handful of such pairs, not
+ *                                 calibrated on a venue
+ * @param lexicalWeight            weight of that lexical similarity in the rank score (docs/search.md, "Ranking")
+ * @param evidenceWeight           weight of a detected object's evidence shortfall (1 - confidence x view support) in the
+ *                                 rank score. Both weights are small on purpose: they reorder near-ties in CLIP similarity
+ *                                 and never replace it. Not calibrated: B3 has not been re-run with them */
 @ConfigurationProperties("chaya.search")
 public record SearchProperties(String visionServiceUrl, Duration visionTimeout, int defaultTopK, int maxTopK,
-                               Duration visionProbeInterval, Double relevanceMinMargin, int relevanceMinPois, int closestMatches) {
+                               Duration visionProbeInterval, Double relevanceMinMargin, int relevanceMinPois, int closestMatches,
+                               Double lexicalMinSimilarity, Double lexicalWeight, Double evidenceWeight) {
 
     public SearchProperties {
         if (visionTimeout == null) {
@@ -39,6 +48,15 @@ public record SearchProperties(String visionServiceUrl, Duration visionTimeout, 
         }
         if (closestMatches <= 0) {
             closestMatches = 3;
+        }
+        if (lexicalMinSimilarity == null) {
+            lexicalMinSimilarity = 0.5;
+        }
+        if (lexicalWeight == null) {
+            lexicalWeight = 0.05;
+        }
+        if (evidenceWeight == null) {
+            evidenceWeight = 0.05;
         }
     }
 }

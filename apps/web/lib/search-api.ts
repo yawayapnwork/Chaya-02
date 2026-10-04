@@ -1,6 +1,9 @@
 "use client";
 
 import { api } from "./capture-api";
+import type { SpatialStatus } from "./search-location";
+
+export { locationNote, type SpatialStatus } from "./search-location";
 
 /** Mirrors dev.chaya.api.search.SearchDtos.SearchResult. */
 export interface SearchResult {
@@ -22,11 +25,20 @@ export interface SearchResult {
   relevanceMargin?: number | null;
   /** Detected objects only: CLIP text-to-image cosine with the crop. Its own scale; never compare it with similarity. */
   imageSimilarity?: number | null;
-  /** FILTERED searches only: the evidence that made this a result. */
-  matchedBy?: "TEXT" | "IMAGE" | "TEXT_AND_IMAGE" | null;
+  /** FILTERED searches only: the evidence that made this a result. LEXICAL: only a whole-word fuzzy match of the name. */
+  matchedBy?: "TEXT" | "IMAGE" | "TEXT_AND_IMAGE" | "LEXICAL" | null;
   /** Detected objects only: the capture frame the bounding box was measured in. */
   sourceFrame?: string | null;
+  /** Whether the position can be shown where it is (docs/search.md, "Ranking"). VALID results always rank first. */
+  spatialStatus?: SpatialStatus | null;
+  /** Detected objects placed with depth evidence: from two or more frames, or one. */
+  localizationStatus?: "MULTI_VIEW" | "SINGLE_VIEW" | null;
+  /** Their measured placement spread in metres: a spread, not an accuracy. */
+  localizationUncertaintyM?: number | null;
+  lexicalSimilarity?: number | null;
+  rankScore?: number | null;
 }
+
 
 /** Mirrors dev.chaya.api.search.SearchDtos.SearchResponse. matchType: "embedding" is real CLIP cosine
  * similarity; "lexical_fallback" is trigram text similarity, used only when the embedding model

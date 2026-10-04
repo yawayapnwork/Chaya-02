@@ -531,3 +531,27 @@ This section was added after the review; the sections above are unchanged.
   - no real venue has been re-scanned;
   - S-2 (mutable storage) still undermines "exact" artifacts at the storage layer.
 
+---
+
+## 8. Addendum (2026-10-04): CV-1, detection placement
+
+This section was added after the review; the sections above are unchanged.
+
+- **CV-1 fixed in code.** SEMANTIC_INDEXING now places a detection with occlusion and depth evidence
+  (`chaya_worker.object_localization`):
+  - Gaussian centres hidden behind nearer geometry in their 16 px z-buffer cell are discarded;
+  - the object is the nearest depth layer in the box that covers at least 25 % of it;
+  - detections without such evidence are rejected (`NO_DEPTH`, `INSUFFICIENT_DEPTH`, `AMBIGUOUS_DEPTH`), never placed.
+- **Required test:** `tests/unit/test_object_localization.py`. A 0.3 m object 2 m in front of a dense wall is placed
+  0.05 m from its centre (the old rule: 2.02 m). Multi-view consistency is recorded (`MULTI_VIEW` / `SINGLE_VIEW`,
+  view spread), not required.
+- **Search:**
+  - every result carries `spatialStatus`; `VALID` results rank before all others;
+  - detected objects from before this change are `UNVERIFIED`;
+  - the rank score adds lexical similarity and detection evidence with small, uncalibrated weights;
+  - misspelt names are found through whole-word trigrams (docs/search.md).
+- **Still open:**
+  - only centres are z-buffered, so Gaussian footprints are ignored;
+  - SEMANTIC_INDEXING has never run on a real reconstruction (G-4), so the placement accuracy on real data is unknown;
+  - B3 has not been re-run with the new rank score.
+

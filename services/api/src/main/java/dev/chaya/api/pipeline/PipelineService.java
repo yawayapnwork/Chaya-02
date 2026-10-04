@@ -990,6 +990,29 @@ public class PipelineService {
         }
         String label = String.valueOf(obj.getOrDefault("label", "object"));
         double confidence = obj.get("confidence") instanceof Number n ? n.doubleValue() : 0.0;
+        // How well the position is supported (V27; chaya_worker.object_localization). A worker that predates it sends none:
+        // the object is stored without, and search reports it UNVERIFIED. A claim that is present but not well-formed is
+        // never stored as if it were evidence: the object is skipped.
+        String localizationStatus = null;
+        Double localizationUncertainty = null;
+        String localizationJson = null;
+        if (obj.containsKey("localization")) {
+            Map<?, ?> loc = obj.get("localization") instanceof Map<?, ?> m ? m : Map.of();
+            Object status = loc.get("status");
+            Object uncertainty = loc.get("uncertainty_m");
+            if (!("MULTI_VIEW".equals(status) || "SINGLE_VIEW".equals(status)) || !(uncertainty instanceof Number u)
+                    || !Double.isFinite(u.doubleValue()) || u.doubleValue() < 0) {
+                log.warn("{}: skipping a detected object with a malformed localization {}", source, loc);
+                return false;
+            }
+            localizationStatus = (String) status;
+            localizationUncertainty = u.doubleValue();
+            try {
+                localizationJson = mapper.writeValueAsString(loc);
+            } catch (JsonProcessingException e) {
+                return false;
+            }
+        }
         String bboxJson = null;
         if (obj.get("bbox_px") instanceof Map<?, ?> bbox) {
             Map<String, Object> withFrame = new LinkedHashMap<>((Map<String, Object>) bbox);
@@ -1006,13 +1029,14 @@ public class PipelineService {
             .param("o", run.orgId()).param("v", run.venueId()).param("f", floorId).query(UUID.class).single();
         jdbc.sql("INSERT INTO poi_version (organization_id, venue_id, poi_id, version_number, label, tags, x, y, z, "
                 + "image_embedding, image_embedding_model, source, detection_confidence, bounding_box, pipeline_run_id, "
-                + "coordinate_frame_id, scan_version_id, created_by) "
+                + "coordinate_frame_id, scan_version_id, created_by, localization_status, localization_uncertainty_m, localization) "
                 + "VALUES (:o, :v, :p, 1, :label, '{}', :x, :y, :z, CAST(:emb AS vector), :model, 'AUTO_DETECTED', :conf, "
-                + "CAST(:bbox AS jsonb), :run, :frame, :sv, 'system:semantic-indexing')")
+                + "CAST(:bbox AS jsonb), :run, :frame, :sv, 'system:semantic-indexing', :locStatus, :locUnc, CAST(:loc AS jsonb))")
             .param("o", run.orgId()).param("v", run.venueId()).param("p", poiId).param("label", label)
             .param("x", position.get(0).doubleValue()).param("y", position.get(1).doubleValue()).param("z", position.get(2).doubleValue())
             .param("emb", vectorLiteral(embedding)).param("model", embeddingModel).param("conf", confidence)
-            .param("bbox", bboxJson).param("run", run.id()).param("frame", frameId).param("sv", run.scanVersionId()).update();
+            .param("bbox", bboxJson).param("run", run.id()).param("frame", frameId).param("sv", run.scanVersionId())
+            .param("locStatus", localizationStatus).param("locUnc", localizationUncertainty).param("loc", localizationJson).update();
         return true;
     }
 

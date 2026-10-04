@@ -15,10 +15,8 @@ stage) runs once per successful reconstruction:
    `False` today and is reported honestly in every stage output. The checkpoint is fully configurable
    (`Settings.grounding_dino_model`) so a future fine-tuned checkpoint (trained on data in the format
    `chaya_worker.datasets` defines) is a config change, not a code change.
-3. Localises each 2D detection in 3D by finding which of the trained splat's own points reproject inside
-   the detection's box in that camera (`chaya_worker.stages.semantic_indexing
-   .associate_detection_with_geometry`, reusing the exact camera-projection math SEMANTIC_SEGMENTATION
-   already uses and tests) and taking their centroid.
+3. Localises each 2D detection in 3D on the surface its box actually shows, or not at all (see "Localization" below;
+   `chaya_worker.object_localization`). A detection without depth evidence is dropped, never given a position.
 4. Crops the detection and embeds it with CLIP's **image** tower (`chaya_worker.clip_embeddings.ClipEmbedder`,
    `ViT-B-32`/`openai`, 512-d, L2-normalised).
 5. Clusters detections of the same physical object seen across multiple frames (`cluster_by_distance`). Two
@@ -27,8 +25,60 @@ stage) runs once per successful reconstruction:
    became one POI with the average of two unrelated crops (docs/ADVERSARIAL_REVIEW.md CV-2). The label is a merge
    guard only. The cost is the other way round: an object labelled "sofa" in one frame and "couch" in another (the
    prompt has both) stays two POIs, a duplicate rather than a lost object.
-6. Publishes a `DETECTED_OBJECTS` artifact: canonical position, image embedding, confidence, and the bounding box
-   together with the frame it was measured in (both from the most confident member).
+6. Publishes a `DETECTED_OBJECTS` artifact: canonical position, image embedding, confidence, the bounding box
+   together with the frame it was measured in (both from the most confident member), and `localization` (below). The
+   report counts the detections rejected for lack of depth evidence, by reason.
+
+## Localization: from a 2D box to a 3D point
+
+The trace, end to end:
+
+| Step | Where | What |
+|---|---|---|
+| Detection | `GroundingDinoDetector.detect` | A box in undistorted-frame pixels, a label, a confidence. |
+| Camera projection | `semantic_segmentation.project_points`, `object_localization.camera_depth` | Every Gaussian **centre** of the trained (or merged) splat is projected into that frame's pinhole camera; in front of the camera, inside the image and on an unmasked pixel (privacy masks) counts as visible. Its depth along the optical axis is converted to metres with the calibrated frame's scale. |
+| Depth / 3D association | `object_localization.localize_detection` | See below. |
+| Multi-view | `semantic_indexing.cluster_by_distance` | Same label within 0.75 m merges into one object; the position is the members' centroid. |
+| POI | `PipelineService#insertDetectedPoi` | `poi_version` with x/y/z, `detection_confidence`, `bounding_box`, and (V27) `localization_status`, `localization_uncertainty_m`, `localization`. A malformed localization claim is skipped, never stored. |
+| Search result | `SemanticSearchService` | The same fields, plus `spatialStatus` (below). |
+| Viewer | `SemanticSearchPanel`, `ViewerWorkspace` | Selecting a result selects that POI in the viewer, which draws POIs only in the frame on screen. The panel states the location's status and spread (`lib/search-location.ts`). |
+
+**How a box becomes a point** (review CV-1: the old rule took the median of every centre projecting into the box, so a
+small object in front of a wall was placed on the wall):
+
+1. **Occlusion.** Visible centres are binned into 16 x 16 px cells; each cell keeps its nearest depth. A centre more than
+   the depth tolerance (0.15 m + 5 % of depth) behind its cell's nearest is hidden behind other geometry and is never
+   used as surface.
+2. **Depth layers.** The unhidden centres in the box, sorted by depth, are split wherever consecutive depths are more
+   than the tolerance apart. A layer with at least 12 centres is a candidate surface.
+3. **The object is the nearest layer that covers the box**: it must occupy at least 25 % of the box's occupied cells. A
+   thin occluder in front (a pole, a chair arm) does not, and is passed over; the background behind the object is
+   never reached.
+4. **Position** = the median of that layer's centres. **Depth spread** = 1.4826 x MAD of its depths.
+
+**Rejected, not placed:** `NO_DEPTH` (no visible centre in the box), `INSUFFICIENT_DEPTH` (fewer than 12 unhidden
+centres, or no layer of 12), `AMBIGUOUS_DEPTH` (no layer covers 25 % of the box).
+
+**Kept with each object:** `localization.status` = `MULTI_VIEW` when its members come from at least two frames, else
+`SINGLE_VIEW`; `view_spread_m` (RMS distance of the members from the centroid: how much independent views disagree);
+`depth_spread_m`; `uncertainty_m` = the larger of the two. These are **measured spreads, not errors against ground
+truth**.
+
+**Measured.** On a synthetic scene (`tests/unit/test_object_localization.py`: a 0.3 m object 2 m in front of a dense
+wall), the placement is 0.05 m from the object's centre; the old rule's was 2.02 m. That is the only number there is.
+Object-level placement accuracy on a real reconstruction has never been measured: SEMANTIC_INDEXING has never run on
+one (review G-4).
+
+**Not handled:**
+
+- Gaussian footprints. Only centres are z-buffered; a large, sparse Gaussian can occlude pixels its centre does not
+  reach. No depth is rendered.
+- An object standing on a floor that recedes continuously in depth can share a layer with the floor around it; its
+  horizontal position is then roughly right and its height too low.
+- A detection fully hidden behind another surface is placed on that surface: the detector saw what was visible, and
+  so does the placement.
+- The thresholds (16 px, 0.15 m + 5 %, 12 centres, 25 %) were chosen on synthetic scenes, not calibrated.
+- Detections of the same object under different labels ("sofa" / "couch") stay separate objects (see step 5).
 
 The worker has no database access (see ARCHITECTURE.md). `dev.chaya.api.pipeline.PipelineService
 #ingestDetectedObjects` reads that artifact when SEMANTIC_INDEXING succeeds and turns each object into a
@@ -109,7 +159,39 @@ not exist yet.
        as close to the query as to **every** detector label in scope (needs at least 2 distinct labels). No threshold
        to calibrate: the competing labels are the reference. `matchedBy = IMAGE` marks results admitted only this way.
 
-   Order: relevant results first, then text similarity, then image similarity, then id.
+   - *lexical / fuzzy* (any POI): pg_trgm `strict_word_similarity` between the query and the POI's text (label,
+     category, tags). A misspelt name is relevant if it reaches `chaya.search.lexical-min-similarity` (0.5):
+     "recepton" scores 0.58 against the reception desk, which real CLIP ranks only fourth for that query; "fire
+     extingusher" 0.75. Strict means whole words, so "sign" is 0.33 against "design studio" (the non-strict form
+     gives 0.8). `matchedBy = LEXICAL` marks results admitted only this way. 0.5 was chosen on a handful of such pairs,
+     not calibrated. Synonyms still come only from CLIP and the staff's tags: "settee" has no trigram in common with
+     "couch".
+
+   **Spatial validity.** Every result has a `spatialStatus`:
+
+   | Status | Meaning |
+   |---|---|
+   | `VALID` | In the frame being viewed (the floor's current frame, or the selected version's); a detected object was also placed with depth evidence (`localization_status` set) |
+   | `UNVERIFIED` | A detected object stored before depth-tested localization (V27): its position may be on whatever was behind it |
+   | `STALE_FRAME` | In an older coordinate frame: the floor was re-reconstructed and the POI not re-placed |
+   | `UNBOUND` | In no frame: the floor had no calibration when it was placed |
+
+   **Order:** relevant results first; then **every `VALID` result before every other**; then the rank score; then image
+   similarity; then id. The spatial tier is a sort key, not a weight, so no text, lexical or image similarity can lift
+   a position that cannot be shown above one that can.
+
+   **Rank score** (`rankScore`), within a tier:
+
+   ```
+   rank_score = similarity + 0.05 x lexical + 0.05 x (evidence - 1)
+   evidence   = 1                                                 manual POI (staff placed it)
+              = detection_confidence x 1.0 / 0.75 / 0.5           detected: MULTI_VIEW / SINGLE_VIEW / unverified
+   ```
+
+   The weights (`chaya.search.lexical-weight`, `chaya.search.evidence-weight`) are small on purpose: CLIP similarity
+   stays the main signal, and they reorder near-ties (two chairs of the same label: the confidently detected,
+   multi-view one first). The penalty is at most 0.05, and the lexical bonus at most 0.05. They are not calibrated:
+   B3 has not been re-run with them. Every pre-existing real-CLIP ranking test still passes.
 4. **Relevance.** CLIP places almost any two short phrases at cosine ~0.8, so the nearest POIs come back even for
    things the venue does not have ("swimming pool" -> "Water fountain"). A POI, manual or detected, counts as a result
    if its text similarity exceeds the query's **mean similarity to the distinct POI texts in scope** by
@@ -131,11 +213,11 @@ not exist yet.
      correct answers, mostly synonyms, no longer count as results but are offered as closest matches. It was
      calibrated on manual POI texts; detected labels are short class names in the same text space, and B3's mixed
      condition measures how it behaves on them, but no separate calibration venue with detections exists.
-   - Each result keeps its spatial metadata: `floorId`, the canonical `x/y/z`, and for detected objects
-     `detectionConfidence`, `boundingBox` and `sourceFrame`.
+   - Each result keeps its spatial metadata: `floorId`, the canonical `x/y/z`, `spatialStatus`, and for detected
+     objects `detectionConfidence`, `boundingBox`, `sourceFrame`, `localizationStatus` and `localizationUncertaintyM`.
 5. If `services/vision` is unavailable, the search **degrades** to Postgres trigram similarity on the label text
    (`pg_trgm`) rather than failing, and `matchType` reports `"lexical_fallback"` so a caller never mistakes it for
-   semantic matching.
+   semantic matching. Its results keep the same spatial tiers.
    - `HttpTextEmbeddingClient` puts a **circuit breaker** in front of the vision service. The first failed call
      (unreachable, an error, or a malformed reply) opens it. From then on every call fails immediately, without
      touching DNS or the network, so searches fall back in milliseconds and the POI embedding backfill (on
