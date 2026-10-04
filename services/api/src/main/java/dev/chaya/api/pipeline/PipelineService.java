@@ -317,6 +317,12 @@ public class PipelineService {
         if (run.scanVersionId() != null && stage == JobStage.REGION_SPLICE) {
             globalLabelsInput(run.scanVersionId()).ifPresent(inputs::add);
         }
+        // A re-scan's NAVIGATION_BAKING re-bakes the whole floor from the merged scene and proves it against the parent
+        // scene outside the region (chaya_worker.stages.navigation_baking), so it gets the parent's cloud and labels too.
+        if (run.scanVersionId() != null && stage == JobStage.NAVIGATION_BAKING) {
+            globalCloudInput(run.scanVersionId()).ifPresent(inputs::add);
+            globalLabelsInput(run.scanVersionId()).ifPresent(inputs::add);
+        }
         return inputs;
     }
 
@@ -899,6 +905,7 @@ public class PipelineService {
             return;
         }
         UUID frameId = requireCanonicalArtifactFrame(run, JobStage.SEMANTIC_INDEXING, doc, "DETECTED_OBJECTS");
+        requireArtifactVersion(run, doc, "DETECTED_OBJECTS");
         UUID floorId = jdbc.sql("SELECT floor_id FROM capture_session WHERE id = :c")
             .param("c", run.captureId()).query(UUID.class).optional().orElse(null);
         if (floorId == null) {
@@ -1045,6 +1052,7 @@ public class PipelineService {
             return;
         }
         UUID frameId = requireCanonicalArtifactFrame(run, stage, doc, "NAVIGATION_GRAPH");
+        requireArtifactVersion(run, doc, "NAVIGATION_GRAPH");
         NavmeshBinding navmesh = requireNavmeshBinding(doc, outputs);
         UUID floorId = jdbc.sql("SELECT floor_id FROM capture_session WHERE id = :c")
             .param("c", run.captureId()).query(UUID.class).optional().orElse(null);
@@ -1219,6 +1227,25 @@ public class PipelineService {
                     + (expected == null ? "(none exists)" : expected.id()) + " but names " + claimed);
         }
         return expected.id();
+    }
+
+    /**
+     * A version-scoped artifact (DETECTED_OBJECTS, NAVIGATION_GRAPH) names the scan version it was produced for
+     * ({@code source.scan_version_id}, chaya_worker.stages.base.run_provenance), and that must be this run's: a re-scan's
+     * graph or detections must never be stored under another version, and an artifact produced for some version must never
+     * enter a run that is not that version. A re-scan's artifact that names no version is refused too; a full run's may
+     * omit it (workers before this check, and a full run is not a version until it is bootstrapped).
+     */
+    private void requireArtifactVersion(RunRow run, Map<String, Object> doc, String kind) {
+        Map<?, ?> source = doc.get("source") instanceof Map<?, ?> m ? m : null;
+        boolean named = source != null && source.containsKey("scan_version_id");
+        Object claimed = named ? source.get("scan_version_id") : null;
+        String expected = run.scanVersionId() == null ? null : run.scanVersionId().toString();
+        if ((named && !java.util.Objects.equals(expected, claimed == null ? null : String.valueOf(claimed)))
+                || (!named && expected != null)) {
+            throw new ApiException(HttpStatus.CONFLICT, "ARTIFACT_VERSION_MISMATCH", kind + " must be produced for scan version "
+                + (expected == null ? "(none: a full reconstruction)" : expected) + " but names " + (named ? claimed : "no version"));
+        }
     }
 
     // =========================================================================================

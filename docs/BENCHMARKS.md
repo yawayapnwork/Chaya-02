@@ -561,15 +561,16 @@ The truth is known, so the error is exact. A trial passes only if **every** gate
 
 | | Full reconstruction | Regional rescan |
 |---|---|---|
-| Stages | 12 (`PipelineDefinition.STAGES`) | 13 if navigation is affected, 12 if not (`INCREMENTAL_STAGES`) |
-| Only in this plan | `SEMANTIC_SEGMENTATION` | `REGION_ALIGNMENT`, `REGION_SPLICE` |
+| Stages | 12 (`PipelineDefinition.STAGES`) | 14 when the parent version has a navmesh, 13 when it has none (`INCREMENTAL_STAGES`) |
+| Only in this plan | none | `REGION_ALIGNMENT`, `REGION_SPLICE` |
 | Frames processed | the whole venue's capture | only the region's own capture |
-| Navigation rebuild | always | only if an ACTIVE routing-graph node lies in the region; then the **whole floor** is re-baked (no per-tile bake), and the new graph goes live only when the version finalizes |
+| Navigation rebuild | always | the **whole floor**, from the merged scene, whenever the parent version has a navmesh (never inherited; no per-tile bake); refused unless the parent and merged scenes are identical outside the region; the new graph goes live only when the version finalizes |
 | Semantic re-index | whole venue | AUTO_DETECTED POIs in the region polygon plus new detections, applied only when the version finalizes; MANUAL POIs never |
 | Planes, viewer asset | whole venue | **whole floor** (refitted / regenerated from the merged cloud): not selective |
 
-Note that **a regional rescan has no `SEMANTIC_SEGMENTATION` stage**, so its `GEOMETRIC_CLEANUP` runs without
-semantic labels, even where the full run had them.
+This table reads the code as of 2026-10-04. The result file above (2026-09-26) predates two changes: the regional plan
+gained `SEMANTIC_SEGMENTATION` (review N-1), and navigation is no longer skipped or inherited when no graph node lies in
+the region (docs/rescan.md, "NAVIGATION").
 
 **Unavailable (real venue).** All of these are missing a full run and a regional run of the same venue, which
 needs `SPLAT_RECONSTRUCTION` (CUDA):

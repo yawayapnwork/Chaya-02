@@ -29,12 +29,11 @@ public final class PipelineDefinition {
     /**
      * The incremental re-scan plan (docs/rescan.md): captures and reconstructs only the selected region,
      * aligns it against the venue's existing reconstruction and splices it in, then re-derives the
-     * downstream artifacts from the spliced, venue-wide result. NAVIGATION_BAKING is included here but
-     * {@link dev.chaya.api.rescan.RescanService} omits it from the plan entirely (not merely skips running
-     * it) whenever the selected region does not intersect the floor's current routing graph -- "only
-     * affected regions require navigation updates" is decided once, up front, because the region is chosen
-     * before capture even starts, and it changes what {@code pipeline_run.stages} is created with, not
-     * something toggled mid-run (pipeline_run's plan is immutable once created).
+     * downstream artifacts from the spliced, venue-wide result. NAVIGATION_BAKING re-bakes the whole floor from the
+     * merged scene; {@link dev.chaya.api.rescan.RescanService} omits it from the plan only when the parent version has
+     * no navmesh at all (so neither does the new version). Navigation is never inherited from the parent: any change in
+     * the region can add or remove an obstacle. The choice is made once, when the run is created, because
+     * {@code pipeline_run.stages} is immutable once created.
      */
     public static final List<JobStage> INCREMENTAL_STAGES = List.of(
         JobStage.INPUT_VALIDATION,

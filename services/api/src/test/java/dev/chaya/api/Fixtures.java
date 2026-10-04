@@ -61,6 +61,11 @@ final class Fixtures {
      * artifacts, then DRAFT -> FINALIZED with that frame. The artifact rows name objects that are never read.
      */
     UUID finalizedScanVersion(UUID org, UUID venue, UUID scan, UUID floor, int number) {
+        return finalizedScanVersion(org, venue, scan, floor, number, false);
+    }
+
+    /** As above; `withNavmesh` also pins the run's NAVMESH, NAVMESH_MANIFEST and NAVIGATION_GRAPH (all three, V26). */
+    UUID finalizedScanVersion(UUID org, UUID venue, UUID scan, UUID floor, int number, boolean withNavmesh) {
         UUID session = jdbc.sql("SELECT capture_session_id FROM scan WHERE id = :s").param("s", scan).query(UUID.class).single();
         UUID frame = calibratedRunForScan(org, venue, scan, session, floor, "FLOOR_LOCAL");
         UUID run = jdbc.sql("SELECT id FROM pipeline_run WHERE scan_id = :s").param("s", scan).query(UUID.class).single();
@@ -71,7 +76,13 @@ final class Fixtures {
                 VALUES (:o, :v, :s, :f, :n, :r) RETURNING id""")
             .param("o", org).param("v", venue).param("s", scan).param("f", floor).param("n", number).param("r", run)
             .query(UUID.class).single();
-        for (var pin : java.util.Map.of(cloud, "SPLAT_CLEAN", ksplat, "KSPLAT").entrySet()) {
+        var pins = new java.util.HashMap<>(java.util.Map.of(cloud, "SPLAT_CLEAN", ksplat, "KSPLAT"));
+        if (withNavmesh) {
+            for (String kind : java.util.List.of("NAVMESH", "NAVMESH_MANIFEST", "NAVIGATION_GRAPH")) {
+                pins.put(publishedArtifact(org, venue, scan, run, "NAVIGATION_BAKING", kind), kind);
+            }
+        }
+        for (var pin : pins.entrySet()) {
             jdbc.sql("INSERT INTO scan_version_artifact (scan_version_id, artifact_id, kind, owner_version_id) VALUES (:v, :a, :k, :v)")
                 .param("v", version).param("a", pin.getKey()).param("k", pin.getValue()).update();
         }

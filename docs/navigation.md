@@ -224,9 +224,12 @@ floor's graph. `navigation_edge` can never span two `graph_id`s anyway (its fore
       1.8 m has no route, and with the wide door walled up 1.3 m has no route;
     - the bake is deterministic.
   - `test_venue_stage.py` runs the same venue through NAVIGATION_BAKING with the orchestrator, in a scaled, rotated,
-    +Y-up reconstruction frame, and routes on the result. It also runs a re-scan (review N-1): REGION_SPLICE splices
-    the venue's and the region's labels, and NAVIGATION_BAKING on the merged cloud still keeps the sofa and the wall
-    outside the region. Without the venue's labels no merged labels are published and the re-bake is refused.
+    +Y-up reconstruction frame, and routes on the result. It also runs a re-scan (review N-1) as a re-scan work order
+    does: REGION_SPLICE splices the venue's and the region's labels; NAVIGATION_BAKING re-bakes the whole floor from
+    the merged cloud, blocks a crate added inside the region, still keeps the sofa, wall and column outside it, and
+    verifies the parent and merged scenes identical outside the region (docs/rescan.md, "NAVIGATION"). Lost obstacles,
+    the region's cloud alone, labels or planes of another cloud and a parent cloud the splice did not use are refused.
+    Without the venue's labels no merged labels are published and the re-bake is refused.
   - `test_recast_fixture.py` covers the hand-made `room_with_doorway.obj` and every failure state of the tool.
   - `test_navigation_baking_stage.py` covers the L-shaped floor (nothing walkable in the unscanned quadrant) and
     `NAVMESH_LABELS_UNAVAILABLE`.

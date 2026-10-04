@@ -79,7 +79,7 @@ public class RescanService {
         }
         FrameView parentFrame = requireCanonicalParentFrame(parent.id());
         double area = requireValidRegion(request.region());
-        boolean navigationRebuildRequired = navigationIntersectsRegion(venueId, floorId, request.region().points());
+        boolean navigationRebuildRequired = parentHasNavigation(parent.id());
 
         Map<String, Object> device = request.device() == null ? Map.of() : request.device();
         UUID captureId = jdbc.sql("""
@@ -110,9 +110,7 @@ public class RescanService {
                                            UUID parentVersionId, Map<String, Object> regionGeometry,
                                            Boolean privacyEnabled, Integer timeBudgetSeconds) {
         ParentVersion parent = requireFinalizedVersion(actor, venueId, parentVersionId);
-        @SuppressWarnings("unchecked")
-        List<List<Number>> points = (List<List<Number>>) regionGeometry.get("points");
-        boolean navigationRebuildRequired = navigationIntersectsRegion(venueId, floorId, points);
+        boolean navigationRebuildRequired = parentHasNavigation(parent.id());
 
         LinkedHashMap<String, Object> processingConfig = new LinkedHashMap<>();
         processingConfig.put("navigationRebuildRequired", navigationRebuildRequired);
@@ -301,23 +299,19 @@ public class RescanService {
         return area;
     }
 
-    /** "Only affected regions require navigation updates where technically possible" (docs/rescan.md
-     * "NAVIGATION"): true only when the floor's current STANDARD routing graph actually has geometry inside
-     * the selected region. No graph at all, or a graph entirely outside the region, means nothing there
-     * needs to change, so NAVIGATION_BAKING is left out of the plan entirely (see PipelineDefinition). */
-    private boolean navigationIntersectsRegion(UUID venueId, UUID floorId, List<? extends List<? extends Number>> polygon) {
-        List<double[]> nodes = jdbc.sql("""
-                SELECT n.x, n.y FROM navigation_node n JOIN navigation_graph g ON g.id = n.graph_id
-                 WHERE g.venue_id = :v AND g.floor_id = :f AND g.profile = 'STANDARD' AND g.status = 'ACTIVE'
-                """)
-            .param("v", venueId).param("f", floorId)
-            .query((rs, i) -> new double[]{rs.getDouble("x"), rs.getDouble("y")}).list();
-        for (double[] node : nodes) {
-            if (PolygonGeometry.pointInPolygon(node[0], node[1], polygon)) {
-                return true;
-            }
-        }
-        return false;
+    /**
+     * Whether the re-scan must re-bake navigation (docs/rescan.md, "Downstream rebuilds"): exactly when the parent version
+     * has a navmesh. Any change inside the region can add or remove an obstacle, or open or close a passage, wherever the
+     * region lies relative to the old graph: a region inside one large navmesh polygon contains none of the graph's nodes,
+     * and a region where furniture was removed has no walkable polygon yet. Testing the region against the old graph
+     * cannot tell, and inheriting the old navmesh would give the new version navigation for geometry it no longer has. So
+     * the new version always gets its own navmesh, re-baked from its merged scene, and checked against the parent outside
+     * the region by the worker. A parent without a navmesh gives a version without one. Decided from the parent version's
+     * own pins, not the floor's ACTIVE graph, which may belong to another reconstruction or frame.
+     */
+    private boolean parentHasNavigation(UUID parentVersionId) {
+        return jdbc.sql("SELECT EXISTS (SELECT 1 FROM scan_version_artifact WHERE scan_version_id = :v AND kind = 'NAVMESH')")
+            .param("v", parentVersionId).query(Boolean.class).single();
     }
 
     private String toJson(Object o) {

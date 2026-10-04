@@ -15,8 +15,6 @@ import dev.chaya.api.poi.PoiService.PoiData;
 import dev.chaya.api.security.Actor;
 import dev.chaya.api.security.Role;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -36,7 +34,9 @@ import org.springframework.test.web.servlet.MvcResult;
  *       finalize-current;</li>
  *   <li>version 2: a re-scan of version 1 whose region touches the navigation graph (so it re-bakes navigation), with a
  *       new detection in the region;</li>
- *   <li>version 3: a re-scan of version 2 whose region is away from the graph (so it inherits version 2's navmesh).</li>
+ *   <li>version 3: a re-scan of version 2 whose region is away from every graph node. It still re-bakes navigation: its
+ *       parent has a navmesh, and navigation is never inherited (a region can change navigation without containing a
+ *       node of the old graph).</li>
  * </ol>
  * It then checks the lineage and numbering, which run owns every pinned artifact, that switching the viewer between
  * versions switches the model, the frame, the POIs and the routing graph together, and that finalized versions cannot be
@@ -45,10 +45,9 @@ import org.springframework.test.web.servlet.MvcResult;
  */
 class ScanVersionLineageTest extends PipelineTestSupport {
 
-    private static final Path NAVMESH_FIXTURE = Path.of("../../packages/contracts/fixtures/navmesh");
     /** 9 m^2 in the left room of the navmesh fixture: four of its STANDARD polygons lie inside. */
     private static final String REGION_TOUCHING_GRAPH = "[[0,0],[0,3],[3,3],[3,0]]";
-    /** 9 m^2 beyond the fixture's walkable area: no polygon inside. */
+    /** 9 m^2 beyond the fixture's walkable area: no polygon or node inside. */
     private static final String REGION_AWAY_FROM_GRAPH = "[[8,6],[8,9],[11,9],[11,6]]";
 
     @Autowired PoiService pois;
@@ -58,7 +57,7 @@ class ScanVersionLineageTest extends PipelineTestSupport {
 
     // ---- worker outputs --------------------------------------------------------------------------------------------
 
-    private String detectedObjects(Object... labelXY) {
+    private String detectedObjects(JsonNode order, Object... labelXY) throws Exception {
         StringBuilder embedding = new StringBuilder();
         for (int i = 0; i < 512; i++) {
             embedding.append(i > 0 ? "," : "").append(String.format(Locale.ROOT, "%.4f", Math.sin(i * 0.011)));
@@ -69,17 +68,8 @@ class ScanVersionLineageTest extends PipelineTestSupport {
                 + ",0.4],\"embedding\":[" + embedding + "]}");
         }
         return "{\"coordinate_frame\":{\"id\":\"" + frameId + "\",\"units\":\"m\",\"up_axis\":\"+Z\"},"
+            + "\"source\":" + mapper.writeValueAsString(sourceOf(order)) + ","
             + "\"embedding_model\":\"open_clip:ViT-B-32:openai\",\"objects\":[" + String.join(",", objects) + "]}";
-    }
-
-    private List<Map<String, Object>> navigationOutputs(JsonNode order) throws Exception {
-        byte[] navmesh = Files.readAllBytes(NAVMESH_FIXTURE.resolve("navmesh.bin"));
-        String manifest = Files.readString(NAVMESH_FIXTURE.resolve("navmesh-manifest.json"), StandardCharsets.UTF_8);
-        String graph = Files.readString(NAVMESH_FIXTURE.resolve("navigation-graph.json"), StandardCharsets.UTF_8)
-            .replace("FIXTURE_FRAME_ID", frameId);
-        return List.of(artifact(order, "navmesh.bin", "NAVMESH", false, false, navmesh),
-            artifact(order, "navmesh-manifest.json", "NAVMESH_MANIFEST", false, false, manifest),
-            artifact(order, "navigation-graph.json", "NAVIGATION_GRAPH", false, false, graph));
     }
 
     private List<Map<String, Object>> model(JsonNode order, String bytes) {
@@ -105,8 +95,8 @@ class ScanVersionLineageTest extends PipelineTestSupport {
             switch (stage.name()) {
                 case "ARTIFACT_GENERATION" -> ok(order, model(order, "version-1 model"));
                 case "SEMANTIC_INDEXING" -> ok(order, List.of(artifact(order, "detected-objects.json", "DETECTED_OBJECTS", false, false,
-                    detectedObjects("bench", 6.5, 1.0, "chair", 1.5, 1.5))));
-                case "NAVIGATION_BAKING" -> ok(order, navigationOutputs(order));
+                    detectedObjects(order, "bench", 6.5, 1.0, "chair", 1.5, 1.5))));
+                case "NAVIGATION_BAKING" -> ok(order, navigationOutputs(order, frameId));
                 default -> succeed(order);
             }
         }
@@ -153,8 +143,8 @@ class ScanVersionLineageTest extends PipelineTestSupport {
                 }
                 case "ARTIFACT_GENERATION" -> ok(order, model(order, modelBytes));
                 case "SEMANTIC_INDEXING" -> ok(order, List.of(artifact(order, "detected-objects.json", "DETECTED_OBJECTS", false, false,
-                    detectedObjects(detections))));
-                case "NAVIGATION_BAKING" -> ok(order, navigationOutputs(order));
+                    detectedObjects(order, detections))));
+                case "NAVIGATION_BAKING" -> ok(order, navigationOutputs(order, frameId));
                 default -> succeed(order);
             }
         }
@@ -252,7 +242,7 @@ class ScanVersionLineageTest extends PipelineTestSupport {
 
         Object[] r3 = rescan(v2Id, REGION_AWAY_FROM_GRAPH, "version-3 merged model");
         UUID run3 = (UUID) r3[0];
-        assertThat((Boolean) r3[1]).as("the region is away from the graph, so navigation is inherited").isFalse();
+        assertThat((Boolean) r3[1]).as("away from every graph node, but its parent has a navmesh: re-baked, never inherited").isTrue();
         Map<Integer, JsonNode> versions = versionsByNumber();
         JsonNode v2 = versions.get(2);
         JsonNode v3 = versions.get(3);
@@ -291,9 +281,8 @@ class ScanVersionLineageTest extends PipelineTestSupport {
         }
         assertThat(v2Owners.get("DETECTED_OBJECTS")).as("its region's detections, and version 1's elsewhere").containsExactlyInAnyOrder(v2Id, v1Id);
         Map<String, List<UUID>> v3Owners = ownersByKind(v3);
-        assertThat(v3Owners.get("KSPLAT")).containsExactly(v3Id);
-        for (String inherited : List.of("NAVMESH", "NAVMESH_MANIFEST", "NAVIGATION_GRAPH")) {
-            assertThat(v3Owners.get(inherited)).as("version 3 did not re-bake: its " + inherited + " is version 2's").containsExactly(v2Id);
+        for (String own : List.of("KSPLAT", "SPLAT_MERGED", "NAVMESH", "NAVMESH_MANIFEST", "NAVIGATION_GRAPH")) {
+            assertThat(v3Owners.get(own)).as("version 3's own " + own + ", never version 2's").containsExactly(v3Id);
         }
         assertThat(jdbc.sql("SELECT DISTINCT scan_version_id FROM processing_artifact a JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id "
                 + "WHERE sr.run_id = :r").param("r", run2).query(UUID.class).list())
@@ -335,14 +324,15 @@ class ScanVersionLineageTest extends PipelineTestSupport {
             assertThat(p.get("scanVersionId").asText()).isEqualTo((p.get("label").asText().equals("kiosk") ? v2Id : v1Id).toString());
         }
 
-        // Navigation: each version routes on its own pinned navmesh's graph (version 3 on the one it inherited).
+        // Navigation: each version routes on its own pinned navmesh's graph.
         UUID v1Graph = standardGraphOf(v1Id);
         UUID v2Graph = standardGraphOf(v2Id);
-        assertThat(v1Graph).isNotEqualTo(v2Graph);
+        UUID v3Graph = standardGraphOf(v3Id);
+        assertThat(Set.of(v1Graph, v2Graph, v3Graph)).hasSize(3);
         UUID receptionId = reception.id();
         assertThat(route(v1Id, receptionId, 200).get("routingSources").get(0).get("graphId").asText()).isEqualTo(v1Graph.toString());
         assertThat(route(v2Id, receptionId, 200).get("routingSources").get(0).get("graphId").asText()).isEqualTo(v2Graph.toString());
-        assertThat(route(v3Id, receptionId, 200).get("routingSources").get(0).get("graphId").asText()).isEqualTo(v2Graph.toString());
+        assertThat(route(v3Id, receptionId, 200).get("routingSources").get(0).get("graphId").asText()).isEqualTo(v3Graph.toString());
         // A POI of a newer version is not a destination in an older one, and a superseded one is not in a newer one.
         assertThat(route(v1Id, poiId("kiosk"), 404).get("detail").asText()).contains("not part of scan version");
         assertThat(route(v2Id, poiId("chair"), 404).get("detail").asText()).contains("not part of scan version");

@@ -24,8 +24,28 @@ stage fails with NOT_CALIBRATED (retryable once the reconstruction is calibrated
      (chaya_worker.navmesh.build_routing_graphs), bound to the navmesh by its checksum. dev.chaya.api ingests it and
      routes only on graphs that carry such a binding (see dev.chaya.api.navigation.RouteService, NAVMESH_NOT_READY).
 
+Every input is checked to describe the same cloud: the labels name the cloud they label (SEMANTIC_LABELS_MERGED does,
+by SHA-256) and PLANE_MODEL names the cloud it was fitted on; a mismatch is refused, not baked.
+
+**Incremental re-scans** (the work order carries `regionGeometry`) re-bake the **whole floor** from the merged scene
+(SPLAT_MERGED + SEMANTIC_LABELS_MERGED). This is not a local re-bake: the navmesh is one Detour tile, and Recast's
+region partitioning and polygonisation are global, so a patch of polygons could not be swapped in without breaking the
+topology at its border. Instead the stage proves that the full re-bake preserved the venue outside the region:
+
+  * the SPLAT_MERGED being baked must be the one REGION_SPLICE produced from exactly this GLOBAL_CLOUD and GLOBAL_LABELS
+    (SPLICE_REPORT);
+  * the surface model of the parent scene (GLOBAL_CLOUD + GLOBAL_LABELS, the parent version's pinned cloud and labels)
+    and of the merged scene must be identical, cell for cell, everywhere farther than RESCAN_INFLUENCE_CELLS cells outside
+    the region polygon: the same ground, the same walls and furniture, the same steps
+    (chaya_worker.navmesh.compare_outside_region);
+  * no polygon of the new navmesh may cover an obstacle cell there (obstacle_cells_under_navmesh).
+
+Any failure is NAVMESH_REGION_INCONSISTENT and nothing is published. The manifest's `rebuild` block records the scope
+(FULL_FLOOR) and these measurements.
+
 Failure states: NAVMESH_TOOL_UNAVAILABLE (no chaya-navmesh on this worker), INVALID_GEOMETRY, NO_WALKABLE_SURFACE,
-NAVMESH_BUILD_FAILED -- each a structured stage failure with nothing published.
+NAVMESH_LABELS_UNAVAILABLE, NAVMESH_REGION_INCONSISTENT, NAVMESH_BUILD_FAILED -- each a structured stage failure with
+nothing published.
 
 Elevators are not detected from geometry -- a hallway scan generally cannot see inside one reliably. Floor-to-floor
 transitions, including elevators, are resolved at query time from stairs/elevator POIs shared across adjacent floors
@@ -43,25 +63,29 @@ from ..frames import UNITS, UP_AXIS, frame_provenance, require_canonical
 from ..navmesh import (
     GROUND_LABELS,
     INVALID_GEOMETRY,
+    NAVMESH_REGION_INCONSISTENT,
     NO_WALKABLE_SURFACE,
     OBSTACLE_LABELS,
+    RESCAN_INFLUENCE_CELLS,
     CanonicalPlane,
     NavmeshError,
     SurfaceModel,
     build_routing_graphs,
     build_surface_model,
+    cells_outside_region,
+    compare_outside_region,
     geometry_from_surface,
+    obstacle_cells_under_navmesh,
     select_floor_plane,
     write_obj,
 )
 from ..ply import read_ply
 from ..recast import NAVMESH_FORMAT, NavmeshBuild, RecastConfig, bake, recast_frame_provenance, resolve_tool, sha256_file
-from .base import command_record, write_json
+from .base import command_record, is_rescan, run_provenance, venue_cloud, write_json
 
 NAVMESH_STATUS_READY = "READY"
 NAVMESH_LABELS_UNAVAILABLE = "NAVMESH_LABELS_UNAVAILABLE"
-# The semantic labels that describe each splat kind Gaussian for Gaussian.
-LABELS_FOR_SPLAT = {"SPLAT_MERGED": "SEMANTIC_LABELS_MERGED", "SPLAT_CLEAN": "SEMANTIC_LABELS_CLEAN", "SPLAT": "SEMANTIC_LABELS"}
+FULL_FLOOR = "FULL_FLOOR"
 INPUT_REPRESENTATION = (
     "canonical-frame triangle soup (metres, +Z up), converted to Recast's +Y-up frame only by chaya_worker.recast_boundary: "
     "one quad per observed ground cell of the surface model (corners at the mean height of level neighbouring cells, so "
@@ -77,7 +101,7 @@ def navmesh_reference(build: NavmeshBuild) -> dict:
 
 
 def navigation_graph_document(build: NavmeshBuild, navmesh_ref: dict, tool: dict, config: RecastConfig, frame: dict, *,
-                              max_ramp_slope_deg: float, surface: SurfaceModel) -> dict:
+                              max_ramp_slope_deg: float, surface: SurfaceModel, source: dict | None = None) -> dict:
     """The NAVIGATION_GRAPH artifact: the Detour polygon graph as STANDARD/STEP_FREE routing graphs, bound to the navmesh
     it came from (source, status, checksum, tool/library versions). dev.chaya.api ingests a graph only with this binding,
     and only when the checksum is that of the NAVMESH artifact published alongside it."""
@@ -99,7 +123,8 @@ def navigation_graph_document(build: NavmeshBuild, navmesh_ref: dict, tool: dict
                          f"{surface.step_min_rise_m} m (and at most the agent's climb)"),
         "step_free_max_slope_deg": max_ramp_slope_deg,
     }
-    return {"coordinate_frame": frame, "navmesh": binding, "recast_config": config.as_dict(), "polygon_count": len(build.polygons),
+    return {"coordinate_frame": frame, "source": source or {}, "navmesh": binding, "recast_config": config.as_dict(),
+            "polygon_count": len(build.polygons),
             "edge_measurements": measurements,
             "graphs": build_routing_graphs(build.polygons, max_ramp_slope_deg=max_ramp_slope_deg, surface=surface)}
 
@@ -117,13 +142,13 @@ class NavigationBaking:
         to_canonical = frame.to_canonical()
         tool_path, tool = resolve_tool(ctx.toolchain)
 
-        splat_kind = next((k for k in LABELS_FOR_SPLAT if ctx.inputs_of(k)), None)
+        # a re-scan bakes the merged venue, never the region alone (venue_cloud refuses that), with that cloud's labels
+        splat_kind, splats, labels_kind, labels_inputs = venue_cloud(ctx, self.name)
         planes_inputs = ctx.inputs_of("PLANE_MODEL")
-        if splat_kind is None or not planes_inputs:
+        if not planes_inputs:
             raise StageError("NAVIGATION_BAKING needs a splat and PLANE_MODEL from PLANE_FITTING", code="INPUT_INVALID")
-        splats = ctx.inputs_of(splat_kind)
-        labels_kind = LABELS_FOR_SPLAT[splat_kind]
-        labels_inputs = ctx.inputs_of(labels_kind)
+        rescan = is_rescan(ctx)
+        splat_sha = sha256_file(splats[0].path)
 
         # ---- 1. cleaned reconstruction geometry, in canonical metres ----
         cloud = read_ply(splats[0].path)
@@ -134,12 +159,24 @@ class NavigationBaking:
             raise NavmeshError(f"no {labels_kind} describes the {splat_kind} to bake: without semantic labels walls and furniture "
                                "cannot be told from the floor, and an obstacle-free navmesh is never baked",
                                code=NAVMESH_LABELS_UNAVAILABLE, details={"splat": splat_kind, "labels": labels_kind})
-        labels = np.array(json.loads(labels_inputs[0].path.read_text(encoding="utf-8"))["labels"], dtype=object)
+        labels_doc = json.loads(labels_inputs[0].path.read_text(encoding="utf-8"))
+        labels = np.array(labels_doc["labels"], dtype=object)
         if len(labels) != len(cloud):
             raise NavmeshError(f"{labels_kind} has {len(labels)} labels for {len(cloud)} Gaussians of {splat_kind}: they do not "
                                "describe the same cloud", code=NAVMESH_LABELS_UNAVAILABLE,
                                details={"labels": len(labels), "gaussians": len(cloud)})
+        labelled_cloud = (labels_doc.get("cloud") or {}).get("sha256")
+        if labelled_cloud != splat_sha and (labelled_cloud is not None or rescan):
+            raise NavmeshError(f"{labels_kind} labels cloud {labelled_cloud}, not the {splat_kind} being baked ({splat_sha}); "
+                               "labels of another cloud, even one of the same size, would put walls and furniture in the wrong "
+                               "places", code=NAVMESH_LABELS_UNAVAILABLE,
+                               details={"labels_cloud_sha256": labelled_cloud, "splat_sha256": splat_sha})
         planes_doc = json.loads(planes_inputs[0].path.read_text(encoding="utf-8"))
+        fitted_on = ((planes_doc.get("source") or {}).get("splat") or {}).get("sha256")
+        if fitted_on != splat_sha and (fitted_on is not None or rescan):
+            raise NavmeshError(f"PLANE_MODEL was fitted on cloud {fitted_on}, not the {splat_kind} being baked ({splat_sha}); its "
+                               "inlier indices would select the wrong Gaussians", code=INVALID_GEOMETRY,
+                               details={"plane_model_cloud_sha256": fitted_on, "splat_sha256": splat_sha})
         planes = []
         for p in planes_doc["planes"]:
             idx = np.array(p["inlier_indices"], dtype=int)
@@ -163,6 +200,24 @@ class NavigationBaking:
                                       agent_height_m=s.navmesh_agent_height_m, step_min_rise_m=s.navmesh_step_min_rise_m,
                                       max_level_above_reference_m=s.navmesh_max_level_above_floor_m,
                                       accessible_width_m=s.navmesh_accessible_width_m, width_cap_m=s.navmesh_width_cap_m)
+        rebuild: dict = {"scope": FULL_FLOOR, "rescan": rescan}
+        outside = None
+        if rescan:
+            polygon = np.array(ctx.order["regionGeometry"]["points"], dtype=np.float64)
+            margin_m = RESCAN_INFLUENCE_CELLS * surface.cell_m
+            parent = _parent_surface(ctx, s, to_canonical, splat_sha, floor.height)
+            comparison = compare_outside_region(parent, surface, polygon, margin_m=margin_m)
+            rebuild.update({"incremental": False, "region_polygon_xy": polygon.tolist(),
+                            "reason": ("the navmesh is a single Detour tile and Recast partitions and polygonises it globally, so "
+                                       "the whole floor is re-baked from the merged scene and checked against the parent scene "
+                                       "outside the region"),
+                            "outside_region": comparison})
+            if not comparison["consistent"]:
+                raise NavmeshError(f"the merged scene differs from the parent scene in {comparison['cells_differing']} cells more "
+                                   f"than {margin_m:.2f} m outside the re-scanned region ({comparison['obstacle_cells_lost']} "
+                                   f"obstacle cells lost, {comparison['obstacle_cells_added']} added); a re-bake from it would not "
+                                   "preserve the venue outside the region", code=NAVMESH_REGION_INCONSISTENT, details=comparison)
+            outside = cells_outside_region(surface.origin, surface.ground_z.shape, surface.cell_m, polygon, margin_m)
         geometry = geometry_from_surface(surface, obstacle_min_height_m=s.navmesh_obstacle_min_height_m)
         if geometry.walkable_candidate_count == 0:
             raise NavmeshError(f"no {s.navmesh_floor_grid_m} m cell holds {s.navmesh_floor_min_points_per_cell} floor/stairs points "
@@ -179,6 +234,13 @@ class NavigationBaking:
         config = RecastConfig.from_settings(s)
         build = bake(tool_path, geometry, config, ctx.workdir / "recast", ctx.runner)
         report = build.report
+        checked = np.ones(surface.obstacle.shape, dtype=bool) if outside is None else outside
+        walked_through = obstacle_cells_under_navmesh(build.polygons, surface, checked)
+        rebuild["obstacle_cells_under_navmesh"] = {"count": len(walked_through), "examples_xy": walked_through[:10].round(3).tolist(),
+                                                   "checked": "outside the region" if rescan else "whole floor"}
+        if rescan and len(walked_through):
+            raise NavmeshError(f"{len(walked_through)} obstacle cells outside the re-scanned region lie under navmesh polygons",
+                               code=NAVMESH_REGION_INCONSISTENT, details=rebuild["obstacle_cells_under_navmesh"])
 
         # ---- 4. navmesh artifact + manifest ----
         navmesh_ref = navmesh_reference(build)
@@ -187,8 +249,9 @@ class NavigationBaking:
         manifest = {
             "status": NAVMESH_STATUS_READY,
             "navmesh": navmesh_ref,
+            "rebuild": rebuild,
             "source": {
-                "run_id": ctx.order.get("runId"), "scan_id": ctx.order.get("scanId"), "scan_version_id": ctx.order.get("scanVersionId"),
+                **run_provenance(ctx, frame.id),
                 "splat": _input_ref(splats[0]), "plane_model": _input_ref(planes_inputs[0]),
                 "semantic_labels": _input_ref(labels_inputs[0]),
                 "input_geometry": {"artifact": "navmesh-input-geometry.obj", "sha256": geometry_sha, "vertices": len(geometry.vertices),
@@ -207,11 +270,12 @@ class NavigationBaking:
 
         # ---- 5. routing graphs from the Detour polygon links ----
         graph_doc = navigation_graph_document(build, navmesh_ref, tool, config, provenance, max_ramp_slope_deg=s.navmesh_max_ramp_slope_deg,
-                                              surface=surface)
+                                              surface=surface, source=run_provenance(ctx, frame.id))
         graphs = graph_doc["graphs"]
         graph_path = write_json(ctx.workdir / "navigation-graph.json", graph_doc)
         baking_report = write_json(ctx.workdir / "navigation-baking-report.json", {
-            "coordinate_frame": provenance, "floor_height_m": floor.height, "floor_inliers": len(floor.inlier_indices),
+            "coordinate_frame": provenance, "source": run_provenance(ctx, frame.id), "rebuild": rebuild,
+            "floor_height_m": floor.height, "floor_inliers": len(floor.inlier_indices),
             "labels": {"artifact_kind": labels_kind, "counts": label_counts}, "surface_model": surface.summary(),
             "input_representation": INPUT_REPRESENTATION,
             "input_triangles": len(geometry.triangles), "input_obstacle_triangles": int(geometry.obstacle.sum()),
@@ -233,3 +297,35 @@ class NavigationBaking:
              ArtifactSpec("NAVMESH_INPUT_GEOMETRY", geometry_path, "navmesh-input-geometry.obj", "text/plain"),
              ArtifactSpec("NAVIGATION_GRAPH", graph_path, "navigation-graph.json", "application/json"),
              ArtifactSpec("NAVIGATION_BAKING_REPORT", baking_report, "navigation-baking-report.json", "application/json")])
+
+
+def _parent_surface(ctx: StageContext, s, to_canonical, splat_sha: str, reference_z: float) -> SurfaceModel:
+    """The surface model of the parent scene the re-scan was spliced into: GLOBAL_CLOUD + GLOBAL_LABELS (the parent
+    version's pinned cloud and its labels), with the settings and floor height the merged scene is baked with. The chain is
+    checked first: SPLICE_REPORT must say REGION_SPLICE made exactly the SPLAT_MERGED being baked, from exactly this
+    GLOBAL_CLOUD and these GLOBAL_LABELS."""
+    clouds, label_inputs, splices = ctx.inputs_of("GLOBAL_CLOUD"), ctx.inputs_of("GLOBAL_LABELS"), ctx.inputs_of("SPLICE_REPORT")
+    missing = [k for k, v in (("GLOBAL_CLOUD", clouds), ("GLOBAL_LABELS", label_inputs), ("SPLICE_REPORT", splices)) if not v]
+    if missing:
+        raise StageError(f"an incremental re-scan's NAVIGATION_BAKING needs {', '.join(missing)} to show the re-bake preserves the "
+                         "venue outside the region", code="INPUT_INVALID", details={"missing": missing})
+    splice = json.loads(splices[0].path.read_text(encoding="utf-8"))
+    chain = {"merged": ((splice.get("output") or {}).get("sha256"), splat_sha),
+             "global_cloud": (((splice.get("inputs") or {}).get("global_cloud") or {}).get("sha256"), sha256_file(clouds[0].path)),
+             "global_labels": (((splice.get("labels") or {}).get("venue_labels") or {}).get("sha256"), sha256_file(label_inputs[0].path))}
+    broken = {k: {"splice_report": a, "given": b} for k, (a, b) in chain.items() if a != b}
+    if broken:
+        raise NavmeshError(f"the re-scan's inputs are not the ones REGION_SPLICE used ({', '.join(broken)})",
+                           code=NAVMESH_REGION_INCONSISTENT, details=broken)
+    parent_cloud = read_ply(clouds[0].path)
+    parent_labels = np.array(json.loads(label_inputs[0].path.read_text(encoding="utf-8"))["labels"], dtype=object)
+    if len(parent_labels) != len(parent_cloud):
+        raise NavmeshError(f"GLOBAL_LABELS has {len(parent_labels)} labels for {len(parent_cloud)} Gaussians of GLOBAL_CLOUD",
+                           code=NAVMESH_LABELS_UNAVAILABLE)
+    positions = to_canonical.apply(parent_cloud.positions)
+    return build_surface_model(positions[np.isin(parent_labels, GROUND_LABELS)], positions[np.isin(parent_labels, OBSTACLE_LABELS)],
+                               reference_z=reference_z, cell_m=s.navmesh_floor_grid_m,
+                               min_points_per_cell=s.navmesh_floor_min_points_per_cell, ground_band_m=s.navmesh_ground_band_m,
+                               agent_max_climb_m=s.navmesh_agent_max_climb_m, agent_height_m=s.navmesh_agent_height_m,
+                               step_min_rise_m=s.navmesh_step_min_rise_m, max_level_above_reference_m=s.navmesh_max_level_above_floor_m,
+                               accessible_width_m=s.navmesh_accessible_width_m, width_cap_m=s.navmesh_width_cap_m)

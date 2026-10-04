@@ -32,9 +32,10 @@ public class ScanVersionService {
     static final List<String> OWN_KINDS = List.of("KSPLAT", "ARTIFACT_MANIFEST", "PLANE_MODEL", "NAVMESH", "NAVMESH_MANIFEST",
         "NAVIGATION_GRAPH", "DETECTED_OBJECTS");
 
-    /** Kinds a re-scan inherits from its parent when its own run did not produce them: navigation is only re-baked when
-     * the region touches the floor's graph (RescanService#navigationIntersectsRegion). */
-    static final Set<String> INHERITABLE_KINDS = Set.of("NAVMESH", "NAVMESH_MANIFEST", "NAVIGATION_GRAPH");
+    /** A version's navigation: its own, all three, or none. Never inherited: a re-scan of a parent with a navmesh re-bakes
+     * it from its merged scene (RescanService#parentHasNavigation), so a newer version never routes on navigation built
+     * for geometry it no longer has. V26 enforces the same in the database. */
+    static final Set<String> NAVIGATION_KINDS = Set.of("NAVMESH", "NAVMESH_MANIFEST", "NAVIGATION_GRAPH");
 
     public static final String VERSION_NOT_FINALIZED = "VERSION_NOT_FINALIZED";
 
@@ -111,8 +112,11 @@ public class ScanVersionService {
 
     /**
      * DRAFT -> FINALIZED, with everything the version is made of recorded first: its own run's published artifacts of
-     * {@link #OWN_KINDS} and its cloud; for a re-scan, the parent's navigation pins it did not replace and the parent's
-     * detections; and the ACTIVE canonical frame of the run's reconstruction frame. The scan_version_guard trigger refuses
+     * {@link #OWN_KINDS} and its cloud; for a re-scan, the parent's detections (its own cover only its region); and the
+     * ACTIVE canonical frame of the run's reconstruction frame. Navigation is never inherited: it is all of the version's
+     * own NAVMESH, NAVMESH_MANIFEST and NAVIGATION_GRAPH, or none; a re-scan of a parent with a navmesh must have re-baked
+     * one; and the version's routing graphs must be the ones bound to its pinned navmesh (VERSION_INCOMPLETE /
+     * VERSION_INCONSISTENT otherwise). The scan_version_guard trigger refuses
      * the transition unless the frame belongs to that reconstruction and the version's own viewer asset and cloud are
      * pinned. Must be called inside the caller's transaction. Returns the frame.
      */
@@ -148,12 +152,9 @@ public class ScanVersionService {
             jdbc.sql("""
                     INSERT INTO scan_version_artifact (scan_version_id, artifact_id, kind, owner_version_id)
                     SELECT :v, p.artifact_id, p.kind, p.owner_version_id FROM scan_version_artifact p
-                     WHERE p.scan_version_id = :parent
-                       AND (p.kind = 'DETECTED_OBJECTS'
-                            OR (p.kind IN (:inheritable) AND NOT EXISTS (
-                                SELECT 1 FROM scan_version_artifact own WHERE own.scan_version_id = :v AND own.kind = p.kind)))
+                     WHERE p.scan_version_id = :parent AND p.kind = 'DETECTED_OBJECTS'
                     """)
-                .param("v", versionId).param("parent", v.parent()).param("inheritable", INHERITABLE_KINDS).update();
+                .param("v", versionId).param("parent", v.parent()).update();
         }
 
         List<String> own = jdbc.sql("SELECT kind FROM scan_version_artifact WHERE scan_version_id = :v AND owner_version_id = :v")
@@ -164,6 +165,7 @@ public class ScanVersionService {
                 + (own.contains("KSPLAT") ? cloudKind : "viewer asset (KSPLAT)") + "; a version is only finalized with its own "
                 + "viewer asset and cloud");
         }
+        requireConsistentNavigation(versionId, v.parent(), own);
         Integer foreignGraphs = jdbc.sql("SELECT count(*) FROM navigation_graph WHERE scan_version_id = :v "
                 + "AND coordinate_frame_id IS DISTINCT FROM :f").param("v", versionId).param("f", frame.id()).query(Integer.class).single();
         if (foreignGraphs > 0) {
@@ -174,6 +176,30 @@ public class ScanVersionService {
                 + "provenance = CAST(:p AS jsonb) WHERE id = :v AND status = 'DRAFT'")
             .param("f", frame.id()).param("p", json(provenance)).param("v", versionId).update();
         return frame.id();
+    }
+
+    private void requireConsistentNavigation(UUID versionId, UUID parentId, List<String> own) {
+        List<String> ownNavigation = own.stream().filter(NAVIGATION_KINDS::contains).sorted().toList();
+        if (!ownNavigation.isEmpty() && ownNavigation.size() != NAVIGATION_KINDS.size()) {
+            throw new ApiException(HttpStatus.CONFLICT, "VERSION_INCOMPLETE", "the version's run published only " + ownNavigation
+                + " of " + NAVIGATION_KINDS + "; a navmesh, its manifest and its routing graph are pinned together or not at all");
+        }
+        boolean parentNavigation = parentId != null && jdbc.sql(
+                "SELECT EXISTS (SELECT 1 FROM scan_version_artifact WHERE scan_version_id = :p AND kind = 'NAVMESH')")
+            .param("p", parentId).query(Boolean.class).single();
+        if (parentNavigation && ownNavigation.isEmpty()) {
+            throw new ApiException(HttpStatus.CONFLICT, "VERSION_INCOMPLETE", "the parent version has a navmesh but this re-scan "
+                + "published none; navigation is never inherited, because it was baked for geometry the re-scan replaced");
+        }
+        Integer unbound = jdbc.sql("""
+                SELECT count(*) FROM navigation_graph g
+                 WHERE g.scan_version_id = :v AND g.navmesh_artifact_id IS DISTINCT FROM (
+                     SELECT artifact_id FROM scan_version_artifact WHERE scan_version_id = :v AND kind = 'NAVMESH')
+                """).param("v", versionId).query(Integer.class).single();
+        if (unbound > 0) {
+            throw new ApiException(HttpStatus.CONFLICT, "VERSION_INCONSISTENT", unbound + " of the version's routing graphs are "
+                + "not bound to the navmesh it pins");
+        }
     }
 
     private static boolean contains(Array sqlArray, String value) throws SQLException {

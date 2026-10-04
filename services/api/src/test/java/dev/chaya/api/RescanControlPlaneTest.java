@@ -12,6 +12,8 @@ import dev.chaya.api.security.Actor;
 import dev.chaya.api.security.Role;
 import dev.chaya.api.storage.ObjectStore;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -51,6 +53,12 @@ class RescanControlPlaneTest extends PipelineTestSupport {
      * derived bucket and a KSPLAT row, both pinned by the version, and the run's canonical frame recorded on it --
      * exactly what PipelineService#globalCloudInput resolves (the parent's pinned cloud). */
     private UUID finalizedParentWithGlobalCloud(Ctx c) {
+        return finalizedParentWithGlobalCloud(c, false);
+    }
+
+    /** As above; `withNavmesh` also pins a NAVMESH, NAVMESH_MANIFEST and NAVIGATION_GRAPH of the parent's run, so a re-scan
+     * of it must re-bake navigation (RescanService#parentHasNavigation). */
+    private UUID finalizedParentWithGlobalCloud(Ctx c, boolean withNavmesh) {
         UUID session = jdbc.sql("INSERT INTO capture_session (organization_id, venue_id, floor_id, operator_id) "
                 + "VALUES (:o, :v, :f, 'operator-sub') RETURNING id")
             .param("o", c.org()).param("v", c.venue()).param("f", c.floor()).query(UUID.class).single();
@@ -112,7 +120,13 @@ class RescanControlPlaneTest extends PipelineTestSupport {
                 """)
             .param("o", c.org()).param("v", c.venue()).param("s", scan).param("f", c.floor()).param("r", run)
             .query(UUID.class).single();
-        for (var pin : Map.of(cloud, "SPLAT_CLEAN", ksplat, "KSPLAT").entrySet()) {
+        Map<UUID, String> pins = new java.util.HashMap<>(Map.of(cloud, "SPLAT_CLEAN", ksplat, "KSPLAT"));
+        if (withNavmesh) {
+            for (String kind : List.of("NAVMESH", "NAVMESH_MANIFEST", "NAVIGATION_GRAPH")) {
+                pins.put(fx.publishedArtifact(c.org(), c.venue(), scan, run, "NAVIGATION_BAKING", kind), kind);
+            }
+        }
+        for (var pin : pins.entrySet()) {
             jdbc.sql("INSERT INTO scan_version_artifact (scan_version_id, artifact_id, kind, owner_version_id) VALUES (:v, :a, :k, :v)")
                 .param("v", version).param("a", pin.getKey()).param("k", pin.getValue()).update();
         }
@@ -293,7 +307,7 @@ class RescanControlPlaneTest extends PipelineTestSupport {
         assertThat(p.get("run").get("status").asText()).isEqualTo("SUCCEEDED");
         List<String> stages = new ArrayList<>();
         p.get("run").get("stages").forEach(st -> stages.add(st.get("stage").asText()));
-        assertThat(stages).as("no navigation graph existed for this floor, so nothing needed rebaking").doesNotContain("NAVIGATION_BAKING");
+        assertThat(stages).as("the parent version has no navmesh, so there is none to re-bake").doesNotContain("NAVIGATION_BAKING");
 
         Map<String, Object> version = versionRow(versionOf(s));
         assertThat(version.get("status")).isEqualTo("FINALIZED");
@@ -327,22 +341,13 @@ class RescanControlPlaneTest extends PipelineTestSupport {
         return id;
     }
 
-    /** An ACTIVE STANDARD graph with a node inside the region: the re-scan plan then includes NAVIGATION_BAKING. */
-    private void activeGraphInRegion(Ctx c) {
-        UUID graph = jdbc.sql("INSERT INTO navigation_graph (organization_id, venue_id, floor_id, profile, status, coordinate_frame_id) "
-                + "VALUES (:o, :v, :f, 'STANDARD', 'DRAFT', :frame) RETURNING id")
-            .param("o", c.org()).param("v", c.venue()).param("f", c.floor()).param("frame", parentFrame).query(UUID.class).single();
-        jdbc.sql("INSERT INTO navigation_node (organization_id, venue_id, graph_id, floor_id, x, y, z) VALUES (:o, :v, :g, :f, 1, 1, 0)")
-            .param("o", c.org()).param("v", c.venue()).param("g", graph).param("f", c.floor()).update();
-        jdbc.sql("UPDATE navigation_graph SET status = 'ACTIVE' WHERE id = :g").param("g", graph).update();
-    }
-
-    private String detectedObjects(double x, double y) {
+    private String detectedObjects(JsonNode order, double x, double y) throws Exception {
         StringBuilder embedding = new StringBuilder();
         for (int i = 0; i < 512; i++) {
             embedding.append(i > 0 ? "," : "").append(String.format(java.util.Locale.ROOT, "%.4f", Math.cos(i * 0.013)));
         }
         return "{\"coordinate_frame\":{\"id\":\"" + parentFrame + "\",\"units\":\"m\",\"up_axis\":\"+Z\"},"
+            + "\"source\":" + mapper.writeValueAsString(sourceOf(order)) + ","
             + "\"embedding_model\":\"open_clip:ViT-B-32:openai\",\"objects\":[{\"label\":\"new bench\",\"confidence\":0.8,"
             + "\"position\":[" + x + "," + y + ",0.4],\"embedding\":[" + embedding + "]}]}";
     }
@@ -358,7 +363,7 @@ class RescanControlPlaneTest extends PipelineTestSupport {
         }
         JsonNode semantic = claimExpecting("SEMANTIC_INDEXING");
         send(semantic, report("SUCCEEDED", List.of(artifact(semantic, "detected-objects.json", "DETECTED_OBJECTS", false, false,
-            detectedObjects(2.0, 2.0))), null, null), svc).andExpect(status().isOk());
+            detectedObjects(semantic, 2.0, 2.0))), null, null), svc).andExpect(status().isOk());
         return claimExpecting("NAVIGATION_BAKING");
     }
 
@@ -370,8 +375,7 @@ class RescanControlPlaneTest extends PipelineTestSupport {
     @Test
     void poisChangeOnlyWhenTheRescanFinalizesAndManualPoisAlwaysSurvive() throws Exception {
         Ctx c = ctx();
-        UUID parent = finalizedParentWithGlobalCloud(c);
-        activeGraphInRegion(c);
+        UUID parent = finalizedParentWithGlobalCloud(c, true);
         poi(c, "MANUAL", 1.5, 1.5);  // inside the region: staff-placed, must survive every re-scan
         poi(c, "AUTO_DETECTED", 1.0, 2.0);  // inside: replaced, but only by a re-scan that finalizes
         poi(c, "AUTO_DETECTED", 8.0, 8.0);  // outside: never touched
@@ -388,12 +392,88 @@ class RescanControlPlaneTest extends PipelineTestSupport {
 
         // A re-scan that finalizes: the region's AUTO_DETECTED POI is replaced; the MANUAL one and the outside one survive.
         JsonNode nav2 = rescanToNavigationBaking(c, parent);
-        succeed(nav2);
+        send(nav2, report("SUCCEEDED", navigationOutputs(nav2, parentFrame), null, null), svc).andExpect(status().isOk());
         assertThat(livePois(c)).containsExactly("AUTO_DETECTED:auto_detected poi", "AUTO_DETECTED:new bench", "MANUAL:manual poi");
         assertThat(reconstructions.listForFloor(viewer, c.venue(), c.floor()))
             .extracting(ReconstructionService.ReconstructionVersion::versionNumber)
             .as("the failed attempt kept number 2; numbers are never reused").containsExactly(3, 1);
         assertThat(jdbc.sql("SELECT count(*) FROM audit_log WHERE action = 'rescan.downstream_applied'").query(Integer.class).single())
             .isGreaterThanOrEqualTo(1);
+    }
+
+    // ---- navigation: re-baked from the merged scene, never inherited; artifacts name their version -------------------------
+
+    @Test
+    void aRescanOfAVersionWithANavmeshReBakesItAgainstTheParentSceneAndPinsOnlyItsOwn() throws Exception {
+        Ctx c = ctx();
+        UUID parent = finalizedParentWithGlobalCloud(c, true);
+        JsonNode nav = rescanToNavigationBaking(c, parent);
+        // The worker re-bakes the whole floor from the merged scene and proves it against the parent scene outside the
+        // region, so it is given the parent's pinned cloud and labels (chaya_worker.stages.navigation_baking).
+        Map<String, String> inputs = new java.util.HashMap<>();
+        nav.get("inputs").forEach(in -> inputs.put(in.get("kind").asText(), in.get("artifactId").asText()));
+        UUID parentCloud = jdbc.sql("SELECT artifact_id FROM scan_version_artifact WHERE scan_version_id = :v AND kind = 'SPLAT_CLEAN'")
+            .param("v", parent).query(UUID.class).single();
+        assertThat(inputs).containsEntry("GLOBAL_CLOUD", parentCloud.toString()).containsEntry("GLOBAL_LABELS", parentLabels.toString())
+            .containsKey("SPLAT_MERGED");
+        assertThat(nav.get("regionGeometry").get("points")).hasSize(4);
+        send(nav, report("SUCCEEDED", navigationOutputs(nav, parentFrame), null, null), svc).andExpect(status().isOk());
+
+        UUID version = UUID.fromString(nav.get("scanVersionId").asText());
+        assertThat(versionRow(version).get("status")).isEqualTo("FINALIZED");
+        List<Map<String, Object>> navigationPins = jdbc.sql("SELECT kind, owner_version_id FROM scan_version_artifact "
+                + "WHERE scan_version_id = :v AND kind IN ('NAVMESH', 'NAVMESH_MANIFEST', 'NAVIGATION_GRAPH')")
+            .param("v", version).query().listOfRows();
+        assertThat(navigationPins).hasSize(3).allSatisfy(p -> assertThat(p.get("owner_version_id")).isEqualTo(version));
+        assertThat(jdbc.sql("SELECT count(*) FROM navigation_graph WHERE scan_version_id = :v AND status = 'ACTIVE'")
+            .param("v", version).query(Integer.class).single()).as("its own graphs went live with it").isEqualTo(2);
+    }
+
+    @Test
+    void aRescanThatPublishesNoNavmeshIsNotFinalizedWhenItsParentHadOne() throws Exception {
+        Ctx c = ctx();
+        UUID parent = finalizedParentWithGlobalCloud(c, true);
+        JsonNode nav = rescanToNavigationBaking(c, parent);
+        // A "successful" NAVIGATION_BAKING with no navmesh: the version would otherwise have had no navigation, or (before
+        // V26) silently inherited the parent's, baked for geometry the re-scan replaced.
+        send(nav, report("SUCCEEDED", List.of(artifact(nav, "navigation-baking-report.json", "NAVIGATION_BAKING_REPORT", false, false,
+            "{}")), null, null), svc).andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("VERSION_INCOMPLETE"));
+        UUID version = UUID.fromString(nav.get("scanVersionId").asText());
+        assertThat(versionRow(version).get("status")).isEqualTo("DRAFT");
+        assertThat(jdbc.sql("SELECT count(*) FROM scan_version_artifact WHERE scan_version_id = :v").param("v", version)
+            .query(Integer.class).single()).as("nothing pinned").isZero();
+    }
+
+    @Test
+    void artifactsThatNameAnotherVersionOrNoneAreRefused() throws Exception {
+        Ctx c = ctx();
+        UUID parent = finalizedParentWithGlobalCloud(c, true);
+        JsonNode nav = rescanToNavigationBaking(c, parent);
+        UUID version = UUID.fromString(nav.get("scanVersionId").asText());
+
+        // A navigation graph produced for the parent version (or any other) is never stored under this one.
+        List<Map<String, Object>> outputs = navigationOutputs(nav, parentFrame);
+        Map<String, Object> graph = mapper.readValue(Files.readString(Path.of("../../packages/contracts/fixtures/navmesh/navigation-graph.json"))
+            .replace("FIXTURE_FRAME_ID", parentFrame.toString()), Map.class);
+        for (Object claimed : java.util.Arrays.asList(parent.toString(), null)) {
+            Map<String, Object> source = new LinkedHashMap<>();
+            source.put("scan_version_id", claimed);
+            graph.put("source", source);
+            List<Map<String, Object>> wrong = new ArrayList<>(outputs.subList(0, 2));
+            wrong.add(artifact(nav, "navigation-graph-" + claimed + ".json", "NAVIGATION_GRAPH", false, false, mapper.writeValueAsString(graph)));
+            send(nav, report("SUCCEEDED", wrong, null, null), svc).andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("ARTIFACT_VERSION_MISMATCH"));
+        }
+        graph.remove("source");
+        List<Map<String, Object>> unnamed = new ArrayList<>(outputs.subList(0, 2));
+        unnamed.add(artifact(nav, "navigation-graph-unnamed.json", "NAVIGATION_GRAPH", false, false, mapper.writeValueAsString(graph)));
+        send(nav, report("SUCCEEDED", unnamed, null, null), svc).andExpect(status().isConflict())
+            .andExpect(jsonPath("$.code").value("ARTIFACT_VERSION_MISMATCH"));
+        assertThat(jdbc.sql("SELECT count(*) FROM navigation_graph WHERE scan_version_id = :v").param("v", version)
+            .query(Integer.class).single()).isZero();
+
+        // The graph naming this version is accepted.
+        send(nav, report("SUCCEEDED", outputs, null, null), svc).andExpect(status().isOk());
+        assertThat(versionRow(version).get("status")).isEqualTo("FINALIZED");
     }
 }

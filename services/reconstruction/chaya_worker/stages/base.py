@@ -26,6 +26,42 @@ def write_json(path: Path, doc: Any) -> Path:
     return path
 
 
+def is_rescan(ctx: StageContext) -> bool:
+    """An incremental re-scan's work order carries the changed region (dev.chaya.api PipelineService#workOrder)."""
+    return isinstance(ctx.order.get("regionGeometry"), dict)
+
+
+def run_provenance(ctx: StageContext, frame_id: str | None = None) -> dict[str, Any]:
+    """The version, run and frame a generated artifact belongs to. Every derived document carries it, so an artifact can be
+    checked against the version that pins it (docs/rescan.md, "VERSIONING")."""
+    return {"run_id": ctx.order.get("runId"), "scan_id": ctx.order.get("scanId"), "scan_version_id": ctx.order.get("scanVersionId"),
+            "coordinate_frame_id": frame_id}
+
+
+# The semantic labels that describe each splat kind Gaussian for Gaussian.
+LABELS_FOR_SPLAT = {"SPLAT_MERGED": "SEMANTIC_LABELS_MERGED", "SPLAT_CLEAN": "SEMANTIC_LABELS_CLEAN", "SPLAT": "SEMANTIC_LABELS"}
+
+
+def venue_cloud(ctx: StageContext, stage: str, kinds: tuple[str, ...] = ("SPLAT_MERGED", "SPLAT_CLEAN", "SPLAT")):
+    """The cloud a downstream stage works on, and the labels of exactly that cloud: (splat kind, splat inputs, labels kind,
+    labels inputs). Raises INPUT_INVALID when there is none.
+
+    SPLAT_MERGED (REGION_SPLICE's venue-wide result) wins when present. A re-scan run also holds the region's own SPLAT_CLEAN
+    and SEMANTIC_LABELS_CLEAN, which describe only the re-captured region: a re-scan never falls back to them, because the
+    planes, viewer asset, index or navmesh built from them would silently be missing the rest of the venue. Labels are
+    always those of the chosen cloud, never another cloud's of a different length."""
+    present = [k for k in kinds if ctx.inputs_of(k)]
+    if is_rescan(ctx) and "SPLAT_MERGED" not in present:
+        raise StageError(f"{stage} in an incremental re-scan needs SPLAT_MERGED, the spliced venue-wide cloud; the region's own "
+                         "cloud would produce a result missing everything outside the region", code="INPUT_INVALID",
+                         details={"present": present})
+    if not present:
+        raise StageError(f"{stage} needs a splat ({', '.join(kinds)})", code="INPUT_INVALID")
+    splat_kind = present[0]
+    labels_kind = LABELS_FOR_SPLAT[splat_kind]
+    return splat_kind, ctx.inputs_of(splat_kind), labels_kind, ctx.inputs_of(labels_kind)
+
+
 def command_record(ctx: StageContext, config: dict[str, Any] | None = None) -> dict[str, Any]:
     """What ran: every external command actually executed, the tunables used and the tool versions."""
     commands = ctx.runner.commands()

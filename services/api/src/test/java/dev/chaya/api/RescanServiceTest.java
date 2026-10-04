@@ -111,7 +111,7 @@ class RescanServiceTest extends AbstractIntegrationTest {
         assertThat(result.parentVersionId()).isEqualTo(parent);
         assertThat(result.scanVersionId()).as("not created until processing starts").isNull();
         assertThat(result.regionAreaSquareMeters()).isCloseTo(9.0, org.assertj.core.data.Offset.offset(1e-9));
-        assertThat(result.navigationRebuildRequired()).as("no navigation graph exists yet for this floor").isFalse();
+        assertThat(result.navigationRebuildRequired()).as("the parent version has no navmesh, so there is none to re-bake").isFalse();
 
         var captured = jdbc.sql("SELECT parent_scan_version_id, region_geometry FROM capture_session WHERE id = :c")
             .param("c", result.captureId()).query().listOfRows().get(0);
@@ -120,6 +120,32 @@ class RescanServiceTest extends AbstractIntegrationTest {
 
         assertThat(jdbc.sql("SELECT count(*) FROM audit_log WHERE action = 'rescan.initiate' AND resource_id = :c")
             .param("c", result.captureId()).query(Integer.class).single()).isEqualTo(1);
+    }
+
+    @Test
+    void navigationIsReBakedExactlyWhenTheParentVersionHasANavmeshWhereverTheRegionLies() {
+        var t = fx.tree();
+        Actor actor = actorFor(t.org(), t.venue());
+        // The floor's ACTIVE graph has a node inside the region, but the selected version has no navmesh: the decision is
+        // the version's, not whatever graph the floor has now (it may be another reconstruction's, in another frame).
+        UUID withoutNavmesh = fx.finalizedScanVersion(t.org(), t.venue(), t.scan(), t.floor(), 2);
+        UUID graph = jdbc.sql("INSERT INTO navigation_graph (organization_id, venue_id, floor_id, profile, status) "
+                + "VALUES (:o, :v, :f, 'STANDARD', 'DRAFT') RETURNING id")
+            .param("o", t.org()).param("v", t.venue()).param("f", t.floor()).query(UUID.class).single();
+        jdbc.sql("INSERT INTO navigation_node (organization_id, venue_id, graph_id, floor_id, x, y, z) VALUES (:o, :v, :g, :f, 1, 1, 0)")
+            .param("o", t.org()).param("v", t.venue()).param("g", graph).param("f", t.floor()).update();
+        jdbc.sql("UPDATE navigation_graph SET status = 'ACTIVE' WHERE id = :g").param("g", graph).update();
+        assertThat(rescan.initiate(actor, t.venue(), t.floor(), new RescanRequest(withoutNavmesh, SQUARE, null)).navigationRebuildRequired())
+            .isFalse();
+
+        // A version with a navmesh: re-baked, even for a region far from every graph node. A region inside one large
+        // navmesh polygon holds none of its nodes, and one where furniture was removed has no polygon yet; the old
+        // node-in-region test skipped both and the new version inherited a navmesh for geometry it no longer had.
+        UUID scan = fx.scan(t.org(), t.venue(), fx.captureSession(t.org(), t.venue()));
+        UUID withNavmesh = fx.finalizedScanVersion(t.org(), t.venue(), scan, t.floor(), 3, true);
+        RescanRequest farAway = new RescanRequest(withNavmesh, new RegionGeometry(List.of(List.of(50.0, 50.0), List.of(50.0, 53.0),
+            List.of(53.0, 53.0), List.of(53.0, 50.0))), null);
+        assertThat(rescan.initiate(actor, t.venue(), t.floor(), farAway).navigationRebuildRequired()).isTrue();
     }
 
     /** A SUCCEEDED full-venue run on `floor` (its own capture session and scan). */

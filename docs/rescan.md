@@ -6,6 +6,21 @@ as a new immutable `scan_version`. It reuses the reconstruction pipeline's contr
 (`dev.chaya.api.pipeline`, docs/pipeline.md) end to end -- an incremental re-scan is a differently-shaped
 pipeline run, not a separate system.
 
+## What is regional, and what is not
+
+| Step | Scope | How |
+|---|---|---|
+| Finding the changed region | **Not detected.** | The operator draws the polygon. Nothing compares the venue before and after to find what changed. |
+| Capture, SfM, training, segmentation, cleanup | Region only | The run sees only the region's own media. |
+| Alignment | Region against the parent's cloud, cropped to the polygon's box | Similarity (scale, rotation, translation) in canonical metres, gated ("ALIGNMENT"). |
+| Geometry and appearance (`SPLAT_MERGED`) | Region only | Venue Gaussians in the region's volume are replaced; every other Gaussian is kept bit for bit and in order ("SPLICE"). |
+| Planes, viewer asset (`.ksplat`) | **Whole floor**, regenerated | Derived from the merged cloud. Outside the region the input is unchanged; the outputs are new files. |
+| Navigation | **Whole floor**, re-baked | Not a local re-bake (see "NAVIGATION"). Re-baked from the merged scene, then **verified** to match the parent scene outside the region. |
+| Semantic index / POIs | Region only | Only AUTO_DETECTED POIs inside the polygon are superseded. |
+
+So an incremental re-scan saves the capture and the reconstruction of everything outside the region, which is most of
+the cost. It does **not** save the downstream derivations, which are cheap and run over the whole floor.
+
 ## The flow
 
 1. **Select an existing venue version** -- `GET /venues/{v}/floors/{f}/scan-versions` lists a floor's
@@ -15,7 +30,8 @@ pipeline run, not a separate system.
    calibrated (a canonical frame, else `409 NOT_CALIBRATED`) and must have published its own viewer asset and cloud
    (else `409 VERSION_INCOMPLETE`). See "VERSIONING".
 2. **Select the changed region** -- a simple polygon (`{"points": [[x, y], ...]}`, >= 3 vertices) in canonical
-   venue metres (x, y horizontal; [coordinate-frames.md](coordinate-frames.md)). The parent version's reconstruction
+   venue metres (x, y horizontal; [coordinate-frames.md](coordinate-frames.md)). The operator chooses it; the system
+   does not detect change. What the splice then replaces is that polygon times the height range the re-scan observed. The parent version's reconstruction
    must have a canonical coordinate frame, or initiation is refused with `409 NOT_CALIBRATED` -- a polygon in metres
    has no location in an uncalibrated reconstruction.
 3. **Capture only that region** -- `POST /venues/{v}/floors/{f}/rescan` (`RescanController#initiate`)
@@ -52,11 +68,17 @@ run as the pinned cloud, as `GLOBAL_LABELS` -- with exactly the index sets it us
 (`NAVMESH_LABELS_UNAVAILABLE`), so a re-bake never drops the walls and furniture outside the region. `PLANE_FITTING`, `ARTIFACT_GENERATION`,
 `SEMANTIC_INDEXING` and (when included) `NAVIGATION_BAKING` all run on `REGION_SPLICE`'s output (kind
 `SPLAT_MERGED`) rather than the region alone, because they need the whole venue's up-to-date geometry, not
-just the part that changed (`chaya_worker` stages prefer `SPLAT_MERGED` over `SPLAT_CLEAN`/`SPLAT` when
-present -- see `plane_fitting.py`, `artifact_generation.py`, `semantic_indexing.py`, `navigation_baking.py`).
+just the part that changed. They all choose their cloud through `chaya_worker.stages.base.venue_cloud`:
+
+- `SPLAT_MERGED` wins; in a re-scan (the work order carries `regionGeometry`) a stage **refuses** to fall back to
+  the region's own `SPLAT_CLEAN` (`INPUT_INVALID`), which would produce planes, a viewer asset, an index or a navmesh
+  missing everything outside the region;
+- the labels are always those of the chosen cloud (`SEMANTIC_LABELS_MERGED` for `SPLAT_MERGED`). PLANE_FITTING used to
+  pair the merged cloud with the region's `SEMANTIC_LABELS_CLEAN`. Once SEMANTIC_SEGMENTATION joined the plan (review
+  N-1), every re-scan would have failed there on the length mismatch.
 
 `NAVIGATION_BAKING` is in brackets because whether it is in the plan **at all** is decided once, at step 4,
-before the run is even created -- see "Downstream rebuilds".
+before the run is even created: it is included exactly when the parent version has a navmesh -- see "NAVIGATION".
 
 ## ALIGNMENT
 
@@ -184,8 +206,60 @@ this.
 | Merged cloud (`SPLAT_MERGED`) | Only the region's volume is replaced (above). | With the version (new artifact under the re-scan's run). |
 | Planes (`PLANE_FITTING`) | **Whole floor**: refitted over the merged cloud. Not selective. | With the version. |
 | Viewer asset (`.ksplat`) | **Whole floor**: regenerated from the merged cloud. It is one file. Not selective. | Viewers list a re-scan's model only once its version is FINALIZED (`ReconstructionService#listForFloor`). A failed or rejected re-scan never replaces what they see. |
-| Navigation | **Skipped entirely** when no node of the floor's ACTIVE graph lies in the region (`RescanService#navigationIntersectsRegion`, decided before the run exists); the version then inherits its parent's navmesh pins. **Otherwise the whole floor** is re-baked: Recast has no per-tile partial bake here. | The new graphs are ingested as DRAFT, tagged with the version, and activated only when the version finalizes (`activateRescanGraphs`). |
+| Navigation | **Whole floor**, re-baked from the merged scene whenever the parent version has a navmesh; never inherited. Verified against the parent scene outside the region (see "NAVIGATION"). | The new graphs are ingested as DRAFT, tagged with the version, and activated only when the version finalizes (`activateRescanGraphs`). |
 | Semantic index / POIs | Only the region: SEMANTIC_INDEXING sees only the re-scan's frames, and only AUTO_DETECTED POIs inside the polygon are superseded. **MANUAL POIs are never touched.** | Only when the version finalizes (`applyRescanDetections`). A re-scan that fails or is rejected changes no POI (review V-6). A superseded POI is soft-deleted with `superseded_by_scan_version_id`, so the versions before the re-scan still show it. The version pins its own region-only DETECTED_OBJECTS next to the ones it inherits. |
+
+## NAVIGATION
+
+### Why the whole floor is re-baked
+
+The navmesh is a single Detour tile. Recast's region partitioning (watershed) and polygonisation run over the whole
+heightfield, so the polygons outside the region can change shape when anything inside it changes. Cutting the old
+polygons along the region and splicing in new ones would leave portals that do not match across the cut. The bake is
+cheap compared with reconstruction, so the re-scan re-bakes the **whole floor** from the merged scene. A tiled navmesh
+(`dtTileCache`) would allow a real local rebuild. It is not implemented.
+
+### When
+
+Exactly when the parent version pinned a NAVMESH (`RescanService#parentHasNavigation`), wherever the region lies. The
+earlier rule (re-bake only when a node of the floor's ACTIVE graph lies in the region, otherwise inherit the parent's
+navmesh) was wrong in three ways:
+
+- nodes are polygon centroids, so a region inside one large polygon held none of them;
+- a region where furniture was removed has no walkable polygon yet;
+- it read the floor's current graph, which may belong to another reconstruction or frame, not the parent version's.
+
+In each case the new version routed on a navmesh baked for geometry it no longer had. A parent without a navmesh gives a
+version without one.
+
+### Proof that the venue outside the region survived
+
+`NAVIGATION_BAKING` in a re-scan gets the parent's `GLOBAL_CLOUD` and `GLOBAL_LABELS` next to its own `SPLAT_MERGED`,
+`SEMANTIC_LABELS_MERGED`, `PLANE_MODEL` and `SPLICE_REPORT`. Before Recast runs, it checks:
+
+1. **The chain.** `SPLICE_REPORT` says REGION_SPLICE made exactly this `SPLAT_MERGED` (SHA-256) from exactly this
+   `GLOBAL_CLOUD` and these `GLOBAL_LABELS`. The merged labels name the cloud they label (`cloud.sha256`), and
+   `PLANE_MODEL` names the cloud it was fitted on (`source.splat.sha256`). Labels or planes of any other cloud are
+   refused, even one with the same number of Gaussians (`NAVMESH_LABELS_UNAVAILABLE`, `INVALID_GEOMETRY`).
+2. **The scene outside the region** (`chaya_worker.navmesh.compare_outside_region`). It builds the surface model, the
+   grid Recast's input is made from, of both the parent scene and the merged scene, with the same settings and floor
+   height. It then compares every cell more than 3 cells (0.3 m) outside the polygon: observed ground and its height,
+   obstacle, step. A cell depends only on its 3 × 3 neighbourhood, and the splice keeps everything outside the polygon,
+   so the two must be **identical**. Any difference means the inputs do not describe the venue the re-scan started
+   from (corrupted or mismatched labels, the wrong parent cloud), and the bake is refused.
+
+After the bake, it checks **the navmesh itself** (`obstacle_cells_under_navmesh`): no polygon of the new navmesh may
+cover an obstacle cell outside the region.
+
+Any failure is `NAVMESH_REGION_INCONSISTENT`, and nothing is published. On success, `NAVMESH_MANIFEST` and
+`NAVIGATION_BAKING_REPORT` carry a `rebuild` block: `scope: FULL_FLOOR`, `incremental: false`, the region, the cell
+counts compared and differing, the obstacle cells outside the region on each side, and the obstacle cells under the
+navmesh. A full reconstruction's bake records `scope: FULL_FLOOR` and the whole-floor obstacle check, without enforcing
+it.
+
+This proves that the Recast **input** outside the region is unchanged. The polygons there may still be shaped
+differently from the parent's navmesh, for the reason above. What stays the same is where an agent can and cannot
+stand.
 
 ## VERSIONING
 
@@ -210,8 +284,19 @@ reconstruction). The service refuses earlier with `NOT_CALIBRATED` or `VERSION_I
 
 - **own**: the latest published, non-PII `KSPLAT`, `ARTIFACT_MANIFEST`, `PLANE_MODEL`, `NAVMESH`, `NAVMESH_MANIFEST`,
   `NAVIGATION_GRAPH`, `DETECTED_OBJECTS` and cloud of the version's own run;
-- **inherited** (re-scans only): the parent's `NAVMESH`, `NAVMESH_MANIFEST` and `NAVIGATION_GRAPH` when the re-scan did
-  not re-bake navigation, and the parent's `DETECTED_OBJECTS` (a re-scan's own detections cover only its region).
+- **inherited** (re-scans only): the parent's `DETECTED_OBJECTS` (a re-scan's own detections cover only its region).
+  Navigation is **never** inherited (V26): a version pins its own `NAVMESH`, `NAVMESH_MANIFEST` and `NAVIGATION_GRAPH`,
+  all three or none, and a re-scan whose parent pinned a navmesh is finalized only with its own
+  (`VERSION_INCOMPLETE` otherwise). The routing graphs bound to a version must be the ones baked with the navmesh it pins
+  (`VERSION_INCONSISTENT`). The database refuses an inherited navigation pin and a finalization that breaks either
+  rule. Versions finalized before V26 keep the pins they have.
+
+Every derived document names the run, version and frame it was produced for (`source`:
+`chaya_worker.stages.base.run_provenance`): `ALIGNMENT_REPORT`, `SPLICE_REPORT`, `SEMANTIC_LABELS_MERGED`, `PLANE_MODEL`,
+`DETECTED_OBJECTS`, `NAVMESH_MANIFEST`, `NAVIGATION_GRAPH`, `NAVIGATION_BAKING_REPORT` (and `ARTIFACT_MANIFEST`'s
+`sourceScanVersion`). The control plane refuses a re-scan's `NAVIGATION_GRAPH` or `DETECTED_OBJECTS` that names another
+version, or none, with `409 ARTIFACT_VERSION_MISMATCH` (`PipelineService#requireArtifactVersion`). A full run's may omit
+it. If it names a version, that version must be the run's.
 
 `owner_version_id` names the version whose run produced each artifact. A trigger refuses a pin whose artifact is not
 from the version's own run (when claimed as its own) or not one of the parent's pins (when claimed as inherited), and
@@ -310,15 +395,20 @@ not venue data.
 |---|---|---|
 | Umeyama, RANSAC, ICP, residuals, confidence, gates: scale / rotation / translation / combined recovery, reflections, degenerate input, outliers, a scale outside the prior, no overlap, offsets only some surfaces observe, confidence independent of sampling | `tests/unit/test_similarity_registration.py` | nothing |
 | Both modes end to end: similarity recovery, too few correspondences, too little overlap, bad scale, high residual, tilt, surveyed calibrations that disagree | `tests/unit/test_region_alignment.py` (a stand-in supplies FEATURE mode's matches) | nothing |
-| Splice: overlapping-geometry replacement, re-scan beyond the polygon, unrelated geometry kept, no-op, visible seam refused, canonical-frame volume, exact index sets | `tests/unit/test_region_splice.py` | nothing |
+| Splice: overlapping-geometry replacement, moved furniture replaced, every Gaussian outside the region kept bit for bit (all attributes, in order), re-scan beyond the polygon, unrelated geometry kept, no-op, visible seam refused, canonical-frame volume, exact index sets | `tests/unit/test_region_splice.py` | nothing |
+| Downstream stages use the merged cloud with its own labels, never the region alone; the outside-region surface comparison (unchanged, change inside, sofa removed / relabelled / new obstacle outside, grown extent, margin); obstacle cells under a navmesh | `tests/unit/test_rescan_consistency.py` | nothing |
+| Scale mismatch through the orchestrator (re-scan reconstruction at 2 units/m, parent at 0.5): a calibration 4 % off is corrected, 20–25 % off is `ALIGNMENT_REJECTED` with the scale gate's value and threshold, nothing published | `tests/orchestration/test_rescan_stages.py` | nothing |
+| Re-bake with the real Recast tool as a re-scan work order runs it: a new crate inside the region blocks; the sofa, wall, column and step outside it survive; `rebuild` block; refused when an obstacle outside the region is lost, when given the region alone, labels or planes of another cloud, a parent cloud the splice did not use, or no parent scene | `tests/navmesh/test_venue_stage.py` | chaya-navmesh |
 | Both stages through the orchestrator, in non-identity frames: successful merge, rejected merge (nothing published), no-op re-scan, Open3D requirement, uncalibrated re-scan | `tests/orchestration/test_rescan_stages.py` | nothing |
 | Real FPFH matching feeding the estimator | `tests/gpu/test_region_alignment.py` | Open3D (skipped without it; run in the `chaya-bench-open3d` image) |
-| Control plane: worker rejection, control-plane rejection, parent untouched, rejected version immutable and not retryable, full lineage on success, POIs and viewer only on finalization, MANUAL POIs survive | `RescanControlPlaneTest`, `RescanServiceTest` | Testcontainers |
-| Version integrity in the database: created DRAFT only, finalization needs run, frame and own KSPLAT and cloud, pins only from the own run or the parent, nothing changes after finalization, numbers unique per floor | `ScanVersionImmutabilityTest` | Testcontainers |
-| Versions end to end over HTTP: v1 (full run, real Recast navmesh fixture, bootstrap), v2 (re-scan that re-bakes navigation), v3 (re-scan that inherits it); lineage and numbering, the run of every pinned artifact, the viewer switched between the three (model bytes, frame, POIs, routing graph), refusals for a DRAFT version and another venue | `ScanVersionLineageTest` | Testcontainers |
+| Control plane: worker rejection, control-plane rejection, parent untouched, rejected version immutable and not retryable, full lineage on success, POIs and viewer only on finalization, MANUAL POIs survive; the re-bake decided by the parent version's navmesh (not the floor's graph, not where the region lies); NAVIGATION_BAKING given the parent's cloud and labels; a re-scan publishing no navmesh is not finalized; graphs naming another version or none refused | `RescanControlPlaneTest`, `RescanServiceTest` | Testcontainers |
+| Version integrity in the database: created DRAFT only, finalization needs run, frame and own KSPLAT and cloud, pins only from the own run or the parent, navigation never inherited and pinned all three or none, nothing changes after finalization, numbers unique per floor | `ScanVersionImmutabilityTest` | Testcontainers |
+| Versions end to end over HTTP: v1 (full run, real Recast navmesh fixture, bootstrap), v2 (re-scan over the graph), v3 (re-scan away from every graph node, which still re-bakes); lineage and numbering, the run of every pinned artifact, the viewer switched between the three (model bytes, frame, POIs, routing graph), refusals for a DRAFT version and another venue | `ScanVersionLineageTest` | Testcontainers |
 | The viewer never uses one scene's POIs, route or model for another | `apps/web/lib/version-scope.test.ts` | nothing |
 
 B5 (docs/BENCHMARKS.md) measures the FEATURE_SIMILARITY path on a real COLMAP cloud with known similarity misalignments.
 
 **Not validated:** no real venue has been re-scanned and merged. Every number above is from synthetic clouds, or from a
-real SfM cloud with simulated misalignment.
+real SfM cloud with simulated misalignment. The outside-region check has only met synthetic scenes; on a real venue its
+exact-equality test is still exact (the splice copies the Gaussians), but its 0.3 m margin has not been checked against
+real label noise at the polygon's edge.

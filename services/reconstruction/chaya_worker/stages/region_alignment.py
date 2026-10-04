@@ -39,7 +39,7 @@ from ..frames import Similarity, frame_provenance, require_canonical, require_me
 from ..ply import read_ply, write_ply
 from ..region_alignment import MODE_DIRECT, MODE_FEATURE, align_region
 from ..region_splice import transform_gaussians
-from .base import command_record, write_json
+from .base import command_record, run_provenance, write_json
 
 VENUE_DATUM = "VENUE_CONTROL_POINTS"
 
@@ -114,6 +114,7 @@ class RegionAlignment:
             "metrics": result.metrics.as_dict(), "gates": result.gates.as_list(), "gates_passed": result.gates.passed,
             "failed_gates": result.gates.failed, "details": result.details,
             "scale_correction": result.correction.scale,
+            "source": run_provenance(ctx, parent_frame.id),
             "inputs": {"region": _ref(region_inputs[0]), "global_cloud": _ref(global_inputs[0])},
             "parent_coordinate_frame": frame_provenance(parent_frame),
             "region_coordinate_frame": {**frame_provenance(region_frame), "gravity_aligned": region_frame.gravity_aligned},

@@ -226,22 +226,24 @@ def main() -> None:
     full, inc = stages("STAGES"), stages("INCREMENTAL_STAGES")
     sc = "stage plan"
     run.add(Metric("stages, full reconstruction", len(full), "stages", "configuration", sc, "PipelineDefinition.STAGES", note=" > ".join(full)),
-            Metric("stages, regional rescan (navigation affected)", len(inc), "stages", "configuration", sc, "PipelineDefinition.INCREMENTAL_STAGES",
-                   note=" > ".join(inc)),
-            Metric("stages, regional rescan (navigation not affected)", len(inc) - 1, "stages", "configuration", sc,
+            Metric("stages, regional rescan (parent version has a navmesh)", len(inc), "stages", "configuration", sc,
+                   "PipelineDefinition.INCREMENTAL_STAGES", note=" > ".join(inc)),
+            Metric("stages, regional rescan (parent version has no navmesh)", len(inc) - 1, "stages", "configuration", sc,
                    "incrementalPlan(..., includeNavigationBaking=false)",
-                   note="NAVIGATION_BAKING is left out when no ACTIVE routing-graph node lies in the region"),
+                   note="NAVIGATION_BAKING is left out only when the parent version pinned no NAVMESH"),
             Metric("stages only in the regional plan", ", ".join(s for s in inc if s not in full), "", "configuration", sc, "diff"),
             Metric("stages only in the full plan", ", ".join(s for s in full if s not in inc), "", "configuration", sc, "diff",
-                   note="a regional rescan runs GEOMETRIC_CLEANUP without semantic labels"),
+                   note="both plans run SEMANTIC_SEGMENTATION; the regional one labels only the region"),
             Metric("frames a regional run processes", "only the region's own capture", "", "configuration", sc, "docs/rescan.md",
                    note="the first stages never see the rest of the venue's frames"),
             Metric("semantic re-index scope", "AUTO_DETECTED POIs inside the region polygon (superseded) plus the new detections; "
                    "MANUAL POIs never", "", "configuration", sc, "PipelineService#applyRescanDetections",
                    note="applied only when the re-scan's version finalizes; a failed or rejected re-scan changes no POI"),
-            Metric("navigation rebuild scope", "whole floor when the region touches the ACTIVE graph, otherwise none", "", "configuration",
-                   sc, "RescanService#navigationIntersectsRegion",
-                   note="Recast re-bakes the full floor (no per-tile partial bake); the new graph goes live only when the version finalizes"),
+            Metric("navigation rebuild scope", "whole floor from the merged scene whenever the parent version has a navmesh; never inherited",
+                   "", "configuration", sc, "RescanService#parentHasNavigation, NAVIGATION_BAKING",
+                   note="not incremental: Recast re-bakes the full floor (one Detour tile, no per-tile partial bake); the worker refuses the "
+                        "bake unless the parent and merged surface models are identical outside the region; the new graph goes live only "
+                        "when the version finalizes"),
             Metric("viewer asset / plane rebuild scope", "whole floor", "", "configuration", sc, "ARTIFACT_GENERATION, PLANE_FITTING",
                    note="the .ksplat is one file and the planes are refitted over the merged cloud: not selective"))
 

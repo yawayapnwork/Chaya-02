@@ -43,7 +43,7 @@ from ..frames import Similarity, frame_provenance, require_canonical
 from ..grounding_dino import Detection, GroundingDinoDetector
 from ..ply import read_ply
 from ..privacy import masks as privacy_masks
-from .base import command_record, write_json
+from .base import command_record, run_provenance, venue_cloud, write_json
 from .semantic_segmentation import project_points
 from .splat_reconstruction import build_cameras
 
@@ -160,8 +160,8 @@ class SemanticIndexing:
         ctx.toolchain.require(["py:torch", "py:transformers", "py:open_clip", "py:PIL", "colmap"], stage=self.name)
         ctx.toolchain.require([f"model:{s.grounding_dino_model}"], stage=self.name)
 
-        merged = ctx.inputs_of("SPLAT_MERGED")
-        splats = merged or ctx.inputs_of("SPLAT_CLEAN") or ctx.inputs_of("SPLAT")
+        splat_kind, splats, _, _ = venue_cloud(ctx, self.name)  # a re-scan indexes into the merged venue, never the region alone
+        merged = splats if splat_kind == "SPLAT_MERGED" else []
         region_to_parent = None
         if merged:
             reports = ctx.inputs_of("ALIGNMENT_REPORT")
@@ -270,7 +270,7 @@ class SemanticIndexing:
                                                           "objects": len(objects)})
 
         objects_path = write_json(ctx.workdir / "detected-objects.json", {
-            "coordinate_frame": frame_provenance(frame),
+            "coordinate_frame": frame_provenance(frame), "source": run_provenance(ctx, frame.id),
             "detector_model": detector.model_id, "detector_fine_tuned": detector.fine_tuned,
             "embedding_model": embedder.model_id, "embedding_dim": len(embeddings[0]) if len(embeddings) else 0,
             "frames_processed": frames_processed, "raw_detection_count": len(raw_objects), "objects": objects})

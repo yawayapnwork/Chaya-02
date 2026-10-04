@@ -3,6 +3,7 @@ package dev.chaya.api;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -98,6 +99,47 @@ class ScanVersionImmutabilityTest extends AbstractIntegrationTest {
             .isInstanceOf(DataIntegrityViolationException.class);
         // The parent's own pin, inherited with its owner: allowed.
         jdbc.sql(pin).param("v", child).param("a", parentKsplat).param("k", "KSPLAT").param("owner", parent).update();
+    }
+
+    @Test
+    void navigationIsNeverInheritedAndIsPinnedAllOrNothing() {
+        var t = fx.tree();
+        UUID parent = fx.finalizedScanVersion(t.org(), t.venue(), otherScan(t), t.floor(), 2, true);
+        UUID parentNavmesh = jdbc.sql("SELECT artifact_id FROM scan_version_artifact WHERE scan_version_id = :v AND kind = 'NAVMESH'")
+            .param("v", parent).query(UUID.class).single();
+        UUID scan = otherScan(t);
+        UUID session = jdbc.sql("SELECT capture_session_id FROM scan WHERE id = :s").param("s", scan).query(UUID.class).single();
+        UUID frame = fx.calibratedRunForScan(t.org(), t.venue(), scan, session, t.floor(), "FLOOR_LOCAL");
+        UUID run = jdbc.sql("SELECT id FROM pipeline_run WHERE scan_id = :s").param("s", scan).query(UUID.class).single();
+        UUID child = jdbc.sql("""
+                INSERT INTO scan_version (organization_id, venue_id, scan_id, floor_id, version_number, parent_version_id, pipeline_run_id)
+                VALUES (:o, :v, :s, :f, 3, :p, :r) RETURNING id""")
+            .param("o", t.org()).param("v", t.venue()).param("s", scan).param("f", t.floor()).param("p", parent).param("r", run)
+            .query(UUID.class).single();
+        String pin = "INSERT INTO scan_version_artifact (scan_version_id, artifact_id, kind, owner_version_id) VALUES (:v, :a, :k, :owner)";
+        String finalize = "UPDATE scan_version SET status = 'FINALIZED', finalized_at = now(), coordinate_frame_id = :frame, "
+            + "provenance = CAST('{\"pipeline\":\"test-fixture\"}' AS jsonb) WHERE id = :id";
+
+        // The parent's own navmesh pin, claimed as inherited: refused, though inheriting any other parent pin is allowed.
+        assertThatThrownBy(() -> jdbc.sql(pin).param("v", child).param("a", parentNavmesh).param("k", "NAVMESH").param("owner", parent).update())
+            .isInstanceOf(DataIntegrityViolationException.class).hasMessageContaining("cannot inherit");
+        for (String kind : List.of("KSPLAT", "SPLAT_CLEAN")) {
+            jdbc.sql(pin).param("v", child).param("a", fx.publishedArtifact(t.org(), t.venue(), scan, run, "ARTIFACT_GENERATION", kind)).param("k", kind)
+                .param("owner", child).update();
+        }
+        // No navigation of its own while the parent has a navmesh: not finalized.
+        assertThatThrownBy(() -> jdbc.sql(finalize).param("frame", frame).param("id", child).update())
+            .isInstanceOf(DataIntegrityViolationException.class).hasMessageContaining("without its own navmesh");
+        // Its own navmesh without the graph baked with it: not finalized either.
+        for (String kind : List.of("NAVMESH", "NAVMESH_MANIFEST")) {
+            jdbc.sql(pin).param("v", child).param("a", fx.publishedArtifact(t.org(), t.venue(), scan, run, "NAVIGATION_BAKING", kind))
+                .param("k", kind).param("owner", child).update();
+        }
+        assertThatThrownBy(() -> jdbc.sql(finalize).param("frame", frame).param("id", child).update())
+            .isInstanceOf(DataIntegrityViolationException.class).hasMessageContaining("all three or none");
+        jdbc.sql(pin).param("v", child).param("a", fx.publishedArtifact(t.org(), t.venue(), scan, run, "NAVIGATION_BAKING", "NAVIGATION_GRAPH"))
+            .param("k", "NAVIGATION_GRAPH").param("owner", child).update();
+        assertThat(jdbc.sql(finalize).param("frame", frame).param("id", child).update()).isEqualTo(1);
     }
 
     @Test

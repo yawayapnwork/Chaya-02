@@ -16,6 +16,9 @@ Pieces:
   * Polygon / build_routing_graphs: the routing graphs dev.chaya.api.navigation.RouteService pathfinds over, taken from
     the polygons and links of the Detour navmesh Recast built, with each portal's clear width measured on the
     SurfaceModel.
+  * compare_outside_region / obstacle_cells_under_navmesh: what an incremental re-scan's re-bake must preserve. Outside
+    the changed region (plus the surface model's reach) the merged scene's surface model must equal the parent's, cell
+    for cell, and no navmesh polygon may cover an obstacle cell there (docs/rescan.md, "NAVIGATION").
 """
 
 from __future__ import annotations
@@ -38,6 +41,7 @@ NAVMESH_TOOL_UNAVAILABLE = "NAVMESH_TOOL_UNAVAILABLE"
 INVALID_GEOMETRY = "INVALID_GEOMETRY"
 NO_WALKABLE_SURFACE = "NO_WALKABLE_SURFACE"
 NAVMESH_BUILD_FAILED = "NAVMESH_BUILD_FAILED"
+NAVMESH_REGION_INCONSISTENT = "NAVMESH_REGION_INCONSISTENT"
 NAVMESH_NOT_READY = "NAVMESH_NOT_READY"
 NO_ROUTE = "NO_ROUTE"
 NO_ACCESSIBLE_ROUTE = "NO_ACCESSIBLE_ROUTE"
@@ -456,6 +460,101 @@ def build_surface_model(ground_points: np.ndarray, obstacle_points: np.ndarray, 
     narrow = free & ~level_change & (width < accessible_width_m)
     return SurfaceModel(origin, float(cell_m), ground_z, obstacle, obstacle_top, level_change, clear, width, narrow,
                         float(reference_z), float(step_min_rise_m), float(accessible_width_m), float(width_cap_m))
+
+
+# ---- what an incremental re-scan's re-bake must preserve ---------------------------------------------------------------
+
+# A cell's surface-model fields depend only on the points in its 3 x 3 neighbourhood: its ground on its own points, its
+# obstacle reference and level changes on its neighbours'. A cell whose centre is more than 1.5 * sqrt(2) cells from the
+# region polygon therefore sees only geometry the splice kept unchanged; 3 cells leaves room for rounding.
+RESCAN_INFLUENCE_CELLS = 3.0
+
+
+def cells_outside_region(origin: np.ndarray, shape: tuple[int, int], cell_m: float, polygon_xy: np.ndarray, margin_m: float,
+                         chunk: int = 50_000) -> np.ndarray:
+    """Pure: (nx, ny) bool, True for grid cells (origin, cell_m) whose centre is outside `polygon_xy` by more than
+    `margin_m`. Only cells near the polygon's bounding box are tested against it; the rest are outside by construction."""
+    from .region_splice import distance_to_polygon_edge, point_in_polygon  # noqa: PLC0415
+
+    polygon_xy = np.asarray(polygon_xy, dtype=np.float64)
+    ii, jj = np.indices(shape)
+    centres = np.asarray(origin, dtype=np.float64) + (np.stack([ii.ravel(), jj.ravel()], axis=1) + 0.5) * cell_m
+    outside = np.ones(len(centres), dtype=bool)
+    near = np.flatnonzero(np.all((centres >= polygon_xy.min(axis=0) - margin_m) & (centres <= polygon_xy.max(axis=0) + margin_m), axis=1))
+    for start in range(0, len(near), chunk):
+        k = near[start:start + chunk]
+        outside[k] = ~point_in_polygon(centres[k], polygon_xy) & (distance_to_polygon_edge(centres[k], polygon_xy) > margin_m)
+    return outside.reshape(shape)
+
+
+def compare_outside_region(parent: SurfaceModel, merged: SurfaceModel, polygon_xy: np.ndarray, *, margin_m: float) -> dict[str, Any]:
+    """Pure: whether the merged scene's surface model equals the parent's everywhere outside the changed region.
+
+    Both models are placed on their common grid (their origins are multiples of cell_m, so the cells coincide). Every
+    cell whose centre is more than `margin_m` outside the polygon and that either model observed is compared: observed
+    ground and its height, obstacle, level change. The splice keeps every Gaussian outside the polygon and their labels
+    unchanged, so any difference there means the re-bake would not preserve the venue (mismatched or corrupted inputs),
+    and `consistent` is False. Returns the counts, the obstacle cells on each side, and up to 10 differing cell centres."""
+    if parent.cell_m != merged.cell_m:
+        raise ValueError(f"the surface models have different cells ({parent.cell_m} m, {merged.cell_m} m)")
+    c = merged.cell_m
+    po = np.round(parent.origin / c).astype(np.int64)
+    mo = np.round(merged.origin / c).astype(np.int64)
+    lo = np.minimum(po, mo)
+    hi = np.maximum(po + np.array(parent.ground_z.shape), mo + np.array(merged.ground_z.shape))
+    shape = (int(hi[0] - lo[0]), int(hi[1] - lo[1]))
+
+    def place(model: SurfaceModel, o: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        g, ob, lc = np.full(shape, np.nan), np.zeros(shape, dtype=bool), np.zeros(shape, dtype=bool)
+        i0, j0 = (int(v) for v in o - lo)
+        nx, ny = model.ground_z.shape
+        g[i0:i0 + nx, j0:j0 + ny] = model.ground_z
+        ob[i0:i0 + nx, j0:j0 + ny] = model.obstacle
+        lc[i0:i0 + nx, j0:j0 + ny] = model.level_change
+        return g, ob, lc
+
+    pg, pob, plc = place(parent, po)
+    mg, mob, mlc = place(merged, mo)
+    origin = lo * c
+    outside = cells_outside_region(origin, shape, c, polygon_xy, margin_m)
+    pfin, mfin = np.isfinite(pg), np.isfinite(mg)
+    relevant = outside & (pfin | mfin | pob | mob)
+    with np.errstate(invalid="ignore"):
+        height_moved = pfin & mfin & (np.abs(pg - mg) > 1e-6)
+    ground_diff = relevant & ((pfin != mfin) | height_moved)
+    obstacle_lost = relevant & pob & ~mob
+    obstacle_added = relevant & ~pob & mob
+    level_diff = relevant & (plc != mlc)
+    differing = ground_diff | obstacle_lost | obstacle_added | level_diff
+    di, dj = np.nonzero(differing)
+    examples = (origin + (np.stack([di, dj], axis=1)[:10] + 0.5) * c).round(3).tolist()
+    return {"consistent": not bool(differing.any()), "margin_m": float(margin_m), "cell_m": c,
+            "cells_compared": int(relevant.sum()), "cells_differing": int(differing.sum()),
+            "ground_cells_differing": int(ground_diff.sum()), "obstacle_cells_lost": int(obstacle_lost.sum()),
+            "obstacle_cells_added": int(obstacle_added.sum()), "level_change_cells_differing": int(level_diff.sum()),
+            "obstacle_cells_outside_region": {"parent": int((outside & pob).sum()), "merged": int((outside & mob).sum())},
+            "differing_cell_centres_xy": examples}
+
+
+def obstacle_cells_under_navmesh(polygons: list[Polygon], model: SurfaceModel, mask: np.ndarray) -> np.ndarray:
+    """Pure: the centres (k, 2) of the obstacle cells within `mask` that lie inside the horizontal footprint of a navmesh
+    polygon -- obstacles the navmesh would let an agent walk through. Recast erodes the walkable area by the agent radius
+    around every obstacle box, so there should be none; a re-bake that has any outside the changed region is refused."""
+    from .region_splice import point_in_polygon  # noqa: PLC0415
+
+    candidates = model.obstacle & mask
+    hit = np.zeros_like(candidates)
+    top = np.array(candidates.shape) - 1
+    for poly in polygons if candidates.any() else []:
+        v = np.array(poly.vertices, dtype=np.float64)[:, :2]
+        (i0, j0), (i1, j1) = np.clip(model.cell_of(v.min(axis=0)), 0, top), np.clip(model.cell_of(v.max(axis=0)), 0, top)
+        ii, jj = np.nonzero(candidates[i0:i1 + 1, j0:j1 + 1] & ~hit[i0:i1 + 1, j0:j1 + 1])  # only the cells under its box
+        if len(ii):
+            ii, jj = ii + i0, jj + j0
+            inside = point_in_polygon(model.origin + (np.stack([ii, jj], axis=1) + 0.5) * model.cell_m, v)
+            hit[ii[inside], jj[inside]] = True
+    hi, hj = np.nonzero(hit)
+    return model.origin + (np.stack([hi, hj], axis=1) + 0.5) * model.cell_m
 
 
 def geometry_from_surface(model: SurfaceModel, *, obstacle_min_height_m: float) -> NavGeometry:

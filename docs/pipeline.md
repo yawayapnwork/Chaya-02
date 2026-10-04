@@ -184,9 +184,10 @@ A capture whose `capture_session.parent_scan_version_id` is set (created by `POS
 the same first seven stages, against only the newly captured region, then `REGION_ALIGNMENT` (real
 feature-matching + ICP against the selected parent version's reconstruction) and `REGION_SPLICE` (replaces
 just the changed region), before the usual `PLANE_FITTING`/`ARTIFACT_GENERATION`/`SEMANTIC_INDEXING`/
-`NAVIGATION_BAKING` re-run on the spliced result. See [docs/rescan.md](docs/rescan.md) for the full design,
-including the alignment confidence quality gate and how navigation/search updates are scoped to only the
-changed region.
+`NAVIGATION_BAKING` re-run on the spliced result. Those four are **not** regional: they re-derive the whole floor
+from the merged cloud (navigation is re-baked whenever the parent version has a navmesh, and checked against the
+parent scene outside the region). See [docs/rescan.md](docs/rescan.md) for the full design, including the alignment
+quality gates and exactly what is regional.
 
 ## Time-boxed reconstruction
 Each run has `time_budget_seconds` (default 3600, max 86400) and a `deadline_at`. Work orders carry the deadline;

@@ -496,3 +496,38 @@ This section was added after the review; the sections above are unchanged.
   (`CorridorPath`, the funnel algorithm of `findStraightPath`). The L-shaped-corridor test is `CorridorPathTest`.
   Clearance is no longer the portal length: it is the bottleneck width on the reconstruction's obstacle geometry.
 - **Still synthetic only:** none of this has met a real reconstruction (G-4).
+
+---
+
+## 7. Addendum (2026-10-04): incremental re-scan
+
+This section was added after the review; the sections above are unchanged.
+
+- **Navigation could still be inherited stale (new; fixed).** A re-scan re-baked navigation only when a node of the
+  floor's ACTIVE graph lay inside the region. Otherwise its version pinned the parent's navmesh. Nodes are polygon
+  centroids, so a region inside one large polygon, or one where furniture was removed, skipped the re-bake. The rule also
+  read the floor's current graph, not the parent version's. Now a re-scan re-bakes whenever the parent version has a
+  navmesh (`RescanService#parentHasNavigation`), and navigation is never inherited. V26 enforces this in the database:
+  no inherited navigation pins, all three navigation kinds or none, and a parent with a navmesh needs a child with its
+  own.
+- **N-1 had a second break (new; fixed).** With SEMANTIC_SEGMENTATION in the incremental plan, PLANE_FITTING paired
+  `SPLAT_MERGED` with the region's `SEMANTIC_LABELS_CLEAN` and failed on the length mismatch. Every real re-scan would
+  have stopped there, before NAVIGATION_BAKING. Downstream stages now pick their cloud and its own labels through
+  `chaya_worker.stages.base.venue_cloud`, which also refuses the region-only cloud in a re-scan.
+- **The obstacle preservation is now verified, not assumed.** A re-scan's NAVIGATION_BAKING still re-bakes the whole
+  floor: one Detour tile, so a local re-bake cannot keep the topology at the cut. It now refuses the bake
+  (`NAVMESH_REGION_INCONSISTENT`) unless:
+  - the parent and merged surface models are identical more than 0.3 m outside the region;
+  - no new polygon covers an obstacle cell there;
+  - its inputs are the exact chain the splice produced (SHA-256). Labels and planes name the cloud they describe.
+- **Version-scoped artifacts name their version.** Re-scan graphs or detections that name another version, or none, are
+  refused (`ARTIFACT_VERSION_MISMATCH`).
+- **Tests:**
+  - worker: `tests/unit/test_rescan_consistency.py`; `tests/navmesh/test_venue_stage.py` (real Recast);
+    `tests/orchestration/test_rescan_stages.py` (scale mismatch); `tests/unit/test_region_splice.py`;
+  - control plane: `RescanServiceTest`, `RescanControlPlaneTest`, `ScanVersionImmutabilityTest`, `ScanVersionLineageTest`.
+- **Unchanged:**
+  - every result is still synthetic;
+  - no real venue has been re-scanned;
+  - S-2 (mutable storage) still undermines "exact" artifacts at the storage layer.
+

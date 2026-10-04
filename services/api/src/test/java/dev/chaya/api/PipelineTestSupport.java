@@ -8,6 +8,7 @@ import dev.chaya.api.pipeline.PipelineDefinition;
 import dev.chaya.api.storage.ObjectStore;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -84,6 +85,31 @@ abstract class PipelineTestSupport extends CaptureTestSupport {
     /** Writes a real object into the derived bucket and returns the artifact report entry for it. */
     protected Map<String, Object> artifact(JsonNode order, String name, String kind, boolean pii, boolean partial, String content) {
         return artifact(order, name, kind, pii, partial, content.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** chaya_worker.stages.base.run_provenance for a work order: the run and version a version-scoped artifact names. */
+    protected Map<String, Object> sourceOf(JsonNode order) {
+        Map<String, Object> source = new LinkedHashMap<>();
+        source.put("run_id", order.path("runId").asText(null));
+        JsonNode version = order.path("scanVersionId");
+        source.put("scan_version_id", version.isNull() || version.isMissingNode() ? null : version.asText());
+        return source;
+    }
+
+    private static final Path NAVMESH_FIXTURE = Path.of("../../packages/contracts/fixtures/navmesh");
+
+    /** NAVIGATION_BAKING's outputs in the worker's real shape: the committed real Recast navmesh fixture
+     * (packages/contracts/fixtures/navmesh), its manifest, and its graph in `frameId`, naming the order's version. */
+    @SuppressWarnings("unchecked")
+    protected List<Map<String, Object>> navigationOutputs(JsonNode order, Object frameId) throws IOException {
+        byte[] navmesh = Files.readAllBytes(NAVMESH_FIXTURE.resolve("navmesh.bin"));
+        String manifest = Files.readString(NAVMESH_FIXTURE.resolve("navmesh-manifest.json"), StandardCharsets.UTF_8);
+        Map<String, Object> graph = mapper.readValue(Files.readString(NAVMESH_FIXTURE.resolve("navigation-graph.json"),
+            StandardCharsets.UTF_8).replace("FIXTURE_FRAME_ID", String.valueOf(frameId)), Map.class);
+        graph.put("source", sourceOf(order));
+        return List.of(artifact(order, "navmesh.bin", "NAVMESH", false, false, navmesh),
+            artifact(order, "navmesh-manifest.json", "NAVMESH_MANIFEST", false, false, manifest),
+            artifact(order, "navigation-graph.json", "NAVIGATION_GRAPH", false, false, mapper.writeValueAsString(graph)));
     }
 
     /** As above, for binary outputs (a Detour navmesh tile, say). */

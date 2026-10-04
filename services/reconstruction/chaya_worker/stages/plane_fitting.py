@@ -18,8 +18,10 @@ plane's calibration (dev.chaya.api.frame) combines with measured distances to bu
 gravity cannot be estimated, GRAVITY_ESTIMATE says NOT_ESTIMATED and why; the stage still succeeds, because
 an operator can provide gravity from floor points instead.
 
-When SEMANTIC_LABELS_CLEAN is available, each plane also reports how well its geometric classification agrees
-with the semantic segmentation of its own inlier points. Needs Open3D; fails structured, produces nothing,
+When the labels of the fitted cloud are available (SEMANTIC_LABELS_MERGED for a re-scan's merged cloud,
+SEMANTIC_LABELS_CLEAN otherwise; never the region's labels against the merged cloud), each plane also reports how well its
+geometric classification agrees with the semantic segmentation of its own inlier points. PLANE_MODEL names the cloud it
+was fitted on (kind and SHA-256), so NAVIGATION_BAKING can refuse planes whose inlier indices belong to another cloud. Needs Open3D; fails structured, produces nothing,
 if it is missing.
 """
 
@@ -34,7 +36,7 @@ from ..frames import CANONICAL_UP, frame_from_order
 from ..geometry_cleanup import FLOOR, characteristic_spacing, fit_planes, reclassify_planes
 from ..gravity import Plane, cameras_from_poses, estimate_gravity, not_estimated
 from ..ply import read_ply
-from .base import command_record, write_json
+from .base import command_record, run_provenance, sha256_file, venue_cloud, write_json
 
 
 class PlaneFitting:
@@ -43,19 +45,17 @@ class PlaneFitting:
     def run(self, ctx: StageContext) -> StageResult:
         ctx.toolchain.require(["py:open3d"], stage=self.name)
         # SPLAT_MERGED (REGION_SPLICE's venue-wide spliced result) takes priority when present -- an
-        # incremental re-scan's plane fit must run on the full merged geometry, not the region alone.
-        merged = ctx.inputs_of("SPLAT_MERGED")
-        splats = merged or ctx.inputs_of("SPLAT_CLEAN")
-        if not splats:
-            raise StageError("no SPLAT_CLEAN was provided by GEOMETRIC_CLEANUP", code="INPUT_INVALID")
-        labels_inputs = ctx.inputs_of("SEMANTIC_LABELS_CLEAN")
+        # incremental re-scan's plane fit must run on the full merged geometry, not the region alone -- and the labels
+        # are always those of the cloud being fitted (the region's own SEMANTIC_LABELS_CLEAN do not describe it).
+        splat_kind, splats, labels_kind, labels_inputs = venue_cloud(ctx, self.name, ("SPLAT_MERGED", "SPLAT_CLEAN"))
+        merged = splat_kind == "SPLAT_MERGED"
 
         cloud = read_ply(splats[0].path)
         labels = None
         if labels_inputs:
             labels = np.array(json.loads(labels_inputs[0].path.read_text(encoding="utf-8"))["labels"], dtype=object)
             if len(labels) != len(cloud):
-                raise StageError(f"SEMANTIC_LABELS_CLEAN has {len(labels)} entries but the splat has {len(cloud)} Gaussians",
+                raise StageError(f"{labels_kind} has {len(labels)} entries but the {splat_kind} splat has {len(cloud)} Gaussians",
                                  code="INPUT_INVALID")
 
         s = ctx.settings
@@ -109,6 +109,9 @@ class PlaneFitting:
         planes_doc = {
             "gaussian_count": len(cloud), "planes_found": len(planes), "coordinate_space": "RECONSTRUCTION",
             "up_source": up_source, "ransac_distance_threshold_reconstruction_units": threshold,
+            "source": {**run_provenance(ctx, frame.id if frame is not None else None),
+                       "splat": {"kind": splat_kind, "artifact_id": splats[0].artifact_id, "sha256": sha256_file(splats[0].path)},
+                       "labels": {"kind": labels_kind, "artifact_id": labels_inputs[0].artifact_id} if labels_inputs else None},
             "median_nn_spacing_reconstruction_units": spacing,
             "planes": [{"equation": list(p.equation), "classification": p.classification, "inlier_count": len(p.inlier_indices),
                        "confidence": p.confidence, "inlier_indices": [int(i) for i in p.inlier_indices]} for p in planes],

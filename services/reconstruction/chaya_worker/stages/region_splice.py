@@ -31,7 +31,7 @@ from ..contract import ArtifactSpec, StageContext, StageError, StageResult
 from ..frames import require_canonical
 from ..ply import read_ply, write_ply
 from ..region_splice import SpliceRejected, splice_labels, splice_region
-from .base import command_record, sha256_file, write_json
+from .base import command_record, run_provenance, sha256_file, write_json
 
 
 class RegionSplice:
@@ -68,12 +68,13 @@ class RegionSplice:
         report = {
             **result.report,
             "coordinate_frame_id": parent_frame.id,
+            "source": run_provenance(ctx, parent_frame.id),
             "inputs": {"global_cloud": _ref(global_inputs[0], len(global_cloud)), "aligned_region": _ref(aligned_inputs[0], len(aligned_cloud))},
             "output": {"artifact": "splat-merged.ply", "sha256": sha256_file(merged_path), "gaussians": len(result.merged)},
             "index": {"artifact": "splice-index.npz", "sha256": sha256_file(index_path),
                       "arrays": ["removed_global_indices", "added_region_indices"]},
         }
-        labels_artifact, report["labels"] = _merged_labels(ctx, global_cloud, aligned_cloud, result)
+        labels_artifact, report["labels"] = _merged_labels(ctx, global_cloud, aligned_cloud, result, report["output"], parent_frame.id)
         report_path = write_json(ctx.workdir / "splice-report.json", report)
         ctx.logger.info("region spliced", extra={k: v for k, v in report.items() if isinstance(v, int)})
         return StageResult("SUCCEEDED", command_record(ctx, {"splice": report}), ctx.runner.last_exit_status(), [
@@ -84,8 +85,11 @@ class RegionSplice:
         ])
 
 
-def _merged_labels(ctx: StageContext, global_cloud, aligned_cloud, result) -> tuple[ArtifactSpec | None, dict]:
-    """SEMANTIC_LABELS_MERGED, or None with the reason, for the report."""
+def _merged_labels(ctx: StageContext, global_cloud, aligned_cloud, result, merged_ref: dict,
+                   frame_id: str) -> tuple[ArtifactSpec | None, dict]:
+    """SEMANTIC_LABELS_MERGED, or None with the reason, for the report. The labels name the exact cloud they describe
+    (`cloud`: SPLAT_MERGED's SHA-256 and size), so NAVIGATION_BAKING can refuse labels of any other cloud, even one with
+    the same number of Gaussians."""
     global_in, region_in = ctx.inputs_of("GLOBAL_LABELS"), ctx.inputs_of("SEMANTIC_LABELS_CLEAN")
     if not global_in or not region_in:
         missing = [k for k, v in (("GLOBAL_LABELS", global_in), ("SEMANTIC_LABELS_CLEAN", region_in)) if not v]
@@ -96,7 +100,9 @@ def _merged_labels(ctx: StageContext, global_cloud, aligned_cloud, result) -> tu
         return None, {"spliced": False, "reason": f"labels do not match their clouds (venue {len(g)} labels / {len(global_cloud)} "
                                                   f"Gaussians, region {len(r)} / {len(aligned_cloud)})"}
     merged = splice_labels(np.array(g, dtype=object), np.array(r, dtype=object), result)
-    path = write_json(ctx.workdir / "semantic-labels-merged.json", {"labels": [str(v) for v in merged]})
+    path = write_json(ctx.workdir / "semantic-labels-merged.json", {
+        "labels": [str(v) for v in merged], "source": run_provenance(ctx, frame_id),
+        "cloud": {"kind": "SPLAT_MERGED", "artifact": merged_ref["artifact"], "sha256": merged_ref["sha256"], "gaussians": merged_ref["gaussians"]}})
     return (ArtifactSpec("SEMANTIC_LABELS_MERGED", path, "semantic-labels-merged.json", "application/json"),
             {"spliced": True, "artifact": "semantic-labels-merged.json", "venue_labels": _ref(global_in[0], len(g)),
              "region_labels": _ref(region_in[0], len(r))})

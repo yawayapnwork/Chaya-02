@@ -158,6 +158,35 @@ def test_splice_replaces_the_overlapping_geometry_and_nothing_else():
     assert report["seam"]["step_m"] is not None and report["seam"]["step_m"] < 0.005
 
 
+def test_moved_furniture_is_replaced_and_every_gaussian_outside_the_region_is_kept_bit_for_bit():
+    """The box was moved 1.4 m within the region between the two captures. The merged venue has the box only where the
+    re-scan saw it, and every venue Gaussian outside the polygon comes through unchanged in every attribute (position,
+    scale, orientation, opacity, colour) and in its original order."""
+    venue = _venue_and_ceiling()
+    points = room(2, density=300)
+    old_box = (points[:, 0] >= 1.5) & (points[:, 0] <= 2.5) & (points[:, 1] >= 1.0) & (points[:, 1] <= 1.6) & (points[:, 2] > 0.01)
+    moved = points.copy()
+    moved[old_box, 1] += 1.4
+    rescan = scene_cloud(moved, seed=2)
+
+    result = splice_region(venue, rescan, ROOM_POLYGON, Similarity.identity(), **SPLICE)
+    merged = result.merged.positions.astype(np.float64)
+
+    def in_box(p, y0, y1):
+        # the box's faces and top (it is sampled on its surface), not the floor under it
+        return (p[:, 0] > 1.45) & (p[:, 0] < 2.55) & (p[:, 1] > y0 - 0.05) & (p[:, 1] < y1 + 0.05) & (p[:, 2] > 0.05) & (p[:, 2] < 0.85)
+
+    assert in_box(venue.positions.astype(np.float64), 1.0, 1.6).sum() > 50, "the venue had the box at its old place"
+    assert not in_box(merged, 1.0, 1.6).any(), "nothing of the box is left at its old place"
+    assert in_box(merged, 2.4, 3.0).sum() == in_box(moved, 2.4, 3.0).sum() > 50, "the box is where the re-scan saw it"
+
+    outside = ~point_in_polygon(venue.positions[:, :2].astype(np.float64), ROOM_POLYGON)
+    kept_outside = venue.subset(outside)
+    merged_outside = result.merged.subset(~point_in_polygon(merged[:, :2], ROOM_POLYGON))
+    for field in ("positions", "scales_log", "rotations_wxyz", "opacity_logit", "colors_dc"):
+        np.testing.assert_array_equal(getattr(merged_outside, field), getattr(kept_outside, field), err_msg=field)
+
+
 def test_a_noop_rescan_changes_nothing():
     """Re-scanning a region with exactly the venue's own Gaussians must give back the venue: the same Gaussians, no more,
     no fewer."""

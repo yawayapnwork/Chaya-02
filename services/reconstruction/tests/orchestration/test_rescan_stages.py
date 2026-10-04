@@ -106,6 +106,34 @@ def test_a_rescan_aligns_and_splices_through_both_stages(harness, tmp_path):
     assert splice_report["output"]["sha256"] == next(a["sha256"] for a in splice["artifacts"] if a["kind"] == "SPLAT_MERGED")
 
 
+@pytest.mark.parametrize("scale_error, accepted", [(1.04, True), (0.96, True), (1.25, False), (0.8, False)])
+def test_a_rescan_whose_metric_scale_is_off_is_corrected_within_the_limit_and_rejected_beyond_it(harness, tmp_path, scale_error,
+                                                                                                  accepted):
+    """Scale mismatch. The re-scan's reconstruction (2 units per metre) and the parent's (0.5 units per metre) are only
+    related through their calibrations, in canonical metres. A re-scan calibration a few percent off in scale is estimated
+    and corrected (the scale is part of the similarity); one off by more than alignment_max_scale_correction (10 %) means
+    the calibration is wrong, and the re-scan is rejected with the measured scale and the threshold, and nothing published."""
+    _, venue_ref = _venue(tmp_path, harness)
+    rescan = _rescan(room(2, density=300), Similarity(scale_error, np.eye(3), np.zeros(3)))
+    report = harness.run(_order(harness, "REGION_ALIGNMENT", [_input(harness, tmp_path, "SPLAT_CLEAN", rescan), venue_ref],
+                                region_frame=frame("rescan", RESCAN_TO_CANONICAL), parent_frame=frame("parent", PARENT_TO_CANONICAL)))
+    if accepted:
+        assert report["status"] == "SUCCEEDED", report.get("errorMessage")
+        alignment = json.loads(_download(harness, report, "ALIGNMENT_REPORT", tmp_path).read_text())
+        assert alignment["correction"]["scale"] == pytest.approx(scale_error, rel=0.005)
+        assert alignment["metrics"]["translation_residual_m"] <= 0.03 and alignment["gates_passed"]
+        # the aligned region, in the parent reconstruction's frame, lands at true size: its floor is 4 m across
+        aligned = PARENT_TO_CANONICAL.apply(read_ply(_download(harness, report, "SPLAT_ALIGNED", tmp_path)).positions)
+        floor = aligned[np.abs(aligned[:, 2]) < 0.02]
+        assert np.ptp(floor[:, 0]) == pytest.approx(4.0, abs=0.03) and np.ptp(floor[:, 1]) == pytest.approx(4.0, abs=0.03)
+    else:
+        assert report["status"] == "FAILED" and report["errorCode"] == "ALIGNMENT_REJECTED"
+        assert report["artifacts"] == [], "nothing that could be spliced is published"
+        gate = next(g for g in report["errorDetails"]["gates"] if g["name"] == "scale_correction")
+        assert not gate["passed"] and gate["threshold"] == pytest.approx(0.1)
+        assert gate["value"] == pytest.approx(abs(scale_error - 1.0), abs=0.02)
+
+
 def test_a_rejected_alignment_publishes_nothing_and_says_why(harness, tmp_path):
     _, venue_ref = _venue(tmp_path, harness)
     error = Similarity(1.0, np.eye(3), np.array([1.2, 0.0, 0.0]))  # the re-scan's survey is 1.2 m off
@@ -155,3 +183,59 @@ def test_feature_mode_needs_open3d_and_an_uncalibrated_rescan_is_never_merged(ha
                     "rotation": None, "translation": None}
     report = harness.run(_order(harness, "REGION_ALIGNMENT", [rescan_ref, venue_ref], region_frame=uncalibrated, parent_frame=parent))
     assert report["errorCode"] == "NOT_CALIBRATED" and report["artifacts"] == []
+
+
+# ---- downstream stages of a re-scan: the merged cloud, with its own labels -------------------------------------------------
+
+
+class _Open3dStandIn(Toolchain):
+    """PLANE_FITTING gates on Open3D for its RANSAC. These tests replace that RANSAC (fit_planes) and test what the stage
+    does around it: which cloud and labels it fits, and what it records."""
+
+    def require(self, requirements, *, stage):
+        pass
+
+
+def _plane_fitting(harness, tmp_path, monkeypatch, kinds: list[str]):
+    from chaya_worker.geometry_cleanup import FittedPlane
+    from chaya_worker.stages import plane_fitting
+
+    seen: dict = {}
+
+    def fit_planes(positions, *, labels=None, **_):
+        seen.update(points=len(positions), labels=None if labels is None else len(labels))
+        return [FittedPlane((0.0, 0.0, 1.0, 0.0), np.flatnonzero(np.abs(positions[:, 2]) < 1e-6), "floor", 1.0)]
+
+    monkeypatch.setattr(plane_fitting, "fit_planes", fit_planes)
+    venue, _ = _venue(tmp_path, harness)
+    region = _rescan(room(2, density=100), Similarity.identity())
+    labels = {"SEMANTIC_LABELS_MERGED": len(venue), "SEMANTIC_LABELS_CLEAN": len(region)}
+    inputs = {"SPLAT_CLEAN": _input(harness, tmp_path, "SPLAT_CLEAN", region), "SPLAT_MERGED": _input(harness, tmp_path, "SPLAT_MERGED", venue)}
+    for kind, n in labels.items():
+        path = tmp_path / f"{kind.lower()}.json"
+        path.write_text(json.dumps({"labels": ["floor"] * n}), encoding="utf-8")
+        inputs[kind] = {**harness.raw_input(kind, path, "application/json"), "containsPii": False}
+    order = _order(harness, "PLANE_FITTING", [inputs[k] for k in kinds], region_frame=None, parent_frame=frame("parent", PARENT_TO_CANONICAL))
+    order["scanVersionId"] = "scan-version-2"
+    return harness.run(order, toolchain=_Open3dStandIn(env={})), seen, inputs, len(venue)
+
+
+def test_plane_fitting_in_a_rescan_fits_the_merged_cloud_with_the_merged_labels(harness, tmp_path, monkeypatch):
+    """The re-scan run holds the region's SPLAT_CLEAN + SEMANTIC_LABELS_CLEAN next to SPLAT_MERGED + SEMANTIC_LABELS_MERGED.
+    PLANE_FITTING used to fit the merged cloud with the region's labels and fail on the length mismatch, so no re-scan
+    could get past it."""
+    report, seen, inputs, merged_size = _plane_fitting(
+        harness, tmp_path, monkeypatch, ["SPLAT_CLEAN", "SEMANTIC_LABELS_CLEAN", "SPLAT_MERGED", "SEMANTIC_LABELS_MERGED"])
+    assert report["status"] == "SUCCEEDED", report.get("errorMessage")
+    assert seen == {"points": merged_size, "labels": merged_size}
+    planes = json.loads(_download(harness, report, "PLANE_MODEL", tmp_path).read_text())
+    assert planes["source"]["splat"] == {"kind": "SPLAT_MERGED", "artifact_id": inputs["SPLAT_MERGED"]["artifactId"],
+                                         "sha256": inputs["SPLAT_MERGED"]["sha256"]}
+    assert planes["source"]["labels"]["kind"] == "SEMANTIC_LABELS_MERGED"
+    assert planes["source"]["scan_version_id"] == "scan-version-2" and planes["source"]["coordinate_frame_id"] == "parent"
+
+
+def test_plane_fitting_in_a_rescan_refuses_the_region_alone(harness, tmp_path, monkeypatch):
+    report, seen, _, _ = _plane_fitting(harness, tmp_path, monkeypatch, ["SPLAT_CLEAN", "SEMANTIC_LABELS_CLEAN"])
+    assert report["status"] == "FAILED" and report["errorCode"] == "INPUT_INVALID" and "SPLAT_MERGED" in report["errorMessage"]
+    assert report["artifacts"] == [] and seen == {}

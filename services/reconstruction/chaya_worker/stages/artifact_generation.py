@@ -15,20 +15,19 @@ import tarfile
 from pathlib import Path
 
 from .. import __version__
-from ..contract import ArtifactSpec, StageContext, StageError, StageResult
+from ..contract import ArtifactSpec, StageContext, StageResult
 from ..ksplat import write_ksplat
 from ..manifest import build_manifest
 from ..ply import read_ply
-from .base import command_record, sha256_file, write_json
+from .base import command_record, sha256_file, venue_cloud, write_json
 
 
 class ArtifactGeneration:
     name = "ARTIFACT_GENERATION"
 
     def run(self, ctx: StageContext) -> StageResult:
-        splats = ctx.inputs_of("SPLAT_MERGED") or ctx.inputs_of("SPLAT_CLEAN") or ctx.inputs_of("SPLAT")
-        if not splats:
-            raise StageError("no cleaned (or raw) Gaussian splat was provided to ARTIFACT_GENERATION", code="INPUT_INVALID")
+        # A re-scan's viewer asset is the merged venue, never the region alone (venue_cloud refuses that).
+        _, splats, _, _ = venue_cloud(ctx, self.name)
         planes_inputs = ctx.inputs_of("PLANE_MODEL")
 
         cloud = read_ply(splats[0].path)
