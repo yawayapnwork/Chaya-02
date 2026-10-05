@@ -580,3 +580,16 @@ This section was added after the review; the sections above are unchanged. Detai
   version-scoped artifacts must name its version (full runs included); a detected POI always names its version; a
   public link is only served FINALIZED versions.
 - **Unchanged:** S-2 (mutable storage) still undermines "exact" artifacts; every result is still synthetic.
+
+---
+
+## 10. Addendum (2026-10-05): Android AR navigation pipeline
+
+This section was added after the review; the sections above are unchanged. Details: docs/ar.md, "End-to-end chain".
+
+- **Item 11 is still PARTIALLY REAL.** The Android client now pins each floor's scan version, refuses answers and route
+  legs of another version or frame, detects drift against registered markers, refreshes its transform while localized,
+  and hands off between floors. All of it is unit-tested with mathematical fixtures and the desktop capability spec
+  passes. **It has not run on a device:** no Android phone or `adb` was available. docs/ar-android-validation.md
+  (sections 1–7, including the new 6b) is the procedure, and its record says pending.
+- Still open: AR-3 (`physicalPose` unused), N-5 (no producer of dynamic obstacles), the image-tracking flag requirement.

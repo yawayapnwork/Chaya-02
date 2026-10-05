@@ -18,6 +18,16 @@
 //   5. Tracking loss (no viewer pose, emulated position, session hidden, world anchor no longer tracked): the route is
 //      hidden and frozen, the UI says tracking is lost, and only a fresh marker observation followed by a successful
 //      relocalization brings it back. Before the first localization, a loss only means "waiting for device tracking".
+//   6. Versions (lib/ar-relocalization.ts, lib/ar-navigation.ts): only anchors whose pose was entered against a scan
+//      version are registered; each floor's version is pinned at its first localization and sent with every later
+//      relocalization (the server refuses another one); a route leg is drawn only if the server routed that floor in the
+//      session's version and frame.
+//   7. Drift: while localized, a registered marker seen again is checked against the transform. Too far off, the
+//      transform is dropped and the session relocalizes from that marker; otherwise it refreshes the transform, which is
+//      blended in over a fraction of a second for drawing.
+//   8. Floors: every floor's markers are registered for the session. Near the end of this floor's leg (a TRANSITION) the
+//      session hands off: the transform is dropped (each floor has its own canonical frame) and the next floor is
+//      localized from its own markers.
 //
 // It cannot be exercised on this development machine (no WebXR). docs/ar-android-validation.md is the device procedure.
 
@@ -26,7 +36,7 @@ import { useSearchParams } from "next/navigation";
 import { ApiError, type Floor, type Venue, listFloors, listVenues } from "@/lib/capture-api";
 import { type Anchor, fetchTargetImage, listAnchors, relocalize } from "@/lib/ar-api";
 import { type Poi, listPois } from "@/lib/poi-api";
-import { type RouteResponse, planRoute } from "@/lib/navigation-api";
+import { type RouteResponse, type RouteWaypoint, planRoute } from "@/lib/navigation-api";
 import {
   type AnchorSupport,
   type ArProblem,
@@ -59,19 +69,31 @@ import {
   advanceProgress,
   anchorCorrectedDeviceToVenue,
   devicePositionInVenue,
-  routeLegOnFloor,
   venueToArWorld,
 } from "@/lib/ar-route";
 import type { Vec3 } from "@/lib/coordinate-frame";
 import type { Pose } from "@/lib/ar-anchor-math";
 import { ArRouteRenderer } from "@/lib/ar-route-renderer";
+import {
+  arSessionInit,
+  blendedTransform,
+  driftExceeded,
+  floorHandoff,
+  markerDrift,
+  refreshDue,
+  routeLegFor,
+} from "@/lib/ar-navigation";
 
 const SUPPORT_TEXT: Record<AnchorSupport, string> = {
   TRACKABLE: "detectable (WebXR image tracking)",
   FIDUCIAL_DETECTION_UNSUPPORTED: "not detectable here: WebXR has no QR/ArUco/AprilTag detection",
   MISSING_PRINTED_SIZE: "not detectable: no printed size registered",
   NOT_CALIBRATED: "not usable: not calibrated",
+  UNVERSIONED: "not usable: its pose was never entered against a scan version (re-enter it)",
 };
+
+/** WebXR image tracking cost grows with the number of registered images. The current floor's come first. */
+const MAX_TRACKED_IMAGES = 32;
 
 const RETRY_AFTER_FAILURE_MS = 1500;
 /** How long a newly created world anchor may be missing from XRFrame.trackedAnchors before that counts as a loss. */
@@ -98,6 +120,8 @@ export default function ArWorkspace() {
   const [floors, setFloors] = useState<Floor[]>([]);
   const [floorId, setFloorId] = useState(searchParams.get("floor") ?? "");
   const [anchors, setAnchors] = useState<Anchor[]>([]);
+  /** Every floor's anchors: a route may cross floors, and WebXR fixes the tracked images when the session starts. */
+  const [venueAnchors, setVenueAnchors] = useState<Anchor[]>([]);
   const [pois, setPois] = useState<Poi[]>([]);
   const [destinationId, setDestinationId] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -113,7 +137,12 @@ export default function ArWorkspace() {
   const [ui, setUi] = useState<{ state: ArSessionState; progress: RouteProgress | null; route: RouteResponse | null }>({
     state: initialArSessionState(), progress: null, route: null,
   });
-  const routeRef = useRef<{ route: RouteResponse; leg: Vec3[] } | null>(null);
+  const routeRef = useRef<{ route: RouteResponse } | null>(null);
+  /** The leg drawn now: this floor's part of the route, checked against the localization's version and frame. */
+  const legRef = useRef<{ floorId: string; points: Vec3[]; waypoints: RouteWaypoint[] } | null>(null);
+  /** After a refresh, the transform drawn just before it, blended into the new one (lib/ar-navigation.ts). */
+  const blendRef = useRef<{ from: Pose; startedAtMs: number } | null>(null);
+  const lastDrawnRef = useRef<Pose | null>(null);
   const progressRef = useRef<RouteProgress | null>(null);
   const markersRef = useRef<TrackedMarker[]>([]);
   const rendererRef = useRef<ArRouteRenderer | null>(null);
@@ -136,19 +165,36 @@ export default function ArWorkspace() {
     if (!venueId || !floorId) return;
     listAnchors(venueId, floorId).then(setAnchors).catch((e) => setError(message(e)));
   }, [venueId, floorId]);
+  useEffect(() => {
+    if (!venueId || floors.length === 0) return;
+    let cancelled = false;
+    Promise.all(floors.map((f) => listAnchors(venueId, f.id)))
+      .then((lists) => { if (!cancelled) setVenueAnchors(lists.flat()); })
+      .catch((e) => !cancelled && setError(message(e)));
+    return () => { cancelled = true; };
+  }, [venueId, floors]);
   useEffect(() => () => { sessionRef.current?.end().catch(() => {}); }, []);
 
   const trackable = useMemo(() => trackableAnchors(anchors), [anchors]);
-  const destinations = useMemo(() => pois.filter((p) => p.floorId === floorId && p.frameStatus === "CURRENT"), [pois, floorId]);
+  /** What the session registers: this floor's trackable anchors first, then every other floor's. */
+  const registered = useMemo(() => {
+    const others = trackableAnchors(venueAnchors).filter((a) => a.floorId !== floorId);
+    return [...trackable, ...others].slice(0, MAX_TRACKED_IMAGES);
+  }, [trackable, venueAnchors, floorId]);
+  // Any floor: a route to another floor crosses a registered floor connection. Only POIs of the published version.
+  const destinations = useMemo(() => pois.filter((p) => p.frameStatus === "CURRENT" && p.current), [pois]);
 
   // Target images are loaded before the session: requestSession must run inside the tap's user activation.
   useEffect(() => {
     if (!venueId || !floorId || trackable.length === 0 || env?.problem) return;
     let cancelled = false;
     Promise.resolve().then(() => { if (!cancelled) { setLoaded(null); setLoadingMarkers(true); } });
-    Promise.all(trackable.map(async (a, index) => ({
-      image: await createImageBitmap(await fetchTargetImage(venueId, floorId, a.id)),
-      marker: { index, anchorId: a.id, markerIdentifier: a.markerIdentifier, widthInMeters: a.markerSizeMeters as number },
+    Promise.all(registered.map(async (a, index) => ({
+      image: await createImageBitmap(await fetchTargetImage(venueId, a.floorId, a.id)),
+      marker: {
+        index, anchorId: a.id, markerIdentifier: a.markerIdentifier, widthInMeters: a.markerSizeMeters as number,
+        floorId: a.floorId, scanVersionId: a.scanVersionId ?? undefined, digitalPose: a.digitalPose,
+      },
     })))
       .then((items) => {
         if (!cancelled) setLoaded({ images: items.map((i) => ({ image: i.image, widthInMeters: i.marker.widthInMeters })), markers: items.map((i) => i.marker) });
@@ -156,7 +202,7 @@ export default function ArWorkspace() {
       .catch((e) => !cancelled && setError(message(e)))
       .finally(() => !cancelled && setLoadingMarkers(false));
     return () => { cancelled = true; };
-  }, [venueId, floorId, trackable, env]);
+  }, [venueId, floorId, trackable, registered, env]);
 
   const publish = useCallback((force: boolean) => {
     const now = performance.now();
@@ -173,28 +219,51 @@ export default function ArWorkspace() {
     }
   }, [publish]);
 
-  /** Sends real observations to the server and waits for the world anchor created at the first one's pose. The answer is
-   * applied only if that request is still the pending one; otherwise the new anchor is released. */
+  /** This floor's leg of the route, if the server routed the floor in the localization's version and frame. */
+  const updateLeg = useCallback(() => {
+    const localization = stateRef.current.localization;
+    const route = routeRef.current?.route;
+    legRef.current = null;
+    if (!route || !localization) return;
+    const check = routeLegFor(route, localization);
+    if (!check.ok) {
+      setError(`Route not drawn: ${check.problem}: ${check.detail}`);
+      return;
+    }
+    legRef.current = { floorId: localization.floorId, points: check.points, waypoints: check.waypoints };
+    progressRef.current = null;
+  }, []);
+
+  /** Sends real observations to the server, in the floor's pinned scan version, and waits for the world anchor created
+   * at the first one's pose. The answer is applied only if that request is still the pending one; otherwise the new
+   * anchor is released. */
   const relocalizeFrom = useCallback(async (
     requestId: number, observations: MarkerObservation[], viewerPose: Pose, anchor: Promise<XRAnchor>, anchorPose: Pose,
   ) => {
     let created: XRAnchor | null = null;
     let deviceToVenue: Pose;
+    const sessionFloor = stateRef.current.floorId ?? floorId;
+    const previous = stateRef.current.localization;
     try {
       const [result, worldAnchor] = await Promise.all([
-        relocalize(venueId, floorId, observations.map((o) => ({ anchorId: o.anchorId, observedPose: o.observedPose }))),
+        relocalize(venueId, sessionFloor, observations.map((o) => ({ anchorId: o.anchorId, observedPose: o.observedPose })),
+          stateRef.current.pinnedVersions[sessionFloor] ?? null),
         anchor.then((a) => (created = a)),
       ]);
       deviceToVenue = result.deviceToVenueTransform;
       const localization = {
-        deviceToVenue, anchorIds: observations.map((o) => o.anchorId),
-        residualMeters: result.residualMeters, coordinateFrameId: result.coordinateFrameId, solvedAtMs: performance.now(),
+        deviceToVenue, anchorIds: observations.map((o) => o.anchorId), residualMeters: result.residualMeters,
+        coordinateFrameId: result.coordinateFrameId, scanVersionId: result.scanVersionId, floorId: sessionFloor,
+        solvedAtMs: performance.now(),
       };
       dispatch({ type: "RELOCALIZATION_SUCCEEDED", requestId, localization });
       if (stateRef.current.localization !== localization) {
-        worldAnchor.delete(); // superseded: tracking was lost while the request was in flight
+        worldAnchor.delete(); // superseded or refused (tracking lost meanwhile, another floor, another version)
         return;
       }
+      // A refresh on the same floor is blended in for drawing; a first or new-floor localization is not.
+      blendRef.current = previous && previous.floorId === sessionFloor && lastDrawnRef.current
+        ? { from: lastDrawnRef.current, startedAtMs: performance.now() } : null;
       worldAnchorRef.current?.anchor.delete();
       worldAnchorRef.current = { anchor: worldAnchor, poseAtSolve: anchorPose, createdAtMs: performance.now(), seenTracked: false };
     } catch (e) {
@@ -203,17 +272,21 @@ export default function ArWorkspace() {
       dispatch({ type: "RELOCALIZATION_FAILED", requestId, error: message(e) });
       return;
     }
+    if (routeRef.current || !destinationId) {
+      if (legRef.current?.floorId !== sessionFloor) updateLeg(); // a new floor after a handoff
+      return;
+    }
     // The route is fetched once, from where the device was when it was first localized. A failure here is a routing
     // error, not a localization one: the localization and its world anchor stay.
-    if (routeRef.current || !destinationId) return;
     try {
-      const route = await planRoute({ venueId, floorId, start: devicePositionInVenue(viewerPose, deviceToVenue), destinationPoiId: destinationId });
-      routeRef.current = { route, leg: routeLegOnFloor(route, floorId).points };
+      const route = await planRoute({ venueId, floorId: sessionFloor, start: devicePositionInVenue(viewerPose, deviceToVenue), destinationPoiId: destinationId });
+      routeRef.current = { route };
+      updateLeg();
       publish(true);
     } catch (e) {
       setError(`Route: ${message(e)}`);
     }
-  }, [venueId, floorId, destinationId, dispatch, publish]);
+  }, [venueId, floorId, destinationId, dispatch, publish, updateLeg]);
 
   const onFrame = useCallback((time: number, frame: XRFrame) => {
     const renderer = rendererRef.current;
@@ -229,58 +302,90 @@ export default function ArWorkspace() {
     dispatch({ type: "TRACKING_RESTORED" });
     const viewerPose = poseFromXrTransform(viewer.transform);
 
+    const results = (frame as ImageTrackingFrame).getImageTrackingResults?.() ?? [];
+    const observed = observeImages(results, markersRef.current, (space) => {
+      const pose = frame.getPose(space as XRSpace, ref);
+      return pose ? poseFromXrTransform(pose.transform) : null;
+    }, time);
+    const sessionFloor = stateRef.current.floorId;
+    const eligible = observed.filter((o) => o.floorId === sessionFloor && relocalizationEligibility(o).eligible);
+
+    // The current transform (world-anchor corrected), if localized and the anchor is tracked.
+    const s = stateRef.current;
+    const worldAnchor = worldAnchorRef.current;
+    let corrected: Pose | null = null;
+    if (canAdvanceRoute(s) && s.localization && worldAnchor) {
+      const anchorPose = frame.trackedAnchors?.has(worldAnchor.anchor) ? frame.getPose(worldAnchor.anchor.anchorSpace, ref) : null;
+      if (!anchorPose) {
+        // A new anchor may take a frame or two to appear in trackedAnchors. Until it is first seen the route stays hidden
+        // and frozen. After that, or once the grace period is over, its absence is a tracking loss.
+        if (worldAnchor.seenTracked || performance.now() - worldAnchor.createdAtMs >= WORLD_ANCHOR_GRACE_MS) {
+          dispatch({ type: "TRACKING_LOST", reason: "the platform no longer tracks the world anchor the route is attached to" });
+        }
+        renderer.setRouteVisible(false);
+        return;
+      }
+      worldAnchor.seenTracked = true;
+      corrected = anchorCorrectedDeviceToVenue(s.localization.deviceToVenue, worldAnchor.poseAtSolve, poseFromXrTransform(anchorPose.transform));
+    }
+
     const state = stateRef.current.state;
-    if ((state === "SEARCHING" || state === "TRACKING_LOST") && performance.now() - lastFailureAtRef.current > RETRY_AFTER_FAILURE_MS) {
-      const results = (frame as ImageTrackingFrame).getImageTrackingResults?.() ?? [];
-      const observed = observeImages(results, markersRef.current, (space) => {
-        const pose = frame.getPose(space as XRSpace, ref);
-        return pose ? poseFromXrTransform(pose.transform) : null;
-      }, time);
-      const eligible = observed.filter((o) => relocalizationEligibility(o).eligible);
-      if (eligible.length > 0) {
+    const canObserve = performance.now() - lastFailureAtRef.current > RETRY_AFTER_FAILURE_MS;
+    if (eligible.length > 0 && canObserve) {
+      if (state === "LOCALIZED" && corrected) {
+        // A registered marker seen again: is the transform still right?
+        const worst = eligible.map((o) => {
+          const digital = markersRef.current.find((m) => m.anchorId === o.anchorId)?.digitalPose;
+          return digital ? markerDrift(corrected as Pose, o.observedPose, digital) : null;
+        }).find((d) => d !== null && driftExceeded(d));
+        if (worst) {
+          dispatch({ type: "DRIFT_EXCEEDED", reason: `a registered marker is ${worst.translationMeters.toFixed(2)} m / ` +
+            `${worst.rotationDegrees.toFixed(1)}° from where the transform puts it (drift)` });
+          renderer.setRouteVisible(false);
+          return;
+        }
+      }
+      const due = state !== "LOCALIZED" || refreshDue(stateRef.current.localization, performance.now(), stateRef.current.pending !== null);
+      if (due && (state === "SEARCHING" || state === "TRACKING_LOST" || state === "FLOOR_TRANSITION" || state === "LOCALIZED")) {
+        const requestId = stateRef.current.nextRequestId;
         dispatch({ type: "MARKERS_OBSERVED", observations: eligible });
         const pending = stateRef.current.pending;
-        if (pending && stateRef.current.state === "RELOCALIZING") {
+        if (pending && pending.requestId === requestId) { // this frame's observations opened a request
           // The world anchor must be created from this frame, at the pose the marker was measured at.
           const at = eligible[0].observedPose;
           const anchor = frame.createAnchor
             ? frame.createAnchor(new XRRigidTransform({ x: at.x, y: at.y, z: at.z }, { x: at.qx, y: at.qy, z: at.qz, w: at.qw }), ref)
             : Promise.reject(new Error(PROBLEM_TEXT.ANCHORS_UNSUPPORTED));
-          void relocalizeFrom(pending.requestId, eligible, viewerPose, anchor, at);
+          void relocalizeFrom(pending.requestId, pending.observations, viewerPose, anchor, at);
         }
       }
     }
 
-    const s = stateRef.current;
-    const leg = routeRef.current?.leg ?? [];
-    const worldAnchor = worldAnchorRef.current;
-    if (!canAdvanceRoute(s) || !s.localization || !worldAnchor) {
-      renderer.setRouteVisible(false); // not localized: nothing drawn, progress frozen
+    const now = stateRef.current;
+    const leg = legRef.current;
+    if (!canAdvanceRoute(now) || !corrected || !leg || leg.floorId !== now.floorId) {
+      renderer.setRouteVisible(false); // not localized on this floor: nothing drawn, progress frozen
       return;
     }
-    const anchorPose = frame.trackedAnchors?.has(worldAnchor.anchor) ? frame.getPose(worldAnchor.anchor.anchorSpace, ref) : null;
-    if (!anchorPose) {
-      // A new anchor may take a frame or two to appear in trackedAnchors. Until it is first seen the route stays hidden
-      // and frozen. After that, or once the grace period is over, its absence is a tracking loss.
-      if (!worldAnchor.seenTracked && performance.now() - worldAnchor.createdAtMs < WORLD_ANCHOR_GRACE_MS) {
-        renderer.setRouteVisible(false);
-        return;
-      }
-      dispatch({ type: "TRACKING_LOST", reason: "the platform no longer tracks the world anchor the route is attached to" });
+    progressRef.current = advanceProgress(progressRef.current, true, leg.points, devicePositionInVenue(viewerPose, corrected));
+    const handoff = routeRef.current ? floorHandoff(routeRef.current.route, leg.floorId, progressRef.current?.remainingMeters ?? null) : null;
+    if (handoff) {
+      dispatch({ type: "FLOOR_HANDOFF", toFloorId: handoff.toFloorId });
+      worldAnchorRef.current?.anchor.delete();
+      worldAnchorRef.current = null;
+      legRef.current = null;
+      blendRef.current = null;
+      lastDrawnRef.current = null;
+      progressRef.current = null;
       renderer.setRouteVisible(false);
       return;
     }
-    worldAnchor.seenTracked = true;
-    const deviceToVenue = anchorCorrectedDeviceToVenue(
-      s.localization.deviceToVenue, worldAnchor.poseAtSolve, poseFromXrTransform(anchorPose.transform),
-    );
-    if (leg.length > 0) {
-      progressRef.current = advanceProgress(progressRef.current, true, leg, devicePositionInVenue(viewerPose, deviceToVenue));
-      renderer.setRoute(leg, progressRef.current?.nextIndex ?? 0);
-      renderer.setVenueToWorld(venueToArWorld(deviceToVenue));
-      renderer.setRouteVisible(true);
-      publish(false);
-    }
+    const drawn = blendedTransform(blendRef.current, corrected, performance.now());
+    lastDrawnRef.current = drawn;
+    renderer.setRoute(leg.points, progressRef.current?.nextIndex ?? 0);
+    renderer.setVenueToWorld(venueToArWorld(drawn));
+    renderer.setRouteVisible(true);
+    publish(false);
   }, [dispatch, publish, relocalizeFrom]);
   useEffect(() => { onFrameRef.current = onFrame; }, [onFrame]);
 
@@ -291,12 +396,7 @@ export default function ArWorkspace() {
     if (!xr || !loaded) return;
     let session: XRSession;
     try {
-      session = await xr.requestSession("immersive-ar", {
-        requiredFeatures: ["image-tracking", "anchors"],
-        optionalFeatures: ["dom-overlay"],
-        ...(overlayRef.current ? { domOverlay: { root: overlayRef.current } } : {}),
-        trackedImages: loaded.images,
-      } as XRSessionInit);
+      session = await xr.requestSession("immersive-ar", arSessionInit(loaded.images, overlayRef.current) as XRSessionInit);
     } catch (e) {
       setSessionProblem(classifySessionError(e));
       return;
@@ -320,6 +420,9 @@ export default function ArWorkspace() {
     rendererRef.current = renderer;
     stateRef.current = initialArSessionState();
     routeRef.current = null;
+    legRef.current = null;
+    blendRef.current = null;
+    lastDrawnRef.current = null;
     progressRef.current = null;
     worldAnchorRef.current = null;
     session.addEventListener("visibilitychange", () => {
@@ -334,7 +437,7 @@ export default function ArWorkspace() {
       setInSession(false);
     });
     await renderer.attach(session);
-    dispatch({ type: "SESSION_STARTED" });
+    dispatch({ type: "SESSION_STARTED", floorId });
     setInSession(true);
     renderer.start((time, frame) => onFrameRef.current(time, frame));
   }
@@ -409,7 +512,8 @@ export default function ArWorkspace() {
         {s.state === "RELOCALIZING" && <p>Marker seen ({s.pending?.observations.map((o) => o.markerIdentifier).join(", ")}): localizing…</p>}
         {s.state === "LOCALIZED" && s.localization && (
           <p>
-            Localized from {s.localization.anchorIds.length} marker(s)
+            Localized on floor {floors.find((f) => f.id === s.floorId)?.name ?? s.floorId} (scan version{" "}
+            {s.localization.scanVersionId.slice(0, 8)}) from {s.localization.anchorIds.length} marker(s)
             {s.localization.residualMeters === null ? " (residual unknown: one marker)" : `, residual ${s.localization.residualMeters.toFixed(2)} m`}.
             {ui.progress && ` ${ui.progress.remainingMeters.toFixed(1)} m to go, ${ui.progress.offRouteMeters.toFixed(1)} m off route.`}
             {!ui.route && " Fetching route…"}
@@ -423,7 +527,15 @@ export default function ArWorkspace() {
           </p>
         )}
         {s.lastError && <p className="text-amber-300">Last relocalization failed: {s.lastError}</p>}
-        {ui.route && ui.route.floorTransitions.length > 0 && <p>The route continues on another floor via {ui.route.floorTransitions[0].connectorType}.</p>}
+        {s.state === "FLOOR_TRANSITION" && (
+          <p>
+            Take the {ui.route?.floorTransitions.find((t) => t.toFloorId === s.floorId)?.connectorType.toLowerCase() ?? "connection"} to
+            {" "}{floors.find((f) => f.id === s.floorId)?.name ?? s.floorId}, then point the camera at a registered marker there.
+          </p>
+        )}
+        {ui.route && s.state === "LOCALIZED" && ui.route.floorTransitions.some((t) => t.fromFloorId === s.floorId) && (
+          <p>The route continues on another floor via {ui.route.floorTransitions.find((t) => t.fromFloorId === s.floorId)?.connectorType}.</p>
+        )}
         {inSession && <button className="border px-3 py-1 rounded" onClick={() => sessionRef.current?.end()}>End AR</button>}
       </div>
     </div>

@@ -201,9 +201,59 @@ IDLE -> SEARCHING -> RELOCALIZING -> LOCALIZED -> TRACKING_LOST -> RELOCALIZING 
   frame may have been reset during the loss. Only a fresh eligible marker observation and a successful server
   relocalization return to `LOCALIZED`. The new transform then replaces the old one.
 
+- `FLOOR_TRANSITION`: entered from `LOCALIZED` when the device is within `HANDOFF_RADIUS_METERS` (2 m) of the end of
+  this floor's leg and that leg ends in a `TRANSITION`. The transform is dropped and the world anchor deleted: each floor
+  has its own canonical frame (docs/coordinate-frames.md), so a transform is never carried to another floor. The overlay
+  names the connector and the next floor. Only that floor's markers can localize the session again; tracking loss in an
+  elevator is expected and only recorded.
+
+`LOCALIZED` also accepts observations: a registered marker of this floor seen again at least `REFRESH_INTERVAL_MS`
+(5 s) after the last solve is first checked for drift, then re-solved in the background (the route stays drawn on the
+current transform; a refused or failed re-solve keeps it). See "End-to-end chain" below.
+
 On the first localization the route is fetched (`POST /navigation/routes`), starting from the device's venue position
-and going to the chosen destination. Only the leg on the current floor is drawn. A floor transition is named in the
-status text.
+and going to the chosen destination, on any floor. Only the leg of the floor the session is localized on is drawn, and
+only if the server routed that floor in the session's scan version and frame.
+
+### End-to-end chain (Android)
+
+Every step, where it is implemented, and what checks it. "Unit" means a pure-function test with mathematical fixtures;
+none of it is device validation.
+
+| Step | What happens | Where | Checked by |
+|---|---|---|---|
+| 1. Scan coordinate frame | A floor publishes one scan version (`floor.current_scan_version_id`) whose canonical frame (metres, +Z up) is a calibration of its reconstruction | `ScanVersionService#promote`, V28 | `ScanVersionPublicationTest` |
+| 2. Anchor registration | An `IMAGE_TARGET` pose is an immutable `ar_anchor_pose` revision entered against the floor's current version, in its frame. The client registers only calibrated, sized anchors that have such a pose (`anchorSupport`: `UNVERSIONED` otherwise), of every floor (the current floor's first, at most 32 images): WebXR fixes the tracked images when the session starts, and a route may cross floors | `AnchorService`, `lib/webxr-support.ts`, `ArWorkspace` | `AnchorServiceTest`, `webxr-support.test.ts` |
+| 3. Image detection | WebXR image tracking result → `MarkerObservation` (anchor id, floor, AR-world pose, `tracked`, measured width). Only the session floor's tracked observations within 20 % of the printed width are used. No hit test is requested (`arSessionInit`) | `lib/ar-marker-tracking.ts`, `lib/ar-navigation.ts` | `ar-marker-tracking.test.ts`, `ar-navigation.test.ts` |
+| 4. Device pose | `XRFrame.getViewerPose(local)`; no pose, an emulated position or a hidden session is a tracking loss | `frameTrackingSignal` | `ar-relocalization.test.ts` |
+| 5. Solve | `POST .../anchors/relocalize` with the floor's pinned `scanVersionId` (after its first localization). The server solves `digitalPose ∘ observedPose⁻¹`, checks gravity, and refuses another version (`VERSION_MISMATCH`), an unversioned anchor (`ANCHOR_UNVERSIONED`) or one of another lineage (`ANCHOR_VERSION_MISMATCH`). The client refuses an answer for another floor or version as well, and pins each floor's version at its first localization | `AnchorService#relocalize`, `reduceArSession` | `ScanVersionPublicationTest`, `AnchorServiceTest`, `ar-relocalization.test.ts` |
+| 6. Between fixes (VIO) | The platform's visual-inertial tracking moves the viewer pose every frame; the world anchor created at the marker carries its map corrections (`anchorCorrectedDeviceToVenue`). Nothing predicts motion. A re-solve is blended in over 600 ms for drawing only (`blendedTransform`); progress uses the latest answer | `lib/ar-route.ts`, `lib/ar-navigation.ts` | `ar-route.test.ts`, `ar-navigation.test.ts` |
+| 7. Drift | A registered marker seen again while localized is mapped through the current transform. More than 0.3 m or 8° from its registered pose: `DRIFT_EXCEEDED`, the transform is dropped and the session relocalizes from that marker | `markerDrift`, `reduceArSession` | `ar-navigation.test.ts`, `ar-relocalization.test.ts` |
+| 8. Route retrieval | `POST /navigation/routes` from the device's canonical position. Each `routingSources[]` entry names the floor's `scanVersionId` and `coordinateFrameId`; a leg is drawn only when both match the localization (`routeLegFor`: `VERSION_MISMATCH`, `FRAME_MISMATCH`, `ROUTE_SOURCE_MISSING` otherwise) | `RouteService`, `lib/ar-navigation.ts` | `ScanVersionPublicationTest`, `ar-navigation.test.ts` |
+| 9. World-space waypoints | Canonical waypoints → AR world with `deviceToVenue⁻¹` (`venueToArWorld`); the renderer places the route group with that pose | `lib/ar-route.ts`, `lib/ar-route-renderer.ts` | `ar-route.test.ts`, `ar-navigation.test.ts` (marker → device → waypoint chain) |
+| 10. Floor handoff | Within 2 m of a leg-ending `TRANSITION`: `FLOOR_HANDOFF`, transform and world anchor dropped, the next floor localized from its own markers in its own version and frame, and its leg drawn after the same check | `floorHandoff`, `reduceArSession` | `ar-navigation.test.ts`, `ar-relocalization.test.ts` |
+
+### Unsupported Android/browser combinations
+
+| Combination | Result |
+|---|---|
+| Chrome for Android **without** `chrome://flags/#webxr-incubations` | `IMAGE_TRACKING_UNSUPPORTED`. Image tracking is an incubation; there is no localization without it. |
+| A phone that is not ARCore-certified, or without Google Play Services for AR | `IMMERSIVE_AR_UNSUPPORTED` |
+| Samsung Internet, Firefox for Android, Opera, Edge, in-app WebViews | Not supported (not tested; WebXR image tracking is a Chrome incubation). Expect `WEBXR_UNAVAILABLE`, `IMMERSIVE_AR_UNSUPPORTED` or `IMAGE_TRACKING_UNSUPPORTED`. |
+| Any page over plain `http://` other than `localhost` | `WEBXR_UNAVAILABLE` (not a secure context) |
+| QR / ArUco / AprilTag anchors | Never detected (`FIDUCIAL_DETECTION_UNSUPPORTED`): no WebXR API detects them |
+| Desktop Chrome, WebXR emulator extensions | `WEBXR_UNAVAILABLE` / `IMMERSIVE_AR_UNSUPPORTED`; the emulators implement neither image tracking nor ARCore anchors |
+| iOS Safari | No WebXR; the native app (`apps/ios-ar`) is the iOS client |
+
+### Not addressed (Android)
+
+- **Nothing above has run on a device** (see the status at the top of this section).
+- The drift limits (0.3 m, 8°), the handoff radius (2 m), the refresh interval (5 s) and the blend (600 ms) are design
+  values, not measured on a device.
+- More than 32 registered images across a venue: the farthest floors' markers are not registered for the session.
+- A route is fetched once per session. A leg refused for a version or frame mismatch is not re-fetched: restart AR.
+- Dynamic obstacles still have no producer (review N-5); the client sends no `blockedRegions`.
+- `physicalPose` is still unused (review AR-3).
 
 ## iOS: Swift/ARKit
 
@@ -300,6 +350,8 @@ Test tiers, from pure functions to physical devices:
 | iOS frames, world-anchor correction, route progress; marker registry (image → anchor id); wire format (null residual, Java instants) | `VenueFramesTests.swift`, `MarkerRegistryTests.swift`, `APIClientCodingTests.swift` | No — `swift test`, Linux CI (`ios` workflow, `core` job) |
 | iOS app level: capability/permission states, ARKit tracking-state mapping, transforms, reference images, renderer placement | `App/ChayaARTests/AppLevelTests.swift` | No — iOS Simulator (`ios` workflow, `app` job). **Never run yet** (no macOS here). |
 | Web camera → AR world → venue chain, world-anchor correction, route placement and progress | `ar-route.test.ts` | No — pure functions |
+| Web session request (no hit test), marker → device → waypoint chain, route/version/frame check, drift, blending between fixes, floor handoff | `ar-navigation.test.ts` | No — pure functions, mathematical fixtures |
+| Web state machine: version pinning, refusals for another version or floor, refresh while localized, drift, floor handoff | `ar-relocalization.test.ts` | No — pure state transitions |
 | Image-tracking result → marker observation (anchor identity, eligibility) | `ar-marker-tracking.test.ts` | No — pure functions over WebXR-shaped results |
 | Anchor CRUD / calibration / relocalization service, image-target size and image | `AnchorServiceTest.java` | No — Testcontainers Postgres only (skipped, not failed, without Docker) |
 | WebXR capability detection (every unsupported state) | `webxr-support.test.ts` | No — injected `navigator`/globals |

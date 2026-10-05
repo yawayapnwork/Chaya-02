@@ -113,17 +113,24 @@ export function classifySessionError(error: unknown): { problem: ArProblem; deta
   return { problem: "SESSION_FAILED", detail: `${PROBLEM_TEXT.SESSION_FAILED} ${message}` };
 }
 
-export type AnchorSupport = "TRACKABLE" | "FIDUCIAL_DETECTION_UNSUPPORTED" | "MISSING_PRINTED_SIZE" | "NOT_CALIBRATED";
+export type AnchorSupport = "TRACKABLE" | "FIDUCIAL_DETECTION_UNSUPPORTED" | "MISSING_PRINTED_SIZE" | "NOT_CALIBRATED" | "UNVERSIONED";
 
 /** What this client can do with each registered anchor. Only calibrated IMAGE_TARGET anchors with a printed size can be
  * detected; QR/ArUco/AprilTag have no WebXR detector and are never treated as detected. */
-export function anchorSupport(anchor: Pick<Anchor, "markerType" | "calibrationStatus" | "markerSizeMeters">): AnchorSupport {
+export function anchorSupport(
+  anchor: Pick<Anchor, "markerType" | "calibrationStatus" | "markerSizeMeters"> & Partial<Pick<Anchor, "scanVersionId" | "poseId">>,
+): AnchorSupport {
   if (anchor.markerType !== "IMAGE_TARGET") return "FIDUCIAL_DETECTION_UNSUPPORTED";
   if (anchor.calibrationStatus !== "CALIBRATED") return "NOT_CALIBRATED";
   if (!(anchor.markerSizeMeters && anchor.markerSizeMeters > 0)) return "MISSING_PRINTED_SIZE";
+  // A pose never entered against a scan version cannot be tied to the reconstruction shown; the server refuses it
+  // (ANCHOR_UNVERSIONED), so it is not registered for tracking at all.
+  if (!anchor.scanVersionId || !anchor.poseId) return "UNVERSIONED";
   return "TRACKABLE";
 }
 
-export function trackableAnchors<T extends Pick<Anchor, "markerType" | "calibrationStatus" | "markerSizeMeters">>(anchors: T[]): T[] {
+export function trackableAnchors<
+  T extends Pick<Anchor, "markerType" | "calibrationStatus" | "markerSizeMeters"> & Partial<Pick<Anchor, "scanVersionId" | "poseId">>,
+>(anchors: T[]): T[] {
   return anchors.filter((a) => anchorSupport(a) === "TRACKABLE");
 }

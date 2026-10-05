@@ -173,7 +173,11 @@ class ScanVersionPublicationTest extends PipelineTestSupport {
             assertThat(p.current()).isTrue();
         });
         UUID desk = poiLabelled(s.c().venue(), "reception desk");
-        assertThat(routeTo(s.c(), desk, null).routingSources()).allSatisfy(src -> assertThat(src.scanVersionId()).isEqualTo(version));
+        assertThat(routeTo(s.c(), desk, null).routingSources()).allSatisfy(src -> {
+            assertThat(src.scanVersionId()).isEqualTo(version);
+            // what an AR client checks before drawing a leg with its transform (apps/web/lib/ar-navigation.ts routeLegFor)
+            assertThat(src.coordinateFrameId()).isEqualTo(UUID.fromString(frame));
+        });
         assertThat(auditCount(s.c().org(), "scan_version.promoted")).isEqualTo(1);
     }
 

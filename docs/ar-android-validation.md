@@ -104,6 +104,23 @@ Choose a destination POI on this floor and tap **Start AR navigation**.
    localization is made up.
 7. **End AR.** Expected: the session closes and the page returns to the start form.
 
+## 6b. Versions, drift and floors
+
+Run these after section 6, with two floors that each publish a scan version, each with at least one calibrated
+`IMAGE_TARGET`, a registered floor connection (an elevator), and a destination on the second floor.
+
+| Check | How | Expected |
+|---|---|---|
+| Version pin | Localize, then in the chrome://inspect Network tab look at the next `relocalize` request (after ≥ 5 s, pointing at a marker again) | Its body carries `scanVersionId`: the version the first answer named. The overlay names that version. |
+| Republished floor | While localized, publish a new version of the floor from the desktop (a new calibrated run, or `finalize-current`). Point at a marker after 5 s | The re-solve is refused (`VERSION_MISMATCH` in "Last relocalization failed"); the route stays drawn on the old version until you restart AR. Nothing from the new version is mixed in. |
+| Unversioned anchor | An anchor from before poses were versioned (or one whose pose was never re-entered) | Listed as "not usable: its pose was never entered against a scan version"; never registered for tracking |
+| Refresh | Stand still, localized, pointing at a marker for > 5 s | One background `relocalize` request; the state stays `LOCALIZED`; the route does not jump (it blends over about half a second) |
+| Drift | Localize from marker A, then move marker A by about 0.5 m (or rotate it about 15°) and point at it | `TRACKING_LOST` with "… from where the transform puts it (drift)", then `RELOCALIZING` and `LOCALIZED` from the moved marker. Put it back and recalibrate it afterwards. |
+| Floor handoff | Walk the route to the elevator | Within about 2 m of the transition: `FLOOR_TRANSITION`, the route disappears, the overlay says which connector and floor. Losing tracking in the elevator does not change that. |
+| Next floor | On the next floor, point at one of its markers (pointing at a first-floor marker, if you carry a print, does nothing) | `RELOCALIZING` (the request goes to the second floor's `/floors/{f}/anchors/relocalize`), then `LOCALIZED`, and the second floor's leg is drawn, ending at the destination |
+| Version / frame check | (Desktop) recalibrate the second floor's reconstruction between starting AR and arriving there | The second floor's leg is not drawn: "Route not drawn: FRAME_MISMATCH" |
+| Hit test | Point at a floor or a blank wall at any point | Nothing is ever placed on it; no state changes |
+
 ## 7. Negative capability checks (same phone, plus a desktop)
 
 | Setup | Expected page state |
@@ -112,6 +129,7 @@ Choose a destination POI on this floor and tap **Start AR navigation**.
 | Phone, `webxr-incubations` flag **Disabled** | `IMAGE_TRACKING_UNSUPPORTED` |
 | Phone over plain `http://` on the LAN IP (not localhost) | `WEBXR_UNAVAILABLE` (not a secure context) |
 | Phone without Google Play Services for AR | `IMMERSIVE_AR_UNSUPPORTED` |
+| Samsung Internet / Firefox for Android on the same phone | Not supported; record which state each shows (`WEBXR_UNAVAILABLE`, `IMMERSIVE_AR_UNSUPPORTED` or `IMAGE_TRACKING_UNSUPPORTED`) |
 
 ## Validation record
 
@@ -121,3 +139,4 @@ and the chrome://inspect network log for steps 4 and 6.
 | Date | Tester | Device / Android | Chrome version | ARCore version | Sections passed | Placement error at 2 / 5 / 10 m | Notes / defects |
 |---|---|---|---|---|---|---|---|
 | — | — | — | — | — | **not run** | — | No device available when the client was written |
+| 2026-10-05 | — | — | — | — | **not run (pending)** | — | Version pinning, drift, refresh and floor handoff added (sections 6b). No Android device and no `adb` on the development machine; only the unit tests and the desktop Playwright spec ran. Hardware validation is pending. |

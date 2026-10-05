@@ -54,7 +54,7 @@ test("session request failures map to named states", () => {
 });
 
 test("only calibrated IMAGE_TARGET anchors with a printed size are detectable; fiducials are never", () => {
-  const base = { calibrationStatus: "CALIBRATED" as const, markerSizeMeters: 0.3 };
+  const base = { calibrationStatus: "CALIBRATED" as const, markerSizeMeters: 0.3, scanVersionId: "sv-1", poseId: "pose-1" };
   assert.equal(anchorSupport({ ...base, markerType: "IMAGE_TARGET" }), "TRACKABLE");
   for (const t of ["APRILTAG", "ARUCO_MARKER", "QR_CODE"] as const) {
     assert.equal(anchorSupport({ ...base, markerType: t }), "FIDUCIAL_DETECTION_UNSUPPORTED");
@@ -63,4 +63,12 @@ test("only calibrated IMAGE_TARGET anchors with a printed size are detectable; f
   assert.equal(anchorSupport({ ...base, markerType: "IMAGE_TARGET", markerSizeMeters: null }), "MISSING_PRINTED_SIZE");
   const anchors = [{ ...base, markerType: "APRILTAG" as const }, { ...base, markerType: "IMAGE_TARGET" as const }];
   assert.equal(trackableAnchors(anchors).length, 1);
+});
+
+test("an anchor whose pose was never entered against a scan version is not registered for tracking", () => {
+  const base = { markerType: "IMAGE_TARGET" as const, calibrationStatus: "CALIBRATED" as const, markerSizeMeters: 0.3 };
+  assert.equal(anchorSupport({ ...base, scanVersionId: null, poseId: null }), "UNVERSIONED");
+  assert.equal(anchorSupport({ ...base, scanVersionId: "sv-1", poseId: null }), "UNVERSIONED");
+  assert.equal(anchorSupport({ ...base }), "UNVERSIONED");
+  assert.equal(anchorSupport({ ...base, scanVersionId: "sv-1", poseId: "pose-1" }), "TRACKABLE");
 });

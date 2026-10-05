@@ -520,7 +520,7 @@ public class RouteService {
             }
         }
         RoutingSource source = new RoutingSource(floorId, active.id(), active.source(), active.navmeshSha256(), active.recastVersion(),
-            null, active.scanVersionId());
+            null, active.scanVersionId(), active.frameId());
         return new FloorGraph(floorId, positions, adjacency, portals, boxes, source, exclusions);
     }
 
@@ -632,7 +632,7 @@ public class RouteService {
         }
         RoutingSource s = graph.source();
         RoutingSource source = new RoutingSource(s.floorId(), s.graphId(), s.source(), s.navmeshSha256(), s.recastnavigationVersion(), method,
-            s.scanVersionId());
+            s.scanVersionId(), s.coordinateFrameId());
         return new RouteLeg(waypoints, polylineLength(waypoints), graph.floorId(), source);
     }
 

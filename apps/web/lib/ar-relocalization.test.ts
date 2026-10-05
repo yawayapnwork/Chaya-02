@@ -17,7 +17,8 @@ const OBS: MarkerObservation = {
 };
 const LOC: Localization = {
   deviceToVenue: { x: 3, y: 4, z: 0, qx: Math.SQRT1_2, qy: 0, qz: 0, qw: Math.SQRT1_2 },
-  anchorIds: ["anchor-entrance"], residualMeters: null, coordinateFrameId: "frame-1", solvedAtMs: 10,
+  anchorIds: ["anchor-entrance"], residualMeters: null, coordinateFrameId: "frame-1", scanVersionId: "sv-1", floorId: "floor-1",
+  solvedAtMs: 10,
 };
 
 /** A started session whose device tracking the platform has confirmed. */
@@ -129,9 +130,86 @@ test("start-up tracking initialisation is not reported as a lost localization", 
   assert.equal(s.deviceTracking, true);
 });
 
-test("while localized, further observations do not restart localization", () => {
+test("while localized, a marker seen again refreshes the transform without leaving LOCALIZED", () => {
   const s = localized();
-  assert.equal(reduceArSession(s, { type: "MARKERS_OBSERVED", observations: [OBS] }), s);
+  const refreshing = reduceArSession(s, { type: "MARKERS_OBSERVED", observations: [OBS] });
+  assert.equal(refreshing.state, "LOCALIZED", "the route keeps being drawn on the current transform");
+  assert.equal(refreshing.localization, LOC);
+  assert.equal(refreshing.pending?.resumeTo, "LOCALIZED");
+  assert.equal(reduceArSession(refreshing, { type: "MARKERS_OBSERVED", observations: [OBS] }), refreshing, "one refresh at a time");
+
+  const newer: Localization = { ...LOC, deviceToVenue: { ...LOC.deviceToVenue, x: 3.05 }, solvedAtMs: 20 };
+  const refreshed = reduceArSession(refreshing, { type: "RELOCALIZATION_SUCCEEDED", requestId: refreshing.pending!.requestId, localization: newer });
+  assert.equal(refreshed.state, "LOCALIZED");
+  assert.equal(refreshed.localization, newer);
+
+  const failed = reduceArSession(refreshing, { type: "RELOCALIZATION_FAILED", requestId: refreshing.pending!.requestId, error: "network" });
+  assert.equal(failed.state, "LOCALIZED", "a failed refresh keeps the transform it had");
+  assert.equal(failed.localization, LOC);
+  assert.equal(failed.lastError, "network");
+});
+
+test("a floor's scan version is pinned at its first localization; an answer in another version never replaces it", () => {
+  const s = localized();
+  assert.deepEqual(s.pinnedVersions, { "floor-1": "sv-1" });
+  const refreshing = reduceArSession(s, { type: "MARKERS_OBSERVED", observations: [OBS] });
+  const republished: Localization = { ...LOC, scanVersionId: "sv-2", solvedAtMs: 20 };
+  const after = reduceArSession(refreshing, { type: "RELOCALIZATION_SUCCEEDED", requestId: refreshing.pending!.requestId, localization: republished });
+  assert.equal(after.localization, LOC, "the old version's transform is kept, never mixed with the new one");
+  assert.match(after.lastError!, /^VERSION_MISMATCH/);
+
+  // From TRACKING_LOST too: the answer is refused and the session stays lost.
+  let lost = reduceArSession(s, { type: "TRACKING_LOST", reason: "covered" });
+  lost = reduceArSession(lost, { type: "TRACKING_RESTORED" });
+  lost = reduceArSession(lost, { type: "MARKERS_OBSERVED", observations: [OBS] });
+  const refused = reduceArSession(lost, { type: "RELOCALIZATION_SUCCEEDED", requestId: lost.pending!.requestId, localization: republished });
+  assert.equal(refused.state, "TRACKING_LOST");
+  assert.match(refused.lastError!, /^VERSION_MISMATCH/);
+});
+
+test("an answer solved on another floor is refused", () => {
+  const s = reduceArSession(started(), { type: "MARKERS_OBSERVED", observations: [OBS] });
+  const pinnedToFloor = { ...s, floorId: "floor-1" };
+  const other = reduceArSession(pinnedToFloor, { type: "RELOCALIZATION_SUCCEEDED", requestId: s.pending!.requestId,
+    localization: { ...LOC, floorId: "floor-2" } });
+  assert.equal(other.state, "SEARCHING");
+  assert.match(other.lastError!, /^FLOOR_MISMATCH/);
+});
+
+test("observations of another floor's markers are ignored", () => {
+  const s = reduceArSession(reduceArSession(initialArSessionState(), { type: "SESSION_STARTED", floorId: "floor-1" }), { type: "TRACKING_RESTORED" });
+  assert.equal(reduceArSession(s, { type: "MARKERS_OBSERVED", observations: [{ ...OBS, floorId: "floor-2" }] }), s);
+  assert.equal(reduceArSession(s, { type: "MARKERS_OBSERVED", observations: [{ ...OBS, floorId: "floor-1" }] }).state, "RELOCALIZING");
+});
+
+test("drift drops the transform; the marker in view relocalizes the session", () => {
+  const s = localized();
+  const drifted = reduceArSession(s, { type: "DRIFT_EXCEEDED", reason: "drift" });
+  assert.equal(drifted.state, "TRACKING_LOST");
+  assert.equal(canAdvanceRoute(drifted), false);
+  assert.equal(drifted.deviceTracking, true, "the platform still tracks: the next observation can relocalize at once");
+  assert.equal(reduceArSession(drifted, { type: "MARKERS_OBSERVED", observations: [OBS] }).state, "RELOCALIZING");
+  assert.equal(reduceArSession(started(), { type: "DRIFT_EXCEEDED", reason: "drift" }).state, "SEARCHING", "only a localization can drift");
+});
+
+test("a floor handoff drops the transform and localizes the next floor from its own markers", () => {
+  const s = localized();
+  const handed = reduceArSession(s, { type: "FLOOR_HANDOFF", toFloorId: "floor-2" });
+  assert.equal(handed.state, "FLOOR_TRANSITION");
+  assert.equal(handed.floorId, "floor-2");
+  assert.equal(handed.localization, null, "a transform is never carried to another floor");
+  assert.equal(canAdvanceRoute(handed), false);
+  assert.equal(reduceArSession(handed, { type: "MARKERS_OBSERVED", observations: [{ ...OBS, floorId: "floor-1" }] }), handed,
+    "the floor left behind cannot localize the session");
+  const relocalizing = reduceArSession(handed, { type: "MARKERS_OBSERVED", observations: [{ ...OBS, floorId: "floor-2" }] });
+  assert.equal(relocalizing.state, "RELOCALIZING");
+  const second: Localization = { ...LOC, floorId: "floor-2", scanVersionId: "sv-9", coordinateFrameId: "frame-9" };
+  const there = reduceArSession(relocalizing, { type: "RELOCALIZATION_SUCCEEDED", requestId: relocalizing.pending!.requestId, localization: second });
+  assert.equal(there.state, "LOCALIZED");
+  assert.deepEqual(there.pinnedVersions, { "floor-1": "sv-1", "floor-2": "sv-9" }, "each floor pins its own version");
+  // Tracking loss in an elevator is expected, and is not a lost localization.
+  const elevator = reduceArSession(handed, { type: "TRACKING_LOST", reason: "no pose" });
+  assert.equal(elevator.state, "FLOOR_TRANSITION");
 });
 
 test("an ended session accepts nothing", () => {

@@ -47,9 +47,10 @@ public final class NavigationDtos {
      * corridor), PORTAL_MIDPOINTS (when the string-pulled path crosses a reported obstacle), or POLYGON_CENTROIDS (graphs
      * without portals, which only SYNTHETIC test graphs are, or when both of the above cross a reported obstacle). */
     /** scanVersionId: the scan version the graph belongs to -- the floor's current version (or the requested one); a route
-     * never combines graphs or POIs of two versions of one floor. */
+     * never combines graphs or POIs of two versions of one floor. coordinateFrameId: the canonical frame the graph (and so
+     * the leg's waypoints) is in; an AR client draws the leg only with a transform solved in that same frame. */
     public record RoutingSource(UUID floorId, UUID graphId, String source, String navmeshSha256, String recastnavigationVersion,
-                                String pathMethod, UUID scanVersionId) {}
+                                String pathMethod, UUID scanVersionId, UUID coordinateFrameId) {}
 
     /** distanceMeters: the 3-D length of the waypoint polyline of every floor leg, in canonical metres, plus the
      * registered walked length of every stairs/ramp connection. estimatedDurationSeconds: each walked length divided by

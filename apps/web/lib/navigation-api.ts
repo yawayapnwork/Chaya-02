@@ -35,6 +35,19 @@ export interface FloorTransition {
   durationSeconds: number;
 }
 
+/** Mirrors dev.chaya.api.navigation.NavigationDtos.RoutingSource: what one floor's leg was routed on. scanVersionId and
+ * coordinateFrameId say which version of the floor, and which frame, its waypoints are in. */
+export interface RoutingSource {
+  floorId: string;
+  graphId: string;
+  source: string;
+  navmeshSha256: string | null;
+  recastnavigationVersion: string | null;
+  pathMethod: string | null;
+  scanVersionId: string | null;
+  coordinateFrameId: string | null;
+}
+
 /** Mirrors dev.chaya.api.navigation.NavigationDtos.RouteResponse. */
 export interface RouteResponse {
   waypoints: RouteWaypoint[];
@@ -43,6 +56,7 @@ export interface RouteResponse {
   floorTransitions: FloorTransition[];
   accessibilityProfile: "STANDARD" | "STEP_FREE";
   accessibilityConstraintsApplied: string[];
+  routingSources?: RoutingSource[];
 }
 
 export interface RouteRequest {

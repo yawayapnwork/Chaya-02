@@ -21,9 +21,11 @@ export interface Poi {
   frameStatus: "CURRENT" | "STALE" | "UNBOUND";
   /** The scan version this POI version was placed against; null if its reconstruction has no version yet. */
   scanVersionId: string | null;
+  /** Whether this POI is part of what its floor publishes now (its current scan version or an ancestor). */
+  current: boolean;
 }
 
-/** Without scanVersionId: every live POI of the venue. With it: exactly the POIs of that finalized scan version, each
+/** Without scanVersionId: the POIs every floor publishes now (its current scan version). With it: exactly the POIs of that finalized scan version, each
  * as it is in that version. */
 export const listPois = (venueId: string, scanVersionId?: string | null) =>
   api<Poi[]>(`/venues/${venueId}/pois${scanVersionId ? `?scanVersionId=${encodeURIComponent(scanVersionId)}` : ""}`);

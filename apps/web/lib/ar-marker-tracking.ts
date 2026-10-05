@@ -28,6 +28,12 @@ export interface XrImageTrackingResultLike {
 export interface TrackedMarker {
   index: number;
   anchorId: string;
+  /** The floor the anchor is registered on: a session tracks every floor's markers, and uses only the current floor's. */
+  floorId?: string;
+  /** The scan version the anchor's pose was entered against. */
+  scanVersionId?: string;
+  /** The anchor's registered canonical pose (its marker's centre), for the drift check (lib/ar-navigation.ts). */
+  digitalPose?: Pose;
   markerIdentifier: string;
   widthInMeters: number;
 }
@@ -36,6 +42,7 @@ export interface TrackedMarker {
  * reference space: metres, gravity-aligned, +Y up), which is what POST .../anchors/relocalize expects. */
 export interface MarkerObservation {
   anchorId: string;
+  floorId?: string;
   markerType: "IMAGE_TARGET";
   markerIdentifier: string;
   observedPose: Pose;
@@ -63,6 +70,7 @@ export function observeImages(
     if (!pose) continue;
     out.push({
       anchorId: marker.anchorId,
+      ...(marker.floorId === undefined ? {} : { floorId: marker.floorId }),
       markerType: "IMAGE_TARGET",
       markerIdentifier: marker.markerIdentifier,
       observedPose: pose,
