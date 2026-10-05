@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { forScene, sceneKey, versionLabel } from "./version-scope.ts";
+import { forScene, initialVersion, sceneKey, versionLabel } from "./version-scope.ts";
 
 test("a finalized version is keyed by the version, a plain reconstruction by its run", () => {
   assert.equal(sceneKey({ runId: "run-1", scanVersionId: "sv-1" }), "version:sv-1");
@@ -31,8 +31,17 @@ test("two runs that share no version never share overlays", () => {
   assert.equal(forScene({ key: sceneKey({ runId: "run-1" })!, value: 1 }, sceneKey({ runId: "run-2" })), null);
 });
 
-test("the picker names versions by number and says when a reconstruction is not one", () => {
-  assert.equal(versionLabel({ versionNumber: 2, generatedAt: "x" }, "29 Sep", true), "v2 · 29 Sep (latest)");
+test("the viewer opens on the version the floor publishes, not the newest one", () => {
+  const v3 = { runId: "run-3", versionNumber: 3, current: false }; // a newer version that is not published
+  const v2 = { runId: "run-2", versionNumber: 2, current: true };
+  const v1 = { runId: "run-1", versionNumber: 1, current: false };
+  assert.equal(initialVersion([v3, v2, v1]), v2);
+  assert.equal(initialVersion([v3, v1]), v3, "nothing published: the newest finalized version");
+  assert.equal(initialVersion([]), null);
+});
+
+test("the picker names versions by number and says which one is current", () => {
+  assert.equal(versionLabel({ versionNumber: 2, generatedAt: "x" }, "29 Sep", true), "v2 · 29 Sep (current)");
   assert.equal(versionLabel({ versionNumber: 1, generatedAt: "x" }, "28 Sep", false), "v1 · 28 Sep");
   assert.equal(versionLabel({ versionNumber: null, generatedAt: "x" }, "27 Sep", false), "27 Sep (not a finalized version)");
 });

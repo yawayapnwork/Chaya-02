@@ -11,6 +11,7 @@ import dev.chaya.api.search.SearchDtos.SearchResult;
 import dev.chaya.api.search.SemanticSearchService;
 import dev.chaya.api.security.Actor;
 import dev.chaya.api.security.Role;
+import dev.chaya.api.web.ApiException;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -55,7 +56,7 @@ class SemanticSearchRankingTest extends AbstractIntegrationTest {
         TestEmbeddingConfig.REAL_CLIP.set(true);
         model = TestEmbeddingConfig.clipFixture().get("text_model").asText();
         t = fx.tree();
-        run = pipelineRun(t);
+        run = publishedRun(t);
         for (int i = 0; i < MANUAL.length; i++) {
             String[] m = MANUAL[i];
             List<String> tags = List.of(m).subList(2, m.length);
@@ -82,6 +83,20 @@ class SemanticSearchRankingTest extends AbstractIntegrationTest {
             .query(UUID.class).single();
     }
 
+    /** A run of the tree's floor, published as the floor's current scan version (V28), so the POIs placed against it are
+     * what a search of the floor returns. Its frame is a fixture identity frame; the POIs below carry their own frames. */
+    private UUID publishedRun(Fixtures.Tree tree) {
+        UUID r = pipelineRun(tree);
+        UUID frame = fx.identityFrame(tree.org(), tree.venue(), tree.floor(), r, "FLOOR_LOCAL");
+        fx.publish(tree.org(), tree.venue(), tree.floor(), r, tree.scan(), frame);
+        return r;
+    }
+
+    /** A new calibration of the published reconstruction, made the floor's current frame (POIs are not re-projected). */
+    private UUID recalibrated() {
+        return fx.identityFrame(t.org(), t.venue(), t.floor(), run, "FLOOR_LOCAL");
+    }
+
     private UUID poi(Fixtures.Tree tree) {
         return jdbc.sql("INSERT INTO poi (organization_id, venue_id, floor_id) VALUES (:o, :v, :f) RETURNING id")
             .param("o", tree.org()).param("v", tree.venue()).param("f", tree.floor()).query(UUID.class).single();
@@ -99,9 +114,10 @@ class SemanticSearchRankingTest extends AbstractIntegrationTest {
         String text = PoiEmbeddingService.embeddingText(label, category, tags);
         jdbc.sql("""
                 INSERT INTO poi_version (organization_id, venue_id, poi_id, version_number, label, category, tags, x, y, z,
-                                         embedding, embedding_model, source, created_by, coordinate_frame_id)
+                                         embedding, embedding_model, source, created_by, coordinate_frame_id, scan_version_id)
                 VALUES (:o, :v, :p, 1, :label, :cat, CAST(:tags AS text[]), :x, 0, :z, CAST(:e AS vector), :m, 'MANUAL', 'test',
-                        :frame)""")
+                        :frame, (SELECT current_scan_version_id FROM floor WHERE id = :f))""")
+            .param("f", tree.floor())
             .param("o", tree.org()).param("v", tree.venue()).param("p", id).param("label", label).param("cat", category)
             .param("tags", "{" + String.join(",", tags.stream().map(s -> "\"" + s + "\"").toList()) + "}")
             .param("x", x).param("z", z).param("e", TestEmbeddingConfig.vectorLiteral(TestEmbeddingConfig.clipText(text)))
@@ -128,9 +144,11 @@ class SemanticSearchRankingTest extends AbstractIntegrationTest {
                 INSERT INTO poi_version (organization_id, venue_id, poi_id, version_number, label, tags, x, y, z,
                                          embedding, embedding_model, image_embedding, image_embedding_model, source,
                                          detection_confidence, bounding_box, pipeline_run_id, created_by, coordinate_frame_id,
-                                         localization_status, localization_uncertainty_m)
+                                         localization_status, localization_uncertainty_m, scan_version_id)
                 VALUES (:o, :v, :p, 1, :label, '{}', :x, :y, :z, CAST(:e AS vector), :tm, CAST(:img AS vector), :im,
-                        'AUTO_DETECTED', :conf, CAST(:bbox AS jsonb), :run, 'system:semantic-indexing', :frame, :loc, :unc)""")
+                        'AUTO_DETECTED', :conf, CAST(:bbox AS jsonb), :run, 'system:semantic-indexing', :frame, :loc, :unc,
+                        (SELECT current_scan_version_id FROM floor WHERE id = :f))""")
+            .param("f", tree.floor())
             .param("o", tree.org()).param("v", tree.venue()).param("p", id).param("label", label)
             .param("x", x).param("y", y).param("z", z)
             .param("e", TestEmbeddingConfig.vectorLiteral(TestEmbeddingConfig.clipText(label))).param("tm", textModel)
@@ -286,7 +304,7 @@ class SemanticSearchRankingTest extends AbstractIntegrationTest {
 
     @Test
     void aPositionThatCannotBeTrustedNeverOutranksATrustedOneOnTextSimilarity() {
-        UUID frame = fx.calibratedFloor(t.org(), t.venue(), t.floor(), "FLOOR_LOCAL");
+        UUID frame = recalibrated();
         // A detected couch placed before depth-tested localization (CV-1: it may sit on the wall behind the couch), in the
         // floor's frame, and a staff-placed lounge in the same frame.
         UUID unverified = detected(t, run, "couch-3", "couch", 30, 0, 0.4, model, model, frame, 0.95, null, null);
@@ -309,7 +327,7 @@ class SemanticSearchRankingTest extends AbstractIntegrationTest {
 
     @Test
     void aDetectionPlacedWithDepthEvidenceRanksOnItsTextAndKeepsItsUncertainty() {
-        UUID frame = fx.calibratedFloor(t.org(), t.venue(), t.floor(), "FLOOR_LOCAL");
+        UUID frame = recalibrated();
         UUID placed = detected(t, run, "couch-3", "couch", 30, 0, 0.4, model, model, frame, 0.95, "MULTI_VIEW", 0.12);
         UUID lounge = manual(t, "Lounge", "seating area", List.of("sofas", "armchairs"), 31, 0, model, frame);
 
@@ -325,7 +343,7 @@ class SemanticSearchRankingTest extends AbstractIntegrationTest {
 
     @Test
     void amongValidDetectionsOfTheSameThingConfidenceAndViewSupportDecide() {
-        UUID frame = fx.calibratedFloor(t.org(), t.venue(), t.floor(), "FLOOR_LOCAL");
+        UUID frame = recalibrated();
         UUID weak = detected(t, run, "chair-3", "chair", 40, 0, 0.4, model, model, frame, 0.55, "SINGLE_VIEW", 0.3);
         UUID strong = detected(t, run, "chair-1", "chair", 41, 0, 0.4, model, model, frame, 0.9, "MULTI_VIEW", 0.1);
 
@@ -336,9 +354,9 @@ class SemanticSearchRankingTest extends AbstractIntegrationTest {
 
     @Test
     void aPositionInAnOlderFrameIsStale() {
-        UUID old = fx.calibratedFloor(t.org(), t.venue(), t.floor(), "FLOOR_LOCAL");
+        UUID old = recalibrated();
         UUID cafe2 = manual(t, "Cafe", "food", List.of("coffee", "snacks"), 50, 0, model, old);
-        UUID current = fx.calibratedFloor(t.org(), t.venue(), t.floor(), "FLOOR_LOCAL");  // re-reconstructed: a new frame
+        UUID current = recalibrated();  // recalibrated: a new frame, and cafe2 was never re-placed in it
         UUID cafe3 = manual(t, "Cafe", "food", List.of("coffee", "snacks"), 51, 0, model, current);
 
         SearchResponse r = query("coffee");
@@ -406,9 +424,35 @@ class SemanticSearchRankingTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void aSearchNeverReturnsADetectionOfAnUnpublishedOrReplacedVersion() {
+        // The same object detected by a run whose version was never published (it failed, or is still processing).
+        UUID draftCouch = detectedInVersion(t.version(), "couch-3", "couch", 60);
+        assertThat(poiIds(query("couch").results())).contains(id("couch-3")).doesNotContain(draftCouch);
+        // Searching that version itself is refused: it is not a finalized version.
+        assertThatThrownBy(() -> search.search(actor(t), t.venue(), "couch", null, null, null, t.version()))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.code()).isEqualTo("VERSION_NOT_FINALIZED"));
+    }
+
+    private UUID detectedInVersion(UUID version, String crop, String label, double x) {
+        UUID id = detected(t, run, crop, label, x, 0, 0, model, model);
+        // detected() places it against the published version; re-point the one poi_version is not possible (immutable),
+        // so a fresh POI is written against `version` instead.
+        UUID other = poi(t);
+        jdbc.sql("""
+                INSERT INTO poi_version (organization_id, venue_id, poi_id, version_number, label, tags, x, y, z, embedding,
+                                         embedding_model, source, pipeline_run_id, scan_version_id, created_by)
+                SELECT organization_id, venue_id, :p, 1, label, tags, x, y, z, embedding, embedding_model, source, pipeline_run_id,
+                       :sv, created_by
+                  FROM poi_version WHERE poi_id = :src""")
+            .param("p", other).param("sv", version).param("src", id).update();
+        jdbc.sql("UPDATE poi SET deleted_at = now() WHERE id = :p").param("p", id).update();
+        return other;
+    }
+
+    @Test
     void aSearchNeverSeesAnotherVenuesDetectedObjects() {
         Fixtures.Tree other = fx.tree();
-        UUID otherCouch = detected(other, pipelineRun(other), "couch-3", "couch", 0, 0, 0, model, model);
+        UUID otherCouch = detected(other, publishedRun(other), "couch-3", "couch", 0, 0, 0, model, model);
 
         SearchResponse here = query("couch");
         assertThat(poiIds(here.results())).doesNotContain(otherCouch);

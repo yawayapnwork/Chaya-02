@@ -6,12 +6,14 @@ import dev.chaya.api.audit.AuditService;
 import dev.chaya.api.rescan.ScanVersionService;
 import dev.chaya.api.security.Actor;
 import dev.chaya.api.security.TenantGuard;
+import dev.chaya.api.web.ApiException;
 import dev.chaya.api.web.NotFoundException;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,10 +28,13 @@ import org.springframework.transaction.annotation.Transactional;
  * accepts CURRENT POIs.
  *
  * <p>Every version also names the ScanVersion it was placed against (scanVersionId): a detected object, the version whose
- * run detected it; a MANUAL one, the floor's newest FINALIZED version in the floor's current reconstruction
- * (floor_current_scan_version, V23), or null when that reconstruction has no version yet (a bootstrap binds it later).
+ * run detected it; a MANUAL one, the version its floor publishes (floor.current_scan_version_id, V28), or null when the
+ * floor publishes none yet (publishing a version of that reconstruction binds it later).
  * {@link #list(Actor, UUID, UUID)} with a version returns exactly the POIs of that version (scan_version_poi_version),
  * each at its position in that version's frame; frameStatus is then relative to the version's frame, not the floor's.
+ * Without one it returns what each floor publishes now: POIs placed against the floor's current version or an ancestor
+ * (poi_version_is_current) -- never a detection of a run that was not published, or of a version since replaced.
+ * current tells which POIs are part of what their floor publishes; {@link #listAll} (staff) also returns the others.
  */
 @Service
 public class PoiService {
@@ -39,14 +44,15 @@ public class PoiService {
 
     public record Poi(UUID id, UUID floorId, UUID spaceId, int version, String label, String category,
                       String description, List<String> tags, double x, double y, double z, UUID coordinateFrameId,
-                      String frameStatus, UUID scanVersionId) {}
+                      String frameStatus, UUID scanVersionId, boolean current) {}
 
     private static final String LATEST = """
             SELECT p.id, p.floor_id, p.space_id, v.version_number, v.label, v.category, v.description,
                    v.tags, v.x, v.y, v.z, v.coordinate_frame_id, v.scan_version_id,
                    CASE WHEN v.coordinate_frame_id IS NULL THEN 'UNBOUND'
                         WHEN v.coordinate_frame_id = f.current_coordinate_frame_id THEN 'CURRENT'
-                        ELSE 'STALE' END AS frame_status
+                        ELSE 'STALE' END AS frame_status,
+                   poi_version_is_current(p.floor_id, v.scan_version_id, v.source) AS current
               FROM poi p
               JOIN poi_version v ON v.poi_id = p.id
               LEFT JOIN floor f ON f.id = p.floor_id
@@ -60,7 +66,8 @@ public class PoiService {
                    v.tags, v.x, v.y, v.z, v.coordinate_frame_id, v.scan_version_id,
                    CASE WHEN v.coordinate_frame_id IS NULL THEN 'UNBOUND'
                         WHEN v.coordinate_frame_id = :frame THEN 'CURRENT'
-                        ELSE 'STALE' END AS frame_status
+                        ELSE 'STALE' END AS frame_status,
+                   poi_version_is_current(p.floor_id, v.scan_version_id, v.source) AS current
               FROM poi p
               JOIN poi_version v ON v.id = scan_version_poi_version(p.id, :sv)
              WHERE p.venue_id = :v AND p.organization_id = :o AND p.floor_id = :f
@@ -86,7 +93,7 @@ public class PoiService {
             rs.getObject("space_id", UUID.class), rs.getInt("version_number"), rs.getString("label"),
             rs.getString("category"), rs.getString("description"), List.of(tags),
             rs.getDouble("x"), rs.getDouble("y"), rs.getDouble("z"), rs.getObject("coordinate_frame_id", UUID.class),
-            rs.getString("frame_status"), rs.getObject("scan_version_id", UUID.class));
+            rs.getString("frame_status"), rs.getObject("scan_version_id", UUID.class), rs.getBoolean("current"));
     }
 
     @Transactional(readOnly = true)
@@ -94,17 +101,30 @@ public class PoiService {
         return list(actor, venueId, null);
     }
 
-    /** scanVersionId null: every live POI at its latest version. Otherwise exactly the POIs of that FINALIZED version. */
+    /** scanVersionId null: what every floor publishes now (see the class comment). Otherwise exactly the POIs of that
+     * FINALIZED version. */
     @Transactional(readOnly = true)
     public List<Poi> list(Actor actor, UUID venueId, UUID scanVersionId) {
         guard.requireVenue(actor, venueId);
         if (scanVersionId == null) {
-            return jdbc.sql(LATEST + " ORDER BY v.label").param("v", venueId).param("o", actor.organizationId())
-                .query(PoiService::map).list();
+            return jdbc.sql(LATEST + " AND poi_version_is_current(p.floor_id, v.scan_version_id, v.source) ORDER BY v.label")
+                .param("v", venueId).param("o", actor.organizationId()).query(PoiService::map).list();
         }
         ScanVersionService.Scope scope = versions.requireFinalized(actor, venueId, scanVersionId);
         return jdbc.sql(IN_VERSION + " ORDER BY v.label, p.id").param("v", venueId).param("o", actor.organizationId())
             .param("sv", scope.id()).param("f", scope.floorId()).param("frame", scope.coordinateFrameId())
+            .query(PoiService::map).list();
+    }
+
+    /** Every live POI at its latest version, current or not (current says which): for staff re-placing POIs a newer
+     * version no longer contains. Never offered to a public viewer. */
+    @Transactional(readOnly = true)
+    public List<Poi> listAll(Actor actor, UUID venueId) {
+        guard.requireVenue(actor, venueId);
+        if (actor.kind() == Actor.Kind.PUBLIC_VIEWER || actor.roles().contains(dev.chaya.api.security.Role.PUBLIC_VIEWER)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "FORBIDDEN", "a public viewer sees only what a floor publishes");
+        }
+        return jdbc.sql(LATEST + " ORDER BY v.label").param("v", venueId).param("o", actor.organizationId())
             .query(PoiService::map).list();
     }
 

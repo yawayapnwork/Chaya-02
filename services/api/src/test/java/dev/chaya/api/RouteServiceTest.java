@@ -48,11 +48,14 @@ class RouteServiceTest extends AbstractIntegrationTest {
     @Autowired
     private FloorConnectionService connections;
 
-    /** The caller of a route request. Publishes the venue's draft graphs first: graphs are built as DRAFT and only then
-     * activated, exactly as PipelineService#ingestNavigationGraph does -- the database refuses to add nodes or edges to
-     * an ACTIVE graph (navigation_graph_content_guard, V6). */
+    /** The caller of a route request. Publishes the venue's draft graphs first: graphs are built as DRAFT and only become
+     * ACTIVE as part of the floor's published scan version, exactly as ScanVersionService#promote does -- the database
+     * refuses to add nodes or edges to an ACTIVE graph (V6), and any ACTIVE graph that is not the floor's current version's
+     * (V28). */
     private Actor actorFor(UUID org, UUID venue) {
-        jdbc.sql("UPDATE navigation_graph SET status = 'ACTIVE' WHERE venue_id = :v AND status = 'DRAFT'").param("v", venue).update();
+        for (UUID floor : jdbc.sql("SELECT id FROM floor WHERE venue_id = :v").param("v", venue).query(UUID.class).list()) {
+            fx.publishDrafts(org, venue, floor);
+        }
         return new Actor(Actor.Kind.USER, "test-user", org, Set.of(venue), Set.of(Role.ADMIN));
     }
 
@@ -110,8 +113,9 @@ class RouteServiceTest extends AbstractIntegrationTest {
             .param("o", org).param("v", venue).param("f", floor).query(UUID.class).single();
         jdbc.sql("""
                 INSERT INTO poi_version (organization_id, venue_id, poi_id, version_number, label, category, tags, x, y, z,
-                    coordinate_frame_id, created_by)
-                VALUES (:o, :v, :p, 1, :label, :cat, '{}', :x, :y, :z, (SELECT current_coordinate_frame_id FROM floor WHERE id = :f), 'test')
+                    coordinate_frame_id, scan_version_id, created_by)
+                VALUES (:o, :v, :p, 1, :label, :cat, '{}', :x, :y, :z, (SELECT current_coordinate_frame_id FROM floor WHERE id = :f),
+                    (SELECT current_scan_version_id FROM floor WHERE id = :f), 'test')
                 """)
             .param("o", org).param("v", venue).param("p", poiId).param("label", label).param("cat", category).param("f", floor)
             .param("x", x).param("y", y).param("z", z).update();
@@ -187,7 +191,7 @@ class RouteServiceTest extends AbstractIntegrationTest {
         var t = calibratedTree();
         corridor(t, t.floor(), "STANDARD", new double[]{0, 0, 0}, new double[]{5, 0, 0});
         Actor actor = actorFor(t.org(), t.venue()); // activates the graph in the first frame
-        fx.calibratedFloor(t.org(), t.venue(), t.floor(), "FLOOR_LOCAL"); // a new reconstruction becomes current
+        fx.recalibrateCurrentReconstruction(t.org(), t.venue(), t.floor()); // the floor's frame changes
         UUID destination = insertPoi(t.org(), t.venue(), t.floor(), "Reception", null, 5, 0, 0);
         assertCode(() -> routeService.route(actor, request(t.venue(), t.floor(), ORIGIN, destination, null, null)), "NAVMESH_NOT_READY");
     }
@@ -206,7 +210,7 @@ class RouteServiceTest extends AbstractIntegrationTest {
         UUID graph = insertGraph(t.org(), t.venue(), t.floor(), "STANDARD");
         insertNode(t.org(), t.venue(), graph, t.floor(), 0, 0, 0);
         UUID destination = insertPoi(t.org(), t.venue(), t.floor(), "Old reception", null, 5, 0, 0);
-        UUID newFrame = fx.calibratedFloor(t.org(), t.venue(), t.floor(), "FLOOR_LOCAL");
+        UUID newFrame = fx.recalibrateCurrentReconstruction(t.org(), t.venue(), t.floor());
         jdbc.sql("UPDATE navigation_graph SET coordinate_frame_id = :c WHERE id = :g").param("c", newFrame).param("g", graph).update();
         assertCode(() -> routeService.route(actorFor(t.org(), t.venue()), request(t.venue(), t.floor(), ORIGIN, destination, null, null)),
             "METRIC_CALIBRATION_REQUIRED");
@@ -560,8 +564,7 @@ class RouteServiceTest extends AbstractIntegrationTest {
         register(actor, f, "ELEVATOR", null, null, 1.1);
         // Floor 1 is re-reconstructed and re-baked, and a destination is placed in the new frame -- but nobody re-placed
         // the landing POI, whose coordinates are still in the old frame.
-        fx.calibratedFloor(f.t().org(), f.t().venue(), f.floor1(), "FLOOR_LOCAL");
-        jdbc.sql("UPDATE navigation_graph SET status = 'RETIRED' WHERE floor_id = :f").param("f", f.floor1()).update();
+        fx.publishNewReconstruction(f.t().org(), f.t().venue(), f.floor1()); // its old graphs are retired with its old version
         corridor(f.t(), f.floor1(), "STANDARD", new double[]{-40, 73, 0}, new double[]{-40, 78, 0});
         UUID office = insertPoi(f.t().org(), f.t().venue(), f.floor1(), "Re-placed office", null, -40, 78, 0);
         Actor again = actorFor(f.t().org(), f.t().venue());

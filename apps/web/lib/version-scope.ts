@@ -29,8 +29,14 @@ export function forScene<T>(loaded: Scoped<T> | null, currentKey: string | null)
   return loaded && currentKey !== null && loaded.key === currentKey ? loaded.value : null;
 }
 
-/** How a reconstruction is named in the version picker. */
-export function versionLabel(v: { versionNumber?: number | null; generatedAt: string }, formattedDate: string, latest: boolean): string {
+/** How a reconstruction is named in the version picker. `current`: the version the floor publishes. */
+export function versionLabel(v: { versionNumber?: number | null; generatedAt: string }, formattedDate: string, current: boolean): string {
   const name = v.versionNumber != null ? `v${v.versionNumber} · ${formattedDate}` : `${formattedDate} (not a finalized version)`;
-  return latest ? `${name} (latest)` : name;
+  return current ? `${name} (current)` : name;
+}
+
+/** Which listed version the viewer opens on: the one the floor publishes (its current scan version), never merely the
+ * newest. When the floor publishes none, the newest listed version (every listed one is a finalized version). */
+export function initialVersion<T extends { current?: boolean }>(versions: T[]): T | null {
+  return versions.find((v) => v.current) ?? versions[0] ?? null;
 }

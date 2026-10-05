@@ -17,7 +17,7 @@ import {
 } from "@/lib/reconstruction-api";
 import { detectDeviceProfile, type DeviceProfile } from "@/lib/device-profile";
 import { formatBytes, formatDate } from "@/lib/viewer-format";
-import { type Scoped, forScene, sceneKey, versionLabel } from "@/lib/version-scope";
+import { type Scoped, forScene, initialVersion, sceneKey, versionLabel } from "@/lib/version-scope";
 import { type SearchResult } from "@/lib/search-api";
 import { type RouteResponse, planRoute } from "@/lib/navigation-api";
 import SplatViewerCanvas from "@/components/SplatViewerCanvas";
@@ -163,7 +163,7 @@ export default function ViewerWorkspace() {
       (vs) => {
         if (cancelled) return;
         setVersions(vs);
-        setRunId(vs.length > 0 ? vs[0].runId : "");
+        setRunId(initialVersion(vs)?.runId ?? "");
         if (vs.length === 0) {
           setReconstruction(null);
           setReconstructionError(null);
@@ -376,9 +376,9 @@ export default function ViewerWorkspace() {
           Reconstruction{" "}
           <select className="rounded border p-1" value={runId} onChange={(e) => setRunId(e.target.value)} disabled={versions.length === 0}>
             {versions.length === 0 && <option value="">No reconstructions</option>}
-            {versions.map((v, i) => (
+            {versions.map((v) => (
               <option key={v.runId} value={v.runId}>
-                {versionLabel(v, formatDate(v.generatedAt), i === 0)}
+                {versionLabel(v, formatDate(v.generatedAt), v.current)}
               </option>
             ))}
           </select>

@@ -42,10 +42,12 @@ class AnchorServiceTest extends AbstractIntegrationTest {
         SEEN_FROM_DEVICE_ORIGIN = new Pose(0, 0, 0, q.x(), q.y(), q.z(), q.w());
     }
 
-    /** A tree whose floor has a canonical coordinate frame (an identity fixture frame), as anchors require. */
+    /** A tree whose floor has a canonical coordinate frame (an identity fixture frame) and publishes that reconstruction as
+     * its current scan version, as anchors require (a pose is entered against a published version, V28). */
     private Fixtures.Tree calibratedTree() {
         var t = fx.tree();
         fx.calibratedFloor(t.org(), t.venue(), t.floor(), "FLOOR_LOCAL");
+        fx.publishCurrentReconstruction(t.org(), t.venue(), t.floor());
         return t;
     }
 
@@ -145,11 +147,31 @@ class AnchorServiceTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void anchorsAreEnteredAgainstThePublishedVersionOnly() {
+        var t = fx.tree();
+        fx.calibratedFloor(t.org(), t.venue(), t.floor(), "FLOOR_LOCAL"); // calibrated, but no version published
+        Actor actor = actorFor(t.org(), t.venue());
+        assertThatThrownBy(() -> anchors.create(actor, t.venue(), t.floor(), markerAt(1, 0, 0)))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.code()).isEqualTo("NO_CURRENT_SCAN_VERSION"));
+
+        UUID version = fx.publishCurrentReconstruction(t.org(), t.venue(), t.floor());
+        Anchor created = anchors.create(actor, t.venue(), t.floor(), markerAt(1, 0, 0));
+        assertThat(created.scanVersionId()).isEqualTo(version);
+        assertThat(created.poseRevision()).isEqualTo(1);
+        Anchor edited = anchors.update(actor, t.venue(), t.floor(), created.id(), markerAt(2, 0, 0));
+        assertThat(edited.poseRevision()).isEqualTo(2);
+        assertThat(edited.poseId()).isNotEqualTo(created.poseId());
+        // The first revision is still what the anchor was: history, not overwritten.
+        assertThat(jdbc.sql("SELECT digital_x FROM ar_anchor_pose WHERE id = :p").param("p", created.poseId()).query(Double.class).single())
+            .isEqualTo(1.0);
+    }
+
+    @Test
     void anAnchorPlacedInAnOlderFrameCannotRelocalizeOrBeCalibrated() {
         var t = calibratedTree();
         Actor actor = actorFor(t.org(), t.venue());
         Anchor a = anchors.calibrate(actor, t.venue(), t.floor(), anchors.create(actor, t.venue(), t.floor(), markerAt(1, 0, 0)).id());
-        fx.calibratedFloor(t.org(), t.venue(), t.floor(), "FLOOR_LOCAL"); // a different reconstruction becomes current
+        fx.publishNewReconstruction(t.org(), t.venue(), t.floor()); // a different reconstruction becomes current
 
         assertThatThrownBy(() -> anchors.relocalize(actor, t.venue(), t.floor(), List.of(new AnchorObservation(a.id(), SEEN_FROM_DEVICE_ORIGIN))))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.code()).isEqualTo("ANCHOR_FRAME_STALE"));
@@ -189,6 +211,7 @@ class AnchorServiceTest extends AbstractIntegrationTest {
         UUID otherVenue = fx.venue(t.org());
         UUID otherFloor = fx.floor(t.org(), otherVenue, 0);
         fx.calibratedFloor(t.org(), otherVenue, otherFloor, "FLOOR_LOCAL");
+        fx.publishCurrentReconstruction(t.org(), otherVenue, otherFloor);
         Actor otherActor = actorFor(t.org(), otherVenue);
         assertThatThrownBy(() -> anchors.get(otherActor, otherVenue, otherFloor, created.id()))
             .isInstanceOf(NotFoundException.class);

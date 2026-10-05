@@ -555,3 +555,28 @@ This section was added after the review; the sections above are unchanged.
   - SEMANTIC_INDEXING has never run on a real reconstruction (G-4), so the placement accuracy on real data is unknown;
   - B3 has not been re-run with the new rank score.
 
+---
+
+## 9. Addendum (2026-10-05): N-4, V-1, V-2, one coherent current version
+
+This section was added after the review; the sections above are unchanged. Details: docs/rescan.md, "Publication".
+
+- **V-2 fixed.** `floor.current_scan_version_id` (V28) names what a floor publishes. It changes only by promotion
+  (`ScanVersionService#promote`), which finalizes the version, activates its graphs (retiring every other), moves the
+  floor's frame and sets the pointer in one transaction. Commit-time database checks refuse an ACTIVE graph that is not the
+  current version's, a floor frame of another reconstruction, a DRAFT or cleared pointer. `reconstructions/latest`, the
+  POI list, search and routes read the current version; the viewer opens on it. Test: a newer run (failed, or not yet
+  published) never replaces the current version for viewers (`ScanVersionPublicationTest`).
+- **N-4 fixed.** Every full run is a DRAFT version from `PipelineService#start`. Its graphs are ingested DRAFT and its
+  detections become POIs only at promotion; promotion runs in a savepoint of the last report, so a refusal publishes
+  nothing and fails the run. Calibrating a new reconstruction no longer moves the floor's frame under the published
+  version. Tests: a new scan that fails leaves the previous ACTIVE graph, POIs and frame in place; a refused promotion
+  leaves no pin, POI, live graph or frame change.
+- **V-1 fixed.** Anchor poses are immutable `ar_anchor_pose` revisions with their version and frame (a calibration of that
+  version's reconstruction); a recalibration adds a revision. `GET .../anchors?scanVersionId=` returns the anchors as of a
+  version. Relocalization uses only anchors of the current version's lineage and refuses a client showing another
+  version. Test: recalibrate a versioned reconstruction; the anchor as of that version keeps its original pose.
+- **Also:** a re-scan is never promoted over a version other than its parent (`PARENT_NOT_CURRENT`); a run's
+  version-scoped artifacts must name its version (full runs included); a detected POI always names its version; a
+  public link is only served FINALIZED versions.
+- **Unchanged:** S-2 (mutable storage) still undermines "exact" artifacts; every result is still synthetic.

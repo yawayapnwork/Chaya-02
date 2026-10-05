@@ -53,10 +53,11 @@ public class ReconstructionService {
         "PLANE_MODEL", "application/json",
         "NAVMESH", "application/octet-stream");
 
-    /** scanVersionId / versionNumber / parentVersionId: the FINALIZED ScanVersion this run is, or null for a reconstruction
-     * that was never formalized as a version. */
+    /** One FINALIZED ScanVersion of the floor (scanVersionId / versionNumber / parentVersionId) and the run it is. current:
+     * whether it is the version the floor publishes (floor.current_scan_version_id, V28). A reconstruction that is not a
+     * FINALIZED version is never listed: what a viewer can pick is always one coherent version. */
     public record ReconstructionVersion(UUID runId, UUID floorId, Instant generatedAt, String runStatus, String runQuality,
-                                        UUID scanVersionId, Integer versionNumber, UUID parentVersionId) {}
+                                        UUID scanVersionId, Integer versionNumber, UUID parentVersionId, boolean current) {}
 
     public record ArtifactRef(String kind, String contentType, long sizeBytes, String sha256, String url) {}
 
@@ -90,21 +91,20 @@ public class ReconstructionService {
         guard.requireVenue(actor, venueId);
         requireFloor(venueId, floorId);
         return jdbc.sql("""
-                SELECT r.id AS run_id, cs.floor_id, sr.finished_at, r.status, r.quality,
-                       sv.id AS scan_version_id, sv.version_number, sv.parent_version_id
-                  FROM pipeline_stage_run sr
-                  JOIN pipeline_run r ON r.id = sr.run_id
+                SELECT DISTINCT ON (sv.version_number) r.id AS run_id, cs.floor_id, sr.finished_at, r.status, r.quality,
+                       sv.id AS scan_version_id, sv.version_number, sv.parent_version_id,
+                       sv.id = f.current_scan_version_id IS TRUE AS current
+                  FROM scan_version sv
+                  JOIN floor f ON f.id = sv.floor_id
+                  JOIN pipeline_run r ON r.id = sv.pipeline_run_id
                   JOIN capture_session cs ON cs.id = r.capture_session_id
-                  LEFT JOIN scan_version sv ON sv.pipeline_run_id = r.id AND sv.status = 'FINALIZED'
-                                           AND sv.coordinate_frame_id IS NOT NULL
-                 WHERE sr.stage = 'ARTIFACT_GENERATION' AND sr.status = 'SUCCEEDED'
-                   AND cs.floor_id = :floor AND r.venue_id = :venue AND r.organization_id = :org
+                  JOIN pipeline_stage_run sr ON sr.run_id = r.id AND sr.stage = 'ARTIFACT_GENERATION' AND sr.status = 'SUCCEEDED'
+                 WHERE sv.status = 'FINALIZED' AND sv.coordinate_frame_id IS NOT NULL
+                   -- a DRAFT version (a run still processing, failed, or awaiting calibration), a rejected re-scan and a run
+                   -- that is no version at all are never listed: none of them is a coherent twin (docs/rescan.md)
+                   AND sv.floor_id = :floor AND sv.venue_id = :venue AND sv.organization_id = :org
                    AND (r.privacy_enabled OR NOT :anonymous)
-                   -- a re-scan's merged model is listed only once its version is FINALIZED: a re-scan that later failed or
-                   -- was rejected never replaces what viewers see (docs/rescan.md)
-                   AND (r.scan_version_id IS NULL
-                        OR EXISTS (SELECT 1 FROM scan_version v WHERE v.id = r.scan_version_id AND v.status = 'FINALIZED'))
-                 ORDER BY sr.finished_at DESC
+                 ORDER BY sv.version_number DESC, sr.finished_at DESC
                  LIMIT 50
                 """)
             .param("floor", floorId).param("venue", venueId).param("org", actor.organizationId())
@@ -112,17 +112,19 @@ public class ReconstructionService {
             .query((rs, i) -> new ReconstructionVersion(rs.getObject("run_id", UUID.class), rs.getObject("floor_id", UUID.class),
                 rs.getTimestamp("finished_at").toInstant(), rs.getString("status"), rs.getString("quality"),
                 rs.getObject("scan_version_id", UUID.class), (Integer) rs.getObject("version_number"),
-                rs.getObject("parent_version_id", UUID.class)))
+                rs.getObject("parent_version_id", UUID.class), rs.getBoolean("current")))
             .list();
     }
 
+    /** What the floor publishes: its current scan version (V28), never merely the newest run. 404 while it publishes
+     * nothing. */
     @Transactional(readOnly = true)
     public Reconstruction latestForFloor(Actor actor, UUID venueId, UUID floorId) {
-        List<ReconstructionVersion> versions = listForFloor(actor, venueId, floorId);
-        if (versions.isEmpty()) {
-            throw new NotFoundException("no reconstruction is available for this floor yet");
-        }
-        return get(actor, venueId, versions.get(0).runId());
+        guard.requireVenue(actor, venueId);
+        requireFloor(venueId, floorId);
+        UUID current = versions.currentOf(floorId)
+            .orElseThrow(() -> new NotFoundException("this floor has not published a scan version yet"));
+        return getVersion(actor, venueId, current);
     }
 
     private record Row(UUID scanId, UUID floorId, Instant generatedAt, String status, String quality, UUID frameRunId) {}
@@ -134,6 +136,10 @@ public class ReconstructionService {
         Optional<UUID> version = versions.finalizedVersionOfRun(runId);
         if (version.isPresent()) {
             return getVersion(actor, venueId, version.get());
+        }
+        if (anonymous(actor)) {
+            // A public link shows a published twin, never a run that is not (yet) a FINALIZED version.
+            throw new NotFoundException("reconstruction not found");
         }
         Row row = runRow(actor, venueId, runId);
         List<ArtifactRef> artifacts = jdbc.sql("""
@@ -209,6 +215,9 @@ public class ReconstructionService {
         guard.requireVenue(actor, venueId);
         if (!VIEWER_ARTIFACT_KINDS.contains(kind)) {
             throw new BadRequestException("unknown viewer artifact kind: " + kind);
+        }
+        if (anonymous(actor) && versions.finalizedVersionOfRun(runId).isEmpty()) {
+            throw new NotFoundException("artifact not found");
         }
         return jdbc.sql("""
                 SELECT a.bucket, a.object_key, a.size_bytes

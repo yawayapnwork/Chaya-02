@@ -72,6 +72,12 @@ import org.springframework.transaction.annotation.Transactional;
  * destination -- whose horizontal footprint crosses them. The client observes something real and reports its region;
  * this service never invents one.
  *
+ * <p>Current version: without a scanVersionId a route is planned on what each floor publishes now, its current scan
+ * version (floor.current_scan_version_id, V28) -- that version's ACTIVE graph, and a destination and landing POIs that
+ * belong to that version or an ancestor of it. A floor that publishes no version has nothing to route on
+ * (NAVMESH_NOT_READY), and a destination placed against another version is refused (VERSION_MISMATCH): a route never
+ * mixes two versions of one floor. Each routingSource names its version.
+ *
  * <p>Scan versions: a request naming a FINALIZED scanVersionId routes on that version exactly -- the navigation graph of
  * the navmesh the version pinned (its own, or the one it inherited when its re-scan did not re-bake navigation), in the
  * coordinate frame the version recorded, to the destination POI as it is in that version -- never on the floor's ACTIVE
@@ -91,9 +97,10 @@ public class RouteService {
     private record EdgeRow(UUID from, UUID to, boolean bidirectional, boolean stepFree, Double minClearanceM, Double maxSlopeDeg,
                            double[][] portal) {}
 
-    private record ActiveGraph(UUID id, UUID frameId, String source, String navmeshSha256, String recastVersion) {}
+    private record ActiveGraph(UUID id, UUID frameId, String source, String navmeshSha256, String recastVersion, UUID scanVersionId) {}
 
-    private record PoiRow(UUID id, UUID floorId, double x, double y, double z, UUID frameId) {
+    /** current: whether this POI version belongs to what its floor publishes (poi_version_is_current, V28). */
+    private record PoiRow(UUID id, UUID floorId, double x, double y, double z, UUID frameId, UUID scanVersionId, boolean current) {
         double[] position() {
             return new double[]{x, y, z};
         }
@@ -176,6 +183,14 @@ public class RouteService {
             throw new ApiException(HttpStatus.CONFLICT, "METRIC_CALIBRATION_REQUIRED",
                 "the destination POI is not placed on any floor, so it has no metric position to route to");
         }
+        if (!destination.current()) {
+            throw new ApiException(HttpStatus.CONFLICT, ScanVersionService.VERSION_MISMATCH, "the destination POI "
+                + (destination.scanVersionId() == null ? "was never placed against a published scan version"
+                    : "was placed against scan version " + destination.scanVersionId())
+                + ", which is not (an ancestor of) the version its floor publishes now ("
+                + versions.currentOf(destination.floorId()).map(UUID::toString).orElse("none")
+                + "); route on that version with scanVersionId, or re-place the POI");
+        }
         requireMetricFrame(request.venueId(), request.floorId());
         FrameView destinationFrame = requireMetricFrame(request.venueId(), destination.floorId());
         if (!destinationFrame.id().equals(destination.frameId())) {
@@ -221,14 +236,15 @@ public class RouteService {
             .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, "METRIC_CALIBRATION_REQUIRED",
                 "scan version " + scope.id() + " has no canonical coordinate frame"));
         PoiRow destination = jdbc.sql("""
-                SELECT p.id, p.floor_id, v.x, v.y, v.z, v.coordinate_frame_id
+                SELECT p.id, p.floor_id, v.x, v.y, v.z, v.coordinate_frame_id, v.scan_version_id
                   FROM poi p JOIN poi_version v ON v.id = scan_version_poi_version(p.id, :sv)
                  WHERE p.id = :poi AND p.venue_id = :venue AND p.organization_id = :org
                 """)
             .param("sv", scope.id()).param("poi", request.destinationPoiId()).param("venue", request.venueId())
             .param("org", actor.organizationId())
             .query((rs, i) -> new PoiRow(rs.getObject("id", UUID.class), rs.getObject("floor_id", UUID.class),
-                rs.getDouble("x"), rs.getDouble("y"), rs.getDouble("z"), rs.getObject("coordinate_frame_id", UUID.class)))
+                rs.getDouble("x"), rs.getDouble("y"), rs.getDouble("z"), rs.getObject("coordinate_frame_id", UUID.class),
+                rs.getObject("scan_version_id", UUID.class), true))
             .optional().orElseThrow(() -> new NotFoundException("destination POI is not part of scan version " + scope.id()));
         if (!scope.floorId().equals(destination.floorId())) {
             throw new ApiException(HttpStatus.CONFLICT, "VERSION_WRONG_FLOOR",
@@ -245,7 +261,7 @@ public class RouteService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_START", "start must be three finite canonical coordinates");
         }
         ActiveGraph graph = jdbc.sql("""
-                SELECT g.id, g.coordinate_frame_id, g.source, g.navmesh_sha256, g.recastnavigation_version
+                SELECT g.id, g.coordinate_frame_id, g.source, g.navmesh_sha256, g.recastnavigation_version, pin.scan_version_id
                   FROM navigation_graph g
                   JOIN scan_version_artifact pin ON pin.artifact_id = g.navmesh_artifact_id
                  WHERE pin.scan_version_id = :sv AND pin.kind = 'NAVMESH' AND g.floor_id = :f AND g.profile = :p
@@ -254,7 +270,7 @@ public class RouteService {
                 """)
             .param("sv", scope.id()).param("f", scope.floorId()).param("p", profile)
             .query((rs, i) -> new ActiveGraph(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class), rs.getString(3),
-                rs.getString(4), rs.getString(5))).optional()
+                rs.getString(4), rs.getString(5), rs.getObject(6, UUID.class))).optional()
             .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, "NAVMESH_NOT_READY", "scan version " + scope.id()
                 + " has no " + profile + " navigation graph baked from a Recast navmesh"));
         if (!frame.id().equals(graph.frameId())) {
@@ -373,7 +389,8 @@ public class RouteService {
 
     private Optional<PoiRow> loadPoi(UUID orgId, UUID venueId, UUID poiId) {
         return jdbc.sql("""
-                SELECT p.id, p.floor_id, v.x, v.y, v.z, v.coordinate_frame_id
+                SELECT p.id, p.floor_id, v.x, v.y, v.z, v.coordinate_frame_id, v.scan_version_id,
+                       poi_version_is_current(p.floor_id, v.scan_version_id, v.source) AS current
                   FROM poi p
                   JOIN poi_version v ON v.poi_id = p.id
                  WHERE p.id = :poi AND p.venue_id = :venue AND p.organization_id = :org AND p.deleted_at IS NULL
@@ -381,18 +398,19 @@ public class RouteService {
                 """)
             .param("poi", poiId).param("venue", venueId).param("org", orgId)
             .query((rs, i) -> new PoiRow(rs.getObject("id", UUID.class), rs.getObject("floor_id", UUID.class),
-                rs.getDouble("x"), rs.getDouble("y"), rs.getDouble("z"), rs.getObject("coordinate_frame_id", UUID.class)))
+                rs.getDouble("x"), rs.getDouble("y"), rs.getDouble("z"), rs.getObject("coordinate_frame_id", UUID.class),
+                rs.getObject("scan_version_id", UUID.class), rs.getBoolean("current")))
             .optional();
     }
 
     // ---- floor graphs ---------------------------------------------------------------------------------
 
     private ActiveGraph activeGraph(UUID venueId, UUID floorId, String profile) {
-        return jdbc.sql("SELECT id, coordinate_frame_id, source, navmesh_sha256, recastnavigation_version FROM navigation_graph "
-                + "WHERE venue_id = :v AND floor_id = :f AND profile = :p AND status = 'ACTIVE'")
+        return jdbc.sql("SELECT id, coordinate_frame_id, source, navmesh_sha256, recastnavigation_version, scan_version_id "
+                + "FROM navigation_graph WHERE venue_id = :v AND floor_id = :f AND profile = :p AND status = 'ACTIVE'")
             .param("v", venueId).param("f", floorId).param("p", profile)
             .query((rs, i) -> new ActiveGraph(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class), rs.getString(3),
-                rs.getString(4), rs.getString(5))).optional().orElse(null);
+                rs.getString(4), rs.getString(5), rs.getObject(6, UUID.class))).optional().orElse(null);
     }
 
     /** Why the floor cannot be routed on (no metric frame, no navmesh-backed graph, or one baked in an older frame), or
@@ -402,7 +420,16 @@ public class RouteService {
         if (frame.isEmpty()) {
             return "floor " + floorId + " has no calibrated metric frame";
         }
+        Optional<UUID> current = versions.currentOf(floorId);
+        if (current.isEmpty()) {
+            return "floor " + floorId + " has not published a scan version, so nothing derived from a scan is current there";
+        }
         ActiveGraph graph = activeGraph(venueId, floorId, profile);
+        if (graph != null && !current.get().equals(graph.scanVersionId())) {
+            // V28 refuses this state at commit; never route on it if it is seen anyway.
+            return "the ACTIVE " + profile + " navigation graph of floor " + floorId + " belongs to scan version "
+                + graph.scanVersionId() + ", not the version the floor publishes (" + current.get() + ")";
+        }
         if (graph == null || !("RECAST_NAVMESH".equals(graph.source()) || props.acceptSyntheticGraphs())) {
             return "floor " + floorId + " has no " + profile + " navigation graph baked from a Recast navmesh"
                 + (graph == null ? "" : " (its ACTIVE graph " + graph.id() + " is " + graph.source() + ", which is never routed on)");
@@ -493,7 +520,7 @@ public class RouteService {
             }
         }
         RoutingSource source = new RoutingSource(floorId, active.id(), active.source(), active.navmeshSha256(), active.recastVersion(),
-            null);
+            null, active.scanVersionId());
         return new FloorGraph(floorId, positions, adjacency, portals, boxes, source, exclusions);
     }
 
@@ -604,7 +631,8 @@ public class RouteService {
             }
         }
         RoutingSource s = graph.source();
-        RoutingSource source = new RoutingSource(s.floorId(), s.graphId(), s.source(), s.navmeshSha256(), s.recastnavigationVersion(), method);
+        RoutingSource source = new RoutingSource(s.floorId(), s.graphId(), s.source(), s.navmeshSha256(), s.recastnavigationVersion(), method,
+            s.scanVersionId());
         return new RouteLeg(waypoints, polylineLength(waypoints), graph.floorId(), source);
     }
 
@@ -768,6 +796,9 @@ public class RouteService {
         Optional<FrameView> frame = metricFrame(venueId, floorId);
         if (frame.isEmpty() || !frame.get().id().equals(poi.get().frameId())) {
             return "landing POI " + poiId + " is not placed in floor " + floorId + "'s current metric frame";
+        }
+        if (!poi.get().current()) {
+            return "landing POI " + poiId + " is not part of the scan version floor " + floorId + " publishes";
         }
         return null;
     }

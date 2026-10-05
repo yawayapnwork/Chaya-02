@@ -42,7 +42,11 @@ public class PoiController {
     /** scanVersionId: only the POIs of that FINALIZED scan version, each at its position in that version's frame. */
     @GetMapping
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR','VIEWER','PUBLIC_VIEWER')")
-    public List<Poi> list(@PathVariable UUID venueId, @RequestParam(required = false) UUID scanVersionId) {
+    public List<Poi> list(@PathVariable UUID venueId, @RequestParam(required = false) UUID scanVersionId,
+                          @RequestParam(defaultValue = "false") boolean all) {
+        if (all && scanVersionId == null) {
+            return pois.listAll(ActorAuthentication.currentActor(), venueId);
+        }
         return pois.list(ActorAuthentication.currentActor(), venueId, scanVersionId);
     }
 

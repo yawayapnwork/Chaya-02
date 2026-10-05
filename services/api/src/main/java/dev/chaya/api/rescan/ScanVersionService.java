@@ -98,6 +98,22 @@ public class ScanVersionService {
             .query((rs, i) -> new Pin(rs.getObject(1, UUID.class), rs.getString(2), rs.getObject(3, UUID.class))).list();
     }
 
+    /** The version the floor publishes (floor.current_scan_version_id, V28), if any. Callers have checked tenancy. */
+    public Optional<UUID> currentOf(UUID floorId) {
+        return jdbc.sql("SELECT current_scan_version_id FROM floor WHERE id = :f").param("f", floorId)
+            .query((rs, i) -> Optional.ofNullable(rs.getObject(1, UUID.class))).optional().flatMap(o -> o);
+    }
+
+    /** The floor's current version as a Scope, or 409 NO_CURRENT_SCAN_VERSION. */
+    public Scope requireCurrent(Actor actor, UUID venueId, UUID floorId) {
+        UUID current = currentOf(floorId).orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, NO_CURRENT_SCAN_VERSION,
+            "floor " + floorId + " has not published a scan version yet; nothing derived from a scan is current there"));
+        return requireFinalized(actor, venueId, current);
+    }
+
+    public static final String NO_CURRENT_SCAN_VERSION = "NO_CURRENT_SCAN_VERSION";
+    public static final String VERSION_MISMATCH = "VERSION_MISMATCH";
+
     // ---- numbering --------------------------------------------------------------------------------------------------
 
     /** The floor's next version number. Locks the floor row, so two versions created concurrently cannot share a number
@@ -106,6 +122,148 @@ public class ScanVersionService {
         jdbc.sql("SELECT id FROM floor WHERE id = :f FOR UPDATE").param("f", floorId).query(UUID.class).optional();
         return jdbc.sql("SELECT coalesce(max(version_number), 0) + 1 FROM scan_version WHERE floor_id = :f")
             .param("f", floorId).query(Integer.class).single();
+    }
+
+    /**
+     * The DRAFT version a full-venue run will be (review N-4): created with the run, so everything the run produces names
+     * its version from the start, and nothing of it is current until {@link #promote}. No parent: a full reconstruction
+     * is not derived from an earlier version's geometry. Call inside the transaction that creates the run, then record the
+     * run on it with {@link #attachRun}.
+     */
+    public UUID createFullRunDraft(Actor actor, UUID venueId, UUID scanId, UUID floorId, Map<String, Object> processingConfig) {
+        return jdbc.sql("""
+                INSERT INTO scan_version (organization_id, venue_id, scan_id, floor_id, version_number, status, processing_config,
+                    created_by)
+                VALUES (:o, :v, :s, :f, :n, 'DRAFT', CAST(:config AS jsonb), :by) RETURNING id
+                """)
+            .param("o", actor.organizationId()).param("v", venueId).param("s", scanId).param("f", floorId)
+            .param("n", nextVersionNumber(floorId)).param("config", json(processingConfig)).param("by", actor.subject())
+            .query(UUID.class).single();
+    }
+
+    public void attachRun(UUID versionId, UUID runId) {
+        jdbc.sql("UPDATE scan_version SET pipeline_run_id = :r WHERE id = :v AND pipeline_run_id IS NULL")
+            .param("r", runId).param("v", versionId).update();
+    }
+
+    /** What a promotion published. */
+    public record Promotion(UUID versionId, UUID floorId, UUID previousVersionId, UUID coordinateFrameId, int graphsActivated,
+                            int graphsRetired, int poiVersionsBound, int anchorsBound, Map<String, Object> frameChange) {}
+
+    /**
+     * Makes the version what its floor publishes (docs/rescan.md, "Publication"), all at once inside the caller's
+     * transaction: finalizes it if it is still DRAFT ({@link #finalizeVersion}); binds what its run produced before
+     * versions existed (legacy graphs, POIs and anchors in a frame of its reconstruction); retires every ACTIVE graph of the
+     * floor and activates the version's own (none, when it has no navigation: an older version's graph is never routed on
+     * in its place); makes the ACTIVE canonical frame of its reconstruction the floor's current frame; and sets
+     * floor.current_scan_version_id. The V28 commit-time checks refuse any other end state, so a failure anywhere leaves
+     * the previous version published, untouched.
+     *
+     * <p>A re-scan is only promoted over its own parent (or onto a floor that publishes nothing): a re-scan of an older
+     * version would silently drop whatever was published since (PARENT_NOT_CURRENT). A full reconstruction replaces
+     * whatever is current. An ALIGNMENT_REJECTED version is never promoted. Promoting the current version again is a no-op.
+     */
+    public Promotion promote(UUID versionId, Map<String, Object> provenance) {
+        record Version(UUID floorId, UUID parent, UUID runId, String status, UUID frameId) {}
+        Version v = jdbc.sql("SELECT floor_id, parent_version_id, pipeline_run_id, status, coordinate_frame_id FROM scan_version "
+                + "WHERE id = :v FOR UPDATE")
+            .param("v", versionId)
+            .query((rs, i) -> new Version(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class), rs.getObject(3, UUID.class),
+                rs.getString(4), rs.getObject(5, UUID.class)))
+            .optional().orElseThrow(() -> new NotFoundException("scan version not found"));
+        UUID previous = jdbc.sql("SELECT current_scan_version_id FROM floor WHERE id = :f FOR UPDATE").param("f", v.floorId())
+            .query((rs, i) -> Optional.ofNullable(rs.getObject(1, UUID.class))).single().orElse(null);
+        if (versionId.equals(previous)) {
+            return new Promotion(versionId, v.floorId(), previous, v.frameId(), 0, 0, 0, 0, Map.of());
+        }
+        if ("ALIGNMENT_REJECTED".equals(v.status())) {
+            throw new ApiException(HttpStatus.CONFLICT, "VERSION_REJECTED", "scan version " + versionId
+                + " failed its alignment gate and can never be published");
+        }
+        if (v.parent() != null && previous != null && !previous.equals(v.parent())) {
+            throw new ApiException(HttpStatus.CONFLICT, "PARENT_NOT_CURRENT", "scan version " + versionId + " is a re-scan of "
+                + v.parent() + ", but its floor now publishes " + previous + "; publishing it would drop that version's changes. "
+                + "Re-scan the current version instead");
+        }
+        UUID frameId = "DRAFT".equals(v.status()) ? finalizeVersion(versionId, provenance) : v.frameId();
+        if (frameId == null) {
+            throw new ApiException(HttpStatus.CONFLICT, "VERSION_INCOMPLETE", "scan version " + versionId
+                + " was finalized before versions recorded their coordinate frame and cannot be published");
+        }
+        UUID frameRun = jdbc.sql("SELECT source_run_id FROM coordinate_frame WHERE id = :f").param("f", frameId)
+            .query(UUID.class).single();
+
+        // Bound once, never re-bound (V23 guards): what the run produced before it was a version.
+        jdbc.sql("""
+                UPDATE navigation_graph SET scan_version_id = :sv
+                 WHERE pipeline_run_id = :r AND scan_version_id IS NULL AND coordinate_frame_id = :frame
+                """).param("sv", versionId).param("r", v.runId()).param("frame", frameId).update();
+        int pois = jdbc.sql("""
+                UPDATE poi_version SET scan_version_id = :sv
+                 WHERE scan_version_id IS NULL
+                   AND (pipeline_run_id = :r
+                        OR (source = 'MANUAL' AND coordinate_frame_id IN (SELECT id FROM coordinate_frame WHERE source_run_id = :fr)))
+                   AND poi_id IN (SELECT id FROM poi WHERE floor_id = :f)
+                """).param("sv", versionId).param("r", v.runId()).param("fr", frameRun).param("f", v.floorId()).update();
+        int anchors = bindUnversionedAnchors(versionId, v.floorId(), frameRun);
+
+        int retired = jdbc.sql("UPDATE navigation_graph SET status = 'RETIRED' WHERE floor_id = :f AND status = 'ACTIVE'")
+            .param("f", v.floorId()).update();
+        int activated = jdbc.sql("""
+                UPDATE navigation_graph SET status = 'ACTIVE'
+                 WHERE id IN (SELECT DISTINCT ON (profile) id FROM navigation_graph
+                               WHERE scan_version_id = :sv AND floor_id = :f AND coordinate_frame_id = :frame
+                               ORDER BY profile, created_at DESC)
+                """).param("sv", versionId).param("f", v.floorId()).param("frame", frameId).update();
+
+        FrameView floorFrame = frames.activeForRun(frameRun).filter(FrameView::canonical)
+            .orElseGet(() -> frames.load(frameId).orElseThrow());
+        Map<String, Object> frameChange = frames.adoptForFloor(v.floorId(), floorFrame);
+        jdbc.sql("UPDATE floor SET current_scan_version_id = :sv WHERE id = :f").param("sv", versionId).param("f", v.floorId()).update();
+        checkPublicationNow();
+        return new Promotion(versionId, v.floorId(), previous, frameId, activated, retired, pois, anchors, frameChange);
+    }
+
+    private static final String PUBLICATION_CONSTRAINTS =
+        "floor_publication_floor, floor_publication_graph, ar_anchor_pose_consistency, ar_anchor_current_pose_fkey";
+
+    /** Runs the V28 commit-time checks now, so a promotion that would leave a floor inconsistent fails here -- inside the
+     * caller's savepoint -- rather than at commit, where it would take the whole transaction with it. */
+    public void checkPublicationNow() {
+        jdbc.sql("SET CONSTRAINTS " + PUBLICATION_CONSTRAINTS + " IMMEDIATE").update();
+        deferPublicationChecks();
+    }
+
+    /** Back to the V28 default (checked at commit). */
+    public void deferPublicationChecks() {
+        jdbc.sql("SET CONSTRAINTS " + PUBLICATION_CONSTRAINTS + " DEFERRED").update();
+    }
+
+    /** Anchors placed in a frame of the version's reconstruction before any version existed: their pose is recorded against
+     * the version (a new revision), so they can take part in relocalization. */
+    private int bindUnversionedAnchors(UUID versionId, UUID floorId, UUID frameRun) {
+        List<UUID> anchors = jdbc.sql("""
+                SELECT id FROM ar_anchor
+                 WHERE floor_id = :f AND deleted_at IS NULL AND scan_version_id IS NULL
+                   AND coordinate_frame_id IN (SELECT id FROM coordinate_frame WHERE source_run_id = :fr)
+                """).param("f", floorId).param("fr", frameRun).query(UUID.class).list();
+        for (UUID anchor : anchors) {
+            UUID pose = jdbc.sql("""
+                    INSERT INTO ar_anchor_pose (organization_id, venue_id, anchor_id, revision, scan_version_id, coordinate_frame_id,
+                        physical_x, physical_y, physical_z, physical_qx, physical_qy, physical_qz, physical_qw,
+                        digital_x, digital_y, digital_z, digital_qx, digital_qy, digital_qz, digital_qw, source, calibrated_at, created_by)
+                    SELECT a.organization_id, a.venue_id, a.id,
+                           coalesce((SELECT max(revision) FROM ar_anchor_pose WHERE anchor_id = a.id), 0) + 1, :sv, a.coordinate_frame_id,
+                           a.physical_x, a.physical_y, a.physical_z, a.physical_qx, a.physical_qy, a.physical_qz, a.physical_qw,
+                           a.digital_x, a.digital_y, a.digital_z, a.digital_qx, a.digital_qy, a.digital_qz, a.digital_qw, 'BACKFILL',
+                           CASE WHEN a.calibration_status = 'CALIBRATED' THEN a.last_calibrated_at END, 'system:scan-version-promotion'
+                      FROM ar_anchor a WHERE a.id = :a
+                    RETURNING id
+                    """).param("sv", versionId).param("a", anchor).query(UUID.class).single();
+            jdbc.sql("UPDATE ar_anchor SET scan_version_id = :sv, current_pose_id = :p WHERE id = :a")
+                .param("sv", versionId).param("p", pose).param("a", anchor).update();
+        }
+        return anchors.size();
     }
 
     // ---- finalization -----------------------------------------------------------------------------------------------

@@ -332,12 +332,13 @@ class RescanControlPlaneTest extends PipelineTestSupport {
             .param("o", c.org()).param("v", c.venue()).param("f", c.floor()).query(UUID.class).single();
         jdbc.sql("""
                 INSERT INTO poi_version (organization_id, venue_id, poi_id, version_number, label, tags, x, y, z, source,
-                    coordinate_frame_id, pipeline_run_id, created_by)
-                VALUES (:o, :v, :p, 1, :label, '{}', :x, :y, 0, :src, :frame, :run, 'test')
+                    coordinate_frame_id, pipeline_run_id, scan_version_id, created_by)
+                VALUES (:o, :v, :p, 1, :label, '{}', :x, :y, 0, :src, :frame, :run,
+                    (SELECT id FROM scan_version WHERE pipeline_run_id = :parentRun), 'test')
                 """)
             .param("o", c.org()).param("v", c.venue()).param("p", id).param("label", source.toLowerCase() + " poi")
             .param("x", x).param("y", y).param("src", source).param("frame", parentFrame)
-            .param("run", source.equals("MANUAL") ? null : parentRun).update();
+            .param("run", source.equals("MANUAL") ? null : parentRun).param("parentRun", parentRun).update();
         return id;
     }
 
@@ -397,8 +398,9 @@ class RescanControlPlaneTest extends PipelineTestSupport {
         assertThat(reconstructions.listForFloor(viewer, c.venue(), c.floor()))
             .extracting(ReconstructionService.ReconstructionVersion::versionNumber)
             .as("the failed attempt kept number 2; numbers are never reused").containsExactly(3, 1);
-        assertThat(jdbc.sql("SELECT count(*) FROM audit_log WHERE action = 'rescan.downstream_applied'").query(Integer.class).single())
-            .isGreaterThanOrEqualTo(1);
+        assertThat(jdbc.sql("SELECT count(*) FROM audit_log WHERE action = 'scan_version.promoted' AND resource_id = "
+                + "(SELECT current_scan_version_id FROM floor WHERE id = :f)").param("f", c.floor()).query(Integer.class).single())
+            .as("the re-scan's version was published, with its detections").isEqualTo(1);
     }
 
     // ---- navigation: re-baked from the merged scene, never inherited; artifacts name their version -------------------------
@@ -436,9 +438,14 @@ class RescanControlPlaneTest extends PipelineTestSupport {
         JsonNode nav = rescanToNavigationBaking(c, parent);
         // A "successful" NAVIGATION_BAKING with no navmesh: the version would otherwise have had no navigation, or (before
         // V26) silently inherited the parent's, baked for geometry the re-scan replaced.
+        // The stage report is kept; publishing the version is refused, so the run ends FAILED and nothing is published.
         send(nav, report("SUCCEEDED", List.of(artifact(nav, "navigation-baking-report.json", "NAVIGATION_BAKING_REPORT", false, false,
-            "{}")), null, null), svc).andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("VERSION_INCOMPLETE"));
+            "{}")), null, null), svc).andExpect(status().isOk());
         UUID version = UUID.fromString(nav.get("scanVersionId").asText());
+        assertThat(jdbc.sql("SELECT status || ':' || coalesce(failure_code, '-') FROM pipeline_run WHERE scan_version_id = :v")
+            .param("v", version).query(String.class).single()).isEqualTo("FAILED:VERSION_INCOMPLETE");
+        assertThat(jdbc.sql("SELECT current_scan_version_id IS NULL FROM floor WHERE id = :f").param("f", c.floor())
+            .query(Boolean.class).single()).as("nothing was published").isTrue();
         assertThat(versionRow(version).get("status")).isEqualTo("DRAFT");
         assertThat(jdbc.sql("SELECT count(*) FROM scan_version_artifact WHERE scan_version_id = :v").param("v", version)
             .query(Integer.class).single()).as("nothing pinned").isZero();

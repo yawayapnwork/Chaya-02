@@ -72,8 +72,10 @@ public class SemanticSearchService {
     private static final TypeReference<Map<String, Object>> MAP = new TypeReference<>() {};
 
     // Shared WHERE clause (venue/org/floor/accessibility scope); each query below prepends its own SELECT and appends its
-    // own extra predicate and ORDER BY. Without :sv the scope is every live POI at its latest version; with :sv (a
-    // FINALIZED ScanVersion) it is exactly that version's POIs, each as it is in that version (scan_version_poi_version).
+    // own extra predicate and ORDER BY. Without :sv the scope is what each floor publishes now: every live POI at its
+    // latest version that belongs to its floor's current scan version (poi_version_is_current, V28), so a search never
+    // returns a detection of an unpublished run or of a replaced version next to the current ones; with :sv (a FINALIZED
+    // ScanVersion) it is exactly that version's POIs, each as it is in that version (scan_version_poi_version).
     private static final String SCOPE_WHERE = """
               FROM poi p
               JOIN poi_version v ON v.poi_id = p.id
@@ -81,6 +83,7 @@ public class SemanticSearchService {
                AND (CASE WHEN CAST(:sv AS uuid) IS NULL
                          THEN p.deleted_at IS NULL
                               AND v.version_number = (SELECT max(version_number) FROM poi_version WHERE poi_id = p.id)
+                              AND poi_version_is_current(p.floor_id, v.scan_version_id, v.source)
                          ELSE v.id = scan_version_poi_version(p.id, CAST(:sv AS uuid))
                               AND p.floor_id = (SELECT floor_id FROM scan_version WHERE id = CAST(:sv AS uuid)) END)
                AND (CAST(:floor AS uuid) IS NULL OR p.floor_id = CAST(:floor AS uuid))

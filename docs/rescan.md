@@ -24,11 +24,12 @@ the cost. It does **not** save the downstream derivations, which are cheap and r
 ## The flow
 
 1. **Select an existing venue version** -- `GET /venues/{v}/floors/{f}/scan-versions` lists a floor's
-   `scan_version` history; the operator picks a `FINALIZED` one. A full reconstruction becomes a version through `POST
-   /venues/{v}/floors/{f}/scan-versions/finalize-current`, which formalizes the floor's latest successful full-venue
-   pipeline run (`dev.chaya.api.rescan.RescanService#finalizeCurrent`). It does not fabricate one: the run must be
-   calibrated (a canonical frame, else `409 NOT_CALIBRATED`) and must have published its own viewer asset and cloud
-   (else `409 VERSION_INCOMPLETE`). See "VERSIONING".
+   `scan_version` history; the operator picks a `FINALIZED` one. Every full-venue run is a DRAFT version from the start
+   and is published when it succeeds with a calibrated reconstruction (see "Publication"). One calibrated only after it
+   succeeded is published with `POST /venues/{v}/floors/{f}/scan-versions/finalize-current`
+   (`dev.chaya.api.rescan.RescanService#finalizeCurrent`), which also gives a run from before V28 its version. It does
+   not fabricate one: the run must be calibrated (a canonical frame, else `409 NOT_CALIBRATED`) and must have published
+   its own viewer asset and cloud (else `409 VERSION_INCOMPLETE`). See "VERSIONING".
 2. **Select the changed region** -- a simple polygon (`{"points": [[x, y], ...]}`, >= 3 vertices) in canonical
    venue metres (x, y horizontal; [coordinate-frames.md](coordinate-frames.md)). The operator chooses it; the system
    does not detect change. What the splice then replaces is that polygon times the height range the re-scan observed. The parent version's reconstruction
@@ -271,7 +272,7 @@ Inserting a row that is not DRAFT is refused.
 
 | What | Where | Written |
 |---|---|---|
-| the run it is | `pipeline_run_id` | at creation (a re-scan: right after its run is started; a bootstrap: the full run it formalizes). Fixed once set. |
+| the run it is | `pipeline_run_id` | at creation, with the run (`PipelineService#start` for a full run, `startIncrementalProcessing` for a re-scan; `finalize-current` for a run from before V28). Fixed once set. |
 | its coordinate frame | `coordinate_frame_id` | at finalization: the ACTIVE canonical calibration of that run's reconstruction frame (for a re-scan, the parent's reconstruction, since the splice writes into it) |
 | its artifacts | `scan_version_artifact` | at finalization (`ScanVersionService#finalizeVersion`), see below |
 
@@ -294,23 +295,24 @@ reconstruction). The service refuses earlier with `NOT_CALIBRATED` or `VERSION_I
 Every derived document names the run, version and frame it was produced for (`source`:
 `chaya_worker.stages.base.run_provenance`): `ALIGNMENT_REPORT`, `SPLICE_REPORT`, `SEMANTIC_LABELS_MERGED`, `PLANE_MODEL`,
 `DETECTED_OBJECTS`, `NAVMESH_MANIFEST`, `NAVIGATION_GRAPH`, `NAVIGATION_BAKING_REPORT` (and `ARTIFACT_MANIFEST`'s
-`sourceScanVersion`). The control plane refuses a re-scan's `NAVIGATION_GRAPH` or `DETECTED_OBJECTS` that names another
-version, or none, with `409 ARTIFACT_VERSION_MISMATCH` (`PipelineService#requireArtifactVersion`). A full run's may omit
-it. If it names a version, that version must be the run's.
+`sourceScanVersion`). The control plane refuses a `NAVIGATION_GRAPH` or `DETECTED_OBJECTS` that names another version,
+or none, with `409 ARTIFACT_VERSION_MISMATCH` (`PipelineService#requireArtifactVersion`) -- for every run since V28, full
+runs included (each is a version from the start).
 
 `owner_version_id` names the version whose run produced each artifact. A trigger refuses a pin whose artifact is not
 from the version's own run (when claimed as its own) or not one of the parent's pins (when claimed as inherited), and
-refuses any pin, update or delete once the version is no longer DRAFT. A re-scan run's `processing_artifact` rows also
-carry its `scan_version_id` (V4's column).
+refuses any pin, update or delete once the version is no longer DRAFT. A run's `processing_artifact` rows carry its
+`scan_version_id` (V4's column; every run since V28), and an artifact produced for a version is only ever pinned as that
+version's own (V28).
 
 ### What names its version
 
 | Data | Column | Set |
 |---|---|---|
-| POI version | `poi_version.scan_version_id` | detected: the version whose run detected it (a re-scan's at finalization; a full run's when it is bootstrapped). MANUAL: `floor_current_scan_version(floor)`, the floor's newest FINALIZED version in the floor's current reconstruction; null while that reconstruction has no version, and bound by its bootstrap. Set once (V23 relaxes the V5 guard for exactly that). |
+| POI version | `poi_version.scan_version_id` | detected: the version whose run detected it, written when that version is published (a detection never exists without one: `poi_version_detected_has_version`, V28). MANUAL: the version the floor publishes (`floor.current_scan_version_id`); null while the floor publishes none, and bound when a version of that reconstruction is published. Set once (V23 relaxes the V5 guard for exactly that). |
 | superseded POI | `poi.superseded_by_scan_version_id` | when a re-scan finalizes and replaces a detected POI in its region |
-| navigation graph | `navigation_graph.scan_version_id` | a re-scan's graphs at ingestion; a full run's (those baked in the version's frame) at bootstrap. Fixed once set. |
-| AR anchor | `ar_anchor.scan_version_id` | on create and update: `floor_current_scan_version(floor)`; bound at bootstrap when still null |
+| navigation graph | `navigation_graph.scan_version_id` | at ingestion, the run's version (a graph of a versioned run naming anything else is refused, V28); a pre-V28 run's graphs when its version is published. Fixed once set. |
+| AR anchor pose | `ar_anchor_pose` (`scan_version_id`, `coordinate_frame_id`, both poses, `calibrated_at`) | a new immutable revision on create, edit, and re-projection by a recalibration; `ar_anchor` is the head naming the current one (`current_pose_id`). The frame must be a calibration of the version's reconstruction. See "Publication". |
 | splat / cloud / navmesh / detections | `scan_version_artifact` | at finalization (above) |
 
 ### Numbering and lineage
@@ -329,16 +331,68 @@ refuses a version that is not FINALIZED (`409 VERSION_NOT_FINALIZED`):
 
 | Endpoint | With a version |
 |---|---|
-| `GET /venues/{v}/floors/{f}/reconstructions` | each entry names its `scanVersionId`, `versionNumber`, `parentVersionId` (null for a reconstruction that is not a version) |
+| `GET /venues/{v}/floors/{f}/reconstructions` | only FINALIZED versions; each entry names its `scanVersionId`, `versionNumber`, `parentVersionId`, and `current` |
 | `GET /venues/{v}/reconstructions/{runId}`, `GET /venues/{v}/scan-versions/{id}/reconstruction` | for a version's run: exactly its pinned artifacts, served from `/scan-versions/{id}/artifacts/{kind}`, and its recorded frame |
 | `GET /venues/{v}/pois?scanVersionId=` | the version's POIs (`scan_version_poi_version`): placed against it or an ancestor, and not deleted, unless the deletion was a re-scan outside its lineage. Each POI is shown as it is in the version's frame; `frameStatus` is relative to that frame. |
 | `POST /navigation/routes` with `scanVersionId` | on the graph of the navmesh the version pinned, in its frame, to the destination as it is in that version; single floor |
 | `GET /venues/{v}/search?scanVersionId=` | only the version's POIs |
+| `GET /venues/{v}/floors/{f}/anchors?scanVersionId=` | each anchor's pose in that version (`scan_version_anchor_pose`: entered against it or an ancestor, preferring one in its own frame), so a later recalibration never moves an anchor in an older version |
 
-The web viewer (`ViewerWorkspace`) selects a reconstruction by version and requests its POIs, routes and search results
-for that version. Every result is stored with the scene it was requested for and drawn only while that scene is on
+The web viewer (`ViewerWorkspace`) opens on the floor's current version (`initialVersion`), lets the user pick another
+finalized one, and requests its POIs, routes and search results for that version. Every result is stored with the scene it was requested for and drawn only while that scene is on
 screen (`lib/version-scope.ts`), so version N's model is never drawn with version N+1's frame, POIs or route, not even
 between a switch and the next response.
+
+### Publication: the floor's current version (V28)
+
+`floor.current_scan_version_id` names the one FINALIZED version a floor publishes. It changes only by promotion
+(`ScanVersionService#promote`), in one transaction:
+
+1. the version is finalized if it is still DRAFT (`finalizeVersion`: pins, frame);
+2. what its run produced before V28 is bound to it (graphs, POIs, and anchors in a frame of its reconstruction; an anchor
+   gets a pose revision);
+3. every ACTIVE graph of the floor is retired and the version's own graphs (one per profile) are activated -- none when
+   it has no navigation, so an older version's graph is never routed on in its place;
+4. the ACTIVE canonical frame of its reconstruction becomes the floor's frame (POIs and anchors are re-projected when it
+   is a recalibration of the same reconstruction; anchors of another one are marked STALE);
+5. the pointer is set.
+
+Who promotes: a run that succeeds with a calibrated reconstruction is promoted by its last stage report
+(`PipelineService#tryPromote`), after its detections are written as POIs naming the version (a re-scan's replacing the
+region's). That happens inside a savepoint of the report's transaction: if anything refuses -- `VERSION_INCOMPLETE`,
+`VERSION_FRAME_MISMATCH`, `PARENT_NOT_CURRENT`, `DETECTIONS_UNREADABLE`, a V28 check -- the savepoint is rolled back,
+nothing of the promotion remains (no pin, no POI, no live graph, no frame change), the stage report is kept, and the run
+ends `FAILED` with that code (retryable). A run that succeeds with an uncalibrated reconstruction stays a DRAFT version
+(`scan_version.awaiting_calibration`) until `finalize-current` promotes it. A run that fails, is PARTIAL or CANCELLED
+never publishes anything: its graphs stay DRAFT, its detections never become POIs, and calibrating its reconstruction does
+not move the floor's frame (`CoordinateFrameService#calibrate` leaves the frame of a floor that publishes another
+reconstruction alone).
+
+A re-scan is promoted only over its own parent (or onto a floor that publishes nothing): a re-scan of an older version
+would silently drop what was published since (`409 PARENT_NOT_CURRENT`). A full reconstruction replaces whatever is
+current. An ALIGNMENT_REJECTED version is never promoted.
+
+The database enforces the end state, checked at commit (`DEFERRABLE INITIALLY DEFERRED` constraint triggers;
+`promote` runs them early with `SET CONSTRAINTS ... IMMEDIATE` so a refusal stays inside the savepoint):
+
+- the pointer names a FINALIZED version of that floor with a recorded frame, and is never cleared;
+- a floor's ACTIVE graphs are exactly its current version's (none while it publishes nothing);
+- the floor's frame is a calibration of its current version's reconstruction;
+- a live anchor that has a version names its current pose, and its head columns are exactly that pose; pose revisions are
+  write-once (only their first calibration may be recorded).
+
+What readers call current, without a version:
+
+| Endpoint | Current means |
+|---|---|
+| `GET .../floors/{f}/reconstructions/latest` | the floor's current version (404 while it publishes none); never merely the newest run |
+| `GET /venues/{v}/pois` | POIs placed against their floor's current version or an ancestor (`poi_version_is_current`); a staff POI on a floor that has never published a version also counts. `current` on each POI; `?all=true` (staff) lists the others too |
+| `GET /venues/{v}/search` | the same POIs |
+| `POST /navigation/routes` | each floor's current version: its ACTIVE graph (which the database guarantees is that version's), a destination and landing POIs of that version (`409 VERSION_MISMATCH` otherwise); `routingSources[].scanVersionId` names it. A floor that publishes nothing is `NAVMESH_NOT_READY`. |
+| `POST .../anchors`, `PUT .../anchors/{id}`, `.../calibrate` | the pose is entered against the current version (`409 NO_CURRENT_SCAN_VERSION` without one) |
+| `POST .../anchors/relocalize` | only anchors entered against the current version or an ancestor (`ANCHOR_VERSION_MISMATCH`; a pre-V28 anchor that never had a version: `ANCHOR_UNVERSIONED`); a request naming another `scanVersionId` than the current one is `409 VERSION_MISMATCH`. The response names the version. |
+
+A public link (`PUBLIC_VIEWER`) is only ever served a FINALIZED version's reconstruction.
 
 ### A re-scan's lineage record
 
@@ -363,12 +417,11 @@ The parent's cloud (`GLOBAL_CLOUD`) is the cloud the parent version pinned, not 
 
 ### Not addressed
 
-- There is no `floor.current_scan_version_id`. `.../reconstructions/latest` and the viewer's default are still the
-  newest listed reconstruction (a re-scan only once FINALIZED; a full run once ARTIFACT_GENERATION succeeded, version or
-  not).
-- A full reconstruction that is never bootstrapped is not a version. Its graphs go live at ingestion and its detections
-  at SEMANTIC_INDEXING, as before; the viewer shows it as "not a finalized version", with the floor's current POIs in its
-  frame.
+- Storage is still mutable (review S-2): a version pins artifacts by object key, and nothing re-verifies their bytes.
+- A capture with no floor produces a run with no version; it can never publish anything.
+- Anchors from before V28 whose tag could not be tied to a frame of their version's reconstruction lost the tag (a
+  recalibration had moved their pose); they cannot be used for relocalization until their pose is entered again.
+- Detected POIs written before V28 without a version are never current; publishing their run's version binds them.
 - Versions finalized before V23 get their run from `provenance.runId` and their frame from the calibration in force at
   `finalized_at`; one whose frame was never recorded stays without one (the constraint is `NOT VALID` for old rows) and
   cannot be viewed as a version (`VERSION_INCOMPLETE`); the viewer lists its run as a reconstruction that is not a
@@ -403,6 +456,7 @@ not venue data.
 | Real FPFH matching feeding the estimator | `tests/gpu/test_region_alignment.py` | Open3D (skipped without it; run in the `chaya-bench-open3d` image) |
 | Control plane: worker rejection, control-plane rejection, parent untouched, rejected version immutable and not retryable, full lineage on success, POIs and viewer only on finalization, MANUAL POIs survive; the re-bake decided by the parent version's navmesh (not the floor's graph, not where the region lies); NAVIGATION_BAKING given the parent's cloud and labels; a re-scan publishing no navmesh is not finalized; graphs naming another version or none refused | `RescanControlPlaneTest`, `RescanServiceTest` | Testcontainers |
 | Version integrity in the database: created DRAFT only, finalization needs run, frame and own KSPLAT and cloud, pins only from the own run or the parent, navigation never inherited and pinned all three or none, nothing changes after finalization, numbers unique per floor | `ScanVersionImmutabilityTest` | Testcontainers |
+| Publication (V28) through the worker protocol: a run is a DRAFT version from the start and nothing of it is current until it succeeds; a new scan that fails leaves the published version, its graphs, POIs, frame and routes untouched (the floor's frame does not move when the new reconstruction is calibrated); a refused promotion (no viewer asset) publishes nothing and fails the run; a successful one switches graphs, POIs, frame and pointer at once, and routes, POI lists, search and relocalization never mix versions; an anchor as of its version keeps its original pose after a recalibration; artifacts that name no or another version are refused; the database refuses a version-less or mixed publication; a re-scan of an older version is not published over a newer one | `ScanVersionPublicationTest`, `AnchorServiceTest`, `SemanticSearchRankingTest` | Testcontainers |
 | Versions end to end over HTTP: v1 (full run, real Recast navmesh fixture, bootstrap), v2 (re-scan over the graph), v3 (re-scan away from every graph node, which still re-bakes); lineage and numbering, the run of every pinned artifact, the viewer switched between the three (model bytes, frame, POIs, routing graph), refusals for a DRAFT version and another venue | `ScanVersionLineageTest` | Testcontainers |
 | The viewer never uses one scene's POIs, route or model for another | `apps/web/lib/version-scope.test.ts` | nothing |
 

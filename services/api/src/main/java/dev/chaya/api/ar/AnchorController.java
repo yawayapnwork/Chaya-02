@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -42,8 +43,9 @@ public class AnchorController {
 
     @GetMapping
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR','VIEWER','PUBLIC_VIEWER')")
-    public List<Anchor> list(@PathVariable UUID venueId, @PathVariable UUID floorId) {
-        return anchors.list(ActorAuthentication.currentActor(), venueId, floorId);
+    public List<Anchor> list(@PathVariable UUID venueId, @PathVariable UUID floorId,
+                             @RequestParam(required = false) UUID scanVersionId) {
+        return anchors.list(ActorAuthentication.currentActor(), venueId, floorId, scanVersionId);
     }
 
     @GetMapping("/{anchorId}")
@@ -95,6 +97,6 @@ public class AnchorController {
     public RelocalizationResponse relocalize(@PathVariable UUID venueId, @PathVariable UUID floorId,
                                              @Valid @RequestBody RelocalizationRequest body) {
         List<AnchorObservation> observations = body.observations();
-        return anchors.relocalize(ActorAuthentication.currentActor(), venueId, floorId, observations);
+        return anchors.relocalize(ActorAuthentication.currentActor(), venueId, floorId, observations, body.scanVersionId());
     }
 }

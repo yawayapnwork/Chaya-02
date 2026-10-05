@@ -110,8 +110,13 @@ class PrivacyLifecycleTest extends PipelineTestSupport {
         return new Started(c, capture, UUID.fromString(n.get("scanId").asText()), UUID.fromString(n.get("run").get("id").asText()));
     }
 
-    private void runPlan(List<JobStage> plan) throws Exception {
+    /** Runs every stage, calibrating the reconstruction before the last one, so the run succeeds with a canonical frame and
+     * is published as its floor's current scan version (V28): only a published version is ever shown to a viewer. */
+    private void runPlan(Started s, List<JobStage> plan) throws Exception {
         for (JobStage stage : plan) {
+            if (stage == plan.get(plan.size() - 1)) {
+                calibrateOk(s, controlPointCalibration(0));
+            }
             succeed(claimExpecting(stage.name()));
         }
     }
@@ -119,7 +124,7 @@ class PrivacyLifecycleTest extends PipelineTestSupport {
     @Test
     void aPrivacyDisabledReconstructionIsNeverServedToAPublicLinkAndKeepsNoStaging() throws Exception {
         var s = startWithoutPrivacy();
-        runPlan(PipelineDefinition.plan(false));
+        runPlan(s, PipelineDefinition.plan(false));
         assertThat(processing(s).get("run").get("status").asText()).isEqualTo("SUCCEEDED");
         // S-7: nothing anonymised these frames, and the run no longer needs them.
         assertThat(piiKeys(s.run())).isNotEmpty().noneMatch(this::existsInDerived);
@@ -142,7 +147,7 @@ class PrivacyLifecycleTest extends PipelineTestSupport {
     @Test
     void aPrivacyEnabledReconstructionIsServedToAPublicLink() throws Exception {
         var s = startRun();
-        runPlan(PipelineDefinition.STAGES);
+        runPlan(s, PipelineDefinition.STAGES);
         Actor publicLink = new Actor(Actor.Kind.PUBLIC_VIEWER, "public-link:" + UUID.randomUUID(), s.c().org(),
             Set.of(s.c().venue()), Set.of(Role.PUBLIC_VIEWER));
         assertThat(reconstructions.listForFloor(publicLink, s.c().venue(), s.c().floor())).hasSize(1);

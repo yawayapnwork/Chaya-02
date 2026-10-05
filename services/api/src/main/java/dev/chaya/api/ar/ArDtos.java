@@ -22,12 +22,14 @@ public final class ArDtos {
 
     /** digitalPose is in canonical venue metres, +Z up, in coordinateFrameId (the floor's current frame when it was set;
      * docs/coordinate-frames.md). For an IMAGE_TARGET it is the pose of the printed image's centre, with the image's own
-     * axes (docs/ar.md, "Marker pose convention"). scanVersionId: the ScanVersion the anchor was registered against
-     * (floor_current_scan_version when it was set, or bound by the bootstrap of that reconstruction's version); null while
-     * the floor's current reconstruction has no version. */
+     * axes (docs/ar.md, "Marker pose convention"). scanVersionId: the ScanVersion the pose was entered against (the version
+     * its floor published then, V28); coordinateFrameId a calibration of that version's reconstruction. poseId/poseRevision:
+     * the immutable versioned pose record (ar_anchor_pose) these values are -- a recalibration or an edit adds a revision and
+     * never changes an earlier one, so the anchor as of an older version keeps its pose. A pre-V28 anchor that was never
+     * entered against a version has no pose record (scanVersionId, poseId null) and cannot be used for relocalization. */
     public record Anchor(UUID id, UUID venueId, UUID floorId, String markerType, String markerIdentifier, Double markerSizeMeters,
                          Pose physicalPose, Pose digitalPose, String calibrationStatus, Instant lastCalibratedAt,
-                         UUID coordinateFrameId, UUID scanVersionId) {}
+                         UUID coordinateFrameId, UUID scanVersionId, UUID poseId, Integer poseRevision) {}
 
     /** A live detection of one already-registered marker, reported by an AR client attempting
      * relocalization. `observedPose` is the marker's pose as the device's own tracking frame currently
@@ -35,11 +37,19 @@ public final class ArDtos {
      * data") -- in the device convention {@link ArDeviceFrame#CONVENTION}: metres, gravity-aligned, +Y up. */
     public record AnchorObservation(@NotNull UUID anchorId, @NotNull Pose observedPose) {}
 
-    public record RelocalizationRequest(@Valid List<AnchorObservation> observations) {}
+    /** scanVersionId (optional): the scan version the client is showing. When given it must be the version the floor
+     * publishes, or the request is refused (VERSION_MISMATCH): a device must not be placed in one version's frame while it
+     * draws another version's content. */
+    public record RelocalizationRequest(@Valid List<AnchorObservation> observations, UUID scanVersionId) {
+        public RelocalizationRequest(List<AnchorObservation> observations) {
+            this(observations, null);
+        }
+    }
 
     /** The device_frame -> venue_frame transform solved from the reported observations, plus a residual
      * (meters) reporting how much the anchors disagreed when more than one was used -- never a claimed
      * accuracy figure, an actual measured spread across the anchors that took part. */
     public record RelocalizationResponse(Pose deviceToVenueTransform, Double residualMeters, int anchorsUsed,
-                                         double gravityTiltDegrees, String deviceFrameConvention, UUID coordinateFrameId) {}
+                                         double gravityTiltDegrees, String deviceFrameConvention, UUID coordinateFrameId,
+                                         UUID scanVersionId) {}
 }

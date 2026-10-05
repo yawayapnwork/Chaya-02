@@ -35,12 +35,13 @@ public final class RescanDtos {
     /** docs/rescan.md "VERSIONING": every field here is written once and never changes after finalization --
      * region/alignment/processing fields are null for a version that was never an incremental re-scan
      * (e.g. a bootstrapped version, see RescanService#finalizeCurrent). pipelineRunId is the run the version is;
-     * coordinateFrameId (set at finalization) the frame its canonical data is in; artifacts what it is made of. */
+     * coordinateFrameId (set at finalization) the frame its canonical data is in; artifacts what it is made of. current:
+     * whether it is the version its floor publishes (floor.current_scan_version_id, V28) -- the only one shown by default. */
     public record ScanVersionView(UUID id, UUID floorId, UUID scanId, int versionNumber, UUID parentVersionId,
                                   String status, Map<String, Object> regionGeometry, String alignmentMethod,
                                   Double alignmentConfidence, Double alignmentResidualM, List<String> changedArtifactKinds,
                                   Map<String, Object> processingConfig, Instant finalizedAt, Instant createdAt,
                                   Map<String, Object> alignmentReport, Map<String, Object> spliceReport, String createdBy,
                                   Instant rejectedAt, UUID pipelineRunId, UUID coordinateFrameId,
-                                  List<PinnedArtifact> artifacts) {}
+                                  List<PinnedArtifact> artifacts, boolean current) {}
 }

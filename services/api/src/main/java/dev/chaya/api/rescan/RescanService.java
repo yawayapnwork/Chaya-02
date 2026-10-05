@@ -162,7 +162,8 @@ public class RescanService {
                 SELECT id, floor_id, scan_id, version_number, parent_version_id, status, region_geometry,
                        alignment_method, alignment_confidence, alignment_residual_m, changed_artifact_kinds,
                        processing_config, finalized_at, created_at, alignment_report, splice_report, created_by, rejected_at,
-                       pipeline_run_id, coordinate_frame_id
+                       pipeline_run_id, coordinate_frame_id,
+                       id = (SELECT current_scan_version_id FROM floor WHERE id = :f) IS TRUE AS current
                   FROM scan_version WHERE venue_id = :v AND floor_id = :f ORDER BY version_number DESC
                 """)
             .param("v", venueId).param("f", floorId).query(this::mapVersion).list();
@@ -183,7 +184,8 @@ public class RescanService {
             readJson(rs.getString("alignment_report")), readJson(rs.getString("splice_report")), rs.getString("created_by"),
             rejectedAt == null ? null : rejectedAt.toInstant(), rs.getObject("pipeline_run_id", UUID.class),
             rs.getObject("coordinate_frame_id", UUID.class),
-            versions.pins(id).stream().map(p -> new RescanDtos.PinnedArtifact(p.artifactId(), p.kind(), p.ownerVersionId())).toList());
+            versions.pins(id).stream().map(p -> new RescanDtos.PinnedArtifact(p.artifactId(), p.kind(), p.ownerVersionId())).toList(),
+            rs.getBoolean("current"));
     }
 
     @SuppressWarnings("unchecked")
@@ -199,13 +201,14 @@ public class RescanService {
     }
 
     /**
-     * Formalizes the floor's latest successful full-venue reconstruction as a FINALIZED version, so there is something to
-     * select as the source of a re-scan. It does not fabricate one: the version is that run, pinned to the run's own
-     * published artifacts (viewer asset, cloud, planes, navmesh, detections) and to the ACTIVE canonical frame of its
-     * reconstruction (ScanVersionService#finalizeVersion) -- an uncalibrated reconstruction, or one with no viewer asset,
-     * is refused. The version takes the floor's next number and has no parent: a new full reconstruction is not derived
-     * from an earlier version's geometry. The run's navigation graphs baked in that frame, its detected POIs, and the MANUAL
-     * POIs and anchors already placed in that reconstruction's frames are bound to the new version. Idempotent per run.
+     * Publishes the floor's latest successful full-venue reconstruction (docs/rescan.md, "Publication"), so it is what the
+     * floor shows and there is something to select as the source of a re-scan. Every run is a DRAFT version from the
+     * start; a run is published on its own when it succeeds with a calibrated reconstruction, and this is how one that was
+     * calibrated only afterwards is published. A run from before that (no version) gets one now. Either way the version is
+     * that run, pinned to its own published artifacts and the ACTIVE canonical frame of its reconstruction
+     * (ScanVersionService#finalizeVersion), and promoted with its graphs, detections and frame in this one transaction
+     * (ScanVersionService#promote); an uncalibrated reconstruction, or one with no viewer asset, is refused and nothing
+     * changes. The version takes the floor's next number and has no parent. Idempotent per run.
      */
     @Transactional
     public RescanDtos.ScanVersionView finalizeCurrent(Actor actor, UUID venueId, UUID floorId) {
@@ -214,7 +217,7 @@ public class RescanService {
         record LatestRun(UUID scanId, UUID runId) {}
         LatestRun latest = jdbc.sql("""
                 SELECT r.scan_id, r.id AS run_id FROM pipeline_run r JOIN capture_session c ON c.id = r.capture_session_id
-                 WHERE c.venue_id = :v AND c.floor_id = :f AND r.status = 'SUCCEEDED' AND r.scan_version_id IS NULL
+                 WHERE c.venue_id = :v AND c.floor_id = :f AND r.status = 'SUCCEEDED' AND NOT ('REGION_SPLICE' = ANY (r.stages))
                  ORDER BY r.finished_at DESC LIMIT 1
                 """)
             .param("v", venueId).param("f", floorId)
@@ -222,42 +225,30 @@ public class RescanService {
             .optional().orElseThrow(() -> new NotFoundException(
                 "no successful full-venue reconstruction exists yet for this floor to finalize as a version"));
 
-        int number = versions.nextVersionNumber(floorId);
-        UUID existing = jdbc.sql("SELECT id FROM scan_version WHERE pipeline_run_id = :r").param("r", latest.runId())
-            .query(UUID.class).optional().orElse(null);
+        record Existing(UUID id, String status) {}
+        Existing existing = jdbc.sql("SELECT id, status FROM scan_version WHERE pipeline_run_id = :r").param("r", latest.runId())
+            .query((rs, i) -> new Existing(rs.getObject(1, UUID.class), rs.getString(2))).optional().orElse(null);
         UUID versionId;
-        if (existing != null) {
-            versionId = existing;
+        if (existing != null && "FINALIZED".equals(existing.status())) {
+            versionId = existing.id();
         } else {
-            versionId = jdbc.sql("""
-                    INSERT INTO scan_version (organization_id, venue_id, scan_id, floor_id, version_number, status,
-                        pipeline_run_id, created_by)
-                    VALUES (:o, :v, :s, :f, :n, 'DRAFT', :r, :by) RETURNING id
-                    """)
-                .param("o", actor.organizationId()).param("v", venueId).param("s", latest.scanId()).param("f", floorId)
-                .param("n", number).param("r", latest.runId()).param("by", actor.subject())
-                .query(UUID.class).single();
-            UUID frameId = versions.finalizeVersion(versionId, Map.of("bootstrap", true, "runId", latest.runId().toString()));
-            int graphs = jdbc.sql("""
-                    UPDATE navigation_graph SET scan_version_id = :sv
-                     WHERE pipeline_run_id = :r AND scan_version_id IS NULL AND coordinate_frame_id = :frame
-                    """).param("sv", versionId).param("r", latest.runId()).param("frame", frameId).update();
-            // MANUAL POIs and anchors carry the frame they were placed in; a frame of this reconstruction ties them to it.
-            int pois = jdbc.sql("""
-                    UPDATE poi_version SET scan_version_id = :sv
-                     WHERE scan_version_id IS NULL AND venue_id = :v
-                       AND (pipeline_run_id = :r
-                            OR (source = 'MANUAL' AND coordinate_frame_id IN (SELECT id FROM coordinate_frame WHERE source_run_id = :r)))
-                    """).param("sv", versionId).param("v", venueId).param("r", latest.runId()).update();
-            int anchors = jdbc.sql("""
-                    UPDATE ar_anchor SET scan_version_id = :sv
-                     WHERE scan_version_id IS NULL AND floor_id = :f AND deleted_at IS NULL
-                       AND coordinate_frame_id IN (SELECT id FROM coordinate_frame WHERE source_run_id = :r)
-                    """).param("sv", versionId).param("f", floorId).param("r", latest.runId()).update();
+            if (existing == null) {
+                // A run from before every run was a version.
+                jdbc.sql("""
+                        INSERT INTO scan_version (organization_id, venue_id, scan_id, floor_id, version_number, status,
+                            pipeline_run_id, created_by)
+                        VALUES (:o, :v, :s, :f, :n, 'DRAFT', :r, :by)
+                        """)
+                    .param("o", actor.organizationId()).param("v", venueId).param("s", latest.scanId()).param("f", floorId)
+                    .param("n", versions.nextVersionNumber(floorId)).param("r", latest.runId()).param("by", actor.subject())
+                    .update();
+            }
+            ScanVersionService.Promotion p = pipeline.publishRun(actor, latest.runId());
+            versionId = p.versionId();
             audit.success(actor, venueId, "rescan.version_bootstrapped", "scan_version", versionId, Map.of(
-                "floorId", floorId.toString(), "runId", latest.runId().toString(), "versionNumber", number,
-                "coordinateFrameId", frameId.toString(), "navigationGraphsBound", graphs, "poiVersionsBound", pois,
-                "anchorsBound", anchors));
+                "floorId", floorId.toString(), "runId", latest.runId().toString(),
+                "coordinateFrameId", String.valueOf(p.coordinateFrameId()), "navigationGraphsActivated", p.graphsActivated(),
+                "poiVersionsBound", p.poiVersionsBound(), "anchorsBound", p.anchorsBound()));
         }
         return listVersions(actor, venueId, floorId).stream().filter(v -> v.id().equals(versionId)).findFirst().orElseThrow();
     }

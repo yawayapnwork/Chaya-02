@@ -5,8 +5,8 @@ import type { CoordinateFrame } from "./coordinate-frame";
 import { publicConfig } from "./env";
 import { currentAuthHeaders } from "./session";
 
-/** Mirrors dev.chaya.api.reconstruction.ReconstructionService.ReconstructionVersion. scanVersionId / versionNumber /
- * parentVersionId: the FINALIZED scan version this reconstruction is, or null when it was never made one. */
+/** Mirrors dev.chaya.api.reconstruction.ReconstructionService.ReconstructionVersion: one FINALIZED scan version of the
+ * floor (only those are listed). current: it is the version the floor publishes (floor.current_scan_version_id). */
 export interface ReconstructionVersion {
   runId: string;
   floorId: string;
@@ -16,6 +16,7 @@ export interface ReconstructionVersion {
   scanVersionId: string | null;
   versionNumber: number | null;
   parentVersionId: string | null;
+  current: boolean;
 }
 
 /** Mirrors dev.chaya.api.reconstruction.ReconstructionService.ArtifactRef. `url` is a path on this

@@ -139,6 +139,12 @@ final class Fixtures {
     }
 
     UUID identityFrame(UUID org, UUID venue, UUID floor, UUID run, String datum) {
+        return identityFrame(org, venue, floor, run, datum, true);
+    }
+
+    /** As above; makeCurrent false leaves the floor's current frame alone (a floor that publishes a version only takes a
+     * new reconstruction's frame by promotion, V28). */
+    UUID identityFrame(UUID org, UUID venue, UUID floor, UUID run, String datum, boolean makeCurrent) {
         jdbc.sql("UPDATE coordinate_frame SET status = 'SUPERSEDED' WHERE source_run_id = :r AND status = 'ACTIVE'")
             .param("r", run).update();
         UUID frame = jdbc.sql("""
@@ -149,10 +155,130 @@ final class Fixtures {
                     'METRIC', 'ALIGNED', :d, 1, 1, 0, 0, 0, 0, 0, 0,
                     'CONTROL_POINTS', 'CONTROL_POINTS', 'TEST_FIXTURE', '{"fixture": true}', '{}', 'fixture') RETURNING id""")
             .param("o", org).param("v", venue).param("f", floor).param("r", run).param("d", datum).query(UUID.class).single();
-        if (floor != null) {
-            jdbc.sql("UPDATE floor SET current_coordinate_frame_id = :c WHERE id = :f").param("c", frame).param("f", floor).update();
+        if (floor != null && makeCurrent) {
+            // As CoordinateFrameService#calibrate: a floor that publishes a version of another reconstruction keeps its frame
+            // until this reconstruction's version is promoted (V28).
+            jdbc.sql("""
+                    UPDATE floor f SET current_coordinate_frame_id = :c
+                     WHERE f.id = :f AND (f.current_scan_version_id IS NULL OR :r = (
+                         SELECT cf.source_run_id FROM scan_version v JOIN coordinate_frame cf ON cf.id = v.coordinate_frame_id
+                          WHERE v.id = f.current_scan_version_id))""")
+                .param("c", frame).param("f", floor).param("r", run).update();
         }
         return frame;
+    }
+
+    /** A new capture, scan and SUCCEEDED run on a floor that already publishes a version, with an identity frame that is
+     * not (yet) the floor's, then published as the floor's current version (see publish). Returns the version. */
+    UUID publishNewReconstruction(UUID org, UUID venue, UUID floor) {
+        UUID session = jdbc.sql("INSERT INTO capture_session (organization_id, venue_id, floor_id, operator_id) "
+                + "VALUES (:o, :v, :f, 'operator-sub') RETURNING id")
+            .param("o", org).param("v", venue).param("f", floor).query(UUID.class).single();
+        UUID scan = scan(org, venue, session);
+        UUID run = jdbc.sql("""
+                INSERT INTO pipeline_run (organization_id, venue_id, scan_id, capture_session_id, status, quality, stages,
+                    time_budget_seconds, deadline_at, finished_at, requested_by)
+                VALUES (:o, :v, :s, :cs, 'SUCCEEDED', 'FINAL', '{}', 3600, now(), now(), 'fixture') RETURNING id""")
+            .param("o", org).param("v", venue).param("s", scan).param("cs", session).query(UUID.class).single();
+        jdbc.sql("UPDATE pipeline_run SET reconstruction_frame_run_id = id WHERE id = :r").param("r", run).update();
+        UUID frame = identityFrame(org, venue, floor, run, "FLOOR_LOCAL", false);
+        return publish(org, venue, floor, run, scan, frame);
+    }
+
+    /**
+     * Publishes the reconstruction of the floor's current frame as the floor's current scan version (V28), the way
+     * ScanVersionService#promote does, in one transaction: a FINALIZED version of that run (its own KSPLAT and SPLAT_CLEAN
+     * pinned, the floor's frame recorded); the floor's DRAFT graphs and its unversioned POIs bound to it; those graphs
+     * ACTIVE and every other ACTIVE graph of the floor retired; and floor.current_scan_version_id set. Returns the version.
+     */
+    UUID publishCurrentReconstruction(UUID org, UUID venue, UUID floor) {
+        record Current(UUID frame, UUID run, UUID scan) {}
+        Current c = jdbc.sql("""
+                SELECT cf.id, r.id, r.scan_id FROM floor f JOIN coordinate_frame cf ON cf.id = f.current_coordinate_frame_id
+                  JOIN pipeline_run r ON r.id = cf.source_run_id WHERE f.id = :f""")
+            .param("f", floor).query((rs, i) -> new Current(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class),
+                rs.getObject(3, UUID.class))).single();
+        return publish(org, venue, floor, c.run(), c.scan(), c.frame());
+    }
+
+    /** Publishes `run` (its frame `frame`) as the floor's current version; see publishCurrentReconstruction. */
+    UUID publish(UUID org, UUID venue, UUID floor, UUID run, UUID scan, UUID frame) {
+        record Current(UUID frame, UUID run, UUID scan) {}
+        Current c = new Current(frame, run, scan);
+        UUID cloud = publishedArtifact(org, venue, c.scan(), c.run(), "GEOMETRIC_CLEANUP", "SPLAT_CLEAN");
+        UUID ksplat = publishedArtifact(org, venue, c.scan(), c.run(), "ARTIFACT_GENERATION", "KSPLAT");
+        UUID version = jdbc.sql("""
+                INSERT INTO scan_version (organization_id, venue_id, scan_id, floor_id, version_number, pipeline_run_id)
+                VALUES (:o, :v, :s, :f, (SELECT coalesce(max(version_number), 0) + 1 FROM scan_version WHERE floor_id = :f), :r)
+                RETURNING id""")
+            .param("o", org).param("v", venue).param("s", c.scan()).param("f", floor).param("r", c.run()).query(UUID.class).single();
+        for (var pin : java.util.Map.of(cloud, "SPLAT_CLEAN", ksplat, "KSPLAT").entrySet()) {
+            jdbc.sql("INSERT INTO scan_version_artifact (scan_version_id, artifact_id, kind, owner_version_id) VALUES (:v, :a, :k, :v)")
+                .param("v", version).param("a", pin.getKey()).param("k", pin.getValue()).update();
+        }
+        jdbc.sql("UPDATE scan_version SET status = 'FINALIZED', finalized_at = now(), coordinate_frame_id = :frame, "
+                + "provenance = CAST(:p AS jsonb) WHERE id = :id")
+            .param("frame", c.frame()).param("p", "{\"fixture\": true, \"runId\": \"" + c.run() + "\"}").param("id", version).update();
+        // One statement, one transaction: the V28 checks run at its commit and see the finished promotion.
+        jdbc.sql("""
+                DO $$
+                BEGIN
+                    UPDATE navigation_graph SET status = 'RETIRED' WHERE floor_id = '%2$s' AND status = 'ACTIVE';
+                    UPDATE navigation_graph SET scan_version_id = '%1$s' WHERE floor_id = '%2$s' AND status = 'DRAFT'
+                       AND scan_version_id IS NULL;
+                    UPDATE navigation_graph SET status = 'ACTIVE' WHERE floor_id = '%2$s' AND status = 'DRAFT'
+                       AND scan_version_id = '%1$s';
+                    UPDATE poi_version SET scan_version_id = '%1$s'
+                     WHERE scan_version_id IS NULL AND poi_id IN (SELECT id FROM poi WHERE floor_id = '%2$s')
+                       AND (coordinate_frame_id IS NULL
+                            OR coordinate_frame_id IN (SELECT id FROM coordinate_frame WHERE source_run_id = '%4$s'));
+                    UPDATE floor SET current_scan_version_id = '%1$s', current_coordinate_frame_id = '%3$s' WHERE id = '%2$s';
+                END $$""".formatted(version, floor, c.frame(), c.run())).update();
+        return version;
+    }
+
+    /**
+     * What a promotion does for the floor's DRAFT graphs and unversioned POIs, for hand-built test graphs: a floor with a
+     * calibrated frame and no published version publishes its current reconstruction (publishCurrentReconstruction); a
+     * floor that already publishes one gets its DRAFT graphs and its unversioned POIs in a frame of that reconstruction
+     * bound to it, those graphs ACTIVE in place of the profile's previous ones. A floor without a frame is left alone.
+     */
+    void publishDrafts(UUID org, UUID venue, UUID floor) {
+        record State(UUID frame, UUID current) {}
+        State s = jdbc.sql("SELECT current_coordinate_frame_id, current_scan_version_id FROM floor WHERE id = :f").param("f", floor)
+            .query((rs, i) -> new State(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class))).single();
+        if (s.frame() == null) {
+            return;
+        }
+        if (s.current() == null) {
+            publishCurrentReconstruction(org, venue, floor);
+            return;
+        }
+        jdbc.sql("""
+                DO $$
+                BEGIN
+                    UPDATE navigation_graph g SET status = 'RETIRED' WHERE g.floor_id = '%2$s' AND g.status = 'ACTIVE'
+                       AND EXISTS (SELECT 1 FROM navigation_graph d WHERE d.floor_id = g.floor_id AND d.profile = g.profile
+                                      AND d.status = 'DRAFT' AND d.scan_version_id IS NULL);
+                    UPDATE navigation_graph SET scan_version_id = '%1$s' WHERE floor_id = '%2$s' AND status = 'DRAFT'
+                       AND scan_version_id IS NULL;
+                    UPDATE navigation_graph SET status = 'ACTIVE' WHERE floor_id = '%2$s' AND status = 'DRAFT'
+                       AND scan_version_id = '%1$s';
+                    UPDATE poi_version SET scan_version_id = '%1$s'
+                     WHERE scan_version_id IS NULL AND poi_id IN (SELECT id FROM poi WHERE floor_id = '%2$s')
+                       AND (coordinate_frame_id IS NULL OR coordinate_frame_id IN (
+                            SELECT id FROM coordinate_frame WHERE source_run_id = (
+                                SELECT cf.source_run_id FROM scan_version v JOIN coordinate_frame cf ON cf.id = v.coordinate_frame_id
+                                 WHERE v.id = '%1$s')));
+                END $$""".formatted(s.current(), floor)).update();
+    }
+
+    /** A new calibration of the reconstruction the floor's current frame belongs to, made the floor's frame (nothing is
+     * re-projected). Returns the new frame. */
+    UUID recalibrateCurrentReconstruction(UUID org, UUID venue, UUID floor) {
+        UUID run = jdbc.sql("SELECT cf.source_run_id FROM floor f JOIN coordinate_frame cf ON cf.id = f.current_coordinate_frame_id "
+                + "WHERE f.id = :f").param("f", floor).query(UUID.class).single();
+        return identityFrame(org, venue, floor, run, "FLOOR_LOCAL");
     }
 
     /** A venue with a floor, capture session, scan and one draft version. */

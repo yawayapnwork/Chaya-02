@@ -412,13 +412,15 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
 
     // ---- SEMANTIC_INDEXING ingestion (DETECTED_OBJECTS -> poi/poi_version rows) -------------------
 
-    private static String detectedObjectsJson(String frameId, double x, double y, double z, String label, double confidence) {
+    private static String detectedObjectsJson(String frameId, String versionId, double x, double y, double z, String label,
+                                              double confidence) {
         StringBuilder embedding = new StringBuilder();
         for (int i = 0; i < 512; i++) {
             if (i > 0) embedding.append(',');
             embedding.append(String.format(java.util.Locale.ROOT, "%.4f", Math.sin(i * 0.017)));
         }
         return "{\"coordinate_frame\":{\"id\":\"" + frameId + "\",\"units\":\"m\",\"up_axis\":\"+Z\"},"
+            + "\"source\":{\"scan_version_id\":\"" + versionId + "\"},"
             + "\"detector_model\":\"IDEA-Research/grounding-dino-tiny\",\"detector_fine_tuned\":false,"
             + "\"embedding_model\":\"open_clip:ViT-B-32:openai\",\"frames_processed\":4,\"raw_detection_count\":3,"
             + "\"objects\":[{\"label\":\"" + label + "\",\"confidence\":" + confidence + ",\"position\":[" + x + "," + y + "," + z + "],"
@@ -444,11 +446,19 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
             if (stage.name().equals("SEMANTIC_INDEXING")) {
                 assertThat(order.get("coordinateFrame").get("id").asText()).isEqualTo(frameId);
                 Map<String, Object> wrongFrame = artifact(order, "detected-objects-wrong.json", "DETECTED_OBJECTS", false, false,
-                    detectedObjectsJson(UUID.randomUUID().toString(), 1.5, 2.5, 0.75, "reception chair", 0.87));
+                    detectedObjectsJson(UUID.randomUUID().toString(), order.get("scanVersionId").asText(), 1.5, 2.5, 0.75,
+                        "reception chair", 0.87));
                 send(order, report("SUCCEEDED", List.of(wrongFrame), null, null), svc).andExpect(status().isConflict());
                 Map<String, Object> detected = artifact(order, "detected-objects.json", "DETECTED_OBJECTS", false, false,
-                    detectedObjectsJson(frameId, 1.5, 2.5, 0.75, "reception chair", 0.87));
+                    detectedObjectsJson(frameId, order.get("scanVersionId").asText(), 1.5, 2.5, 0.75, "reception chair", 0.87));
                 send(order, report("SUCCEEDED", List.of(detected), null, null), svc).andExpect(status().isOk());
+                // Validated, but not a POI yet: only publishing the run's version turns its detections into POIs (V28).
+                assertThat(jdbc.sql("SELECT count(*) FROM poi WHERE venue_id = :v").param("v", s.c().venue())
+                    .query(Integer.class).single()).isZero();
+                // NAVIGATION_BAKING is the last stage: the run succeeds with a calibrated reconstruction and is published.
+                succeed(claimExpecting("NAVIGATION_BAKING"));
+                assertThat(jdbc.sql("SELECT current_scan_version_id FROM floor WHERE id = :f").param("f", s.c().floor())
+                    .query(UUID.class).single()).isEqualTo(UUID.fromString(order.get("scanVersionId").asText()));
                 break;
             }
             succeed(order);
@@ -499,8 +509,9 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
             .param("o", s.c().org()).param("v", s.c().venue()).param("f", floor).query(UUID.class).single();
         jdbc.sql("""
                 INSERT INTO poi_version (organization_id, venue_id, poi_id, version_number, label, category, tags, x, y, z,
-                    coordinate_frame_id, created_by)
-                VALUES (:o, :v, :p, 1, 'Far room', null, '{}', :x, :y, :z, (SELECT current_coordinate_frame_id FROM floor WHERE id = :f), 'test')
+                    coordinate_frame_id, scan_version_id, created_by)
+                VALUES (:o, :v, :p, 1, 'Far room', null, '{}', :x, :y, :z, (SELECT current_coordinate_frame_id FROM floor WHERE id = :f),
+                    (SELECT current_scan_version_id FROM floor WHERE id = :f), 'test')
                 """)
             .param("o", s.c().org()).param("v", s.c().venue()).param("p", poi).param("f", floor)
             .param("x", x).param("y", y).param("z", z).update();
@@ -565,7 +576,10 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
                 succeed(order);
                 continue;
             }
-            String graph = graphTemplate.replace("FIXTURE_FRAME_ID", frameId);
+            // The graph names the run's version, as chaya_worker.stages.base.run_provenance makes it.
+            Map<String, Object> graphDoc = mapper.readValue(graphTemplate.replace("FIXTURE_FRAME_ID", frameId), Map.class);
+            graphDoc.put("source", sourceOf(order));
+            String graph = mapper.writeValueAsString(graphDoc);
             var nav = artifact(order, "navmesh.bin", "NAVMESH", false, false, navmesh);
             var man = artifact(order, "navmesh-manifest.json", "NAVMESH_MANIFEST", false, false, manifest);
             // A graph that names some other navmesh is refused, not ingested as routable.
@@ -667,7 +681,8 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
         jdbc.sql("INSERT INTO navigation_edge (organization_id, venue_id, graph_id, from_node_id, to_node_id, length_m) "
                 + "VALUES (:o, :v, :g, :a, :b, 5)")
             .param("o", s.c().org()).param("v", s.c().venue()).param("g", synthetic).param("a", n1).param("b", n2).update();
-        jdbc.sql("UPDATE navigation_graph SET status = 'ACTIVE' WHERE id = :g").param("g", synthetic).update();
+        assertThatThrownBy(() -> jdbc.sql("UPDATE navigation_graph SET status = 'ACTIVE' WHERE id = :g").param("g", synthetic).update())
+            .as("a graph of no published version is never live (V28)").hasMessageContaining("is not its current scan_version");
         assertThat(jdbc.sql("SELECT source FROM navigation_graph WHERE id = :g").param("g", synthetic).query(String.class).single())
             .as("anything not ingested from a navmesh is SYNTHETIC by default").isEqualTo("SYNTHETIC");
         UUID floor2Poi = insertPoiInCurrentFrame(s, floor2, 5, 0, 0);

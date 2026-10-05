@@ -134,7 +134,13 @@ class RescanServiceTest extends AbstractIntegrationTest {
             .param("o", t.org()).param("v", t.venue()).param("f", t.floor()).query(UUID.class).single();
         jdbc.sql("INSERT INTO navigation_node (organization_id, venue_id, graph_id, floor_id, x, y, z) VALUES (:o, :v, :g, :f, 1, 1, 0)")
             .param("o", t.org()).param("v", t.venue()).param("g", graph).param("f", t.floor()).update();
-        jdbc.sql("UPDATE navigation_graph SET status = 'ACTIVE' WHERE id = :g").param("g", graph).update();
+        // ACTIVE as part of the floor's published version (V28): the graph, its version and the floor pointer together.
+        jdbc.sql("""
+                DO $$
+                BEGIN
+                    UPDATE navigation_graph SET scan_version_id = '%1$s', status = 'ACTIVE' WHERE id = '%2$s';
+                    UPDATE floor SET current_scan_version_id = '%1$s' WHERE id = '%3$s';
+                END $$""".formatted(withoutNavmesh, graph, t.floor())).update();
         assertThat(rescan.initiate(actor, t.venue(), t.floor(), new RescanRequest(withoutNavmesh, SQUARE, null)).navigationRebuildRequired())
             .isFalse();
 
@@ -201,6 +207,7 @@ class RescanServiceTest extends AbstractIntegrationTest {
         assertThat(v1.coordinateFrameId()).isEqualTo(frame1);
         assertThat(v1.artifacts()).extracting(RescanDtos.PinnedArtifact::artifactId).containsExactlyInAnyOrder(cloud1, ksplat1);
         assertThat(v1.artifacts()).allSatisfy(a -> assertThat(a.ownerVersionId()).isEqualTo(v1.id()));
+        assertThat(v1.current()).as("finalize-current publishes the version (V28)").isTrue();
 
         // Idempotent: finalizing the same run again returns the same version, not a duplicate.
         assertThat(rescan.finalizeCurrent(actor, t.venue(), floor).id()).isEqualTo(v1.id());
@@ -209,7 +216,8 @@ class RescanServiceTest extends AbstractIntegrationTest {
         // A later full reconstruction of the floor is the floor's next number (it used to be "1" again), with no parent:
         // its geometry is not derived from version 1.
         UUID run2 = fullRun(t, floor);
-        UUID frame2 = fx.identityFrame(t.org(), t.venue(), floor, run2, "FLOOR_LOCAL");
+        // Calibrating it does not move the floor's frame: the floor publishes version 1 until version 2 is promoted.
+        UUID frame2 = fx.identityFrame(t.org(), t.venue(), floor, run2, "FLOOR_LOCAL", false);
         fx.publishedArtifact(t.org(), t.venue(), scanOf(run2), run2, "GEOMETRIC_CLEANUP", "SPLAT_CLEAN");
         fx.publishedArtifact(t.org(), t.venue(), scanOf(run2), run2, "ARTIFACT_GENERATION", "KSPLAT");
         ScanVersionView v2 = rescan.finalizeCurrent(actor, t.venue(), floor);
@@ -219,5 +227,8 @@ class RescanServiceTest extends AbstractIntegrationTest {
         assertThat(v2.coordinateFrameId()).isEqualTo(frame2);
         assertThat(v2.artifacts()).extracting(RescanDtos.PinnedArtifact::artifactId).doesNotContain(cloud1, ksplat1);
         assertThat(rescan.listVersions(actor, t.venue(), floor)).extracting(ScanVersionView::versionNumber).containsExactly(2, 1);
+        assertThat(rescan.listVersions(actor, t.venue(), floor)).extracting(ScanVersionView::current).containsExactly(true, false);
+        assertThat(jdbc.sql("SELECT current_coordinate_frame_id FROM floor WHERE id = :f").param("f", floor).query(UUID.class).single())
+            .as("promotion moved the floor to version 2's frame").isEqualTo(frame2);
     }
 }

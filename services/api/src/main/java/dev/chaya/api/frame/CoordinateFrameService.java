@@ -155,7 +155,14 @@ public class CoordinateFrameService {
         meta.put("method", result.method());
         boolean frameRoot = runId.equals(run.reconstructionFrameRunId());
         if (view.canonical() && frameRoot && run.floorId() != null) {
-            meta.putAll(makeCurrentForFloor(run.floorId(), view));
+            if (publishesAnotherReconstruction(run.floorId(), runId)) {
+                // A reconstruction the floor does not publish yet: its frame becomes the floor's when its version is
+                // promoted (ScanVersionService#promote), never before, so the published version's POIs, anchors and routes
+                // keep the frame they are in.
+                meta.put("floorFrameChanged", false);
+            } else {
+                meta.putAll(makeCurrentForFloor(run.floorId(), view));
+            }
         }
         audit.success(actor, venueId, "coordinate_frame.calibrate", "coordinate_frame", id, meta);
         return view;
@@ -278,6 +285,27 @@ public class CoordinateFrameService {
     // Lifecycle: the floor's current frame
     // =========================================================================================
 
+    /** Whether the floor publishes a scan version (V28) of a reconstruction other than `frameRun`'s. */
+    private boolean publishesAnotherReconstruction(UUID floorId, UUID frameRun) {
+        UUID published = jdbc.sql("""
+                SELECT cf.source_run_id FROM floor f
+                  JOIN scan_version v ON v.id = f.current_scan_version_id
+                  JOIN coordinate_frame cf ON cf.id = v.coordinate_frame_id
+                 WHERE f.id = :f
+                """).param("f", floorId).query(UUID.class).optional().orElse(null);
+        return published != null && !published.equals(frameRun);
+    }
+
+    /** Makes `frame` the floor's current frame, as a calibration of the published reconstruction does. Used by
+     * ScanVersionService#promote, inside its transaction: re-projects POIs and anchors when only the calibration of the
+     * same reconstruction changed, and marks calibrated anchors of another reconstruction STALE. */
+    public Map<String, Object> adoptForFloor(UUID floorId, FrameView frame) {
+        if (!frame.canonical()) {
+            throw new ApiException(HttpStatus.CONFLICT, NOT_CALIBRATED, "frame " + frame.id() + " is not canonical");
+        }
+        return makeCurrentForFloor(floorId, frame);
+    }
+
     private Map<String, Object> makeCurrentForFloor(UUID floorId, FrameView next) {
         UUID previousId = jdbc.sql("SELECT current_coordinate_frame_id FROM floor WHERE id = :f FOR UPDATE")
             .param("f", floorId).query((rs, i) -> rs.getObject(1, UUID.class)).optional().orElse(null);
@@ -329,13 +357,37 @@ public class CoordinateFrameService {
 
     private int reprojectAnchors(UUID floorId, UUID oldFrame, UUID newFrame, Similarity change) {
         List<Map<String, Object>> rows = jdbc.sql("""
-                SELECT id, digital_x, digital_y, digital_z, digital_qx, digital_qy, digital_qz, digital_qw FROM ar_anchor
+                SELECT id, digital_x, digital_y, digital_z, digital_qx, digital_qy, digital_qz, digital_qw, current_pose_id FROM ar_anchor
                  WHERE floor_id = :f AND deleted_at IS NULL AND coordinate_frame_id = :old
                 """).param("f", floorId).param("old", oldFrame).query().listOfRows();
         for (Map<String, Object> r : rows) {
             double[] p = change.apply(new double[]{num(r, "digital_x"), num(r, "digital_y"), num(r, "digital_z")});
             Quaternion q = change.applyOrientation(new Quaternion(num(r, "digital_qw"), num(r, "digital_qx"), num(r, "digital_qy"),
                 num(r, "digital_qz")));
+            if (r.get("current_pose_id") != null) {
+                // A versioned anchor (V28): the pose it had stays as history -- the anchor as of its version keeps it --
+                // and the re-projected one is a new revision, in the new frame, against the same version.
+                UUID pose = jdbc.sql("""
+                        INSERT INTO ar_anchor_pose (organization_id, venue_id, anchor_id, revision, scan_version_id, coordinate_frame_id,
+                            physical_x, physical_y, physical_z, physical_qx, physical_qy, physical_qz, physical_qw,
+                            digital_x, digital_y, digital_z, digital_qx, digital_qy, digital_qz, digital_qw, source, calibrated_at, created_by)
+                        SELECT organization_id, venue_id, anchor_id,
+                               (SELECT max(revision) FROM ar_anchor_pose WHERE anchor_id = cur.anchor_id) + 1, scan_version_id, :new,
+                               physical_x, physical_y, physical_z, physical_qx, physical_qy, physical_qz, physical_qw,
+                               :x, :y, :z, :qx, :qy, :qz, :qw, 'REPROJECTED', calibrated_at, 'system:coordinate-frame-recalibration'
+                          FROM ar_anchor_pose cur WHERE cur.id = :cur
+                        RETURNING id
+                        """)
+                    .param("x", p[0]).param("y", p[1]).param("z", p[2]).param("qx", q.x()).param("qy", q.y()).param("qz", q.z())
+                    .param("qw", q.w()).param("new", newFrame).param("cur", r.get("current_pose_id")).query(UUID.class).single();
+                jdbc.sql("""
+                        UPDATE ar_anchor SET digital_x = :x, digital_y = :y, digital_z = :z, digital_qx = :qx, digital_qy = :qy,
+                            digital_qz = :qz, digital_qw = :qw, coordinate_frame_id = :new, current_pose_id = :pose WHERE id = :id
+                        """)
+                    .param("x", p[0]).param("y", p[1]).param("z", p[2]).param("qx", q.x()).param("qy", q.y()).param("qz", q.z())
+                    .param("qw", q.w()).param("new", newFrame).param("pose", pose).param("id", r.get("id")).update();
+                continue;
+            }
             jdbc.sql("""
                     UPDATE ar_anchor SET digital_x = :x, digital_y = :y, digital_z = :z, digital_qx = :qx, digital_qy = :qy,
                         digital_qz = :qz, digital_qw = :qw, coordinate_frame_id = :new WHERE id = :id

@@ -222,6 +222,11 @@ class ScanVersionLineageTest extends PipelineTestSupport {
 
     // ---- the test ----------------------------------------------------------------------------------------------------
 
+    /** A version as listed, without `current`: whether the floor publishes it is the floor's state, not the version's. */
+    private static JsonNode withoutCurrent(JsonNode version) {
+        return ((com.fasterxml.jackson.databind.node.ObjectNode) version.deepCopy()).without("current");
+    }
+
     @Test
     void versionsOwnTheirArtifactsAndTheViewerShowsExactlyTheSelectedOne() throws Exception {
         JsonNode v1 = version1();
@@ -237,8 +242,11 @@ class ScanVersionLineageTest extends PipelineTestSupport {
         assertThat((Boolean) r2[1]).as("the region touches the graph, so navigation is re-baked").isTrue();
         Map<Integer, JsonNode> afterV2 = versionsByNumber();
         UUID v2Id = UUID.fromString(afterV2.get(2).get("id").asText());
-        // Version 1 exactly as it was when it finalized.
-        assertThat(afterV2.get(1)).isEqualTo(v1);
+        // Version 1 exactly as it was when it finalized -- except that its floor no longer publishes it.
+        assertThat(v1.get("current").asBoolean()).isTrue();
+        assertThat(afterV2.get(1).get("current").asBoolean()).isFalse();
+        assertThat(afterV2.get(2).get("current").asBoolean()).as("the finalized re-scan is published").isTrue();
+        assertThat(withoutCurrent(afterV2.get(1))).isEqualTo(withoutCurrent(v1));
 
         Object[] r3 = rescan(v2Id, REGION_AWAY_FROM_GRAPH, "version-3 merged model");
         UUID run3 = (UUID) r3[0];
@@ -250,7 +258,7 @@ class ScanVersionLineageTest extends PipelineTestSupport {
 
         // ---- lineage and numbering ------------------------------------------------------------------------------------
         assertThat(versions.keySet()).containsExactlyInAnyOrder(1, 2, 3);
-        assertThat(versions.get(1)).isEqualTo(v1);
+        assertThat(withoutCurrent(versions.get(1))).isEqualTo(withoutCurrent(v1));
         assertThat(v1.get("parentVersionId").isNull()).isTrue();
         assertThat(v2.get("parentVersionId").asText()).isEqualTo(v1Id.toString());
         assertThat(v3.get("parentVersionId").asText()).isEqualTo(v2Id.toString());
@@ -345,7 +353,7 @@ class ScanVersionLineageTest extends PipelineTestSupport {
             .hasMessageContaining("write-once");
         assertThatThrownBy(() -> jdbc.sql("UPDATE navigation_graph SET scan_version_id = :other WHERE id = :g")
             .param("other", v2Id).param("g", v1Graph).update()).hasMessageContaining("belongs to scan_version");
-        assertThat(versionsByNumber().get(1)).isEqualTo(v1);
+        assertThat(withoutCurrent(versionsByNumber().get(1))).isEqualTo(withoutCurrent(v1));
     }
 
     @Test

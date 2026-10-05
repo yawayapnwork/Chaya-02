@@ -161,10 +161,10 @@ class PoiEmbeddingServiceTest extends AbstractIntegrationTest {
             .param("o", t.org()).param("v", t.venue()).param("f", t.floor()).query(UUID.class).single();
         float[] crop = TestEmbeddingConfig.embedFor("a photo crop of a sofa");
         jdbc.sql("INSERT INTO poi_version (organization_id, venue_id, poi_id, version_number, label, tags, x, y, z, "
-                + "image_embedding, image_embedding_model, source, pipeline_run_id, created_by) "
-                + "VALUES (:o, :v, :p, 1, 'sofa', '{}', 0, 0, 0, CAST(:e AS vector), 'clip-image', 'AUTO_DETECTED', :r, 'test')")
+                + "image_embedding, image_embedding_model, source, pipeline_run_id, scan_version_id, created_by) "
+                + "VALUES (:o, :v, :p, 1, 'sofa', '{}', 0, 0, 0, CAST(:e AS vector), 'clip-image', 'AUTO_DETECTED', :r, :sv, 'test')")
             .param("o", t.org()).param("v", t.venue()).param("p", poi).param("e", TestEmbeddingConfig.vectorLiteral(crop))
-            .param("r", run).update();
+            .param("r", run).param("sv", t.version()).update();
 
         embeddings.embedPending(10_000);
 

@@ -172,6 +172,12 @@ class CoordinateFrameCalibrationTest extends PipelineTestSupport {
     void recalibratingTheSameReconstructionSupersedesTheFrameAndReprojectsPoisAndAnchorsExactly() throws Exception {
         Started s = reconstructed(true);
         JsonNode v1 = calibrateOk(s, controlPointCalibration(0));
+        // The rest of the run succeeds, and with its reconstruction calibrated it is published as the floor's current scan
+        // version (V28): anchors are entered against a published version only.
+        succeed(claimExpecting("SEMANTIC_INDEXING"));
+        succeed(claimExpecting("NAVIGATION_BAKING"));
+        assertThat(jdbc.sql("SELECT current_scan_version_id IS NOT NULL FROM floor WHERE id = :f").param("f", s.c().floor())
+            .query(Boolean.class).single()).isTrue();
         String manager = TestJwt.user(s.c().org(), "venue-manager").venues(s.c().venue()).token();
         String poiJson = post("/api/v1/venues/" + s.c().venue() + "/pois", manager,
                 "{\"floorId\":\"" + s.c().floor() + "\",\"label\":\"Reception\",\"x\":1.0,\"y\":2.0,\"z\":0.0}")

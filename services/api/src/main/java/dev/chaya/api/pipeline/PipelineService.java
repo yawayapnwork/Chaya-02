@@ -86,9 +86,15 @@ public class PipelineService {
     private static final Pattern KIND = Pattern.compile("^[A-Z][A-Z0-9_]{1,39}$");
     private static final TypeReference<Map<String, Object>> MAP = new TypeReference<>() {};
 
+    /** scanVersionId: the DRAFT version the run will be (every run since V28; null for a run started before, or for a
+     * capture with no floor). incremental(): a re-scan, whose version has a parent and a region. */
     private record RunRow(UUID id, UUID orgId, UUID venueId, UUID scanId, UUID scanVersionId, UUID captureId, String status,
                           List<JobStage> stages, boolean privacy, int budgetSeconds, Instant deadline,
-                          String failureStage, UUID reconstructionFrameRunId) {}
+                          String failureStage, UUID reconstructionFrameRunId) {
+        boolean incremental() {
+            return scanVersionId != null && stages.contains(JobStage.REGION_SPLICE);
+        }
+    }
 
     private record JobRow(UUID id, UUID orgId, UUID venueId, UUID scanId, UUID runId, JobStage stage, String status,
                           int retryCount, String workerId, Instant startedAt) {}
@@ -154,6 +160,17 @@ public class PipelineService {
         }
         derived.ensureBucket();
         List<JobStage> resolvedPlan = plan != null ? plan : PipelineDefinition.plan(privacy);
+        boolean incremental = resolvedPlan.contains(JobStage.REGION_SPLICE);
+        if (scanVersionId == null) {
+            // Every full-venue run is a DRAFT version from the start (review N-4): what it produces names its version, and
+            // none of it is current until the version is promoted. A capture with no floor produces no floor's twin, so
+            // there is nothing it could ever publish.
+            UUID floorId = jdbc.sql("SELECT floor_id FROM capture_session WHERE id = :c").param("c", captureId)
+                .query((rs, i) -> Optional.ofNullable(rs.getObject(1, UUID.class))).optional().flatMap(o -> o).orElse(null);
+            if (floorId != null) {
+                scanVersionId = versions.createFullRunDraft(actor, venueId, scanId, floorId, Map.of("privacyEnabled", privacy));
+            }
+        }
         UUID runId = jdbc.sql("INSERT INTO pipeline_run (organization_id, venue_id, scan_id, scan_version_id, capture_session_id, "
                 + "stages, privacy_enabled, time_budget_seconds, deadline_at, requested_by) "
                 + "VALUES (:o, :v, :s, :sv, :c, ARRAY(SELECT jsonb_array_elements_text(CAST(:stages AS jsonb))), :p, :b, "
@@ -163,7 +180,10 @@ public class PipelineService {
             .param("by", actor.subject()).query(UUID.class).single();
         // Full reconstruction: its own SfM frame. Incremental re-scan: the frame its merged output is spliced into -- the
         // parent version's run's reconstruction frame (docs/coordinate-frames.md, "Incremental re-scans").
-        UUID frameRoot = scanVersionId == null ? runId : jdbc.sql("""
+        if (scanVersionId != null && !incremental) {
+            versions.attachRun(scanVersionId, runId);
+        }
+        UUID frameRoot = !incremental ? runId : jdbc.sql("""
                 SELECT coalesce(p.reconstruction_frame_run_id, p.id)
                   FROM scan_version v
                   JOIN scan_version parent ON parent.id = v.parent_version_id
@@ -319,7 +339,7 @@ public class PipelineService {
         }
         // A re-scan's NAVIGATION_BAKING re-bakes the whole floor from the merged scene and proves it against the parent
         // scene outside the region (chaya_worker.stages.navigation_baking), so it gets the parent's cloud and labels too.
-        if (run.scanVersionId() != null && stage == JobStage.NAVIGATION_BAKING) {
+        if (run.incremental() && stage == JobStage.NAVIGATION_BAKING) {
             globalCloudInput(run.scanVersionId()).ifPresent(inputs::add);
             globalLabelsInput(run.scanVersionId()).ifPresent(inputs::add);
         }
@@ -585,13 +605,13 @@ public class PipelineService {
     }
 
     /** Appends `kind` to changed_artifact_kinds exactly once (docs/rescan.md "VERSIONING": a version
-     * records which artifacts it actually changed). No-op for a full-venue run (scanVersionId null). */
+     * records which artifacts it actually changed). No-op for a full-venue run, which changes everything. */
     private void appendChangedArtifactKind(UUID scanVersionId, String kind) {
         if (scanVersionId == null) {
             return;
         }
         jdbc.sql("UPDATE scan_version SET changed_artifact_kinds = array_append(changed_artifact_kinds, :k) "
-                + "WHERE id = :v AND NOT (:k = ANY(changed_artifact_kinds))")
+                + "WHERE id = :v AND parent_version_id IS NOT NULL AND NOT (:k = ANY(changed_artifact_kinds))")
             .param("k", kind).param("v", scanVersionId).update();
     }
 
@@ -600,9 +620,10 @@ public class PipelineService {
         int idx = plan.indexOf(stage);
         if (ok) {
             if (idx == plan.size() - 1) {
-                finishRun(actor, run, "SUCCEEDED", "FINAL", null, null, null);
-                jdbc.sql("UPDATE capture_session SET status = 'COMPLETED' WHERE id = :c AND status = 'PROCESSING'")
-                    .param("c", run.captureId()).update();
+                if ("SUCCEEDED".equals(finishRun(actor, run, "SUCCEEDED", "FINAL", null, null, null))) {
+                    jdbc.sql("UPDATE capture_session SET status = 'COMPLETED' WHERE id = :c AND status = 'PROCESSING'")
+                        .param("c", run.captureId()).update();
+                }
             } else if (Instant.now().isAfter(run.deadline())) {
                 finalizeTimeBoxed(actor, run, plan.get(idx + 1));
             } else {
@@ -641,23 +662,114 @@ public class PipelineService {
         jdbc.sql("UPDATE capture_session SET status = 'COMPLETED' WHERE id = :c AND status = 'PROCESSING'").param("c", run.captureId()).update();
     }
 
-    private void finishRun(Actor actor, RunRow run, String status, String quality, String failStage, String failCode, String failMessage) {
+    /** Ends the run. A SUCCEEDED run that is a version is promoted first ({@link #tryPromote}); when that is refused the run
+     * ends FAILED instead, with nothing published. Returns the status the run ended with. */
+    private String finishRun(Actor actor, RunRow run, String status, String quality, String failStage, String failCode, String failMessage) {
+        if ("SUCCEEDED".equals(status) && run.scanVersionId() != null) {
+            ApiException refused = tryPromote(actor, run);
+            if (refused != null) {
+                status = "FAILED";
+                quality = null;
+                failStage = run.stages().get(run.stages().size() - 1).name();
+                failCode = refused.code();
+                failMessage = "the run's stages all succeeded, but its scan version could not be published: " + refused.getMessage();
+            }
+        }
         jdbc.sql("UPDATE pipeline_run SET status = :s, quality = :q, finished_at = now(), failure_stage = :fs, failure_code = :fc, "
                 + "failure_message = :fm WHERE id = :r AND status = 'RUNNING'")
             .param("s", status).param("q", quality).param("fs", failStage).param("fc", failCode).param("fm", failMessage)
             .param("r", run.id()).update();
         audit.successInOrganization(actor, run.orgId(), run.venueId(), "pipeline." + status.toLowerCase(), "pipeline_run", run.id(),
             failCode == null ? Map.of() : Map.of("stage", String.valueOf(failStage), "code", failCode));
-        if (run.scanVersionId() != null) {
+        if (run.incremental()) {
             recordRescanOutcome(actor, run, status, failCode);
         }
+        return status;
+    }
+
+    /**
+     * Publishes a SUCCEEDED run's version (docs/rescan.md, "Publication") inside a savepoint: its detections become POIs
+     * (for a re-scan, replacing the region's), then ScanVersionService#promote finalizes it, activates its graphs, moves
+     * the floor's frame and pointer. Any refusal rolls all of that back to the savepoint -- the previously published
+     * version stays exactly as it was -- and is returned so the run ends FAILED. A full run whose reconstruction has no
+     * calibrated canonical frame yet is not refused: its version stays DRAFT until it is calibrated and published with
+     * POST .../scan-versions/finalize-current.
+     */
+    private ApiException tryPromote(Actor actor, RunRow run) {
+        UUID frameRun = run.reconstructionFrameRunId() == null ? run.id() : run.reconstructionFrameRunId();
+        if (!run.incremental() && frames.activeForRun(frameRun).filter(FrameView::canonical).isEmpty()) {
+            audit.successInOrganization(actor, run.orgId(), run.venueId(), "scan_version.awaiting_calibration", "scan_version",
+                run.scanVersionId(), Map.of("runId", run.id().toString()));
+            return null;
+        }
+        // A savepoint inside the report's transaction (on its JDBC connection; the JPA transaction manager offers no nested
+        // transactions): publishing is all or nothing, and a refusal does not lose the stage report.
+        jdbc.sql("SAVEPOINT scan_version_publish").update();
+        try {
+            publish(actor, run);
+            jdbc.sql("RELEASE SAVEPOINT scan_version_publish").update();
+            return null;
+        } catch (ApiException e) {
+            jdbc.sql("ROLLBACK TO SAVEPOINT scan_version_publish").update();
+            versions.deferPublicationChecks();
+            log.warn("run {}: scan version {} was not published: {} {}", run.id(), run.scanVersionId(), e.code(), e.getMessage());
+            audit.successInOrganization(actor, run.orgId(), run.venueId(), "scan_version.promotion_refused", "scan_version",
+                run.scanVersionId(), Map.of("runId", run.id().toString(), "code", e.code()));
+            return e;
+        } catch (org.springframework.dao.DataAccessException e) {
+            jdbc.sql("ROLLBACK TO SAVEPOINT scan_version_publish").update();
+            versions.deferPublicationChecks();
+            log.warn("run {}: scan version {} was not published: {}", run.id(), run.scanVersionId(), e.getMessage());
+            audit.successInOrganization(actor, run.orgId(), run.venueId(), "scan_version.promotion_refused", "scan_version",
+                run.scanVersionId(), Map.of("runId", run.id().toString(), "code", "VERSION_INCONSISTENT"));
+            return new ApiException(HttpStatus.CONFLICT, "VERSION_INCONSISTENT", String.valueOf(e.getMostSpecificCause().getMessage()));
+        }
+    }
+
+    /**
+     * POST .../scan-versions/finalize-current for a run whose version is still DRAFT after it succeeded (its reconstruction
+     * was calibrated only afterwards), or a run from before every run was a version. Inside the caller's transaction; a
+     * refusal propagates and rolls everything back.
+     */
+    public ScanVersionService.Promotion publishRun(Actor actor, UUID runId) {
+        RunRow run = lockRun(runId);
+        if (!"SUCCEEDED".equals(run.status())) {
+            throw new ApiException(HttpStatus.CONFLICT, "RUN_NOT_SUCCEEDED", "run " + runId + " is " + run.status()
+                + "; only a run whose every stage succeeded can be published");
+        }
+        return publish(actor, run);
+    }
+
+    private ScanVersionService.Promotion publish(Actor actor, RunRow run) {
+        UUID versionId = run.scanVersionId() != null ? run.scanVersionId()
+            : jdbc.sql("SELECT id FROM scan_version WHERE pipeline_run_id = :r").param("r", run.id()).query(UUID.class).single();
+        boolean draft = "DRAFT".equals(jdbc.sql("SELECT status FROM scan_version WHERE id = :v").param("v", versionId)
+            .query(String.class).single());
+        // A run from before V28 ingested its detections when SEMANTIC_INDEXING reported; promote binds them instead.
+        int[] pois = draft && run.scanVersionId() != null ? applyDetections(run) : new int[]{0, 0};
+        Map<String, Object> provenance = Map.of("runId", run.id().toString(), "stages", run.stages().stream().map(Enum::name).toList());
+        ScanVersionService.Promotion p = versions.promote(versionId, provenance);
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("floorId", p.floorId().toString());
+        meta.put("runId", run.id().toString());
+        meta.put("previousVersionId", String.valueOf(p.previousVersionId()));
+        meta.put("coordinateFrameId", String.valueOf(p.coordinateFrameId()));
+        meta.put("navigationGraphsActivated", p.graphsActivated());
+        meta.put("navigationGraphsRetired", p.graphsRetired());
+        meta.put("poisSuperseded", pois[0]);
+        meta.put("poisCreated", pois[1]);
+        meta.put("poiVersionsBound", p.poiVersionsBound());
+        meta.put("anchorsBound", p.anchorsBound());
+        meta.putAll(p.frameChange());
+        audit.successInOrganization(actor, run.orgId(), run.venueId(), "scan_version.promoted", "scan_version", versionId, meta);
+        return p;
     }
 
     /**
      * The AUDIT record docs/rescan.md requires: who initiated the re-scan (the run's own audit trail
      * already has that, from RescanService's "rescan.initiate"), which region and source version (read
      * from the ScanVersion itself, which recorded them at creation and never changes), the resulting
-     * version, and the outcome. Only a true SUCCEEDED run finalizes the ScanVersion -- FAILED, PARTIAL and
+     * version, and the outcome. Only a SUCCEEDED run was published (finishRun) -- FAILED, PARTIAL and
      * CANCELLED all leave it DRAFT forever (an abandoned attempt, never silently promoted).
      */
     private void recordRescanOutcome(Actor actor, RunRow run, String status, String failCode) {
@@ -671,32 +783,12 @@ public class PipelineService {
             meta.put("failureCode", failCode);
         }
         audit.successInOrganization(actor, run.orgId(), run.venueId(), "rescan.outcome", "scan_version", run.scanVersionId(), meta);
-        if ("SUCCEEDED".equals(status)) {
-            int graphsActivated = activateRescanGraphs(run);
-            int[] pois = applyRescanDetections(run);
-            audit.successInOrganization(actor, run.orgId(), run.venueId(), "rescan.downstream_applied", "scan_version", run.scanVersionId(),
-                Map.of("navigationGraphsActivated", graphsActivated, "poisSuperseded", pois[0], "poisCreated", pois[1]));
-            Map<String, Object> provenance = Map.of("runId", run.id().toString(), "stages",
-                run.stages().stream().map(Enum::name).toList());
-            // Pins the run's artifacts (and what it inherits from its parent) and the frame, then FINALIZED.
-            versions.finalizeVersion(run.scanVersionId(), provenance);
-        }
     }
 
-    /** The re-scan run's navigation graphs were ingested as DRAFT; the version finalizing is what makes them live. */
-    private int activateRescanGraphs(RunRow run) {
-        record Draft(UUID id, UUID floorId, String profile) {}
-        List<Draft> drafts = jdbc.sql("SELECT id, floor_id, profile FROM navigation_graph WHERE pipeline_run_id = :r AND status = 'DRAFT'")
-            .param("r", run.id()).query((rs, i) -> new Draft(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class), rs.getString(3))).list();
-        for (Draft d : drafts) {
-            activateGraph(run.venueId(), d.floorId(), d.profile(), d.id());
-        }
-        return drafts.size();
-    }
-
-    /** The re-scan run's DETECTED_OBJECTS, applied now that its version finalizes: supersede the region's AUTO_DETECTED
-     * POIs, insert the new detections. Returns {superseded, created}. */
-    private int[] applyRescanDetections(RunRow run) {
+    /** The run's DETECTED_OBJECTS, applied as its version is published: for a re-scan, the region's AUTO_DETECTED POIs are
+     * superseded first. Each POI names the version. An artifact that cannot be read refuses the publication rather than
+     * publishing the version without its detections. Returns {superseded, created}. */
+    private int[] applyDetections(RunRow run) {
         String key = jdbc.sql("""
                 SELECT a.object_key FROM processing_artifact a JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id
                  WHERE sr.run_id = :r AND sr.status = 'SUCCEEDED' AND a.kind = 'DETECTED_OBJECTS' ORDER BY a.created_at DESC LIMIT 1
@@ -710,11 +802,12 @@ public class PipelineService {
         try (InputStream in = derived.open(key)) {
             doc = mapper.readValue(in, MAP);
         } catch (IOException | StorageException e) {
-            log.error("could not read DETECTED_OBJECTS artifact {} at finalization: {}", key, e.getMessage());
-            return new int[]{0, 0};
+            throw new ApiException(HttpStatus.CONFLICT, "DETECTIONS_UNREADABLE", "the run's DETECTED_OBJECTS artifact " + key
+                + " could not be read (" + e.getMessage() + "); the version is not published without its detections");
         }
         UUID frameId = requireCanonicalArtifactFrame(run, JobStage.SEMANTIC_INDEXING, doc, "DETECTED_OBJECTS");
-        int superseded = supersedePoisInRegion(run, floorId);
+        requireArtifactVersion(run, doc, "DETECTED_OBJECTS");
+        int superseded = run.incremental() ? supersedePoisInRegion(run, floorId) : 0;
         String embeddingModel = (String) doc.get("embedding_model");
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> objects = (List<Map<String, Object>>) doc.getOrDefault("objects", List.of());
@@ -904,37 +997,19 @@ public class PipelineService {
             log.error("could not read DETECTED_OBJECTS artifact {}: {}", artifact.key(), e.getMessage());
             return;
         }
-        UUID frameId = requireCanonicalArtifactFrame(run, JobStage.SEMANTIC_INDEXING, doc, "DETECTED_OBJECTS");
+        requireCanonicalArtifactFrame(run, JobStage.SEMANTIC_INDEXING, doc, "DETECTED_OBJECTS");
         requireArtifactVersion(run, doc, "DETECTED_OBJECTS");
-        UUID floorId = jdbc.sql("SELECT floor_id FROM capture_session WHERE id = :c")
-            .param("c", run.captureId()).query(UUID.class).optional().orElse(null);
-        if (floorId == null) {
-            log.warn("run {} has no floor on its capture session; skipping AUTO_DETECTED POI ingestion", run.id());
+        if (run.scanVersionId() == null) {
+            // A run with no version (its capture has no floor, or it started before V28) can never publish its detections.
+            log.warn("run {} is not a scan version; its detections are not ingested as POIs", run.id());
             return;
         }
-        if (run.scanVersionId() != null) {
-            // Incremental re-scan: nothing changes yet. The detections are applied in recordRescanOutcome, and only if
-            // the version finalizes; a re-scan that later fails or is rejected never touches a POI.
-            log.info("run {} is a re-scan: its detections are applied only when its version finalizes", run.id());
-            return;
-        }
-        int superseded = 0;
-        String embeddingModel = (String) doc.get("embedding_model");
+        // Nothing becomes a POI yet: the detections are applied when the run's version is published (finishRun ->
+        // tryPromote -> applyDetections), so a run that later fails, or a re-scan that is rejected, never shows a POI.
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> objects = (List<Map<String, Object>>) doc.getOrDefault("objects", List.of());
-        int inserted = 0;
-        for (Map<String, Object> obj : objects) {
-            if (insertDetectedPoi(job.id().toString(), run, floorId, obj, embeddingModel, frameId)) {
-                inserted++;
-            }
-        }
-        if (inserted > 0) {
-            appendChangedArtifactKind(run.scanVersionId(), "DETECTED_OBJECTS");
-        }
-        log.info("ingested {} of {} auto-detected objects as POIs for run {} ({} superseded in the changed region)",
-            inserted, objects.size(), run.id(), superseded);
-        audit.successInOrganization(SYSTEM, run.orgId(), run.venueId(), "semantic_indexing.ingested", "pipeline_run", run.id(),
-            Map.of("objectsDetected", objects.size(), "poisCreated", inserted, "poisSuperseded", superseded));
+        audit.successInOrganization(SYSTEM, run.orgId(), run.venueId(), "semantic_indexing.validated", "pipeline_run", run.id(),
+            Map.of("objectsDetected", objects.size(), "scanVersionId", run.scanVersionId().toString()));
     }
 
     /** Soft-deletes the AUTO_DETECTED POIs on this floor whose latest position falls inside the ScanVersion's
@@ -1053,10 +1128,9 @@ public class PipelineService {
      * NAVIGATION_BAKING (chaya_worker.stages.navigation_baking) publishes a NAVMESH (a Detour navmesh built by the real
      * Recast/Detour library), its NAVMESH_MANIFEST, and a NAVIGATION_GRAPH artifact with two profile graphs (STANDARD,
      * STEP_FREE -- the Detour polygon graph, see chaya_worker.navmesh.build_routing_graphs); this turns each into a
-     * navigation_graph/navigation_node/navigation_edge DRAFT, then promotes it to ACTIVE (retiring whichever graph was
-     * previously ACTIVE for that venue/floor/profile), so dev.chaya.api.navigation.RouteService always finds at most one
-     * ACTIVE graph to route against. A missing or unparseable artifact is logged and skipped, same as
-     * ingestDetectedObjects.
+     * navigation_graph/navigation_node/navigation_edge DRAFT of the run's version. It stays DRAFT: only publishing the
+     * version (ScanVersionService#promote) makes it ACTIVE, together with the rest of the version, so a run that later
+     * fails never leaves a live graph behind (review N-4). A missing or unparseable artifact is logged and skipped.
      *
      * <p>The graph must be bound to the NAVMESH reported by the same stage: its {@code navmesh} block must say it came from
      * a READY Recast navmesh whose SHA-256 is exactly that artifact's checksum. Anything else is refused
@@ -1080,8 +1154,8 @@ public class PipelineService {
         NavmeshBinding navmesh = requireNavmeshBinding(doc, outputs);
         UUID floorId = jdbc.sql("SELECT floor_id FROM capture_session WHERE id = :c")
             .param("c", run.captureId()).query(UUID.class).optional().orElse(null);
-        if (floorId == null) {
-            log.warn("run {} has no floor on its capture session; skipping navigation graph ingestion", run.id());
+        if (floorId == null || run.scanVersionId() == null) {
+            log.warn("run {} is not a scan version of a floor; skipping navigation graph ingestion", run.id());
             return;
         }
         Object graphsRaw = doc.get("graphs");
@@ -1092,7 +1166,7 @@ public class PipelineService {
         for (String profile : List.of("STANDARD", "STEP_FREE")) {
             Object graphRaw = graphs.get(profile);
             if (graphRaw instanceof Map<?, ?> graph
-                    && ingestOneNavigationGraph(run, floorId, profile, graph, frameId, navmesh, run.scanVersionId() == null)) {
+                    && ingestOneNavigationGraph(run, floorId, profile, graph, frameId, navmesh)) {
                 ingested++;
             }
         }
@@ -1159,7 +1233,7 @@ public class PipelineService {
 
     @SuppressWarnings("unchecked")
     private boolean ingestOneNavigationGraph(RunRow run, UUID floorId, String profile, Map<?, ?> graph, UUID frameId,
-                                             NavmeshBinding navmesh, boolean activate) {
+                                             NavmeshBinding navmesh) {
         Object nodesRaw = graph.get("nodes");
         Object edgesRaw = graph.get("edges");
         List<Map<String, Object>> nodesDoc = nodesRaw instanceof List<?> l ? (List<Map<String, Object>>) l : List.of();
@@ -1222,17 +1296,7 @@ public class PipelineService {
                 .param("ax", portal[0]).param("ay", portal[1]).param("az", portal[2])
                 .param("bx", portal[3]).param("by", portal[4]).param("bz", portal[5]).update();
         }
-        if (activate) {
-            activateGraph(run.venueId(), floorId, profile, graphId);
-        }
         return true;
-    }
-
-    /** Retires whatever graph is ACTIVE for the venue/floor/profile, then activates `graphId`. */
-    private void activateGraph(UUID venueId, UUID floorId, String profile, UUID graphId) {
-        jdbc.sql("UPDATE navigation_graph SET status = 'RETIRED' WHERE venue_id = :v AND floor_id = :f AND profile = :p AND status = 'ACTIVE'")
-            .param("v", venueId).param("f", floorId).param("p", profile).update();
-        jdbc.sql("UPDATE navigation_graph SET status = 'ACTIVE' WHERE id = :g").param("g", graphId).update();
     }
 
     /**
@@ -1257,16 +1321,15 @@ public class PipelineService {
      * A version-scoped artifact (DETECTED_OBJECTS, NAVIGATION_GRAPH) names the scan version it was produced for
      * ({@code source.scan_version_id}, chaya_worker.stages.base.run_provenance), and that must be this run's: a re-scan's
      * graph or detections must never be stored under another version, and an artifact produced for some version must never
-     * enter a run that is not that version. A re-scan's artifact that names no version is refused too; a full run's may
-     * omit it (workers before this check, and a full run is not a version until it is bootstrapped).
+     * enter a run that is not that version. Every run is a version since V28, so an artifact that names no version, or
+     * names it null, is refused as well: its lineage cannot be checked.
      */
     private void requireArtifactVersion(RunRow run, Map<String, Object> doc, String kind) {
         Map<?, ?> source = doc.get("source") instanceof Map<?, ?> m ? m : null;
         boolean named = source != null && source.containsKey("scan_version_id");
         Object claimed = named ? source.get("scan_version_id") : null;
         String expected = run.scanVersionId() == null ? null : run.scanVersionId().toString();
-        if ((named && !java.util.Objects.equals(expected, claimed == null ? null : String.valueOf(claimed)))
-                || (!named && expected != null)) {
+        if (!java.util.Objects.equals(expected, claimed == null ? null : String.valueOf(claimed))) {
             throw new ApiException(HttpStatus.CONFLICT, "ARTIFACT_VERSION_MISMATCH", kind + " must be produced for scan version "
                 + (expected == null ? "(none: a full reconstruction)" : expected) + " but names " + (named ? claimed : "no version"));
         }

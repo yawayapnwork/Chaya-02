@@ -21,8 +21,11 @@ export interface Anchor {
   lastCalibratedAt: string | null;
   /** The coordinate frame digitalPose (canonical metres, +Z up) is expressed in. */
   coordinateFrameId: string | null;
-  /** The scan version the anchor was registered against; null while the floor's reconstruction has no version. */
+  /** The scan version the pose was entered against; null for an anchor from before poses were versioned (not usable). */
   scanVersionId?: string | null;
+  /** The immutable versioned pose record these values are (ar_anchor_pose), and its revision. */
+  poseId?: string | null;
+  poseRevision?: number | null;
 }
 
 export interface AnchorRequest {
@@ -51,6 +54,8 @@ export interface RelocalizationResponse {
   gravityTiltDegrees: number;
   deviceFrameConvention: string;
   coordinateFrameId: string;
+  /** The scan version the floor publishes, whose anchors and frame the transform is solved in. */
+  scanVersionId: string;
 }
 
 export const listAnchors = (venueId: string, floorId: string) =>
@@ -71,10 +76,12 @@ export const calibrateAnchor = (venueId: string, floorId: string, anchorId: stri
 export const deleteAnchor = (venueId: string, floorId: string, anchorId: string) =>
   api<void>(`/venues/${venueId}/floors/${floorId}/anchors/${anchorId}`, { method: "DELETE" });
 
-export const relocalize = (venueId: string, floorId: string, observations: AnchorObservation[]) =>
+/** scanVersionId: the version the client shows, if it knows; the server refuses (409 VERSION_MISMATCH) when the floor
+ * publishes another one, so the device is never placed in one version's frame while drawing another's content. */
+export const relocalize = (venueId: string, floorId: string, observations: AnchorObservation[], scanVersionId?: string | null) =>
   api<RelocalizationResponse>(`/venues/${venueId}/floors/${floorId}/anchors/relocalize`, {
     method: "POST",
-    body: JSON.stringify({ observations }),
+    body: JSON.stringify({ observations, scanVersionId: scanVersionId ?? null }),
   });
 
 /** The IMAGE_TARGET's target image (the server generates it from the anchor id): the exact image the operator printed,
