@@ -24,7 +24,31 @@ public interface ObjectStore {
 
     InputStream open(String key);
 
+    /** Server-side copy within the bucket: the bytes never pass through the API. Replaces the target if it exists. */
+    void copy(String sourceKey, String targetKey);
+
     void delete(String key);
+
+    /** The SHA-256 (lowercase hex) of an object's bytes, computed by reading all of them. */
+    default String sha256(String key) {
+        try (InputStream in = open(key)) {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] buf = new byte[1 << 16];
+            for (int n; (n = in.read(buf)) > 0; ) {
+                md.update(buf, 0, n);
+            }
+            return java.util.HexFormat.of().formatHex(md.digest());
+        } catch (java.io.IOException e) {
+            throw new StorageException("could not read " + key + " to hash it", e);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** The object's bytes, failing at end of stream unless they hash to {@code expectedSha256} (VerifyingInputStream). */
+    default InputStream openVerified(String key, String expectedSha256) {
+        return new VerifyingInputStream(open(key), expectedSha256, key);
+    }
 
     /** True if the storage service answers. Used by the health check. */
     boolean ping();

@@ -67,8 +67,9 @@ class CaptureStateAndAccessTest extends CaptureTestSupport {
         // A failed capture no longer accepts media rows.
         assertThatThrownBy(() -> jdbc.sql("INSERT INTO capture_media (organization_id, venue_id, capture_session_id, kind, original_filename, "
                 + "claimed_content_type, declared_size_bytes, declared_sha256, bucket, object_key, part_size_bytes, total_parts) "
-                + "VALUES (:o, :v, :c, 'IMAGE', 'x', 'image/png', 1, :h, 'b', 'k', 1, 1)")
-            .param("o", c.org()).param("v", c.venue()).param("c", capture).param("h", "a".repeat(64)).update())
+                + "VALUES (:o, :v, :c, 'IMAGE', 'x', 'image/png', 1, :h, 'b', :k, 1, 1)")
+            .param("o", c.org()).param("v", c.venue()).param("c", capture).param("h", "a".repeat(64))
+            .param("k", "org/" + c.org() + "/venue/" + c.venue() + "/k").update())
             .isInstanceOf(DataIntegrityViolationException.class).hasMessageContaining("no longer accepts media");
     }
 

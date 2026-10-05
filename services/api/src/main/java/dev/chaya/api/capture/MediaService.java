@@ -5,6 +5,7 @@ import dev.chaya.api.security.Actor;
 import dev.chaya.api.security.TenantGuard;
 import dev.chaya.api.storage.ObjectStore;
 import dev.chaya.api.storage.StorageProperties;
+import dev.chaya.api.storage.TenantKeys;
 import dev.chaya.api.web.ApiException;
 import dev.chaya.api.web.NotFoundException;
 import java.io.IOException;
@@ -121,7 +122,7 @@ public class MediaService {
         }
         UUID mediaId = UUID.randomUUID();
         // Server-generated key: only UUIDs, never any client text.
-        String key = "org/%s/venue/%s/capture/%s/raw/%s".formatted(actor.organizationId(), venueId, captureId, mediaId);
+        String key = TenantKeys.prefix(actor.organizationId(), venueId) + "capture/%s/raw/%s".formatted(captureId, mediaId);
         String filename = FilenameSanitizer.sanitize(r.filename());
         String uploadId = store.beginMultipart(key, claimed);
         try {

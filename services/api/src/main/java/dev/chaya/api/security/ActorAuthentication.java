@@ -11,7 +11,9 @@ public class ActorAuthentication extends AbstractAuthenticationToken {
     private final Actor actor;
 
     public ActorAuthentication(Actor actor) {
-        super(actor.roles().stream().map(r -> new SimpleGrantedAuthority(r.authority())).collect(Collectors.toSet()));
+        // allRoles: a venue-scoped request carries an actor already narrowed to that venue (VenueScopeFilter), whose
+        // roles are exactly the venue's; otherwise every role the actor holds anywhere, the first, coarse check.
+        super(actor.allRoles().stream().map(r -> new SimpleGrantedAuthority(r.authority())).collect(Collectors.toSet()));
         this.actor = actor;
         setAuthenticated(true);
     }

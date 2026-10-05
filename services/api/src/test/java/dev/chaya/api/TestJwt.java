@@ -41,6 +41,8 @@ final class TestJwt {
     private UUID orgId;
     private final List<String> roles = new ArrayList<>();
     private final List<String> venueIds = new ArrayList<>();
+    private final List<String> venueRoles = new ArrayList<>();
+    private Object rawVenueRoles;
 
     static TestJwt user(UUID orgId, String... roles) {
         TestJwt t = new TestJwt();
@@ -60,6 +62,18 @@ final class TestJwt {
         for (UUID id : ids) {
             venueIds.add(id.toString());
         }
+        return this;
+    }
+
+    /** A per-venue grant (venue_roles claim, "venueId:role"; Keycloak role names). */
+    TestJwt grant(UUID venueId, String role) {
+        venueRoles.add(venueId + ":" + role);
+        return this;
+    }
+
+    /** venue_roles exactly as given (to test malformed claims). */
+    TestJwt rawVenueRoles(Object claim) {
+        rawVenueRoles = claim;
         return this;
     }
 
@@ -107,6 +121,11 @@ final class TestJwt {
             c.claim("venue_id", venueIds.get(0));
         } else if (venueIds.size() > 1) {
             c.claim("venue_id", venueIds);
+        }
+        if (rawVenueRoles != null) {
+            c.claim("venue_roles", rawVenueRoles);
+        } else if (!venueRoles.isEmpty()) {
+            c.claim("venue_roles", venueRoles);
         }
         return c.build();
     }

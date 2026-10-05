@@ -21,6 +21,11 @@ public enum Role {
         this.keycloakName = keycloakName;
     }
 
+    /** Roles a venue_roles grant may carry. ADMIN is organization-wide and SERVICE is not a user role. */
+    public boolean grantablePerVenue() {
+        return this == VENUE_MANAGER || this == OPERATOR || this == VIEWER;
+    }
+
     public String authority() {
         return "ROLE_" + name();
     }

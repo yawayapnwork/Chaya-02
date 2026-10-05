@@ -2,6 +2,7 @@ package dev.chaya.api.security;
 
 import java.util.Collection;
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -14,8 +15,10 @@ import org.springframework.security.oauth2.server.resource.InvalidBearerTokenExc
 
 /**
  * Turns an already signature-verified Keycloak JWT into an {@link Actor}.
- * Claims: realm_access.roles (role names), org_id (uuid), venue_id (uuid or list of uuids).
- * A token that verifies but does not carry the claims this API needs is rejected as invalid.
+ * Claims: realm_access.roles (role names), org_id (uuid), venue_id (uuid or list of uuids), and venue_roles (a
+ * "venueId:role" string or a list of them: venue-manager, operator or viewer at that one venue; review S-8).
+ * A token that verifies but does not carry the claims this API needs, or carries one malformed, is rejected as invalid:
+ * an unreadable grant is never silently dropped or widened.
  */
 public class JwtActorConverter implements Converter<Jwt, AbstractAuthenticationToken> {
 
@@ -46,7 +49,29 @@ public class JwtActorConverter implements Converter<Jwt, AbstractAuthenticationT
         } else if (venueClaim != null) {
             venueIds.add(uuidClaim(venueClaim, "venue_id"));
         }
-        return new ActorAuthentication(new Actor(Actor.Kind.USER, jwt.getSubject(), orgId, Set.copyOf(venueIds), roles));
+        return new ActorAuthentication(new Actor(Actor.Kind.USER, jwt.getSubject(), orgId, Set.copyOf(venueIds), roles,
+            venueRoles(jwt.getClaim("venue_roles"))));
+    }
+
+    /** "venueId:role" entries -> venue -> roles. Only venue-manager, operator and viewer can be granted per venue. */
+    static Map<UUID, Set<Role>> venueRoles(Object claim) {
+        Map<UUID, Set<Role>> grants = new HashMap<>();
+        if (claim == null) {
+            return grants;
+        }
+        Collection<?> entries = claim instanceof Collection<?> c ? c : List.of(claim);
+        for (Object entry : entries) {
+            String text = String.valueOf(entry);
+            int colon = text.indexOf(':');
+            if (colon < 0) {
+                throw invalid("venue_roles entry is not venueId:role");
+            }
+            UUID venue = uuidClaim(text.substring(0, colon), "venue_roles");
+            Role role = Role.fromKeycloak(text.substring(colon + 1)).filter(Role::grantablePerVenue)
+                .orElseThrow(() -> invalid("venue_roles grants only venue-manager, operator or viewer"));
+            grants.computeIfAbsent(venue, v -> EnumSet.noneOf(Role.class)).add(role);
+        }
+        return grants;
     }
 
     private static List<String> realmRoles(Jwt jwt) {

@@ -17,6 +17,7 @@ import software.amazon.awssdk.services.s3.model.AbortMultipartUploadRequest;
 import software.amazon.awssdk.services.s3.model.CompleteMultipartUploadRequest;
 import software.amazon.awssdk.services.s3.model.CompletedMultipartUpload;
 import software.amazon.awssdk.services.s3.model.CompletedPart;
+import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
 import software.amazon.awssdk.services.s3.model.CreateBucketRequest;
 import software.amazon.awssdk.services.s3.model.CreateMultipartUploadRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
@@ -106,6 +107,12 @@ public class S3ObjectStore implements ObjectStore {
     public InputStream open(String key) {
         return call("read object", () -> s3.getObject(GetObjectRequest.builder().bucket(bucket).key(key).build(),
             ResponseTransformer.toInputStream()));
+    }
+
+    @Override
+    public void copy(String sourceKey, String targetKey) {
+        call("copy object", () -> s3.copyObject(CopyObjectRequest.builder()
+            .sourceBucket(bucket).sourceKey(sourceKey).destinationBucket(bucket).destinationKey(targetKey).build()));
     }
 
     @Override

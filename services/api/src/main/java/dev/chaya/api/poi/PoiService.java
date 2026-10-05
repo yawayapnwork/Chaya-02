@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.chaya.api.audit.AuditService;
 import dev.chaya.api.rescan.ScanVersionService;
 import dev.chaya.api.security.Actor;
+import dev.chaya.api.security.PublicExposure;
 import dev.chaya.api.security.TenantGuard;
 import dev.chaya.api.web.ApiException;
 import dev.chaya.api.web.NotFoundException;
@@ -73,6 +74,13 @@ public class PoiService {
              WHERE p.venue_id = :v AND p.organization_id = :o AND p.floor_id = :f
             """;
 
+    /** For a public-link viewer: no POI detected by a run whose frames were never anonymised (privacy disabled; review
+     * S-6). Its reconstruction is never served to such a viewer, and neither is what was found in it. */
+    private static final String PUBLIC_ONLY = """
+             AND (v.pipeline_run_id IS NULL
+                  OR EXISTS (SELECT 1 FROM pipeline_run pr WHERE pr.id = v.pipeline_run_id AND pr.privacy_enabled))
+            """;
+
     private final JdbcClient jdbc;
     private final TenantGuard guard;
     private final AuditService audit;
@@ -107,11 +115,12 @@ public class PoiService {
     public List<Poi> list(Actor actor, UUID venueId, UUID scanVersionId) {
         guard.requireVenue(actor, venueId);
         if (scanVersionId == null) {
-            return jdbc.sql(LATEST + " AND poi_version_is_current(p.floor_id, v.scan_version_id, v.source) ORDER BY v.label")
+            return jdbc.sql(LATEST + " AND poi_version_is_current(p.floor_id, v.scan_version_id, v.source)" + publicFilter(actor)
+                    + " ORDER BY v.label")
                 .param("v", venueId).param("o", actor.organizationId()).query(PoiService::map).list();
         }
         ScanVersionService.Scope scope = versions.requireFinalized(actor, venueId, scanVersionId);
-        return jdbc.sql(IN_VERSION + " ORDER BY v.label, p.id").param("v", venueId).param("o", actor.organizationId())
+        return jdbc.sql(IN_VERSION + publicFilter(actor) + " ORDER BY v.label, p.id").param("v", venueId).param("o", actor.organizationId())
             .param("sv", scope.id()).param("f", scope.floorId()).param("frame", scope.coordinateFrameId())
             .query(PoiService::map).list();
     }
@@ -121,17 +130,21 @@ public class PoiService {
     @Transactional(readOnly = true)
     public List<Poi> listAll(Actor actor, UUID venueId) {
         guard.requireVenue(actor, venueId);
-        if (actor.kind() == Actor.Kind.PUBLIC_VIEWER || actor.roles().contains(dev.chaya.api.security.Role.PUBLIC_VIEWER)) {
+        if (PublicExposure.isAnonymous(actor)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "FORBIDDEN", "a public viewer sees only what a floor publishes");
         }
         return jdbc.sql(LATEST + " ORDER BY v.label").param("v", venueId).param("o", actor.organizationId())
             .query(PoiService::map).list();
     }
 
+    /** One POI at its latest version. A public-link viewer gets it only if the floor publishes it (as in the list):
+     * never a POI of a draft, rejected or superseded version, nor one detected without privacy preprocessing. */
     @Transactional(readOnly = true)
     public Poi get(Actor actor, UUID venueId, UUID poiId) {
         guard.requireVenue(actor, venueId);
-        return jdbc.sql(LATEST + " AND p.id = :p").param("v", venueId).param("o", actor.organizationId())
+        String published = PublicExposure.isAnonymous(actor)
+            ? " AND poi_version_is_current(p.floor_id, v.scan_version_id, v.source)" + PUBLIC_ONLY : "";
+        return jdbc.sql(LATEST + " AND p.id = :p" + published).param("v", venueId).param("o", actor.organizationId())
             .param("p", poiId).query(PoiService::map).optional().orElseThrow(() -> new NotFoundException("poi not found"));
     }
 
@@ -145,6 +158,10 @@ public class PoiService {
         insertVersion(actor, venueId, poi, 1, d);
         audit.success(actor, venueId, "poi.create", "poi", poi, Map.of("version", 1));
         return get(actor, venueId, poi);
+    }
+
+    private static String publicFilter(Actor actor) {
+        return PublicExposure.isAnonymous(actor) ? PUBLIC_ONLY : "";
     }
 
     /** Appends a new version; the previous one stays as history. */

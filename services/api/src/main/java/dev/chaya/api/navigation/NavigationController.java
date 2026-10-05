@@ -2,8 +2,10 @@ package dev.chaya.api.navigation;
 
 import dev.chaya.api.navigation.NavigationDtos.RouteRequest;
 import dev.chaya.api.navigation.NavigationDtos.RouteResponse;
+import dev.chaya.api.security.Actor;
 import dev.chaya.api.security.ActorAuthentication;
 import jakarta.validation.Valid;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -23,6 +25,12 @@ public class NavigationController {
     @PostMapping("/routes")
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR','VIEWER','PUBLIC_VIEWER')")
     public RouteResponse route(@Valid @RequestBody RouteRequest request) {
-        return routes.route(ActorAuthentication.currentActor(), request);
+        // The venue is in the body, not the path, so VenueScopeFilter cannot narrow the actor: do it here. A member of the
+        // venue must hold a role there (any role may route); a non-member is refused as 404 by the service's TenantGuard.
+        Actor actor = ActorAuthentication.currentActor().atVenue(request.venueId());
+        if (actor.isMemberOf(request.venueId()) && actor.rolesAt(request.venueId()).isEmpty()) {
+            throw new AccessDeniedException("no role at this venue");
+        }
+        return routes.route(actor, request);
     }
 }

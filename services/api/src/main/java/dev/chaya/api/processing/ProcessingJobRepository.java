@@ -41,12 +41,14 @@ public class ProcessingJobRepository {
     /**
      * Atomically moves the oldest QUEUED job of one of the stages to RUNNING and leases it to the worker.
      * Concurrent workers never get the same job, and jobs of a run whose time budget is already spent are
-     * left for the deadline enforcer instead of being handed out.
+     * left for the deadline enforcer instead of being handed out. {@code leaseTokenSha256} is the hash of the lease token
+     * the caller hands the worker; every later call about the job must present that token ({@link #holdsLease}).
      */
-    public Optional<ClaimedJob> claim(List<JobStage> stages, String workerId, int leaseSeconds) {
+    public Optional<ClaimedJob> claim(List<JobStage> stages, String workerId, int leaseSeconds, String leaseTokenSha256) {
         return jdbc.sql("""
                 UPDATE processing_job SET status = 'RUNNING', started_at = now(), worker_id = :worker,
-                                          lease_expires_at = now() + make_interval(secs => :lease)
+                                          lease_expires_at = now() + make_interval(secs => :lease),
+                                          lease_token_sha256 = :leaseHash
                  WHERE id = (SELECT j.id FROM processing_job j
                               WHERE j.status = 'QUEUED' AND j.stage IN (:stages)
                                 AND NOT EXISTS (SELECT 1 FROM pipeline_run r WHERE r.id = j.run_id AND r.deadline_at < now())
@@ -55,6 +57,7 @@ public class ProcessingJobRepository {
             .param("stages", stages.stream().map(Enum::name).toList())
             .param("worker", workerId)
             .param("lease", leaseSeconds)
+            .param("leaseHash", leaseTokenSha256)
             .query((rs, i) -> new ClaimedJob(rs.getObject("id", UUID.class), rs.getObject("organization_id", UUID.class),
                 rs.getObject("venue_id", UUID.class), rs.getObject("scan_id", UUID.class),
                 rs.getObject("scan_version_id", UUID.class), JobStage.valueOf(rs.getString("stage")),
@@ -62,11 +65,20 @@ public class ProcessingJobRepository {
             .optional();
     }
 
-    /** Extends the lease. False if the job is no longer RUNNING for this worker (finished, cancelled, expired). */
-    public boolean heartbeat(UUID jobId, String workerId, int leaseSeconds) {
+    /** Extends the lease. False unless the job is RUNNING under this lease (not finished, cancelled, expired and swept,
+     * or re-claimed by another worker). */
+    public boolean heartbeat(UUID jobId, String leaseTokenSha256, int leaseSeconds) {
         return jdbc.sql("UPDATE processing_job SET lease_expires_at = now() + make_interval(secs => :lease) "
-                + "WHERE id = :id AND status = 'RUNNING' AND worker_id = :worker")
-            .param("id", jobId).param("worker", workerId).param("lease", leaseSeconds).update() == 1;
+                + "WHERE id = :id AND status = 'RUNNING' AND lease_token_sha256 = :leaseHash")
+            .param("id", jobId).param("leaseHash", leaseTokenSha256).param("lease", leaseSeconds).update() == 1;
+    }
+
+    /** Whether the job was last claimed under the lease whose token hashes to {@code leaseTokenSha256}. Status is the
+     * caller's to check (a finished job still names its last lease; a re-queued one names none). */
+    public boolean holdsLease(UUID jobId, String leaseTokenSha256) {
+        return leaseTokenSha256 != null && jdbc.sql(
+                "SELECT count(*) FROM processing_job WHERE id = :id AND lease_token_sha256 = :leaseHash")
+            .param("id", jobId).param("leaseHash", leaseTokenSha256).query(Integer.class).single() == 1;
     }
 
     public UUID enqueueForRun(UUID organizationId, UUID venueId, UUID scanId, UUID runId, JobStage stage) {
@@ -134,7 +146,7 @@ public class ProcessingJobRepository {
         int rows = jdbc.sql("""
                 UPDATE processing_job
                    SET status = 'QUEUED', retry_count = retry_count + 1, queued_at = now(),
-                       started_at = NULL, finished_at = NULL, worker_id = NULL, lease_expires_at = NULL,
+                       started_at = NULL, finished_at = NULL, worker_id = NULL, lease_expires_at = NULL, lease_token_sha256 = NULL,
                        error_code = NULL, error_message = NULL
                  WHERE id = :id AND status = 'FAILED' AND retry_count < max_retries""")
             .param("id", jobId)

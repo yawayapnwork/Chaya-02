@@ -5,6 +5,7 @@ import dev.chaya.api.pipeline.PipelineDtos.Heartbeat;
 import dev.chaya.api.pipeline.PipelineDtos.StageReport;
 import dev.chaya.api.pipeline.PipelineDtos.WorkOrder;
 import dev.chaya.api.pipeline.PipelineService;
+import dev.chaya.api.processing.JobLease;
 import dev.chaya.api.processing.JobStage;
 import dev.chaya.api.processing.ProcessingJobRepository;
 import dev.chaya.api.processing.ProcessingJobRepository.JobScope;
@@ -27,6 +28,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -36,6 +38,11 @@ import org.springframework.web.bind.annotation.RestController;
  *
  * <p>Pipeline jobs are driven with claim -> heartbeat* -> report. complete/fail exist only for legacy
  * jobs that are not part of a pipeline run.
+ *
+ * <p>The service role says a caller is <em>a</em> worker, not which job it may act on. The claim's work order carries a
+ * lease token, and heartbeat, report, complete and fail act only for the caller presenting it ({@link JobLease#HEADER});
+ * anything else is 409 LEASE_MISMATCH. So no worker can report on, extend or finish a job -- of any tenant -- that it did
+ * not claim, or its own job after the lease expired and the job was handed to another worker.
  */
 @RestController
 @RequestMapping("/api/v1/internal/jobs")
@@ -70,17 +77,26 @@ public class InternalJobController {
             }
         }
 
+        private void requireLease(UUID jobId, String leaseToken) {
+            if (!jobs.holdsLease(jobId, JobLease.hash(leaseToken))) {
+                throw new ApiException(HttpStatus.CONFLICT, "LEASE_MISMATCH",
+                    "this worker does not hold the job's lease; only the worker that claimed it may finish it");
+            }
+        }
+
         @Transactional
-        public void complete(Actor worker, UUID jobId) {
+        public void complete(Actor worker, UUID jobId, String leaseToken) {
             requireLegacy(jobId);
+            requireLease(jobId, leaseToken);
             JobScope scope = jobs.scope(jobId).orElseThrow(() -> new NotFoundException("job not found"));
             jobs.succeed(jobId);
             audit.successInOrganization(worker, scope.organizationId(), scope.venueId(), "job.complete", "processing_job", jobId, Map.of());
         }
 
         @Transactional
-        public void fail(Actor worker, UUID jobId, String code, String message) {
+        public void fail(Actor worker, UUID jobId, String leaseToken, String code, String message) {
             requireLegacy(jobId);
+            requireLease(jobId, leaseToken);
             JobScope scope = jobs.scope(jobId).orElseThrow(() -> new NotFoundException("job not found"));
             jobs.fail(jobId, code, message);
             audit.successInOrganization(worker, scope.organizationId(), scope.venueId(), "job.fail", "processing_job", jobId,
@@ -110,22 +126,25 @@ public class InternalJobController {
     }
 
     @PostMapping("/{jobId}/heartbeat")
-    public Heartbeat heartbeat(@PathVariable UUID jobId, @Valid @RequestBody HeartbeatRequest body) {
-        return pipeline.heartbeat(jobId, body.workerId());
+    public Heartbeat heartbeat(@PathVariable UUID jobId, @Valid @RequestBody HeartbeatRequest body,
+                               @RequestHeader(name = JobLease.HEADER, required = false) String leaseToken) {
+        return pipeline.heartbeat(jobId, leaseToken); // keepGoing=false without the current lease: the worker stops
     }
 
     @PostMapping("/{jobId}/report")
-    public void report(@PathVariable UUID jobId, @RequestBody StageReport body) {
-        pipeline.report(ActorAuthentication.currentActor(), jobId, body);
+    public void report(@PathVariable UUID jobId, @RequestBody StageReport body,
+                       @RequestHeader(name = JobLease.HEADER, required = false) String leaseToken) {
+        pipeline.report(ActorAuthentication.currentActor(), jobId, leaseToken, body);
     }
 
     @PostMapping("/{jobId}/complete")
-    public void complete(@PathVariable UUID jobId) {
-        legacy.complete(ActorAuthentication.currentActor(), jobId);
+    public void complete(@PathVariable UUID jobId, @RequestHeader(name = JobLease.HEADER, required = false) String leaseToken) {
+        legacy.complete(ActorAuthentication.currentActor(), jobId, leaseToken);
     }
 
     @PostMapping("/{jobId}/fail")
-    public void fail(@PathVariable UUID jobId, @Valid @RequestBody FailRequest body) {
-        legacy.fail(ActorAuthentication.currentActor(), jobId, body.errorCode(), body.errorMessage());
+    public void fail(@PathVariable UUID jobId, @Valid @RequestBody FailRequest body,
+                     @RequestHeader(name = JobLease.HEADER, required = false) String leaseToken) {
+        legacy.fail(ActorAuthentication.currentActor(), jobId, leaseToken, body.errorCode(), body.errorMessage());
     }
 }

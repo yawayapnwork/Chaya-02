@@ -1,10 +1,13 @@
 package dev.chaya.api.reconstruction;
 
+import dev.chaya.api.audit.AuditService;
 import dev.chaya.api.reconstruction.ReconstructionService.Reconstruction;
 import dev.chaya.api.reconstruction.ReconstructionService.ReconstructionVersion;
 import dev.chaya.api.reconstruction.ReconstructionService.StoredArtifact;
+import dev.chaya.api.security.Actor;
 import dev.chaya.api.security.ActorAuthentication;
 import dev.chaya.api.storage.ObjectStore;
+import dev.chaya.api.storage.VerifyingInputStream.IntegrityException;
 import java.io.InputStream;
 import java.util.List;
 import java.util.UUID;
@@ -32,10 +35,13 @@ public class ReconstructionController {
 
     private final ReconstructionService reconstructions;
     private final ObjectStore derivedStore;
+    private final AuditService audit;
 
-    public ReconstructionController(ReconstructionService reconstructions, @Qualifier("derived") ObjectStore derivedStore) {
+    public ReconstructionController(ReconstructionService reconstructions, @Qualifier("derived") ObjectStore derivedStore,
+                                    AuditService audit) {
         this.reconstructions = reconstructions;
         this.derivedStore = derivedStore;
+        this.audit = audit;
     }
 
     @GetMapping("/venues/{venueId}/floors/{floorId}/reconstructions")
@@ -67,7 +73,8 @@ public class ReconstructionController {
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR','VIEWER','PUBLIC_VIEWER')")
     public ResponseEntity<StreamingResponseBody> versionArtifact(@PathVariable UUID venueId, @PathVariable UUID scanVersionId,
                                                                  @PathVariable String kind) {
-        return stream(reconstructions.versionArtifactBytes(ActorAuthentication.currentActor(), venueId, scanVersionId, kind));
+        Actor actor = ActorAuthentication.currentActor();
+        return stream(actor, reconstructions.versionArtifactBytes(actor, venueId, scanVersionId, kind));
     }
 
     /** Streams the artifact bytes through the backend rather than a presigned S3 URL, so venue/org scope and
@@ -75,13 +82,19 @@ public class ReconstructionController {
     @GetMapping("/venues/{venueId}/reconstructions/{runId}/artifacts/{kind}")
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR','VIEWER','PUBLIC_VIEWER')")
     public ResponseEntity<StreamingResponseBody> artifact(@PathVariable UUID venueId, @PathVariable UUID runId, @PathVariable String kind) {
-        return stream(reconstructions.artifactBytes(ActorAuthentication.currentActor(), venueId, runId, kind));
+        Actor actor = ActorAuthentication.currentActor();
+        return stream(actor, reconstructions.artifactBytes(actor, venueId, runId, kind));
     }
 
-    private ResponseEntity<StreamingResponseBody> stream(StoredArtifact a) {
+    /** Streams the object while hashing it. Bytes that do not hash to the registered SHA-256 end the response early (the
+     * client sees a failed download: the Content-Length is never reached) and are audited (review S-2). */
+    private ResponseEntity<StreamingResponseBody> stream(Actor actor, StoredArtifact a) {
         StreamingResponseBody body = out -> {
-            try (InputStream in = derivedStore.open(a.objectKey())) {
+            try (InputStream in = derivedStore.openVerified(a.objectKey(), a.sha256())) {
                 in.transferTo(out);
+            } catch (IntegrityException e) {
+                audit.integrityViolation(actor, a.organizationId(), a.venueId(), a.objectKey());
+                throw e;
             }
         };
         return ResponseEntity.ok()

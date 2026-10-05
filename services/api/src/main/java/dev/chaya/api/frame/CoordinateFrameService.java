@@ -451,17 +451,21 @@ public class CoordinateFrameService {
 
     @SuppressWarnings("unchecked")
     private Optional<GravityEvidence> gravityEvidence(UUID runId) {
-        Optional<String> key = jdbc.sql("""
-                SELECT a.object_key FROM processing_artifact a JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id
+        record Stored(String key, String sha256) {}
+        Optional<Stored> key = jdbc.sql("""
+                SELECT a.object_key, a.checksum_sha256 FROM processing_artifact a
+                  JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id
+                  JOIN pipeline_run r ON r.id = sr.run_id
                  WHERE sr.run_id = :r AND sr.status = 'SUCCEEDED' AND a.kind = 'GRAVITY_ESTIMATE'
+                   AND a.organization_id = r.organization_id AND a.venue_id = r.venue_id
                  ORDER BY sr.finished_at DESC LIMIT 1
-                """).param("r", runId).query(String.class).optional();
+                """).param("r", runId).query((rs, i) -> new Stored(rs.getString(1), rs.getString(2))).optional();
         if (key.isEmpty()) {
             return Optional.empty();
         }
         Map<String, Object> doc;
-        try (InputStream in = derived.open(key.get())) {
-            doc = mapper.readValue(in, MAP);
+        try (InputStream in = derived.openVerified(key.get().key(), key.get().sha256())) {
+            doc = mapper.readValue(in.readAllBytes(), MAP);
         } catch (IOException | StorageException e) {
             throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "GRAVITY_ESTIMATE_UNREADABLE",
                 "the run's GRAVITY_ESTIMATE could not be read: " + e.getMessage());

@@ -48,15 +48,19 @@ class ServiceAuthenticationTest extends ApiTest {
         UUID job = queuedJob(t);
         String svc = TestJwt.service().token();
 
-        post(CLAIM, svc, CLAIM_BODY).andExpect(status().isOk())
+        String lease = com.jayway.jsonpath.JsonPath.read(post(CLAIM, svc, CLAIM_BODY).andExpect(status().isOk())
             .andExpect(jsonPath("$.id").value(job.toString()))
-            .andExpect(jsonPath("$.organizationId").value(t.org().toString()));
+            .andExpect(jsonPath("$.organizationId").value(t.org().toString()))
+            .andReturn().getResponse().getContentAsString(), "$.leaseToken");
         // Nothing else is queued: no content, and the running job is not handed out twice.
         post(CLAIM, svc, CLAIM_BODY).andExpect(status().isNoContent());
 
-        post("/api/v1/internal/jobs/" + job + "/complete", svc, null).andExpect(status().isOk());
+        // Another service token without the claim's lease cannot finish the job.
+        post("/api/v1/internal/jobs/" + job + "/complete", svc, null).andExpect(status().isConflict())
+            .andExpect(jsonPath("$.code").value("LEASE_MISMATCH"));
+        postWithLease("/api/v1/internal/jobs/" + job + "/complete", svc, null, lease).andExpect(status().isOk());
         // Completing twice is a conflict.
-        post("/api/v1/internal/jobs/" + job + "/complete", svc, null).andExpect(status().isConflict());
+        postWithLease("/api/v1/internal/jobs/" + job + "/complete", svc, null, lease).andExpect(status().isConflict());
 
         assertThat(auditCount(t.org(), "job.claim")).isEqualTo(1);
         assertThat(auditCount(t.org(), "job.complete")).isEqualTo(1);
@@ -69,10 +73,11 @@ class ServiceAuthenticationTest extends ApiTest {
         var t = fx.tree();
         UUID job = queuedJob(t);
         String svc = TestJwt.service().token();
-        post(CLAIM, svc, CLAIM_BODY).andExpect(status().isOk());
-        post("/api/v1/internal/jobs/" + job + "/fail", svc, "{\"errorCode\":\"NAV_FAILED\",\"errorMessage\":\"no walkable surface\"}")
+        String lease = com.jayway.jsonpath.JsonPath.read(post(CLAIM, svc, CLAIM_BODY).andExpect(status().isOk())
+            .andReturn().getResponse().getContentAsString(), "$.leaseToken");
+        postWithLease("/api/v1/internal/jobs/" + job + "/fail", svc, "{\"errorCode\":\"NAV_FAILED\",\"errorMessage\":\"no walkable surface\"}", lease)
             .andExpect(status().isOk());
-        post("/api/v1/internal/jobs/" + job + "/fail", svc, "{\"errorCode\":\"X\"}").andExpect(status().isBadRequest());
+        postWithLease("/api/v1/internal/jobs/" + job + "/fail", svc, "{\"errorCode\":\"X\"}", lease).andExpect(status().isBadRequest());
 
         String op = TestJwt.user(t.org(), "operator").venues(t.venue()).token();
         post("/api/v1/venues/" + t.venue() + "/jobs/" + job + "/retry", op, null).andExpect(status().isOk());

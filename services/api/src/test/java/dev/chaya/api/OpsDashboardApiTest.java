@@ -177,7 +177,7 @@ class OpsDashboardApiTest extends ApiTest {
                 VALUES (:o, :v, :s, :j, 'ARTIFACT_GENERATION', 'chaya-derived-test', :k, :sha, 'application/octet-stream', 1234, 'KSPLAT')
                 """)
             .param("o", t.org()).param("v", t.venue()).param("s", t.scan()).param("j", job)
-            .param("k", "ops-test/" + UUID.randomUUID()).param("sha", "a".repeat(64)).update();
+            .param("k", "org/" + t.org() + "/venue/" + t.venue() + "/ops-test/" + UUID.randomUUID()).param("sha", "a".repeat(64)).update();
 
         get(url(t.venue(), "storage"), token(t.org(), t.venue(), "operator")).andExpect(status().isOk())
             .andExpect(jsonPath("$.artifactCount").value(1))

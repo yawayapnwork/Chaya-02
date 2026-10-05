@@ -152,8 +152,20 @@ abstract class PipelineTestSupport extends CaptureTestSupport {
         return r;
     }
 
+    /** Reports on a claimed job as the worker that claimed it (with the work order's lease token). */
     protected org.springframework.test.web.servlet.ResultActions send(JsonNode order, Map<String, Object> report, String token) throws Exception {
-        return post("/api/v1/internal/jobs/" + order.get("id").asText() + "/report", token, mapper.writeValueAsString(report));
+        return sendWithLease(order, report, token, order.path("leaseToken").asText(null));
+    }
+
+    protected org.springframework.test.web.servlet.ResultActions sendWithLease(JsonNode order, Map<String, Object> report, String token,
+                                                                              String leaseToken) throws Exception {
+        return postWithLease("/api/v1/internal/jobs/" + order.get("id").asText() + "/report", token, mapper.writeValueAsString(report),
+            leaseToken);
+    }
+
+    protected org.springframework.test.web.servlet.ResultActions heartbeat(JsonNode order, String leaseToken) throws Exception {
+        return postWithLease("/api/v1/internal/jobs/" + order.get("id").asText() + "/heartbeat", svc, "{\"workerId\":\"test-worker\"}",
+            leaseToken);
     }
 
     /** The realistic output of each stage (small real objects). Pre-privacy frames are flagged as PII. */

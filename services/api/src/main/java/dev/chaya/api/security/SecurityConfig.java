@@ -20,7 +20,8 @@ import org.springframework.security.web.context.SecurityContextHolderFilter;
 /**
  * Two ways in: a Keycloak-issued JWT (Authorization: Bearer) or a public-viewer token
  * (X-Chaya-Viewer-Token). Everything not listed as public requires authentication, and
- * per-endpoint role rules live on the controllers (@PreAuthorize) next to the code they protect.
+ * per-endpoint role rules live on the controllers (@PreAuthorize) next to the code they protect. For paths under
+ * /api/v1/venues/{venueId}/ those rules see only the roles the caller holds at that venue (VenueScopeFilter).
  *
  * <p>CSRF protection is off because no cookie or session authenticates anything: credentials travel only in
  * headers a cross-site page cannot make a browser attach. Re-enable it if cookie authentication is ever added.
@@ -49,7 +50,9 @@ public class SecurityConfig {
                 .anyRequest().authenticated())
             .oauth2ResourceServer(o -> o.jwt(j -> j.jwtAuthenticationConverter(new JwtActorConverter())))
             .addFilterBefore(new DependencyFailureFilter(), SecurityContextHolderFilter.class)
-            .addFilterBefore(new PublicViewerTokenFilter(viewerAuthenticator), BearerTokenAuthenticationFilter.class);
+            .addFilterBefore(new PublicViewerTokenFilter(viewerAuthenticator), BearerTokenAuthenticationFilter.class)
+            // after authentication, before authorization: roles narrowed to the venue a path is about (review S-8)
+            .addFilterAfter(new VenueScopeFilter(), BearerTokenAuthenticationFilter.class);
         rateLimiter.ifAvailable(l -> http.addFilterAfter(new RateLimitFilter(l), BearerTokenAuthenticationFilter.class));
         return http.build();
     }

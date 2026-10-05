@@ -33,18 +33,21 @@ public class VenueService {
             rs.getString("slug"), rs.getString("name"), rs.getString("timezone"));
     }
 
-    /** Venues the actor may see: all of the organization for admins, otherwise the listed venues. */
+    /** Venues the actor may see: all of the organization for admins, otherwise those it holds a role at (venue_id with a
+     * realm role, or a venue_roles grant). */
     @Transactional(readOnly = true)
     public List<Venue> list(Actor actor) {
         if (actor.roles().contains(Role.ADMIN)) {
             return jdbc.sql("SELECT " + COLUMNS + " FROM venue WHERE organization_id = :o AND deleted_at IS NULL ORDER BY name")
                 .param("o", actor.organizationId()).query(VenueService::map).list();
         }
-        if (actor.venueIds().isEmpty()) {
+        java.util.Set<UUID> ids = new java.util.HashSet<>(actor.venueRoles().keySet());
+        actor.venueIds().stream().filter(v -> !actor.rolesAt(v).isEmpty()).forEach(ids::add);
+        if (ids.isEmpty()) {
             return List.of();
         }
         return jdbc.sql("SELECT " + COLUMNS + " FROM venue WHERE organization_id = :o AND deleted_at IS NULL AND id IN (:ids) ORDER BY name")
-            .param("o", actor.organizationId()).param("ids", actor.venueIds()).query(VenueService::map).list();
+            .param("o", actor.organizationId()).param("ids", ids).query(VenueService::map).list();
     }
 
     @Transactional(readOnly = true)

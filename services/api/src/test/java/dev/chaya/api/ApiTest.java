@@ -26,6 +26,21 @@ abstract class ApiTest extends AbstractIntegrationTest {
         return mvc.perform(req);
     }
 
+    /** A worker call about a claimed job: the bearer token plus the claim's lease token (X-Chaya-Lease-Token). */
+    protected ResultActions postWithLease(String url, String bearer, String json, String leaseToken) throws Exception {
+        MockHttpServletRequestBuilder req = MockMvcRequestBuilders.request(HttpMethod.POST, url);
+        if (bearer != null) {
+            req.header(HttpHeaders.AUTHORIZATION, "Bearer " + bearer);
+        }
+        if (leaseToken != null) {
+            req.header("X-Chaya-Lease-Token", leaseToken);
+        }
+        if (json != null) {
+            req.contentType(MediaType.APPLICATION_JSON).content(json);
+        }
+        return mvc.perform(req);
+    }
+
     protected ResultActions get(String url, String bearer) throws Exception {
         return call(HttpMethod.GET, url, bearer, null);
     }

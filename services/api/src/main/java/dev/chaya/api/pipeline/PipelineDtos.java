@@ -27,7 +27,8 @@ public final class PipelineDtos {
     public record WorkOrder(UUID id, UUID organizationId, UUID venueId, UUID scanId, UUID scanVersionId, String stage,
                             UUID runId, int attempt, Instant deadlineAt, boolean privacyEnabled, String derivedBucket,
                             String outputPrefix, List<InputRef> inputs, Map<String, Object> regionGeometry,
-                            Map<String, Object> coordinateFrame, Map<String, Object> parentCoordinateFrame) {}
+                            Map<String, Object> coordinateFrame, Map<String, Object> parentCoordinateFrame,
+                            String leaseToken) {}
 
     public record ArtifactReport(String kind, String key, String sha256, String contentType, long sizeBytes,
                                  boolean containsPii, boolean partial) {}

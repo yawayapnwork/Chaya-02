@@ -2,6 +2,10 @@
 
 Authenticates with the OAuth2 client-credentials grant against Keycloak (service account `chaya-worker`)
 and refreshes the token before it expires. The worker has no other identity and no database access.
+
+Each claim's work order carries a lease token. The control plane accepts heartbeats and reports about a job only with
+that token (header X-Chaya-Lease-Token; docs/security.md), so this client remembers it per job id and sends it on every
+later call about the job.
 """
 
 from __future__ import annotations
@@ -15,6 +19,8 @@ import requests
 from .settings import Settings
 
 log = logging.getLogger(__name__)
+
+LEASE_HEADER = "X-Chaya-Lease-Token"
 
 
 class ApiError(Exception):
@@ -39,6 +45,7 @@ class HttpControlPlane:
         self._http = session or requests.Session()
         self._token: str | None = None
         self._expires_at = 0.0
+        self._leases: dict[str, str] = {}
 
     def _bearer(self) -> str:
         if self._token is None or time.time() > self._expires_at - 30:
@@ -51,11 +58,14 @@ class HttpControlPlane:
             self._expires_at = time.time() + int(body.get("expires_in", 60))
         return self._token
 
-    def _call(self, method: str, path: str, json: Any = None) -> requests.Response:
+    def _call(self, method: str, path: str, json: Any = None, lease: str | None = None) -> requests.Response:
         url = f"{self._s.api_url}/api/v1/internal/jobs{path}"
         for attempt in range(3):
+            headers = {"Authorization": f"Bearer {self._bearer()}"}
+            if lease:
+                headers[LEASE_HEADER] = lease
             try:
-                res = self._http.request(method, url, json=json, headers={"Authorization": f"Bearer {self._bearer()}"}, timeout=60)
+                res = self._http.request(method, url, json=json, headers=headers, timeout=60)
             except requests.RequestException as exc:
                 if attempt == 2:
                     raise ApiError(0, "UNREACHABLE", f"control plane unreachable: {exc}") from exc
@@ -85,12 +95,16 @@ class HttpControlPlane:
         if res.status_code == 204:
             return None
         self._raise(res)
-        return res.json()
+        order = res.json()
+        if order.get("leaseToken"):
+            self._leases[order["id"]] = order["leaseToken"]
+        return order
 
     def heartbeat(self, job_id: str, worker_id: str) -> dict[str, Any]:
-        res = self._call("POST", f"/{job_id}/heartbeat", {"workerId": worker_id})
+        res = self._call("POST", f"/{job_id}/heartbeat", {"workerId": worker_id}, lease=self._leases.get(job_id))
         self._raise(res)
         return res.json()
 
     def report(self, job_id: str, report: dict[str, Any]) -> None:
-        self._raise(self._call("POST", f"/{job_id}/report", report))
+        self._raise(self._call("POST", f"/{job_id}/report", report, lease=self._leases.get(job_id)))
+        self._leases.pop(job_id, None)  # the job is finished; the lease is of no further use

@@ -45,6 +45,7 @@ class SemanticSearchRankingTest extends AbstractIntegrationTest {
     private static final String[][] DETECTED = {{"chair-1", "chair"}, {"chair-3", "chair"}, {"couch-3", "couch"}, {"plant-1", "plant"}};
 
     @Autowired private SemanticSearchService search;
+    @Autowired private dev.chaya.api.poi.PoiService pois;
 
     private String model;
     private Fixtures.Tree t;
@@ -186,6 +187,37 @@ class SemanticSearchRankingTest extends AbstractIntegrationTest {
 
     private static List<UUID> poiIds(List<SearchResult> results) {
         return results.stream().map(SearchResult::poiId).toList();
+    }
+
+    // ---- public links and privacy (review S-6) ------------------------------------------------------------------
+
+    @Test
+    void aPublicLinkNeverSeesWhatWasDetectedInFramesThatWereNotAnonymised() {
+        Actor link = new Actor(Actor.Kind.PUBLIC_VIEWER, "public-link:" + UUID.randomUUID(), t.org(), Set.of(t.venue()),
+            Set.of(Role.PUBLIC_VIEWER));
+        // A run an administrator started with privacy preprocessing disabled detected a chair on this floor.
+        UUID session = fx.captureSession(t.org(), t.venue());
+        UUID unblurred = jdbc.sql("""
+                INSERT INTO pipeline_run (organization_id, venue_id, scan_id, capture_session_id, status, quality, stages,
+                    time_budget_seconds, deadline_at, finished_at, requested_by, privacy_enabled)
+                VALUES (:o, :v, :s, :cs, 'SUCCEEDED', 'FINAL', '{SEMANTIC_INDEXING}', 3600, now(), now(), 'fixture', false) RETURNING id""")
+            .param("o", t.org()).param("v", t.venue()).param("s", fx.scan(t.org(), t.venue(), session))
+            .param("cs", session).query(UUID.class).single();
+        UUID secret = detected(t, unblurred, "chair-3", "chair", 30, 1.5, 0, model, model);
+
+        // Staff see every detection of the published version.
+        assertThat(poiIds(search.search(actor(t), t.venue(), "chair", null, null, null).results())).contains(secret, id("chair-1"));
+        assertThat(pois.list(actor(t), t.venue())).extracting(dev.chaya.api.poi.PoiService.Poi::id).contains(secret);
+        assertThat(pois.get(actor(t), t.venue(), secret).id()).isEqualTo(secret);
+
+        // The public link sees the privacy-preprocessed ones only, through every read path, by id too.
+        SearchResponse r = search.search(link, t.venue(), "chair", null, null, null);
+        assertThat(poiIds(r.results())).contains(id("chair-1")).doesNotContain(secret);
+        assertThat(r.closestMatches() == null ? List.<UUID>of() : poiIds(r.closestMatches())).doesNotContain(secret);
+        assertThat(pois.list(link, t.venue())).extracting(dev.chaya.api.poi.PoiService.Poi::id).contains(id("chair-1")).doesNotContain(secret);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> pois.get(link, t.venue(), secret))
+            .isInstanceOf(dev.chaya.api.web.NotFoundException.class);
+        assertThat(pois.get(link, t.venue(), id("chair-1")).id()).isEqualTo(id("chair-1"));
     }
 
     // ---- the query types ----------------------------------------------------------------------------------------

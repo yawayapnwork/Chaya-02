@@ -223,12 +223,12 @@ class ScanVersionImmutabilityTest extends AbstractIntegrationTest {
                 RETURNING id""";
         String sum = "a".repeat(64);
         UUID artifact = jdbc.sql(sql).param("o", t.org()).param("v", t.venue()).param("s", t.scan())
-            .param("sv", t.version()).param("j", job).param("key", "k/" + t.version()).param("sum", sum)
+            .param("sv", t.version()).param("j", job).param("key", "org/" + t.org() + "/venue/" + t.venue() + "/k/" + t.version()).param("sum", sum)
             .query(UUID.class).single();
 
         // Same object key again: refused rather than silently replaced.
         assertThatThrownBy(() -> jdbc.sql(sql).param("o", t.org()).param("v", t.venue()).param("s", t.scan())
-            .param("sv", t.version()).param("j", job).param("key", "k/" + t.version()).param("sum", sum)
+            .param("sv", t.version()).param("j", job).param("key", "org/" + t.org() + "/venue/" + t.venue() + "/k/" + t.version()).param("sum", sum)
             .query(UUID.class).single()).isInstanceOf(DataIntegrityViolationException.class);
         // Overwrite / delete of an existing record: refused.
         assertThatThrownBy(() -> jdbc.sql("UPDATE processing_artifact SET checksum_sha256 = :c WHERE id = :id")

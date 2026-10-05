@@ -614,3 +614,28 @@ This section was added after the review; the sections above are unchanged. Detai
   run, and nothing has run with a camera: docs/ar-ios-validation.md (now including a republished-floor check) is still
   NOT RUN. With a green `ios` run it is at most PARTIALLY REAL, like item 11.
 - Still open on iOS: drift detection, refresh while localized, floor handoff (Android has them); AR-3; N-5.
+
+---
+
+## 12. Addendum (2026-10-05): S-2, S-8, storage and worker tenancy
+
+This section was added after the review; the sections above are unchanged. Details: docs/security.md, "Roles are per
+venue", "Object storage", "Service-to-service authentication" and "Tenant inventory".
+
+- **S-2 addressed in code.** A reported object is copied server-side to `sealed/org/{org}/venue/{venue}/…`, and the copy's
+  SHA-256 and size must match the report (`ARTIFACT_CHECKSUM_MISMATCH` otherwise). Worker storage accounts are denied
+  writes and deletes under `sealed/` (init.sh). Every read is verified again against the registered hash, and a
+  mismatch aborts the stream and is audited. Required test met: `ArtifactIntegrityTest` replaces a sealed KSPLAT and
+  the API refuses to serve it. `StoragePolicyTest` shows the worker account cannot write it.
+- **S-8 addressed in code.** The new `venue_roles` claim carries per-venue grants, and every venue-scoped request sees only
+  that venue's roles (`VenueScopeFilter`). Required test met: `VenueRoleAuthorizationTest` (manages A, views B, cannot
+  edit B).
+- **New, fixed:** any service token could report on any running job, of any tenant, including after its own lease had
+  expired and the job was re-claimed. Claims now issue a lease token that every later call must present (`409
+  LEASE_MISMATCH`).
+- **New, fixed:** a public link could read an unpublished POI by id, and saw POIs detected by privacy-disabled runs (S-6
+  covered only the reconstruction).
+- Database: object keys are CHECK-constrained to their row's tenant (V29). `TenantSchemaInvariantTest` checks the
+  composite tenant keys of every venue-scoped table.
+- **Residual:** worker storage credentials are still shared across tenants (cross-tenant *read*, and unsealed writes
+  under any prefix); per-run credentials are not built. Pre-V29 artifacts are unsealed, though verified on read.

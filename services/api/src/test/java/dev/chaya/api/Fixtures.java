@@ -111,7 +111,7 @@ final class Fixtures {
                 VALUES (:o, :v, :s, :j, :st, 'chaya-derived-test', :key, :sha, 'application/octet-stream', 1, :k, :sr, false, false)
                 RETURNING id""")
             .param("o", org).param("v", venue).param("s", scan).param("j", job).param("st", stage)
-            .param("key", "fixture/" + run + "/" + stage + "/" + kind).param("sha", "0".repeat(64)).param("k", kind).param("sr", stageRun)
+            .param("key", "org/" + org + "/venue/" + venue + "/fixture/" + run + "/" + stage + "/" + kind).param("sha", "0".repeat(64)).param("k", kind).param("sr", stageRun)
             .query(UUID.class).single();
     }
 

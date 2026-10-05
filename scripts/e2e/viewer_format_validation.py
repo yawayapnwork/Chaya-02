@@ -155,7 +155,9 @@ def v3_stand_ins() -> None:
                   "command": {"standIn": True, "formatValidationFixture": "packages/contracts/fixtures/viewer-scene",
                               "note": STAND_IN_NOTE},
                   "inputArtifactIds": [i["artifactId"] for i in order["inputs"]], "artifacts": artifacts}
-        r = svc("POST", f"/api/v1/internal/jobs/{order['id']}/report", json=report)
+        # Only the claim's lease holder may report on the job (docs/security.md, "Service-to-service authentication").
+        r = svc("POST", f"/api/v1/internal/jobs/{order['id']}/report", json=report,
+                headers={"X-Chaya-Lease-Token": order["leaseToken"]})
         if r.status_code >= 300:
             record("V3", f"Stand-in {stage}", "report accepted", False, ev.short(r))
             return

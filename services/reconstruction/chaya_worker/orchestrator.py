@@ -244,7 +244,9 @@ class Orchestrator:
             self.api.report(order["id"], report)
             log.info("stage report accepted", extra={"job_id": order["id"], "stage": order["stage"], "status": report["status"]})
         except ApiError as exc:
-            if exc.status in (400, 409) and exc.code not in ("JOB_NOT_RUNNING", "RUN_NOT_ACTIVE"):
+            # JOB_NOT_RUNNING / RUN_NOT_ACTIVE / LEASE_MISMATCH: the job is no longer this worker's to report on, so a
+            # fallback failure report would be refused for the same reason.
+            if exc.status in (400, 409) and exc.code not in ("JOB_NOT_RUNNING", "RUN_NOT_ACTIVE", "LEASE_MISMATCH"):
                 # The control plane refused the report itself. Fail the stage explicitly instead of leaving it to time out.
                 log.error("stage report rejected", extra={"job_id": order["id"], "code": exc.code, "message_detail": exc.message})
                 fallback = {**report, "status": "FAILED", "artifacts": [], "errorCode": "REPORT_REJECTED",

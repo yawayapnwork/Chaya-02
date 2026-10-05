@@ -42,6 +42,20 @@ public class AuditService {
             action, resourceType, resourceId, Outcome.SUCCESS, metadata));
     }
 
+    /**
+     * A stored object did not hash to the SHA-256 registered for it, so its read was aborted (review S-2): someone with
+     * write access to object storage replaced it. Recorded in the organization that owns the artifact. Never throws.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void integrityViolation(Actor actor, UUID organizationId, UUID venueId, String objectKey) {
+        try {
+            writer.record(new AuditEvent(organizationId, venueId, actor.subject(), actor.auditType(),
+                "artifact.integrity_violation", "processing_artifact", null, Outcome.FAILURE, Map.of("objectKey", objectKey)));
+        } catch (RuntimeException e) {
+            log.error("could not write integrity-violation audit for {}", objectKey, e);
+        }
+    }
+
     /** Records a refused access attempt. Never throws: a failed audit must not mask the denial. */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void denied(Actor actor, String action, String resourceType, UUID attemptedResourceId) {

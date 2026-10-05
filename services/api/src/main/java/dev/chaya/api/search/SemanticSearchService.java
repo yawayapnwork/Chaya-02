@@ -6,6 +6,7 @@ import dev.chaya.api.search.SearchDtos.SearchResponse;
 import dev.chaya.api.search.SearchDtos.SearchResult;
 import dev.chaya.api.rescan.ScanVersionService;
 import dev.chaya.api.security.Actor;
+import dev.chaya.api.security.PublicExposure;
 import dev.chaya.api.security.TenantGuard;
 import dev.chaya.api.web.BadRequestException;
 import java.sql.ResultSet;
@@ -88,6 +89,9 @@ public class SemanticSearchService {
                               AND p.floor_id = (SELECT floor_id FROM scan_version WHERE id = CAST(:sv AS uuid)) END)
                AND (CAST(:floor AS uuid) IS NULL OR p.floor_id = CAST(:floor AS uuid))
                AND (:accessible = false OR COALESCE((v.attributes->>'accessible')::boolean, false) = true)
+               -- a public link never sees what was detected in frames that were never anonymised (review S-6)
+               AND (:anonymous = false OR v.pipeline_run_id IS NULL
+                    OR EXISTS (SELECT 1 FROM pipeline_run pr WHERE pr.id = v.pipeline_run_id AND pr.privacy_enabled))
             """;
 
     // Where a POI's position stands relative to what is being viewed: the floor's current frame, or the selected version's.
@@ -226,6 +230,7 @@ public class SemanticSearchService {
             TextEmbeddingClient.Embedding queryEmbedding = embeddings.embedWithModel(normalized);
             List<Scored> scored = jdbc.sql(VECTOR_SQL)
                 .param("venue", venueId).param("org", actor.organizationId()).param("floor", floorId).param("accessible", accessible)
+                .param("anonymous", PublicExposure.isAnonymous(actor))
                 .param("sv", scanVersionId)
                 .param("qv", vectorLiteral(queryEmbedding.vector())).param("model", queryEmbedding.model())
                 .param("q", normalized).param("lexMin", props.lexicalMinSimilarity())
@@ -245,6 +250,7 @@ public class SemanticSearchService {
             log.warn("embedding model unavailable, falling back to lexical search: {}", e.getMessage());
             results = jdbc.sql(LEXICAL_SQL)
                 .param("venue", venueId).param("org", actor.organizationId()).param("floor", floorId).param("accessible", accessible)
+                .param("anonymous", PublicExposure.isAnonymous(actor))
                 .param("sv", scanVersionId)
                 .param("q", normalized).param("k", k)
                 .query((rs, i) -> mapRow(rs, null, null, null, null)).list();

@@ -4,8 +4,8 @@ import dev.chaya.api.frame.CoordinateFrameService;
 import dev.chaya.api.frame.FrameDtos.FrameView;
 import dev.chaya.api.rescan.ScanVersionService;
 import dev.chaya.api.security.Actor;
-import dev.chaya.api.security.Role;
 import dev.chaya.api.security.TenantGuard;
+import dev.chaya.api.storage.TenantKeys;
 import dev.chaya.api.web.BadRequestException;
 import dev.chaya.api.web.NotFoundException;
 import java.time.Instant;
@@ -72,7 +72,9 @@ public class ReconstructionService {
                                  String runQuality, List<ArtifactRef> artifacts, FrameView coordinateFrame,
                                  UUID scanVersionId, Integer versionNumber, UUID parentVersionId) {}
 
-    public record StoredArtifact(String bucket, String objectKey, String contentType, long sizeBytes) {}
+    /** What to stream, and what it must hash to. objectKey is checked to be under the requested venue's own prefixes. */
+    public record StoredArtifact(String bucket, String objectKey, String contentType, long sizeBytes, String sha256,
+                                 UUID organizationId, UUID venueId) {}
 
     private final JdbcClient jdbc;
     private final TenantGuard guard;
@@ -220,18 +222,18 @@ public class ReconstructionService {
             throw new NotFoundException("artifact not found");
         }
         return jdbc.sql("""
-                SELECT a.bucket, a.object_key, a.size_bytes
+                SELECT a.bucket, a.object_key, a.size_bytes, a.checksum_sha256
                   FROM processing_artifact a
                   JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id
                   JOIN pipeline_run r ON r.id = sr.run_id
                  WHERE sr.run_id = :run AND sr.status = 'SUCCEEDED' AND a.kind = :kind AND a.contains_pii = false
                    AND r.venue_id = :venue AND r.organization_id = :org
+                   AND a.venue_id = :venue AND a.organization_id = :org
                    AND (r.privacy_enabled OR NOT :anonymous)
                 """)
             .param("run", runId).param("kind", kind).param("venue", venueId).param("org", actor.organizationId())
             .param("anonymous", anonymous(actor))
-            .query((rs, i) -> new StoredArtifact(rs.getString("bucket"), rs.getString("object_key"),
-                SERVED_CONTENT_TYPES.get(kind), rs.getLong("size_bytes")))
+            .query((rs, i) -> stored(rs, kind, actor.organizationId(), venueId))
             .optional().orElseThrow(() -> new NotFoundException("artifact not found"));
     }
 
@@ -245,22 +247,30 @@ public class ReconstructionService {
         ScanVersionService.Scope scope = versions.requireFinalized(actor, venueId, scanVersionId);
         runRow(actor, venueId, scope.runId()); // 404 for a public viewer when the version's own run had privacy disabled
         return jdbc.sql("""
-                SELECT a.bucket, a.object_key, a.size_bytes
+                SELECT a.bucket, a.object_key, a.size_bytes, a.checksum_sha256
                   FROM scan_version_artifact pin JOIN processing_artifact a ON a.id = pin.artifact_id
                   JOIN pipeline_stage_run asr ON asr.id = a.stage_run_id
                   JOIN pipeline_run ar ON ar.id = asr.run_id
                  WHERE pin.scan_version_id = :sv AND pin.kind = :kind AND a.contains_pii = false
+                   AND a.venue_id = :venue AND a.organization_id = :org
                    AND (ar.privacy_enabled OR NOT :anonymous)
                 """)
             .param("sv", scanVersionId).param("kind", kind).param("anonymous", anonymous(actor))
-            .query((rs, i) -> new StoredArtifact(rs.getString("bucket"), rs.getString("object_key"),
-                SERVED_CONTENT_TYPES.get(kind), rs.getLong("size_bytes")))
+            .param("venue", venueId).param("org", actor.organizationId())
+            .query((rs, i) -> stored(rs, kind, actor.organizationId(), venueId))
             .optional().orElseThrow(() -> new NotFoundException("artifact not found"));
+    }
+
+    private static StoredArtifact stored(java.sql.ResultSet rs, String kind, UUID organizationId, UUID venueId) throws java.sql.SQLException {
+        // The row is this venue's; its key must be too. A key outside the venue's prefixes is a defect, never served.
+        String key = TenantKeys.require(rs.getString("object_key"), organizationId, venueId);
+        return new StoredArtifact(rs.getString("bucket"), key, SERVED_CONTENT_TYPES.get(kind), rs.getLong("size_bytes"),
+            rs.getString("checksum_sha256"), organizationId, venueId);
     }
 
     /** A public-link viewer: never served a reconstruction trained without privacy preprocessing. */
     private static boolean anonymous(Actor actor) {
-        return actor.kind() == Actor.Kind.PUBLIC_VIEWER || actor.roles().contains(Role.PUBLIC_VIEWER);
+        return dev.chaya.api.security.PublicExposure.isAnonymous(actor);
     }
 
     private void requireFloor(UUID venueId, UUID floorId) {

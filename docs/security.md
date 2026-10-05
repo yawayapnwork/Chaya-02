@@ -18,10 +18,11 @@ itself is trusted.
 | `sub` | Stable user id; recorded as actor in audit logs and as operator on captures |
 | `realm_access.roles` | Keycloak realm roles (see below); unknown roles are ignored |
 | `org_id` | UUID of the caller's organization. Required for user tokens |
-| `venue_id` | UUID, or list of UUIDs, of venues the user is restricted to. Absent = no venue access (except `admin`) |
+| `venue_id` | UUID, or list of UUIDs, of venues the user's realm roles apply to. Absent = no venue access (except `admin`) |
+| `venue_roles` | `"<venueId>:<role>"`, or a list of them: `venue-manager`, `operator` or `viewer` at that one venue. A malformed entry, or a grant of `admin`/`service`, makes the token invalid (401) |
 | `aud`, `iss`, `exp` | Validated as above |
 
-`org_id` and `venue_id` come from Keycloak **user attributes** (`org_id` single value, `venue_id` multi-valued) through the `chaya-tenant` client scope. Only administrators of Keycloak can set them; users cannot change their own.
+`org_id`, `venue_id` and `venue_roles` come from Keycloak **user attributes** (`org_id` single value, the other two multi-valued) through the `chaya-tenant` client scope. Only administrators of Keycloak can set them; users cannot change their own.
 
 Design note: tenancy and role travel in the token (as requested) instead of a `venue_membership` table. The cost is that revocation takes effect when the access token expires (5 minutes in the shipped realm) rather than instantly.
 
@@ -38,11 +39,32 @@ Design note: tenancy and role travel in the token (as requested) instead of a `v
 
 Authorities are `ROLE_<NAME>` with `-` mapped to `_` (`venue-manager` → `ROLE_VENUE_MANAGER`).
 
+### Roles are per venue (review S-8)
+A user's roles at one venue are (`Actor.rolesAt`):
+1. `admin` (realm role): every role, at every venue of `org_id`;
+2. otherwise, if `venue_roles` names the venue: exactly the roles granted there;
+3. otherwise, if `venue_id` names the venue: the realm roles (the original model, kept for existing users);
+4. otherwise none.
+
+`VenueScopeFilter` runs after authentication and before authorization. For every request under
+`/api/v1/venues/{venueId}/` by a member of that venue it replaces the actor with `Actor.atVenue(venueId)`: that venue's
+roles only, and access to that venue only. `@PreAuthorize`, `TenantGuard` and the services' own role checks
+(`OpsSection`, the privacy opt-out, …) therefore all see the venue's roles. A user granted
+`["A:venue-manager", "B:viewer"]` edits A and only reads B. Non-members pass through unchanged and are refused as 404 by
+`TenantGuard`. `POST /navigation/routes` names its venue in the body; its controller applies the same narrowing.
+For a path that names no venue (`GET /venues`, `/audit-log`) the coarse check uses every role the user holds anywhere;
+those endpoints then filter by venue (`GET /venues`) or require `admin`. New users should get `venue_roles`; a realm
+role combined with `venue_id` still applies at every listed venue.
+
 ## Tenant enforcement
 Two independent layers:
 1. **URL/method rules** (`SecurityConfig`, `@PreAuthorize`): who may call the endpoint at all.
 2. **`TenantGuard.requireVenue`**, called first by every service method that takes a venue id: the venue must be in the actor's organization, not deleted, and permitted by `venue_id` (admins: any venue of their organization). Every query afterwards also filters by `venue_id` and `organization_id`.
-3. **Database**: composite foreign keys make cross-organization references impossible (see ADR 0002).
+3. **Database**: composite foreign keys make cross-organization references impossible (see ADR 0002), and every object
+   key column is CHECK-constrained to its own row's tenant prefix (V29). `TenantSchemaInvariantTest` enforces both on the
+   real migrated schema (see "Tenant inventory").
+
+Roles are narrowed to the venue of the request before layer 1 runs (see "Roles are per venue").
 
 A refused venue access is audited (`venue.access`, outcome `DENIED`, in the *caller's* organization with the attempted id in metadata) and returned as 404.
 
@@ -109,7 +131,10 @@ Purpose: let anyone with a link view one venue without an account, with a creden
 3. Requests carry `X-Chaya-Viewer-Token`. The backend maps the token to a `PUBLIC_VIEWER` actor bound to exactly one venue and organization. A bad, expired or revoked token is a hard 401; sending it together with a bearer token is a 400.
 4. Every token use joins back to its link, so revocation (`DELETE /venues/{id}/public-links/{linkId}`) is immediate.
 
-What it can do: `GET` the venue and its POIs. What it cannot do: reach other venues (404), list venues, write anything, create links, read the audit log, or call worker endpoints — those endpoints do not list `PUBLIC_VIEWER`, and the tests assert each of them.
+What it can do: `GET` the venue, its floors, anchors and routes, and what each floor **explicitly publishes**: FINALIZED
+scan versions and their pinned, verified artifacts, and the current version's POIs (list, search and by id). It is
+never shown a run trained without privacy preprocessing, nor anything derived from one (its reconstruction,
+artifacts and detected POIs; `PublicExposure`), nor a POI of a draft or superseded version, even by id. What it cannot do: reach other venues (404), list venues, write anything, create links, read the audit log, or call worker endpoints — those endpoints do not list `PUBLIC_VIEWER`, and the tests assert each of them.
 
 No JWT is signed by the backend: the viewer token is an opaque, server-side-checked credential, so there is no signing key to protect. Link exchange is rate limited per client address (see Rate limits). Not yet built: access counters per link. The viewer page sends `Referrer-Policy: no-referrer`, so the `?link=` secret never leaves the origin in a Referer header. It does remain in browser history.
 
@@ -119,7 +144,108 @@ Workers authenticate to Keycloak with the OAuth2 client-credentials grant as cli
 - `/api/v1/internal/**` requires `ROLE_SERVICE` (URL rule and `@PreAuthorize`); anonymous → 401, users (even admins) → 403.
 - Service tokens have no `org_id` and no access to tenant endpoints; a token combining `service` with user roles is rejected.
 - Contract: `POST /internal/jobs/claim {stage|stages, workerId}` (204 when nothing is queued), `POST /internal/jobs/{id}/heartbeat`, `POST /internal/jobs/{id}/report` (the stage record; see docs/pipeline.md). `complete`/`fail` remain only for legacy jobs outside a pipeline run. Claiming is atomic (`FOR UPDATE SKIP LOCKED`), transitions follow the job state machine, and each call is audited with actor type `SERVICE`.
-- Artifact registration is part of the stage report and is verified server-side (key prefix, object exists with the reported size, PII rules).
+- **Leases.** The service role says a caller is *a* worker, not which job it may act on. Each claim's work order carries
+  a fresh `leaseToken` (256 random bits; only its SHA-256 is stored, `processing_job.lease_token_sha256`). Heartbeat,
+  report, complete and fail act only with `X-Chaya-Lease-Token` set to it: otherwise the report/complete/fail is
+  `409 LEASE_MISMATCH` and the heartbeat answers `keepGoing: false`. A worker therefore cannot report on, extend or
+  finish a job of any tenant that it did not claim, nor its own job after the lease expired and the job was re-queued
+  (a retry clears the lease; the next claim issues a new one). The Python worker keeps the token per job
+  (`chaya_worker.api_client`).
+- Every input key in a work order is checked to belong to the job's own tenant before the order is handed out.
+- Artifact registration is part of the stage report and is verified server-side: key under the attempt's prefix, PII
+  rules, and the object is sealed (see "Object storage").
+
+## Object storage
+
+### Key layout
+Every object key is under its tenant (`dev.chaya.api.storage.TenantKeys`):
+
+| Prefix | Written by | What |
+|---|---|---|
+| `org/{org}/venue/{venue}/capture/{capture}/raw/{media}` | API | Raw capture media (raw bucket) |
+| `org/{org}/venue/{venue}/scan/{scan}/run/{run}/{STAGE}/attempt-{n}/…` | Worker | A stage attempt's output, before registration |
+| `sealed/org/{org}/venue/{venue}/…/{nonce}/{file}` | API only | A registered artifact: the sealed copy (derived bucket) |
+
+The API checks a key against the requested venue before streaming it (`TenantKeys.require`), and the database refuses a
+`processing_artifact` or `capture_media` row whose key is outside the row's own organization and venue (V29 CHECK
+constraints). The bytes are always streamed through the API, never via presigned URLs.
+
+### Sealed, verified artifacts (review S-2)
+When a worker reports an object, `ArtifactSealer`:
+1. copies it server-side to `sealed/…` with a per-registration nonce directory (the file name and any `pii/` segment are kept);
+2. hashes **the copy** and refuses the report (`409 ARTIFACT_CHECKSUM_MISMATCH` / `ARTIFACT_SIZE_MISMATCH` /
+   `ARTIFACT_MISSING`) unless its size and SHA-256 match the report. The copy is then removed and nothing is registered;
+3. records the sealed key (`processing_artifact.sealed`, `worker_object_key`). After the registration commits it
+   deletes the worker's original. A sealed copy whose registration fails is removed.
+
+Worker storage accounts have an explicit Deny on writes and deletes under `sealed/` (`infra/docker/minio/init.sh`), so
+a registered artifact cannot be replaced by any worker credential. Every read verifies the bytes again against the
+registered SHA-256 (`ObjectStore.openVerified`): the next stage's inputs (the worker checks the hash too), the API's own
+parsing of detections, navigation graphs and gravity estimates, and the viewer. A mismatch while streaming ends the
+response before its Content-Length, so the client sees a failed download, and is audited as
+`artifact.integrity_violation` (outcome `FAILURE`). The PII purge deletes both the sealed key and the worker key.
+
+### Storage accounts
+| Account | Raw bucket | Derived bucket |
+|---|---|---|
+| `chaya-api` | read, write, delete | read, write, delete (the only writer of `sealed/`) |
+| `chaya-worker` | read | read; write except `sealed/`; no delete |
+| `chaya-recon` (post-privacy workers) | none | read except any `*/pii/*` key; write except `sealed/` and `pii/`; no delete |
+| `chaya-backup` | read | read |
+| anonymous | none | none |
+
+`StoragePolicyTest` runs the real `init.sh` against MinIO and checks each row of this table with that account's own
+credentials, below the API.
+
+**Residual (not addressed).** The worker accounts are shared by all tenants. A compromised worker credential can still
+*read* every tenant's raw media and derived objects, and write unsealed objects under any tenant's prefix. It cannot
+change what is registered: sealed copies are out of its reach, and a forged object fails the hash check at registration.
+Per-tenant or per-run credentials (STS scoped to the run prefix) would close this. Artifacts registered before V29 are
+unsealed, but they are still verified on every read. A server-side copy is a single `CopyObject`, so objects over 5 GB
+cannot be sealed.
+
+## Tenant inventory
+Every table that carries tenant or version scope (from the migrated schema; `TenantSchemaInvariantTest` writes this
+table to `services/api/target/tenant-inventory.md` and fails if a table breaks the rules below):
+
+| Table | organization_id | venue_id | scan_version_id |
+|---|---|---|---|
+| `ar_anchor` | NOT NULL | NOT NULL | nullable |
+| `ar_anchor_pose` | NOT NULL | NOT NULL | NOT NULL |
+| `audit_log` | NOT NULL | nullable | — |
+| `capture_hud_pose_sample` | NOT NULL | NOT NULL | — |
+| `capture_hud_quality_sample` | NOT NULL | NOT NULL | — |
+| `capture_hud_scene` | NOT NULL | NOT NULL | — |
+| `capture_media` | NOT NULL | NOT NULL | — |
+| `capture_session` | NOT NULL | NOT NULL | — |
+| `coordinate_frame` | NOT NULL | NOT NULL | — |
+| `floor` | NOT NULL | NOT NULL | — |
+| `floor_connection` | NOT NULL | NOT NULL | — |
+| `navigation_edge` | NOT NULL | NOT NULL | — |
+| `navigation_graph` | NOT NULL | NOT NULL | nullable |
+| `navigation_node` | NOT NULL | NOT NULL | — |
+| `pipeline_run` | NOT NULL | NOT NULL | nullable |
+| `pipeline_stage_run` | NOT NULL | NOT NULL | — |
+| `poi` | NOT NULL | NOT NULL | — |
+| `poi_version` | NOT NULL | NOT NULL | nullable |
+| `processing_artifact` | NOT NULL | NOT NULL | nullable |
+| `processing_job` | NOT NULL | NOT NULL | nullable |
+| `public_viewer_link` | NOT NULL | NOT NULL | — |
+| `scan` | NOT NULL | NOT NULL | — |
+| `scan_version` | NOT NULL | NOT NULL | — |
+| `scan_version_artifact` | — | — | NOT NULL |
+| `search_query` | NOT NULL | NOT NULL | — |
+| `space` | NOT NULL | NOT NULL | — |
+| `venue` | NOT NULL | — | — |
+
+- Every table with `venue_id` has `organization_id` and a foreign key over `(venue_id, organization_id)`, except
+  `audit_log`: a refused cross-tenant attempt is recorded in the caller's organization with `venue_id` NULL.
+- Every `scan_version_id` column references `scan_version`.
+- `scan_version_artifact` has no tenant columns of its own. Its guard trigger allows a pin only of the version's own
+  run's artifact, or of one its parent version pinned, and the parent is same-venue by composite key.
+- Tables without tenant columns: `organization` (the tenant itself), and `capture_media_part`, `pii_staging_purge` and
+  `public_viewer_token`, which reference a `capture_media`, `processing_artifact` or `public_viewer_link` row that has them
+  and are only ever reached through it.
 
 ## Audit
 Written in the same transaction as the operation (so both commit or neither): `venue.create`, `venue.update`, `scan.create`, `job.enqueue`, `job.cancel`, `job.retry`, `job.claim`, `job.complete`, `job.fail`, `poi.create`, `poi.update`, `poi.delete`, `public_link.create`, `public_link.revoke`, `public_link.exchange`. Refused venue access (`venue.access`, `DENIED`) is written in its own transaction so it survives the rejection. Secrets and tokens are never written to the log. The table is append-only at the database level.

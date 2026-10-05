@@ -15,6 +15,7 @@ import dev.chaya.api.pipeline.PipelineDtos.StageReport;
 import dev.chaya.api.pipeline.PipelineDtos.StageRunView;
 import dev.chaya.api.pipeline.PipelineDtos.StageView;
 import dev.chaya.api.pipeline.PipelineDtos.WorkOrder;
+import dev.chaya.api.processing.JobLease;
 import dev.chaya.api.processing.JobStage;
 import dev.chaya.api.processing.ProcessingJobRepository;
 import dev.chaya.api.processing.ProcessingJobRepository.ClaimedJob;
@@ -27,6 +28,7 @@ import dev.chaya.api.security.Role;
 import dev.chaya.api.storage.ObjectStore;
 import dev.chaya.api.storage.StorageProperties;
 import dev.chaya.api.storage.StorageException;
+import dev.chaya.api.storage.TenantKeys;
 import dev.chaya.api.web.ApiException;
 import dev.chaya.api.web.NotFoundException;
 import java.io.IOException;
@@ -111,6 +113,8 @@ public class PipelineService {
     private final CoordinateFrameService frames;
     private final ScanVersionService versions;
 
+    private final ArtifactSealer sealer;
+
     public PipelineService(JdbcClient jdbc, ProcessingJobRepository jobs, AuditService audit,
                            @Qualifier("derived") ObjectStore derived, PipelineProperties props,
                            RescanProperties rescanProps,
@@ -123,6 +127,7 @@ public class PipelineService {
         this.jobs = jobs;
         this.audit = audit;
         this.derived = derived;
+        this.sealer = new ArtifactSealer(derived);
         this.props = props;
         this.rescanProps = rescanProps;
         this.tx = tx;
@@ -254,18 +259,30 @@ public class PipelineService {
     // Worker protocol: claim, heartbeat, report
     // =========================================================================================
 
+    /** Claims a job and leases it to the caller: the work order carries a fresh lease token (JobLease) that every later
+     * call about the job must present. */
     public Optional<WorkOrder> claim(Actor worker, List<JobStage> stages, String workerId) {
-        return tx.execute(s -> jobs.claim(stages, workerId, props.leaseSeconds()).map(j -> {
+        String leaseToken = JobLease.newToken();
+        return tx.execute(s -> jobs.claim(stages, workerId, props.leaseSeconds(), JobLease.hash(leaseToken)).map(j -> {
             audit.successInOrganization(worker, j.organizationId(), j.venueId(), "job.claim", "processing_job", j.id(),
                 Map.of("stage", j.stage().name(), "worker", workerId));
-            return workOrder(j);
+            return workOrder(j, leaseToken);
         }));
     }
 
-    private WorkOrder workOrder(ClaimedJob j) {
+    /** 409 LEASE_MISMATCH unless the job was last claimed under this lease token. */
+    public void requireLease(UUID jobId, String leaseToken) {
+        if (!jobs.holdsLease(jobId, JobLease.hash(leaseToken))) {
+            log.warn("refused a call about job {} without its current lease", jobId);
+            throw new ApiException(HttpStatus.CONFLICT, "LEASE_MISMATCH",
+                "this worker does not hold the job's lease; only the worker that claimed it may report on it");
+        }
+    }
+
+    private WorkOrder workOrder(ClaimedJob j, String leaseToken) {
         if (j.runId() == null) { // legacy job: no run, no inputs
             return new WorkOrder(j.id(), j.organizationId(), j.venueId(), j.scanId(), j.scanVersionId(), j.stage().name(),
-                null, j.retryCount() + 1, null, false, null, null, List.of(), null, null, null);
+                null, j.retryCount() + 1, null, false, null, null, List.of(), null, null, null, leaseToken);
         }
         RunRow run = loadRun(j.runId());
         int attempt = j.retryCount() + 1;
@@ -274,9 +291,14 @@ public class PipelineService {
         Map<String, Object> parentFrame = run.scanVersionId() != null
             && (j.stage() == JobStage.REGION_ALIGNMENT || j.stage() == JobStage.REGION_SPLICE)
             ? frames.activeForRun(run.reconstructionFrameRunId()).map(FrameView::wire).orElse(null) : null;
+        List<InputRef> inputs = inputs(run, j.stage());
+        // Defence in depth: everything a work order points the worker at belongs to the job's own tenant.
+        for (InputRef in : inputs) {
+            TenantKeys.require(in.key(), j.organizationId(), j.venueId());
+        }
         return new WorkOrder(j.id(), j.organizationId(), j.venueId(), j.scanId(), j.scanVersionId(), j.stage().name(),
             run.id(), attempt, run.deadline(), run.privacy(), derivedBucketName, prefix(run, j.stage(), attempt),
-            inputs(run, j.stage()), regionGeometry, frame, parentFrame);
+            inputs, regionGeometry, frame, parentFrame, leaseToken);
     }
 
     /**
@@ -300,7 +322,8 @@ public class PipelineService {
 
     /** Keys a stage attempt may write: everything under this prefix, and nothing else. */
     static String prefix(RunRow run, JobStage stage, int attempt) {
-        return "org/%s/venue/%s/scan/%s/run/%s/%s/attempt-%d/".formatted(run.orgId(), run.venueId(), run.scanId(), run.id(), stage, attempt);
+        return TenantKeys.prefix(run.orgId(), run.venueId())
+            + "scan/%s/run/%s/%s/attempt-%d/".formatted(run.scanId(), run.id(), stage, attempt);
     }
 
     /**
@@ -395,37 +418,82 @@ public class PipelineService {
             .optional();
     }
 
-    public Heartbeat heartbeat(UUID jobId, String workerId) {
-        boolean alive = jobs.heartbeat(jobId, workerId, props.leaseSeconds());
+    public Heartbeat heartbeat(UUID jobId, String leaseToken) {
+        boolean alive = jobs.heartbeat(jobId, JobLease.hash(leaseToken), props.leaseSeconds());
         Instant deadline = jdbc.sql("SELECT r.deadline_at FROM processing_job j JOIN pipeline_run r ON r.id = j.run_id WHERE j.id = :j")
             .param("j", jobId).query((rs, i) -> rs.getTimestamp(1).toInstant()).optional().orElse(null);
         return new Heartbeat(alive, deadline);
     }
 
-    /** Applies a worker's stage report: verifies artifacts, records the stage, moves the job and the run. */
-    public void report(Actor worker, UUID jobId, StageReport r) {
-        Runnable afterCommit = tx.execute(s -> {
-            JobRow job = lockJob(jobId);
-            if (job.runId() == null) {
-                throw new ApiException(HttpStatus.CONFLICT, "NOT_A_PIPELINE_JOB", "this job is not part of a pipeline run; use complete/fail");
+    /**
+     * Applies a worker's stage report: checks the lease, seals and verifies every reported object (ArtifactSealer), records
+     * the stage, moves the job and the run. Sealing reads whole objects, so it runs before the row locks are taken; the
+     * job's state and lease are checked again under them. Sealed copies of a report that does not commit are removed; the
+     * worker's originals are removed once it has.
+     */
+    public void report(Actor worker, UUID jobId, String leaseToken, StageReport r) {
+        requireLease(jobId, leaseToken);
+        JobRow claimed = job(jobId, false);
+        if (claimed.runId() == null) {
+            throw new ApiException(HttpStatus.CONFLICT, "NOT_A_PIPELINE_JOB", "this job is not part of a pipeline run; use complete/fail");
+        }
+        if (!claimed.status().equals("RUNNING")) {
+            throw new ApiException(HttpStatus.CONFLICT, "JOB_NOT_RUNNING", "job is " + claimed.status() + "; the report was not applied");
+        }
+        Map<String, String> sealed = new LinkedHashMap<>();
+        Runnable afterCommit;
+        try {
+            ReportScope scope = reportScope(claimed, loadRun(claimed.runId()));
+            for (ArtifactReport a : reportedObjects(r)) {
+                validateArtifact(a, scope.prefix(), scope.afterPrivacy(), scope.beforePrivacy());
+                if (!sealed.containsKey(a.key())) {
+                    sealed.put(a.key(), sealer.seal(a.key(), a.sha256(), a.sizeBytes(), claimed.orgId(), claimed.venueId()));
+                }
             }
-            if (!job.status().equals("RUNNING")) {
-                throw new ApiException(HttpStatus.CONFLICT, "JOB_NOT_RUNNING", "job is " + job.status() + "; the report was not applied");
-            }
-            RunRow run = lockRun(job.runId());
-            if (!run.status().equals("RUNNING")) {
-                throw new ApiException(HttpStatus.CONFLICT, "RUN_NOT_ACTIVE", "the pipeline run is " + run.status());
-            }
-            return applyReport(worker, job, run, r, true);
-        });
+            afterCommit = tx.execute(s -> {
+                JobRow job = job(jobId, true);
+                if (!job.status().equals("RUNNING")) {
+                    throw new ApiException(HttpStatus.CONFLICT, "JOB_NOT_RUNNING", "job is " + job.status() + "; the report was not applied");
+                }
+                requireLease(jobId, leaseToken); // still this worker's, now under the row lock
+                RunRow run = lockRun(job.runId());
+                if (!run.status().equals("RUNNING")) {
+                    throw new ApiException(HttpStatus.CONFLICT, "RUN_NOT_ACTIVE", "the pipeline run is " + run.status());
+                }
+                return applyReport(worker, job, run, r, sealed);
+            });
+        } catch (RuntimeException e) {
+            sealed.values().forEach(sealer::discard);
+            throw e;
+        }
+        sealed.keySet().forEach(sealer::deleteOriginal);
         afterCommit.run();
+    }
+
+    /** Where a stage attempt may write, and which PII rules its outputs fall under. */
+    private record ReportScope(String prefix, boolean afterPrivacy, boolean beforePrivacy) {}
+
+    private static ReportScope reportScope(JobRow job, RunRow run) {
+        boolean afterPrivacy = run.privacy() && run.stages().indexOf(JobStage.PRIVACY_PREPROCESS) < run.stages().indexOf(job.stage());
+        boolean beforePrivacy = run.privacy() && run.stages().contains(JobStage.PRIVACY_PREPROCESS)
+            && run.stages().indexOf(job.stage()) < run.stages().indexOf(JobStage.PRIVACY_PREPROCESS);
+        return new ReportScope(prefix(run, job.stage(), job.retryCount() + 1), afterPrivacy, beforePrivacy);
+    }
+
+    private static List<ArtifactReport> reportedObjects(StageReport r) {
+        List<ArtifactReport> all = new ArrayList<>(r.artifacts() == null ? List.of() : r.artifacts());
+        if (r.stdout() != null) all.add(r.stdout());
+        if (r.stderr() != null) all.add(r.stderr());
+        return all;
     }
 
     // =========================================================================================
     // Applying a report (shared by workers and the system enforcer)
     // =========================================================================================
 
-    private Runnable applyReport(Actor actor, JobRow job, RunRow run, StageReport r, boolean verifyArtifacts) {
+    /** {@code sealedKeys}: worker key -> sealed key for every reported object (worker reports); empty for the control
+     * plane's own synthetic reports, which carry no objects. */
+    private Runnable applyReport(Actor actor, JobRow job, RunRow run, StageReport r, Map<String, String> sealedKeys) {
         boolean ok = "SUCCEEDED".equals(r.status());
         if (!ok && !"FAILED".equals(r.status())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_REPORT", "status must be SUCCEEDED or FAILED");
@@ -440,20 +508,16 @@ public class PipelineService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_REPORT", "startedAt, finishedAt (not before startedAt) and command are required");
         }
         int attempt = job.retryCount() + 1;
-        String prefix = prefix(run, job.stage(), attempt);
+        ReportScope scope = reportScope(job, run);
         List<ArtifactReport> outputs = r.artifacts() == null ? List.of() : r.artifacts();
-        List<ArtifactReport> all = new ArrayList<>(outputs);
-        if (r.stdout() != null) all.add(r.stdout());
-        if (r.stderr() != null) all.add(r.stderr());
-        boolean afterPrivacy = run.privacy() && run.stages().indexOf(JobStage.PRIVACY_PREPROCESS) < run.stages().indexOf(job.stage());
-        boolean beforePrivacy = run.privacy() && run.stages().contains(JobStage.PRIVACY_PREPROCESS)
-            && run.stages().indexOf(job.stage()) < run.stages().indexOf(JobStage.PRIVACY_PREPROCESS);
-        for (ArtifactReport a : all) {
-            validateArtifact(a, prefix, afterPrivacy, beforePrivacy);
-            if (verifyArtifacts) {
-                verifyStored(a);
+        for (ArtifactReport a : reportedObjects(r)) {
+            validateArtifact(a, scope.prefix(), scope.afterPrivacy(), scope.beforePrivacy());
+            if (sealedKeys == null || !sealedKeys.containsKey(a.key())) {
+                throw new ApiException(HttpStatus.CONFLICT, "ARTIFACT_INVALID", "artifact " + a.key() + " was not sealed");
             }
         }
+        // From here on every object is referred to by its sealed key.
+        List<ArtifactReport> stored = outputs.stream().map(a -> withKey(a, sealedKeys.get(a.key()))).toList();
 
         UUID stageRunId = UUID.randomUUID();
         UUID stdoutId = r.stdout() == null ? null : UUID.randomUUID();
@@ -470,10 +534,12 @@ public class PipelineService {
             .param("sha", outputSha).param("ec", r.errorCode()).param("em", r.errorMessage())
             .param("ed", r.errorDetails() == null ? null : json(r.errorDetails())).param("w", job.workerId()).update();
         for (ArtifactReport a : outputs) {
-            insertArtifact(UUID.randomUUID(), job, run.scanVersionId(), stageRunId, a);
+            insertArtifact(UUID.randomUUID(), job, run.scanVersionId(), stageRunId, a, sealedKeys.get(a.key()));
         }
-        if (r.stdout() != null) insertArtifact(stdoutId, job, run.scanVersionId(), stageRunId, forceLog(r.stdout(), "LOG_STDOUT"));
-        if (r.stderr() != null) insertArtifact(stderrId, job, run.scanVersionId(), stageRunId, forceLog(r.stderr(), "LOG_STDERR"));
+        if (r.stdout() != null) insertArtifact(stdoutId, job, run.scanVersionId(), stageRunId, forceLog(r.stdout(), "LOG_STDOUT"),
+            sealedKeys.get(r.stdout().key()));
+        if (r.stderr() != null) insertArtifact(stderrId, job, run.scanVersionId(), stageRunId, forceLog(r.stderr(), "LOG_STDERR"),
+            sealedKeys.get(r.stderr().key()));
 
         String failCode = r.errorCode();
         String failMessage = r.errorMessage();
@@ -501,10 +567,10 @@ public class PipelineService {
             appendChangedArtifactKind(run.scanVersionId(), "SPLAT_MERGED");
         }
         if (ok && job.stage() == JobStage.SEMANTIC_INDEXING) {
-            ingestDetectedObjects(job, run, outputs);
+            ingestDetectedObjects(job, run, stored);
         }
         if (ok && job.stage() == JobStage.NAVIGATION_BAKING) {
-            ingestNavigationGraph(run, job.stage(), outputs);
+            ingestNavigationGraph(run, job.stage(), stored);
         }
 
         if (ok) {
@@ -789,18 +855,20 @@ public class PipelineService {
      * superseded first. Each POI names the version. An artifact that cannot be read refuses the publication rather than
      * publishing the version without its detections. Returns {superseded, created}. */
     private int[] applyDetections(RunRow run) {
-        String key = jdbc.sql("""
-                SELECT a.object_key FROM processing_artifact a JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id
+        record Stored(String key, String sha256) {}
+        Stored stored = jdbc.sql("""
+                SELECT a.object_key, a.checksum_sha256 FROM processing_artifact a JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id
                  WHERE sr.run_id = :r AND sr.status = 'SUCCEEDED' AND a.kind = 'DETECTED_OBJECTS' ORDER BY a.created_at DESC LIMIT 1
-                """).param("r", run.id()).query(String.class).optional().orElse(null);
+                """).param("r", run.id()).query((rs, i) -> new Stored(rs.getString(1), rs.getString(2))).optional().orElse(null);
+        String key = stored == null ? null : TenantKeys.require(stored.key(), run.orgId(), run.venueId());
         UUID floorId = jdbc.sql("SELECT floor_id FROM capture_session WHERE id = :c").param("c", run.captureId())
             .query(UUID.class).optional().orElse(null);
         if (key == null || floorId == null) {
             return new int[]{0, 0};
         }
         Map<String, Object> doc;
-        try (InputStream in = derived.open(key)) {
-            doc = mapper.readValue(in, MAP);
+        try (InputStream in = derived.openVerified(key, stored.sha256())) {
+            doc = mapper.readValue(in.readAllBytes(), MAP);
         } catch (IOException | StorageException e) {
             throw new ApiException(HttpStatus.CONFLICT, "DETECTIONS_UNREADABLE", "the run's DETECTED_OBJECTS artifact " + key
                 + " could not be read (" + e.getMessage() + "); the version is not published without its detections");
@@ -858,18 +926,8 @@ public class PipelineService {
         }
     }
 
-    /** The object must really exist in the derived bucket with the claimed size. */
-    private void verifyStored(ArtifactReport a) {
-        long size;
-        try {
-            size = derived.size(a.key());
-        } catch (dev.chaya.api.storage.StorageException e) {
-            throw new ApiException(HttpStatus.CONFLICT, "ARTIFACT_MISSING", "artifact " + a.key() + " was not found in storage");
-        }
-        if (size != a.sizeBytes()) {
-            throw new ApiException(HttpStatus.CONFLICT, "ARTIFACT_SIZE_MISMATCH",
-                "artifact " + a.key() + " is " + size + " bytes in storage but was reported as " + a.sizeBytes());
-        }
+    private static ArtifactReport withKey(ArtifactReport a, String key) {
+        return new ArtifactReport(a.kind(), key, a.sha256(), a.contentType(), a.sizeBytes(), a.containsPii(), a.partial());
     }
 
     private static ArtifactReport forceLog(ArtifactReport a, String kind) {
@@ -878,13 +936,13 @@ public class PipelineService {
 
     /** A re-scan run's artifacts name the (DRAFT) version they are produced for; the V4 guard refuses any once it is
      * finalized. A full run's artifacts have no version yet: a bootstrap pins them (scan_version_artifact). */
-    private void insertArtifact(UUID id, JobRow job, UUID scanVersionId, UUID stageRunId, ArtifactReport a) {
+    private void insertArtifact(UUID id, JobRow job, UUID scanVersionId, UUID stageRunId, ArtifactReport a, String sealedKey) {
         jdbc.sql("INSERT INTO processing_artifact (id, organization_id, venue_id, scan_id, scan_version_id, job_id, stage, bucket, "
-                + "object_key, checksum_sha256, content_type, size_bytes, kind, stage_run_id, contains_pii, partial) "
-                + "VALUES (:id, :o, :v, :s, :sv, :j, :st, :b, :k, :sha, :ct, :sz, :kind, :sr, :pii, :part)")
+                + "object_key, checksum_sha256, content_type, size_bytes, kind, stage_run_id, contains_pii, partial, sealed, worker_object_key) "
+                + "VALUES (:id, :o, :v, :s, :sv, :j, :st, :b, :k, :sha, :ct, :sz, :kind, :sr, :pii, :part, true, :wk)")
             .param("id", id).param("o", job.orgId()).param("v", job.venueId()).param("s", job.scanId())
-            .param("sv", scanVersionId).param("j", job.id())
-            .param("st", job.stage().name()).param("b", derivedBucketName).param("k", a.key()).param("sha", a.sha256())
+            .param("sv", scanVersionId).param("j", job.id()).param("wk", a.key())
+            .param("st", job.stage().name()).param("b", derivedBucketName).param("k", sealedKey).param("sha", a.sha256())
             .param("ct", a.contentType()).param("sz", a.sizeBytes()).param("kind", a.kind()).param("sr", stageRunId)
             .param("pii", a.containsPii()).param("part", a.partial()).update();
     }
@@ -950,10 +1008,13 @@ public class PipelineService {
     /** Deletes the objects of the run's PII artifacts not purged yet, recording each deletion. Best effort, audited (when
      * there was anything to delete, or always with {@code auditWhenNothing}), idempotent. */
     private void purgePii(RunRow run, String reason, boolean auditWhenNothing) {
-        record Pii(UUID id, String key) {}
-        List<Pii> items = jdbc.sql("SELECT a.id, a.object_key FROM processing_artifact a JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id "
+        // worker: the key the worker wrote, for a sealed artifact. It is deleted once sealing commits; deleting it again
+        // here (a no-op when it is gone) makes sure a PII original never outlives its run's purge.
+        record Pii(UUID id, String key, String worker) {}
+        List<Pii> items = jdbc.sql("SELECT a.id, a.object_key, a.worker_object_key FROM processing_artifact a "
+                + "JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id "
                 + "WHERE sr.run_id = :r AND a.contains_pii AND NOT EXISTS (SELECT 1 FROM pii_staging_purge p WHERE p.artifact_id = a.id)")
-            .param("r", run.id()).query((rs, i) -> new Pii(rs.getObject(1, UUID.class), rs.getString(2))).list();
+            .param("r", run.id()).query((rs, i) -> new Pii(rs.getObject(1, UUID.class), rs.getString(2), rs.getString(3))).list();
         if (items.isEmpty() && !auditWhenNothing) {
             return;
         }
@@ -962,6 +1023,9 @@ public class PipelineService {
         for (Pii item : items) {
             try {
                 derived.delete(item.key());
+                if (item.worker() != null) {
+                    derived.delete(item.worker());
+                }
                 jdbc.sql("INSERT INTO pii_staging_purge (artifact_id, run_id, reason) VALUES (:a, :r, :why) ON CONFLICT DO NOTHING")
                     .param("a", item.id()).param("r", run.id()).param("why", reason).update();
                 deleted++;
@@ -991,8 +1055,8 @@ public class PipelineService {
             return;
         }
         Map<String, Object> doc;
-        try (InputStream in = derived.open(artifact.key())) {
-            doc = mapper.readValue(in, MAP);
+        try (InputStream in = derived.openVerified(artifact.key(), artifact.sha256())) {
+            doc = mapper.readValue(in.readAllBytes(), MAP);
         } catch (IOException | StorageException e) {
             log.error("could not read DETECTED_OBJECTS artifact {}: {}", artifact.key(), e.getMessage());
             return;
@@ -1143,8 +1207,8 @@ public class PipelineService {
             return;
         }
         Map<String, Object> doc;
-        try (InputStream in = derived.open(artifact.key())) {
-            doc = mapper.readValue(in, MAP);
+        try (InputStream in = derived.openVerified(artifact.key(), artifact.sha256())) {
+            doc = mapper.readValue(in.readAllBytes(), MAP);
         } catch (IOException | StorageException e) {
             log.error("could not read NAVIGATION_GRAPH artifact {}: {}", artifact.key(), e.getMessage());
             return;
@@ -1382,7 +1446,7 @@ public class PipelineService {
             if (!run.status().equals("RUNNING")) return null;
             StageReport report = new StageReport("FAILED", started, Instant.now(), Map.of("synthetic", "enforced-by-control-plane", "reason", code),
                 List.of(), null, null, null, List.of(), code, message, Map.of());
-            return applyReport(SYSTEM, job, run, report, false);
+            return applyReport(SYSTEM, job, run, report, Map.of());
         });
         if (after == null) return false;
         after.run();
@@ -1473,8 +1537,12 @@ public class PipelineService {
     }
 
     private JobRow lockJob(UUID jobId) {
+        return job(jobId, true);
+    }
+
+    private JobRow job(UUID jobId, boolean lock) {
         return jdbc.sql("SELECT id, organization_id, venue_id, scan_id, run_id, stage, status, retry_count, worker_id, started_at "
-                + "FROM processing_job WHERE id = :j FOR UPDATE").param("j", jobId)
+                + "FROM processing_job WHERE id = :j" + (lock ? " FOR UPDATE" : "")).param("j", jobId)
             .query((rs, i) -> new JobRow(rs.getObject("id", UUID.class), rs.getObject("organization_id", UUID.class),
                 rs.getObject("venue_id", UUID.class), rs.getObject("scan_id", UUID.class), rs.getObject("run_id", UUID.class),
                 JobStage.valueOf(rs.getString("stage")), rs.getString("status"), rs.getInt("retry_count"), rs.getString("worker_id"),

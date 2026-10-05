@@ -176,7 +176,12 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
         assertThat(frames.get("inputs").get(0).get("containsPii").asBoolean()).isTrue();
         Map<String, Object> pii = outputsFor(frames).get(0);
         succeed(frames);
-        String piiKey = (String) pii.get("key");
+        String workerKey = (String) pii.get("key");
+        // Registered as a sealed copy; the worker's own object is gone at once (ArtifactSealer).
+        String piiKey = jdbc.sql("SELECT object_key FROM processing_artifact WHERE worker_object_key = :k").param("k", workerKey)
+            .query(String.class).single();
+        assertThat(piiKey).startsWith("sealed/").contains("/pii/");
+        assertThat(existsInDerived(workerKey)).as("the worker's unsealed original").isFalse();
         assertThat(existsInDerived(piiKey)).as("raw frames exist until the privacy stage has finished").isTrue();
         succeed(claimExpecting("FRAME_QUALITY_FILTER"));
         JsonNode privacy = claimExpecting("PRIVACY_PREPROCESS");
@@ -342,11 +347,11 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
         JsonNode order = claimExpecting("INPUT_VALIDATION");
         String jobId = order.get("id").asText();
 
-        // Heartbeats keep the lease; a different worker id does not own it.
-        post("/api/v1/internal/jobs/" + jobId + "/heartbeat", svc, "{\"workerId\":\"test-worker\"}").andExpect(status().isOk())
-            .andExpect(jsonPath("$.keepGoing").value(true));
-        post("/api/v1/internal/jobs/" + jobId + "/heartbeat", svc, "{\"workerId\":\"impostor\"}").andExpect(status().isOk())
-            .andExpect(jsonPath("$.keepGoing").value(false));
+        // Heartbeats with the claim's lease token keep the lease; a worker without it (whatever worker id it sends) does not
+        // own the job and is told to stop.
+        heartbeat(order, order.get("leaseToken").asText()).andExpect(status().isOk()).andExpect(jsonPath("$.keepGoing").value(true));
+        heartbeat(order, null).andExpect(status().isOk()).andExpect(jsonPath("$.keepGoing").value(false));
+        heartbeat(order, "cjl_not-the-lease").andExpect(status().isOk()).andExpect(jsonPath("$.keepGoing").value(false));
 
         jdbc.sql("UPDATE processing_job SET lease_expires_at = now() - interval '1 minute' WHERE id = :j").param("j", UUID.fromString(jobId)).update();
         assertThat(pipeline.enforceLeasesAndDeadlines()).isPositive();
@@ -376,8 +381,7 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
         JsonNode order = claimExpecting("INPUT_VALIDATION");
         post(capUrl(s.c(), s.capture()) + "/processing/cancel", s.c().operator(), null).andExpect(status().isOk())
             .andExpect(jsonPath("$.run.status").value("CANCELLED"));
-        post("/api/v1/internal/jobs/" + order.get("id").asText() + "/heartbeat", svc, "{\"workerId\":\"test-worker\"}")
-            .andExpect(jsonPath("$.keepGoing").value(false));
+        heartbeat(order, order.get("leaseToken").asText()).andExpect(jsonPath("$.keepGoing").value(false));
         send(order, report("SUCCEEDED", List.of(), null, null), svc).andExpect(status().isConflict())
             .andExpect(jsonPath("$.code").value("JOB_NOT_RUNNING"));
         assertThat(captureStatus(s)).isEqualTo("FAILED");
