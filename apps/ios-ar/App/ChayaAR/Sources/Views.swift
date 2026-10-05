@@ -143,7 +143,7 @@ struct StatusText: View {
                 Text("Marker seen (\(s.pending?.observations.map(\.markerIdentifier).joined(separator: ", ") ?? "")): localizing…")
             case .localized, .limited:
                 if let loc = s.localization {
-                    Text("Localized from \(loc.anchorIds.count) marker(s)" +
+                    Text("Localized in scan version \(String(loc.scanVersionId.apiString.prefix(8))) from \(loc.anchorIds.count) marker(s)" +
                          (loc.residualMeters.map { String(format: ", residual %.2f m", $0) } ?? " (residual unknown: one marker)"))
                 }
                 if s.phase == .limited { Text("Tracking limited: route position frozen.") }

@@ -143,36 +143,46 @@ public final class APIClient: @unchecked Sendable {
         try await send("/venues/\(venueId.apiString)/floors/\(floorId.apiString)/anchors/\(anchorId.apiString)/target.png")
     }
 
-    public func relocalize(venueId: UUID, floorId: UUID, observations: [AnchorObservation]) async throws -> RelocalizationResponse {
+    /// `scanVersionId`: the version this session pinned for the floor at its first localization (nil before it). The server
+    /// refuses the request (409 VERSION_MISMATCH) when the floor publishes another version, so the device is never placed
+    /// in one version's frame while it draws another version's route.
+    public func relocalize(venueId: UUID, floorId: UUID, observations: [AnchorObservation], scanVersionId: UUID?) async throws -> RelocalizationResponse {
         try await request("/venues/\(venueId.apiString)/floors/\(floorId.apiString)/anchors/relocalize", method: "POST",
-                          body: try Self.relocalizeBody(observations))
+                          body: try Self.relocalizeBody(observations, scanVersionId: scanVersionId))
     }
 
-    static func relocalizeBody(_ observations: [AnchorObservation]) throws -> Data {
-        struct Body: Encodable { let observations: [AnchorObservation] }
-        return try JSONEncoder.chayaAR.encode(Body(observations: observations))
+    static func relocalizeBody(_ observations: [AnchorObservation], scanVersionId: UUID?) throws -> Data {
+        struct Body: Encodable { let observations: [AnchorObservation]; let scanVersionId: String? }
+        return try JSONEncoder.chayaAR.encode(Body(observations: observations, scanVersionId: scanVersionId?.apiString))
     }
 
     // ---- routing ----------------------------------------------------------------------------------------
 
     /// `start` is canonical venue metres (+Z up) on `floorId` -- the device's position as solved by relocalization.
-    public func planRoute(venueId: UUID, floorId: UUID, start: Vec3, destinationPoiId: UUID, accessibility: String? = nil) async throws -> RouteResponse {
+    /// `scanVersionId`: route on exactly that FINALIZED version of the floor (its pinned navmesh, its frame, the destination
+    /// as it is in that version) instead of whatever the floor publishes when the request lands. The AR app passes the
+    /// version its localization was solved in. Such a route stays on that floor (the server refuses another floor's
+    /// destination with VERSION_WRONG_FLOOR).
+    public func planRoute(venueId: UUID, floorId: UUID, start: Vec3, destinationPoiId: UUID, scanVersionId: UUID?,
+                          accessibility: String? = nil) async throws -> RouteResponse {
         try await request("/navigation/routes", method: "POST",
-                          body: try Self.routeBody(venueId: venueId, floorId: floorId, start: start,
-                                                   destinationPoiId: destinationPoiId, accessibility: accessibility))
+                          body: try Self.routeBody(venueId: venueId, floorId: floorId, start: start, destinationPoiId: destinationPoiId,
+                                                   scanVersionId: scanVersionId, accessibility: accessibility))
     }
 
-    static func routeBody(venueId: UUID, floorId: UUID, start: Vec3, destinationPoiId: UUID, accessibility: String?) throws -> Data {
+    static func routeBody(venueId: UUID, floorId: UUID, start: Vec3, destinationPoiId: UUID, scanVersionId: UUID?,
+                          accessibility: String?) throws -> Data {
         struct Body: Encodable {
             let venueId: String
             let floorId: String
             let start: [Double]
             let destinationPoiId: String
+            let scanVersionId: String?
             let accessibility: String?
         }
         return try JSONEncoder.chayaAR.encode(Body(venueId: venueId.apiString, floorId: floorId.apiString,
-                                                   start: [start.x, start.y, start.z],
-                                                   destinationPoiId: destinationPoiId.apiString, accessibility: accessibility))
+                                                   start: [start.x, start.y, start.z], destinationPoiId: destinationPoiId.apiString,
+                                                   scanVersionId: scanVersionId?.apiString, accessibility: accessibility))
     }
 }
 

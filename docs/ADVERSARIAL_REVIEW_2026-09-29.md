@@ -593,3 +593,24 @@ This section was added after the review; the sections above are unchanged. Detai
   passes. **It has not run on a device:** no Android phone or `adb` was available. docs/ar-android-validation.md
   (sections 1–7, including the new 6b) is the procedure, and its record says pending.
 - Still open: AR-3 (`physicalPose` unused), N-5 (no producer of dynamic obstacles), the image-tracking flag requirement.
+
+---
+
+## 11. Addendum (2026-10-05): C-3, iOS app build and scan versions
+
+This section was added after the review; the sections above are unchanged. Details: docs/ar.md, "iOS: Swift/ARKit".
+
+- **C-3's build failure was fixed after this review:** `ios` run 36734833669 (2026-09-30, commit `f99b8a6`, which
+  pinned `projectFormat: xcode15_0`) generated the project with XcodeGen 2.46.0, built the app for
+  `generic/platform=iOS` with Xcode 15.4 (`BUILD SUCCEEDED`, one warning about interface orientations, now fixed with
+  `UIRequiresFullScreen`), and passed the 9 app-level Simulator tests; the Linux `core` job passed 35. C-3's required
+  test is met by that run.
+- **The iOS client ignored scan versions** (the Android work in section 10 did not touch it): it decoded neither
+  `scanVersionId` nor `routingSources`, never sent a version, and drew whatever leg the route had. It now skips
+  unversioned anchors, pins the floor's version at the first localization and sends it with every relocalization,
+  refuses answers in another version or for another floor, routes in the localization's version, and draws a leg only
+  when its routing source names the localization's version and frame. Core tests: 43 (Linux).
+- **Item 12 is not upgraded by this change.** The ARKit layer after `f99b8a6` is type-checked only by the next `ios`
+  run, and nothing has run with a camera: docs/ar-ios-validation.md (now including a republished-floor check) is still
+  NOT RUN. With a green `ios` run it is at most PARTIALLY REAL, like item 11.
+- Still open on iOS: drift detection, refresh while localized, floor handoff (Android has them); AR-3; N-5.

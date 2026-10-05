@@ -69,6 +69,55 @@ final class VenueFramesTests: XCTestCase {
         XCTAssertEqual(RouteGeometry.legOnFloor(route, floorId: UUID()), [])
     }
 
+    func testALegIsDrawnOnlyWhenRoutedInTheLocalizationsScanVersionAndFrame() {
+        let floor = UUID(), other = UUID(), version = UUID(), frame = UUID()
+        let localization = Localization(deviceToVenue: transform, anchorIds: [UUID()], residualMeters: nil, coordinateFrameId: frame,
+                                        scanVersionId: version, floorId: floor, solvedAt: 1)
+        func route(_ sources: [RoutingSource]?) -> RouteResponse {
+            RouteResponse(waypoints: [Waypoint(x: 5, y: 4, z: 0, floorId: floor, kind: .start),
+                                      Waypoint(x: 5, y: 8, z: 0, floorId: floor, kind: .destination)],
+                          distanceMeters: 4, estimatedDurationSeconds: 3, floorTransitions: [], accessibilityProfile: "STANDARD",
+                          accessibilityConstraintsApplied: [], routingSources: sources)
+        }
+        func problem(_ check: RouteGeometry.LegCheck) -> RouteGeometry.LegProblem? {
+            if case .refused(let p, _) = check { return p }
+            return nil
+        }
+        let ok = RouteGeometry.leg(of: route([RoutingSource(floorId: floor, scanVersionId: version, coordinateFrameId: frame)]), for: localization)
+        XCTAssertEqual(ok, .drawable(route(nil).waypoints))
+        XCTAssertEqual(problem(RouteGeometry.leg(of: route(nil), for: localization)), .routeSourceMissing)
+        XCTAssertEqual(problem(RouteGeometry.leg(of: route([RoutingSource(floorId: other, scanVersionId: version, coordinateFrameId: frame)]),
+                                                 for: localization)), .routeSourceMissing)
+        XCTAssertEqual(problem(RouteGeometry.leg(of: route([RoutingSource(floorId: floor, scanVersionId: UUID(), coordinateFrameId: frame)]),
+                                                 for: localization)), .versionMismatch, "a stale (or newer) version's leg is never drawn")
+        XCTAssertEqual(problem(RouteGeometry.leg(of: route([RoutingSource(floorId: floor, scanVersionId: nil, coordinateFrameId: frame)]),
+                                                 for: localization)), .versionMismatch)
+        XCTAssertEqual(problem(RouteGeometry.leg(of: route([RoutingSource(floorId: floor, scanVersionId: version, coordinateFrameId: UUID())]),
+                                                 for: localization)), .frameMismatch)
+        var elsewhere = localization
+        elsewhere.floorId = other
+        XCTAssertEqual(problem(RouteGeometry.leg(of: route([RoutingSource(floorId: other, scanVersionId: version, coordinateFrameId: frame)]),
+                                                 for: elsewhere)), .noLegOnFloor)
+    }
+
+    /// The explicit canonical (+Z up) <-> ARKit (+Y up) boundary for a marker on a wall (docs/ar.md "Marker pose
+    /// convention": facing canonical -Y, upright, 180 degrees about X), seen straight ahead by ARKit 2 m away.
+    func testCanonicalUpIsARKitUpAndCanonicalAxesLandWhereTheWallMarkerSays() {
+        let wall = Pose(x: 3, y: 10, z: 1.5, qx: 1, qy: 0, qz: 0, qw: 0)
+        // ARKit: the image faces the camera (+Y out of the face = ARKit +Z toward the viewer), its right is ARKit +X and its
+        // bottom edge is ARKit -Y: that is +90 degrees about X.
+        let seen = Pose(x: 0, y: 0, z: -2, qx: s, qw: s)
+        let t = AnchorMath.deviceToVenue(fromAnchorDigitalPose: wall, observedPose: seen)
+        XCTAssertLessThan(VenueFrames.gravityTiltDegrees(t), 1e-6)
+        assertClose(VenueFrames.worldPointToVenue(deviceToVenue: t, Vec3(0, 0, -2)), Vec3(3, 10, 1.5))
+        // the session origin is 2 m in front of the wall: canonical -Y of the marker, at its height
+        assertClose(VenueFrames.devicePositionInVenue(camera: .identity, deviceToVenue: t), Vec3(3, 8, 1.5))
+        // one metre up in ARKit is one metre up in canonical
+        assertClose(VenueFrames.worldPointToVenue(deviceToVenue: t, Vec3(0, 1, 0)), Vec3(3, 8, 2.5))
+        // and back: a canonical point 1 m above the floor below the marker is 0.5 m below the marker in ARKit
+        assertClose(VenueFrames.venuePointToWorld(deviceToVenue: t, Vec3(3, 10, 1)), Vec3(0, -0.5, -2))
+    }
+
     func testProgressProjectsTheDeviceAndIsFrozenWhenItMayNotAdvance() {
         let route = [Vec3(0, 0, 0), Vec3(10, 0, 0), Vec3(10, 10, 0)]
         let p = RouteGeometry.progress(along: route, device: Vec3(4, 1, 1.5))!

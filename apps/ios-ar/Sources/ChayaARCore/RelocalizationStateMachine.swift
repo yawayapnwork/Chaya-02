@@ -24,6 +24,10 @@ import Foundation
 ///   * Tracking loss is sticky. ARKit reporting `.normal` again only gets to `recovered`; the route returns only after a
 ///     registered marker is observed again and the server relocalizes from it.
 ///   * A server answer for a request that is no longer pending is ignored.
+///   * A localization belongs to one floor and one scan version. The session's floor is fixed when it starts; its version
+///     is pinned at the first localization and sent with every later request. An answer for another floor, or in another
+///     version (the floor was republished mid-session), is refused (FLOOR_MISMATCH / VERSION_MISMATCH) like a failed
+///     solve: it never replaces the transform, so a stale version's route is never drawn with a new version's transform.
 public enum LimitedReason: String, Equatable, Sendable {
     case initializing, excessiveMotion, insufficientFeatures, relocalizing, other
 
@@ -50,17 +54,22 @@ public enum TrackingQuality: Equatable, Sendable {
     }
 }
 
-/// A server-solved localization (POST .../anchors/relocalize).
+/// A server-solved localization (POST .../anchors/relocalize). Valid only on `floorId` (every floor has its own canonical
+/// frame), and only in the scan version and coordinate frame the server solved it in.
 public struct Localization: Equatable, Sendable {
     public var deviceToVenue: Pose
     public var anchorIds: [UUID]
     public var residualMeters: Double?
     public var coordinateFrameId: UUID
+    public var scanVersionId: UUID
+    public var floorId: UUID
     public var solvedAt: TimeInterval
 
-    public init(deviceToVenue: Pose, anchorIds: [UUID], residualMeters: Double?, coordinateFrameId: UUID, solvedAt: TimeInterval) {
+    public init(deviceToVenue: Pose, anchorIds: [UUID], residualMeters: Double?, coordinateFrameId: UUID, scanVersionId: UUID,
+                floorId: UUID, solvedAt: TimeInterval) {
         self.deviceToVenue = deviceToVenue; self.anchorIds = anchorIds; self.residualMeters = residualMeters
-        self.coordinateFrameId = coordinateFrameId; self.solvedAt = solvedAt
+        self.coordinateFrameId = coordinateFrameId; self.scanVersionId = scanVersionId; self.floorId = floorId
+        self.solvedAt = solvedAt
     }
 }
 
@@ -87,6 +96,11 @@ public struct NavigationState: Equatable, Sendable {
     }
 
     public var phase: NavigationPhase = .idle
+    /// The floor this session localizes on (set when it starts). Answers for another floor are refused.
+    public var floorId: UUID?
+    /// The scan version the floor was first localized in. Sent with every later relocalization; an answer in another
+    /// version is refused.
+    public var pinnedScanVersionId: UUID?
     public var deviceTracking: TrackingQuality = .notAvailable
     /// The current localization; kept while trackingLost/recovered for display only, never used to advance.
     public var localization: Localization?
@@ -119,7 +133,7 @@ public struct NavigationState: Equatable, Sendable {
 }
 
 public enum NavigationEvent: Equatable, Sendable {
-    case sessionStarted
+    case sessionStarted(floorId: UUID)
     case trackingChanged(TrackingQuality, at: TimeInterval)
     case tick(at: TimeInterval)
     case sessionInterrupted
@@ -142,9 +156,10 @@ public enum RelocalizationStateMachine {
         if s.phase == .ended { return s }
         var n = s
         switch e {
-        case .sessionStarted:
+        case .sessionStarted(let floorId):
             guard s.phase == .idle else { return s }
             n.phase = .searching
+            n.floorId = floorId
             n.deviceTracking = .notAvailable
 
         case .trackingChanged(let quality, let at):
@@ -197,9 +212,16 @@ public enum RelocalizationStateMachine {
             n.nextRequestId += 1
 
         case .relocalizationSucceeded(let requestId, let localization):
-            guard s.phase == .solving, s.pending?.requestId == requestId else { return s }
+            guard s.phase == .solving, let pending = s.pending, pending.requestId == requestId else { return s }
+            if let refused = refusal(s, localization) {
+                n.phase = pending.resumeTo
+                n.pending = nil
+                n.lastError = refused
+                return n
+            }
             n.phase = .localized
             n.localization = localization
+            n.pinnedScanVersionId = localization.scanVersionId
             n.pending = nil
             n.limitedSince = nil
             n.lostReason = nil
@@ -225,6 +247,18 @@ public enum RelocalizationStateMachine {
             n.pending = nil
         }
         return n
+    }
+
+    /// Why a server answer cannot be used in this session, or nil.
+    static func refusal(_ s: NavigationState, _ l: Localization) -> String? {
+        if let floorId = s.floorId, l.floorId != floorId {
+            return "FLOOR_MISMATCH: solved on floor \(l.floorId.apiString), but the session is on floor \(floorId.apiString)"
+        }
+        if let pinned = s.pinnedScanVersionId, pinned != l.scanVersionId {
+            return "VERSION_MISMATCH: this floor was localized in scan version \(pinned.apiString), but the server now answers in " +
+                "\(l.scanVersionId.apiString) (the floor was republished); end AR and start again to load the new version"
+        }
+        return nil
     }
 
     private static func lose(_ s: NavigationState, reason: String) -> NavigationState {

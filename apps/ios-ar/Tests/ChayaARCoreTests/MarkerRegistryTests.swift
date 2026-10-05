@@ -4,9 +4,11 @@ import XCTest
 /// Reference image -> registered marker -> backend anchor, and which observations may relocalize.
 final class MarkerRegistryTests: XCTestCase {
 
-    func anchor(_ type: MarkerType, _ identifier: String, size: Double? = 0.3, status: CalibrationStatus = .calibrated) -> Anchor {
+    func anchor(_ type: MarkerType, _ identifier: String, size: Double? = 0.3, status: CalibrationStatus = .calibrated,
+                versioned: Bool = true) -> Anchor {
         Anchor(id: UUID(), venueId: UUID(), floorId: UUID(), markerType: type, markerIdentifier: identifier, markerSizeMeters: size,
-               physicalPose: .identity, digitalPose: .identity, calibrationStatus: status, lastCalibratedAt: nil, coordinateFrameId: UUID())
+               physicalPose: .identity, digitalPose: .identity, calibrationStatus: status, lastCalibratedAt: nil, coordinateFrameId: UUID(),
+               scanVersionId: versioned ? UUID() : nil, poseId: versioned ? UUID() : nil, poseRevision: versioned ? 1 : nil)
     }
 
     func testOnlyCalibratedImageTargetsWithAPrintedSizeAreTrackable() {
@@ -16,6 +18,12 @@ final class MarkerRegistryTests: XCTestCase {
         }
         XCTAssertEqual(AnchorSupport.of(anchor(.imageTarget, "s", status: .stale)), .notCalibrated)
         XCTAssertEqual(AnchorSupport.of(anchor(.imageTarget, "n", size: nil)), .missingPrintedSize)
+    }
+
+    func testAnAnchorWhosePoseWasNeverEnteredAgainstAScanVersionIsNotRegistered() {
+        let unversioned = anchor(.imageTarget, "old", versioned: false)
+        XCTAssertEqual(AnchorSupport.of(unversioned), .unversioned)
+        XCTAssertTrue(MarkerRegistry(anchors: [unversioned]).markers.isEmpty, "the server would refuse it (ANCHOR_UNVERSIONED)")
     }
 
     func testAReferenceImageNameIdentifiesExactlyOneBackendAnchor() {

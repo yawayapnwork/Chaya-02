@@ -5,8 +5,8 @@ import Foundation
 ///
 /// ARKit's marker detection is image detection/tracking (`ARReferenceImage` -> `ARImageAnchor`). It detects the
 /// images it is given; it has no AprilTag/ArUco detector, and a QR code has no stable printed artwork registered on
-/// the server to hand it. So only calibrated IMAGE_TARGET anchors with a printed size are trackable; every other
-/// anchor gets an explicit reason and is never treated as detected.
+/// the server to hand it. So only calibrated IMAGE_TARGET anchors with a printed size and a versioned pose are
+/// trackable; every other anchor gets an explicit reason and is never treated as detected.
 ///
 /// Identity: each trackable anchor becomes one reference image whose `name` is the anchor's id. A detected
 /// ARImageAnchor's `referenceImage.name` therefore identifies exactly one backend anchor; a name this registry did
@@ -16,6 +16,8 @@ public enum AnchorSupport: String, Equatable, Sendable {
     case fiducialDetectionUnsupported = "FIDUCIAL_DETECTION_UNSUPPORTED"
     case missingPrintedSize = "MISSING_PRINTED_SIZE"
     case notCalibrated = "NOT_CALIBRATED"
+    /// The pose was never entered against a scan version: the server refuses it (ANCHOR_UNVERSIONED).
+    case unversioned = "UNVERSIONED"
 
     public var explanation: String {
         switch self {
@@ -23,6 +25,7 @@ public enum AnchorSupport: String, Equatable, Sendable {
         case .fiducialDetectionUnsupported: return "not detectable here: ARKit has no QR/ArUco/AprilTag pose detection"
         case .missingPrintedSize: return "not detectable: no printed size registered"
         case .notCalibrated: return "not usable: not calibrated"
+        case .unversioned: return "not usable: its pose was never entered against a scan version; re-enter it"
         }
     }
 
@@ -30,6 +33,7 @@ public enum AnchorSupport: String, Equatable, Sendable {
         guard anchor.markerType == .imageTarget else { return .fiducialDetectionUnsupported }
         guard anchor.calibrationStatus == .calibrated else { return .notCalibrated }
         guard let size = anchor.markerSizeMeters, size > 0 else { return .missingPrintedSize }
+        guard anchor.scanVersionId != nil, anchor.poseId != nil else { return .unversioned }
         return .trackable
     }
 }

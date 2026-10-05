@@ -83,6 +83,42 @@ public enum RouteGeometry {
         return Array(route.waypoints[start...end])
     }
 
+    public enum LegProblem: String, Equatable, Sendable {
+        case noLegOnFloor = "NO_LEG_ON_FLOOR"
+        case routeSourceMissing = "ROUTE_SOURCE_MISSING"
+        case versionMismatch = "VERSION_MISMATCH"
+        case frameMismatch = "FRAME_MISMATCH"
+    }
+
+    public enum LegCheck: Equatable, Sendable {
+        case drawable([Waypoint])
+        case refused(LegProblem, String)
+    }
+
+    /// The localization's floor leg of `route`, if it may be drawn with that localization: the server must have routed the
+    /// floor on the scan version and in the coordinate frame the transform was solved in. A leg of another version or frame
+    /// is in other canonical coordinates; placed with this transform it would be misplaced, so it is refused, never drawn.
+    /// Mirrors apps/web/lib/ar-navigation.ts `routeLegFor`.
+    public static func leg(of route: RouteResponse, for localization: Localization) -> LegCheck {
+        let floorId = localization.floorId
+        let leg = legOnFloor(route, floorId: floorId)
+        guard !leg.isEmpty else {
+            return .refused(.noLegOnFloor, "the route does not pass through floor \(floorId.apiString)")
+        }
+        guard let source = route.routingSources?.first(where: { $0.floorId == floorId }) else {
+            return .refused(.routeSourceMissing, "the route does not say what floor \(floorId.apiString) was routed on")
+        }
+        guard source.scanVersionId == localization.scanVersionId else {
+            return .refused(.versionMismatch, "floor \(floorId.apiString) was routed on scan version " +
+                "\(source.scanVersionId?.apiString ?? "(none)"), but the session is localized in \(localization.scanVersionId.apiString)")
+        }
+        guard source.coordinateFrameId == localization.coordinateFrameId else {
+            return .refused(.frameMismatch, "floor \(floorId.apiString) was routed in coordinate frame " +
+                "\(source.coordinateFrameId?.apiString ?? "(none)"), but the session is localized in \(localization.coordinateFrameId.apiString)")
+        }
+        return .drawable(leg)
+    }
+
     public static func points(_ waypoints: [Waypoint]) -> [Vec3] {
         waypoints.map { Vec3($0.x, $0.y, $0.z) }
     }

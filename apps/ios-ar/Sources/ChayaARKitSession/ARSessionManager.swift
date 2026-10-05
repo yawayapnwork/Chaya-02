@@ -10,12 +10,14 @@ import Foundation
 ///   2. Every ARFrame: its ARImageAnchors are turned into observations of registered markers (reference image name ->
 ///      anchor id), with ARKit's measured transform, the frame timestamp, isTracked and the estimated scale.
 ///   3. While searching (or recovered after a loss), eligible observations go to POST .../anchors/relocalize, which
-///      solves the ARKit world -> canonical venue transform. In the same frame an ARAnchor is added at the observed
-///      marker's pose; ARKit keeps moving it as it refines its map, and that correction is applied to the transform
-///      every frame (VenueFrames.anchorCorrectedDeviceToVenue).
-///   4. On the first localization the route is planned from the device's canonical position; then each frame the route
-///      is placed with the corrected transform and progress is advanced from ARKit's camera transform, only while
-///      localized.
+///      solves the ARKit world -> canonical venue transform. The first answer pins the floor's scan version; every later
+///      request sends it, and an answer in another version is refused (RelocalizationStateMachine). In the same frame an
+///      ARAnchor is added at the observed marker's pose; ARKit keeps moving it as it refines its map, and that correction
+///      is applied to the transform every frame (VenueFrames.anchorCorrectedDeviceToVenue).
+///   4. On the first localization the route is planned from the device's canonical position, in the localization's scan
+///      version. Its leg is drawn only if the server routed it in that version and coordinate frame
+///      (RouteGeometry.leg(of:for:)), re-checked on every later localization. Each frame the route is placed with the
+///      corrected transform and progress is advanced from ARKit's camera transform, only while localized.
 ///   5. ARKit's camera tracking state, session interruptions, errors, and the world anchor's disappearance drive
 ///      RelocalizationStateMachine (normal / limited / relocalizing / lost / recovered).
 ///
@@ -26,8 +28,10 @@ import Foundation
 @available(iOS 16.0, *)
 public final class ARSessionManager: NSObject, ARSessionDelegate {
 
-    public typealias Relocalize = @Sendable ([AnchorObservation]) async throws -> RelocalizationResponse
-    public typealias PlanRoute = @Sendable (Vec3) async throws -> RouteResponse
+    /// The observations, and the scan version the session pinned for the floor (nil before the first localization).
+    public typealias Relocalize = @Sendable ([AnchorObservation], UUID?) async throws -> RelocalizationResponse
+    /// The device's canonical start, and the scan version the localization it was computed with was solved in.
+    public typealias PlanRoute = @Sendable (Vec3, UUID) async throws -> RouteResponse
 
     /// What the UI shows.
     public struct Snapshot: Equatable {
@@ -36,6 +40,8 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
         public var route: RouteResponse?
         /// Why the most recent sighting of a registered marker could not be used (wrong size, not tracked), if any.
         public var lastRejectedObservation: String?
+        /// Why there is no route to draw: the route request failed, or its leg was refused for this localization
+        /// (VERSION_MISMATCH, FRAME_MISMATCH, ROUTE_SOURCE_MISSING, NO_LEG_ON_FLOOR).
         public var routeError: String?
     }
 
@@ -50,6 +56,7 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
     private let planRoute: PlanRoute
 
     private var routePoints: [Vec3] = []
+    private var routeRequested = false
     private var worldAnchor: (anchor: ARAnchor, poseAtSolve: Pose, addedAt: TimeInterval, seen: Bool)?
     private var lastFailureAt: TimeInterval = -.infinity
     private var lastPublishAt: TimeInterval = 0
@@ -82,7 +89,7 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
         configuration.maximumNumberOfTrackedImages = min(referenceImages.count, 4)
         configuration.automaticImageScaleEstimationEnabled = true
         session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
-        dispatch(.sessionStarted)
+        dispatch(.sessionStarted(floorId: floorId))
     }
 
     public func stop() {
@@ -175,11 +182,12 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
         session.add(anchor: anchor)
         let requestId = pending.requestId
         let body = eligible.map(\.asAnchorObservation)
+        let pinnedVersion = snapshot.state.pinnedScanVersionId
         let cameraPose = Pose(frame.camera.transform)
         let relocalize = self.relocalize
         Task { @MainActor [weak self] in
             do {
-                let result = try await relocalize(body)
+                let result = try await relocalize(body, pinnedVersion)
                 self?.solved(requestId: requestId, result: result, anchorIds: eligible.map(\.anchorId), anchor: anchor,
                              anchorPose: anchorPose, cameraPose: cameraPose)
             } catch {
@@ -193,15 +201,26 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
         let now = ProcessInfo.processInfo.systemUptime
         let localization = Localization(deviceToVenue: result.deviceToVenueTransform, anchorIds: anchorIds,
                                         residualMeters: result.residualMeters, coordinateFrameId: result.coordinateFrameId,
-                                        solvedAt: now)
+                                        scanVersionId: result.scanVersionId, floorId: floorId, solvedAt: now)
         dispatch(.relocalizationSucceeded(requestId: requestId, localization))
         guard snapshot.state.localization == localization, snapshot.state.phase == .localized else {
-            session.remove(anchor: anchor) // superseded: tracking was lost while the request was in flight
+            // Superseded (tracking was lost while the request was in flight) or refused (another scan version or floor).
+            // A refusal is retried no faster than a failure.
+            session.remove(anchor: anchor)
+            lastFailureAt = session.currentFrame?.timestamp ?? ProcessInfo.processInfo.systemUptime
             return
         }
         if let previous = worldAnchor { session.remove(anchor: previous.anchor) }
         worldAnchor = (anchor, anchorPose, now, false)
-        if snapshot.route == nil { fetchRoute(from: VenueFrames.devicePositionInVenue(camera: cameraPose, deviceToVenue: localization.deviceToVenue)) }
+        if snapshot.route == nil {
+            if !routeRequested {
+                routeRequested = true
+                fetchRoute(from: VenueFrames.devicePositionInVenue(camera: cameraPose, deviceToVenue: localization.deviceToVenue),
+                           scanVersionId: localization.scanVersionId)
+            }
+        } else {
+            applyRoute() // a new localization may be in another frame than the route: re-check before drawing
+        }
     }
 
     private func failed(requestId: Int, error: Error, anchor: ARAnchor) {
@@ -211,26 +230,41 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
         dispatch(.relocalizationFailed(requestId: requestId, error: text))
     }
 
-    /// Planned once, from where the device was when first localized. A failure is a routing error, not a localization
-    /// one: the localization stays.
-    private func fetchRoute(from start: Vec3) {
+    /// Planned once, from where the device was when first localized, on the scan version that localization was solved in.
+    /// A failure is a routing error, not a localization one: the localization stays.
+    private func fetchRoute(from start: Vec3, scanVersionId: UUID) {
         let planRoute = self.planRoute
-        let floorId = self.floorId
         Task { @MainActor [weak self] in
             do {
-                let route = try await planRoute(start)
+                let route = try await planRoute(start, scanVersionId)
                 guard let self else { return }
                 self.snapshot.route = route
-                self.snapshot.routeError = nil
-                self.routePoints = RouteGeometry.points(RouteGeometry.legOnFloor(route, floorId: floorId))
-                self.renderer.setRoute(self.routePoints)
-                self.publish(force: true)
+                self.applyRoute()
             } catch {
                 guard let self else { return }
+                self.routeRequested = false // retried at the next localization
                 self.snapshot.routeError = (error as? APIError).map { "\($0.code): \($0.detail)" } ?? error.localizedDescription
                 self.publish(force: true)
             }
         }
+    }
+
+    /// Draws the route's leg on this floor only if it was routed in the scan version and coordinate frame of the current
+    /// localization; otherwise nothing is drawn and the refusal is shown. Called when the route arrives and after every
+    /// later localization.
+    private func applyRoute() {
+        guard let route = snapshot.route, let localization = snapshot.state.localization else { return }
+        switch RouteGeometry.leg(of: route, for: localization) {
+        case .drawable(let leg):
+            routePoints = RouteGeometry.points(leg)
+            snapshot.routeError = nil
+        case .refused(let problem, let detail):
+            routePoints = []
+            snapshot.progress = nil
+            snapshot.routeError = "\(problem.rawValue): \(detail)"
+        }
+        renderer.setRoute(routePoints)
+        publish(force: true)
     }
 
     // MARK: - Route placement and progress

@@ -261,10 +261,14 @@ none of it is device validation.
 (XcodeGen `project.yml`, `Info.plist` with `NSCameraUsageDescription`, `arkit` required). See
 [apps/ios-ar/README.md](../apps/ios-ar/README.md).
 
-**Validation status: NOT DONE.** No macOS host, Xcode or iPhone was available.
+**Validation status: builds in CI; device validation NOT DONE.** No macOS host, Xcode or iPhone was available to the
+authors.
 - `ChayaARCore` is built and its tests pass on Linux Swift 5.10.
-- The ARKit layer and the app have only been syntax-checked. They have never been type-checked, built or run; the
-  `ios` CI workflow (`.github/workflows/ios.yml`) is the first place they compile.
+- The app and the ARKit layer compile with Xcode 15.4 for `generic/platform=iOS`, and the app-level tests pass in the
+  Simulator: first on 2026-09-30 (`ios` run 36734833669, commit `f99b8a6`). Changes since are type-checked by the next
+  `ios` run, nowhere else.
+- Nothing has run with a camera: the Simulator has no world tracking. Marker detection, the image-anchor axis
+  convention, placement accuracy and the tracking-state behaviour are unverified.
 - The app shows a "NOT DEVICE-VALIDATED" banner (`DeviceValidation.status`) until
   [ar-ios-validation.md](ar-ios-validation.md) has passed on a device.
 
@@ -302,6 +306,11 @@ The same chain as Android ("Frames" above), in `ChayaARCore/VenueFrames.swift`. 
 - The device's venue position (`devicePositionInVenue`) drives progress. The route root node is placed with
   `venueToWorld`.
 
+The axis change (+Y up → +Z up) happens in exactly one place: the server-solved `deviceToVenue` and its inverse. ARKit
+values (`ARFrame.camera.transform`, `ARImageAnchor.transform`, `ARAnchor.transform`) enter the core only as `Pose`s in
+the ARKit world (`Pose(simd_float4x4)`, `ARKitConversions.swift`); canonical values (anchors, waypoints) stay canonical
+until `VenueFrames` maps them. SceneKit receives only the canonical → world pose of the route root node.
+
 No scene coordinate is made up by the app. **Marker pose convention:** ARKit's image anchor is expected to use the
 same axes as the web client (+X right, +Y out of the face, +Z toward the bottom edge). This has not been confirmed on
 a device.
@@ -322,6 +331,21 @@ a device.
 | `session(_:didFailWithError:)` | `ended`, with the error (`CAMERA_PERMISSION_DENIED` for `ARError.cameraUnauthorized`) | same |
 
 A server answer to a request overtaken by a loss is ignored, and its world anchor is removed.
+
+### Scan versions (iOS)
+
+The same rules as the Android chain (steps 2, 5 and 8 above), for the one floor an iOS session runs on:
+
+| Rule | Where | Checked by |
+|---|---|---|
+| An anchor whose pose was never entered against a scan version (`scanVersionId`/`poseId` null) is `UNVERSIONED` and not registered as a reference image | `AnchorSupport.of` | `MarkerRegistryTests` |
+| The session's floor is fixed at start; the first successful solve pins its `scanVersionId`, which every later `relocalize` sends (the server answers `409 VERSION_MISMATCH` if the floor was republished) | `RelocalizationStateMachine`, `ARSessionManager` | `RelocalizationStateMachineTests`, `APIClientCodingTests` |
+| An answer for another floor or in another version is refused (`FLOOR_MISMATCH` / `VERSION_MISMATCH`): it never replaces the transform, the route stays hidden, and the next attempt waits the 1.5 s retry interval | `RelocalizationStateMachine.refusal` | `RelocalizationStateMachineTests` |
+| The route is requested **in the localization's scan version** (`POST /navigation/routes` with `scanVersionId`): the server routes on that version's pinned navmesh and frame, to the destination as it is in that version. iOS destinations are on the session's floor, which such a route requires | `APIClient.planRoute`, `ARSessionManager` | `APIClientCodingTests` |
+| The leg is drawn only if its `routingSources` entry names the localization's version and frame (`VERSION_MISMATCH`, `FRAME_MISMATCH`, `ROUTE_SOURCE_MISSING`, `NO_LEG_ON_FLOOR` otherwise), re-checked after every later localization | `RouteGeometry.leg(of:for:)`, `ARSessionManager.applyRoute` | `VenueFramesTests`, `AppLevelTests` |
+
+Not on iOS (the Android client has them): drift detection and refresh while localized, blending between fixes, and
+floor handoff. An iOS session is one floor; a route that leaves it shows "continues on another floor" and stops there.
 
 ### Capability states (app)
 
@@ -347,8 +371,8 @@ Test tiers, from pure functions to physical devices:
 | Coordinate transformation / anchor math | `CoordinateTransformTest.java`, `ar-anchor-math.test.ts`, `AnchorMathTests.swift` | No — pure functions, run in CI |
 | Device/canonical axis boundary, gravity-tilt check | `ArDeviceFrameTest.java`, `ar-frame-boundary.test.ts`, `VenueFramesTests.swift` | No — pure functions |
 | Relocalization state machine | `ar-relocalization.test.ts`, `RelocalizationStateMachineTests.swift` (incl. AR-2's startup `initializing` case) | No — pure state transitions |
-| iOS frames, world-anchor correction, route progress; marker registry (image → anchor id); wire format (null residual, Java instants) | `VenueFramesTests.swift`, `MarkerRegistryTests.swift`, `APIClientCodingTests.swift` | No — `swift test`, Linux CI (`ios` workflow, `core` job) |
-| iOS app level: capability/permission states, ARKit tracking-state mapping, transforms, reference images, renderer placement | `App/ChayaARTests/AppLevelTests.swift` | No — iOS Simulator (`ios` workflow, `app` job). **Never run yet** (no macOS here). |
+| iOS frames and the canonical/ARKit axis boundary, world-anchor correction, route progress, route-leg version/frame check; marker registry (image → anchor id, unversioned anchors); version pinning; wire format (null residual, Java instants, `scanVersionId`, `routingSources`) | `VenueFramesTests.swift`, `MarkerRegistryTests.swift`, `RelocalizationStateMachineTests.swift`, `APIClientCodingTests.swift` | No — `swift test`, Linux CI (`ios` workflow, `core` job) |
+| iOS app level: capability/permission states, ARKit tracking-state mapping, transforms, reference images, renderer placement, the session manager's callbacks | `App/ChayaARTests/AppLevelTests.swift` | No — iOS Simulator (`ios` workflow, `app` job; first green 2026-09-30) |
 | Web camera → AR world → venue chain, world-anchor correction, route placement and progress | `ar-route.test.ts` | No — pure functions |
 | Web session request (no hit test), marker → device → waypoint chain, route/version/frame check, drift, blending between fixes, floor handoff | `ar-navigation.test.ts` | No — pure functions, mathematical fixtures |
 | Web state machine: version pinning, refusals for another version or floor, refresh while localized, drift, floor handoff | `ar-relocalization.test.ts` | No — pure state transitions |

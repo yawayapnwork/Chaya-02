@@ -115,8 +115,13 @@ final class NavigationViewModel: ObservableObject {
         guard capability == .ready else { return }
         let manager = ARSessionManager(
             registry: registry, floorId: floorId,
-            relocalize: { observations in try await api.relocalize(venueId: venue.id, floorId: floorId, observations: observations) },
-            planRoute: { start in try await api.planRoute(venueId: venue.id, floorId: floorId, start: start, destinationPoiId: destinationId) })
+            relocalize: { observations, scanVersionId in
+                try await api.relocalize(venueId: venue.id, floorId: floorId, observations: observations, scanVersionId: scanVersionId)
+            },
+            planRoute: { start, scanVersionId in
+                try await api.planRoute(venueId: venue.id, floorId: floorId, start: start, destinationPoiId: destinationId,
+                                        scanVersionId: scanVersionId)
+            })
         manager.onUpdate = { [weak self] snapshot in Task { @MainActor in self?.snapshot = snapshot } }
         self.manager = manager
         manager.run(referenceImages: referenceImages)

@@ -62,17 +62,23 @@ public struct Anchor: Codable, Equatable, Sendable {
     public var lastCalibratedAt: Date?
     /// The coordinate frame `digitalPose` is expressed in.
     public var coordinateFrameId: UUID?
-    /// The scan version the anchor was registered against; nil while the floor's reconstruction has no version.
+    /// The scan version the pose was entered against (ar_anchor_pose, V28). nil for an anchor whose pose was never entered
+    /// against a version: the server refuses it (ANCHOR_UNVERSIONED), so it is never registered for tracking.
     public var scanVersionId: UUID?
+    /// The immutable versioned pose record these values are, and its revision. nil exactly when scanVersionId is.
+    public var poseId: UUID?
+    public var poseRevision: Int?
 
     public init(id: UUID, venueId: UUID, floorId: UUID, markerType: MarkerType, markerIdentifier: String,
                 markerSizeMeters: Double?, physicalPose: Pose, digitalPose: Pose, calibrationStatus: CalibrationStatus,
-                lastCalibratedAt: Date?, coordinateFrameId: UUID?, scanVersionId: UUID? = nil) {
+                lastCalibratedAt: Date?, coordinateFrameId: UUID?, scanVersionId: UUID? = nil, poseId: UUID? = nil,
+                poseRevision: Int? = nil) {
         self.id = id; self.venueId = venueId; self.floorId = floorId
         self.markerType = markerType; self.markerIdentifier = markerIdentifier; self.markerSizeMeters = markerSizeMeters
         self.physicalPose = physicalPose; self.digitalPose = digitalPose
         self.calibrationStatus = calibrationStatus; self.lastCalibratedAt = lastCalibratedAt
         self.coordinateFrameId = coordinateFrameId; self.scanVersionId = scanVersionId
+        self.poseId = poseId; self.poseRevision = poseRevision
     }
 }
 
@@ -91,7 +97,8 @@ public struct AnchorObservation: Codable, Equatable, Sendable {
 
 /// Mirrors dev.chaya.api.ar.ArDtos.RelocalizationResponse. `residualMeters` is a real measured disagreement across the
 /// anchors used, never a claimed accuracy figure, and nil (unknown) when only one anchor was used -- see docs/ar.md.
-/// `deviceToVenueTransform` maps ARKit world coordinates to canonical venue metres.
+/// `deviceToVenueTransform` maps ARKit world coordinates to canonical venue metres, in `coordinateFrameId` of
+/// `scanVersionId` (the version the floor published when the server solved it).
 public struct RelocalizationResponse: Codable, Equatable, Sendable {
     public var deviceToVenueTransform: Pose
     public var residualMeters: Double?
@@ -99,6 +106,7 @@ public struct RelocalizationResponse: Codable, Equatable, Sendable {
     public var gravityTiltDegrees: Double
     public var deviceFrameConvention: String
     public var coordinateFrameId: UUID
+    public var scanVersionId: UUID
 }
 
 public enum WaypointKind: String, Codable, Sendable {
@@ -133,8 +141,27 @@ public struct FloorTransition: Codable, Equatable, Sendable {
     public var durationSeconds: Double?
 }
 
+/// Mirrors dev.chaya.api.navigation.NavigationDtos.RoutingSource (the fields the app uses): what one floor's leg was
+/// routed on. scanVersionId and coordinateFrameId say which version of the floor, and which canonical frame, the leg's
+/// waypoints are in.
+public struct RoutingSource: Codable, Equatable, Sendable {
+    public var floorId: UUID
+    public var graphId: UUID?
+    public var source: String?
+    public var pathMethod: String?
+    public var scanVersionId: UUID?
+    public var coordinateFrameId: UUID?
+
+    public init(floorId: UUID, graphId: UUID? = nil, source: String? = nil, pathMethod: String? = nil,
+                scanVersionId: UUID?, coordinateFrameId: UUID?) {
+        self.floorId = floorId; self.graphId = graphId; self.source = source; self.pathMethod = pathMethod
+        self.scanVersionId = scanVersionId; self.coordinateFrameId = coordinateFrameId
+    }
+}
+
 /// Mirrors dev.chaya.api.navigation.NavigationDtos.RouteResponse (docs/navigation.md). Both AR clients
-/// render this same route; neither computes its own path.
+/// render this same route; neither computes its own path. `routingSources` is optional only so that a response without
+/// it still decodes: a leg without a routing source is never drawn (RouteGeometry.leg(of:for:)).
 public struct RouteResponse: Codable, Equatable, Sendable {
     public var waypoints: [Waypoint]
     public var distanceMeters: Double
@@ -142,6 +169,14 @@ public struct RouteResponse: Codable, Equatable, Sendable {
     public var floorTransitions: [FloorTransition]
     public var accessibilityProfile: String
     public var accessibilityConstraintsApplied: [String]
+    public var routingSources: [RoutingSource]?
+
+    public init(waypoints: [Waypoint], distanceMeters: Double, estimatedDurationSeconds: Double, floorTransitions: [FloorTransition],
+                accessibilityProfile: String, accessibilityConstraintsApplied: [String], routingSources: [RoutingSource]? = nil) {
+        self.waypoints = waypoints; self.distanceMeters = distanceMeters; self.estimatedDurationSeconds = estimatedDurationSeconds
+        self.floorTransitions = floorTransitions; self.accessibilityProfile = accessibilityProfile
+        self.accessibilityConstraintsApplied = accessibilityConstraintsApplied; self.routingSources = routingSources
+    }
 }
 
 /// Mirrors dev.chaya.api.venue's venue view (the fields the app uses).

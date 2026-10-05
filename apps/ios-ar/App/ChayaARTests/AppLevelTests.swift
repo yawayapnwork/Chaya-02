@@ -137,4 +137,28 @@ final class RouteSceneRendererTests: XCTestCase {
         renderer.hide()
         XCTAssertTrue(renderer.venueRoot.isHidden)
     }
+
+    func testARefusedLegLeavesNothingToDraw() {
+        let renderer = RouteSceneRenderer()
+        renderer.setRoute([Vec3(5, 4, 0), Vec3(5, 8, 0)])
+        renderer.setRoute([]) // what ARSessionManager sets when RouteGeometry.leg(of:for:) refuses the leg
+        renderer.update(venueToWorld: .identity, nextIndex: 0, visible: true)
+        XCTAssertEqual(renderer.waypointCount, 0)
+        XCTAssertTrue(renderer.venueRoot.isHidden)
+    }
+}
+
+final class ARSessionManagerTests: XCTestCase {
+
+    /// The manager hands the pinned scan version to relocalization and the localization's version to routing. No session is
+    /// run: the Simulator cannot track, and nothing here pretends it does.
+    func testTheManagerStartsIdleWithVersionAwareCallbacks() {
+        let manager = ARSessionManager(
+            registry: MarkerRegistry(anchors: []), floorId: UUID(),
+            relocalize: { (_: [AnchorObservation], _: UUID?) in throw APIError(status: 0, code: "UNUSED", detail: "not called") },
+            planRoute: { (_: Vec3, _: UUID) in throw APIError(status: 0, code: "UNUSED", detail: "not called") })
+        XCTAssertEqual(manager.snapshot.state.phase, .idle)
+        XCTAssertNil(manager.snapshot.state.pinnedScanVersionId)
+        XCTAssertNil(manager.snapshot.route)
+    }
 }

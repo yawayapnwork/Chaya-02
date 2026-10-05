@@ -9,9 +9,12 @@ final class RelocalizationStateMachineTests: XCTestCase {
     let obs = MarkerObservation(anchorId: UUID(), markerIdentifier: "entrance",
                                 observedPose: Pose(x: 0.2, y: 0.1, z: -1.5), timestamp: 10, isTracked: true, estimatedScaleFactor: 1)
     let frameId = UUID()
-    func loc(_ at: TimeInterval = 11) -> Localization {
+    let floorId = UUID()
+    let versionId = UUID()
+    func loc(_ at: TimeInterval = 11, version: UUID? = nil, floor: UUID? = nil) -> Localization {
         Localization(deviceToVenue: Pose(x: 3, y: 4, z: 0, qx: 0.5.squareRoot(), qw: 0.5.squareRoot()),
-                     anchorIds: [obs.anchorId], residualMeters: nil, coordinateFrameId: frameId, solvedAt: at)
+                     anchorIds: [obs.anchorId], residualMeters: nil, coordinateFrameId: frameId,
+                     scanVersionId: version ?? versionId, floorId: floor ?? floorId, solvedAt: at)
     }
 
     func reduce(_ s: NavigationState, _ events: NavigationEvent...) -> NavigationState {
@@ -19,7 +22,7 @@ final class RelocalizationStateMachineTests: XCTestCase {
     }
 
     func started() -> NavigationState {
-        reduce(NavigationState(), .sessionStarted, .trackingChanged(.normal, at: 1))
+        reduce(NavigationState(), .sessionStarted(floorId: floorId), .trackingChanged(.normal, at: 1))
     }
 
     func localized() -> NavigationState {
@@ -30,7 +33,7 @@ final class RelocalizationStateMachineTests: XCTestCase {
     }
 
     func testLocalizesOnlyThroughAnObservedMarkerAndAServerSolve() {
-        var s = SM.reduce(NavigationState(), .sessionStarted)
+        var s = SM.reduce(NavigationState(), .sessionStarted(floorId: floorId))
         XCTAssertEqual(s.phase, .searching)
         XCTAssertFalse(s.canAdvanceRoute)
         XCTAssertEqual(SM.reduce(s, .markersObserved([obs])), s, "no observation counts before ARKit reports normal tracking")
@@ -50,7 +53,7 @@ final class RelocalizationStateMachineTests: XCTestCase {
 
     /// Review AR-2's required test: startDetecting -> limited(initializing) -> detection must end localized.
     func testStartupInitializingIsNotALossAndADetectionAfterItLocalizes() {
-        var s = reduce(NavigationState(), .sessionStarted, .trackingChanged(.limited(.initializing), at: 0.1))
+        var s = reduce(NavigationState(), .sessionStarted(floorId: floorId), .trackingChanged(.limited(.initializing), at: 0.1))
         XCTAssertEqual(s.phase, .searching)
         XCTAssertEqual(s.trackingStatus, .limited(.initializing))
         s = reduce(s, .trackingChanged(.normal, at: 0.8), .markersObserved([obs]))
@@ -149,6 +152,44 @@ final class RelocalizationStateMachineTests: XCTestCase {
     func testWhileLocalizedFurtherObservationsDoNotRestartLocalization() {
         let s = localized()
         XCTAssertEqual(SM.reduce(s, .markersObserved([obs])), s)
+    }
+
+    func testTheFirstLocalizationPinsTheFloorsScanVersion() {
+        let s = localized()
+        XCTAssertEqual(s.floorId, floorId)
+        XCTAssertEqual(s.pinnedScanVersionId, versionId, "later relocalizations are sent in this version")
+        XCTAssertNil(SM.refusal(s, loc(50)))
+    }
+
+    /// The floor was republished while the session ran: the server answers in the new version. The route and the anchors
+    /// this session holds belong to the pinned one, so the answer must not replace the transform.
+    func testAnAnswerInAnotherScanVersionIsRefusedAndNeverReplacesTheTransform() {
+        var s = reduce(localized(), .trackingChanged(.notAvailable, at: 20), .trackingChanged(.normal, at: 21), .markersObserved([obs]))
+        XCTAssertEqual(s.phase, .solving)
+        let republished = UUID()
+        s = SM.reduce(s, .relocalizationSucceeded(requestId: s.pending!.requestId, loc(30, version: republished)))
+        XCTAssertEqual(s.phase, .recovered, "still waiting for a usable localization")
+        XCTAssertFalse(s.routeVisible)
+        XCTAssertFalse(s.canAdvanceRoute)
+        XCTAssertEqual(s.localization?.scanVersionId, versionId, "the stale-version answer was not adopted")
+        XCTAssertEqual(s.localization?.solvedAt, 11)
+        XCTAssertEqual(s.pinnedScanVersionId, versionId, "the pin does not move")
+        XCTAssertTrue(s.lastError!.hasPrefix("VERSION_MISMATCH"))
+
+        // the same version again is accepted
+        s = SM.reduce(s, .markersObserved([obs]))
+        s = SM.reduce(s, .relocalizationSucceeded(requestId: s.pending!.requestId, loc(40)))
+        XCTAssertEqual(s.phase, .localized)
+        XCTAssertNil(s.lastError)
+    }
+
+    func testAFirstAnswerForAnotherFloorIsRefused() {
+        var s = reduce(started(), .markersObserved([obs]))
+        s = SM.reduce(s, .relocalizationSucceeded(requestId: s.pending!.requestId, loc(floor: UUID())))
+        XCTAssertEqual(s.phase, .searching)
+        XCTAssertNil(s.localization)
+        XCTAssertNil(s.pinnedScanVersionId, "a refused answer pins nothing")
+        XCTAssertTrue(s.lastError!.hasPrefix("FLOOR_MISMATCH"))
     }
 
     func testAnEndedOrFailedSessionAcceptsNothing() {
