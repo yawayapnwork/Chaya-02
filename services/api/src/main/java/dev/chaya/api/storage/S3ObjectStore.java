@@ -2,6 +2,7 @@ package dev.chaya.api.storage;
 
 import java.io.InputStream;
 import java.net.URI;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import org.slf4j.Logger;
@@ -24,6 +25,9 @@ import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadBucketRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
+import software.amazon.awssdk.services.s3.model.ListMultipartUploadsRequest;
+import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
+import software.amazon.awssdk.services.s3.model.MultipartUpload;
 import software.amazon.awssdk.services.s3.model.NoSuchBucketException;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.services.s3.model.UploadPartRequest;
@@ -118,6 +122,38 @@ public class S3ObjectStore implements ObjectStore {
     @Override
     public void delete(String key) {
         call("delete object", () -> s3.deleteObject(DeleteObjectRequest.builder().bucket(bucket).key(key).build()));
+    }
+
+    @Override
+    public List<String> list(String prefix) {
+        List<String> keys = new ArrayList<>();
+        try {
+            s3.listObjectsV2Paginator(ListObjectsV2Request.builder().bucket(bucket).prefix(prefix).build())
+                .contents().forEach(o -> keys.add(o.key()));
+        } catch (NoSuchBucketException e) {
+            return List.of();
+        } catch (S3Exception | software.amazon.awssdk.core.exception.SdkClientException e) {
+            throw new StorageException("object storage failed to list " + prefix, e);
+        }
+        return keys;
+    }
+
+    @Override
+    public int abortUploads(String prefix) {
+        List<MultipartUpload> uploads = new ArrayList<>();
+        try {
+            s3.listMultipartUploadsPaginator(ListMultipartUploadsRequest.builder().bucket(bucket).prefix(prefix).build())
+                .uploads().forEach(uploads::add);
+        } catch (NoSuchBucketException e) {
+            return 0;
+        } catch (S3Exception | software.amazon.awssdk.core.exception.SdkClientException e) {
+            throw new StorageException("object storage failed to list uploads under " + prefix, e);
+        }
+        for (MultipartUpload u : uploads) {
+            call("abort upload", () -> s3.abortMultipartUpload(AbortMultipartUploadRequest.builder()
+                .bucket(bucket).key(u.key()).uploadId(u.uploadId()).build()));
+        }
+        return uploads.size();
     }
 
     @Override

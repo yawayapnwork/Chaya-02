@@ -366,6 +366,35 @@ def test_a_job_the_control_plane_took_back_is_not_reported(harness):
     assert result is None and harness.api.reports == [] and harness.api.heartbeats >= 1
 
 
+def test_a_job_taken_back_while_running_uploads_nothing(harness):
+    """Review S-7 / E-1: a job that was cancelled or whose data was erased while it ran must not leave objects behind
+    (pii/ frames included) that no report will ever register."""
+    harness.api.keep_going = False
+
+    def frames(ctx):
+        ctx.runner.run([sys.executable, "-c", "import time; time.sleep(1.5)"])
+        f = ctx.workdir / "frames.tar"
+        f.write_bytes(b"unblurred")
+        return StageResult("SUCCEEDED", {"stage": ctx.stage, "argv": ["x"]}, 0,
+                           [ArtifactSpec("FRAMES", f, "frames.tar", "application/x-tar", contains_pii=True)])
+
+    order = harness.order("FFMPEG_PREPROCESS", [])
+    result = harness.run(order, registry={"FFMPEG_PREPROCESS": _Stage("FFMPEG_PREPROCESS", frames)})
+    assert result is None and harness.api.reports == []
+    assert [k for k in harness.storage.keys(DERIVED_BUCKET) if k.startswith(order["outputPrefix"])] == []
+    assert not harness.settings.workdir.joinpath(order["id"]).exists()
+
+
+def test_job_directories_left_by_a_killed_worker_are_removed_at_startup(harness):
+    stale = harness.settings.workdir / "a-job-from-a-killed-process"
+    (stale / "inputs").mkdir(parents=True)
+    (stale / "inputs" / "frame-000001.jpg").write_bytes(b"unblurred")
+    alive = harness.settings.workdir / ".alive"
+    alive.write_text("0")
+    assert harness.orchestrator().purge_stale_workdirs() == 1
+    assert not stale.exists() and alive.exists(), "only job directories go; the liveness file stays"
+
+
 def test_the_worker_polls_only_the_stages_it_is_configured_for(tmp_path, testsrc_video):
     h = Harness(tmp_path)
     h.settings = type(h.settings)(**{**h.settings.__dict__, "stages": ("FFMPEG_PREPROCESS",)})

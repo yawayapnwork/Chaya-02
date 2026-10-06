@@ -1,5 +1,6 @@
 package dev.chaya.api.metrics;
 
+import dev.chaya.api.erasure.ErasureObjectPurger;
 import dev.chaya.api.pipeline.PipelineProperties;
 import dev.chaya.api.pipeline.PipelineService;
 import io.micrometer.core.instrument.Gauge;
@@ -36,6 +37,8 @@ public class PlatformMetrics {
     private final MultiGauge storageBytes;
     private final AtomicReference<Double> oldestQueuedAge = new AtomicReference<>(Double.NaN);
     private final AtomicReference<Double> piiOverdue = new AtomicReference<>(Double.NaN);
+    private final AtomicReference<Double> piiUnswept = new AtomicReference<>(Double.NaN);
+    private final AtomicReference<Double> erasurePending = new AtomicReference<>(Double.NaN);
     private final AtomicReference<Double> refreshOk = new AtomicReference<>(0.0);
     private final AtomicReference<Double> refreshedAt = new AtomicReference<>(Double.NaN);
 
@@ -56,6 +59,13 @@ public class PlatformMetrics {
         Gauge.builder("chaya.pii.staging.overdue.artifacts", piiOverdue, AtomicReference::get)
             .description("PII staging artifacts (unanonymised frames) the retention policy says must be deleted and are not; "
                 + "the sweep clears these within a minute, so a lasting non-zero value means deletions are failing").register(registry);
+        Gauge.builder("chaya.pii.staging.unswept.runs", piiUnswept, AtomicReference::get)
+            .description("Finished runs whose storage prefixes have not been checked for unregistered pii/ objects for over 15 "
+                + "minutes after they became due; the sweep lists them every minute, so a lasting non-zero value means listing "
+                + "or deleting is failing").register(registry);
+        Gauge.builder("chaya.erasure.pending.overdue", erasurePending, AtomicReference::get)
+            .description("Erasure requests whose rows are gone but whose objects are still not all deleted an hour after they "
+                + "could have been (docs/privacy-erasure.md)").register(registry);
         Gauge.builder("chaya.metrics.refresh.ok", refreshOk, AtomicReference::get)
             .description("1 when the last refresh of the chaya_* gauges succeeded, 0 otherwise").register(registry);
         Gauge.builder("chaya.metrics.refreshed", refreshedAt, AtomicReference::get).baseUnit("seconds")
@@ -107,6 +117,12 @@ public class PlatformMetrics {
             oldestQueuedAge.set(oldest == null ? Double.NaN : oldest);
             piiOverdue.set((double) jdbc.sql("SELECT count(*) " + PipelineService.PII_PURGE_DUE)
                 .param("retention", (double) pipelineProps.piiStagingRetention().toSeconds()).query(Long.class).single());
+            piiUnswept.set((double) jdbc.sql("SELECT count(*) " + PipelineService.STAGING_SWEEP_DUE)
+                .param("retention", (double) pipelineProps.piiStagingRetention().toSeconds())
+                .param("settle", (double) (pipelineProps.leaseSeconds() + pipelineProps.deadlineGraceSeconds() + 900))
+                .query(Long.class).single());
+            erasurePending.set((double) jdbc.sql("SELECT count(*) " + ErasureObjectPurger.PENDING_OVERDUE)
+                .param("overdue", 3600.0).query(Long.class).single());
             refreshOk.set(1.0);
             refreshedAt.set(System.currentTimeMillis() / 1000.0);
         } catch (RuntimeException e) {
@@ -116,6 +132,8 @@ public class PlatformMetrics {
             }
             oldestQueuedAge.set(Double.NaN);
             piiOverdue.set(Double.NaN);
+            piiUnswept.set(Double.NaN);
+            erasurePending.set(Double.NaN);
             refreshOk.set(0.0);
         }
     }

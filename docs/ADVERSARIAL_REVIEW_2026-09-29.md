@@ -639,3 +639,21 @@ venue", "Object storage", "Service-to-service authentication" and "Tenant invent
   composite tenant keys of every venue-scoped table.
 - **Residual:** worker storage credentials are still shared across tenants (cross-tenant *read*, and unsealed writes
   under any prefix); per-run credentials are not built. Pre-V29 artifacts are unsealed, though verified on read.
+
+## 13. Addendum (2026-10-06): E-1, S-7
+
+This section was added after the review; the sections above are unchanged.
+
+- **E-1 addressed in code.** Erasure of a capture, a scan version or a venue: `DELETE /venues/{v}/captures/{c}`,
+  `DELETE /venues/{v}/scan-versions/{sv}`, `DELETE /venues/{v}` (docs/privacy-erasure.md). Rows are deleted, not
+  tombstoned, across the full dependency closure: derived versions, runs, artifacts, frames, graphs, detected POIs and
+  their embeddings. The immutability guards yield only inside the erasure's own transaction (V30). The audit log stays
+  append-only. Every object key and prefix is listed durably and deleted after commit, with retries until done. The
+  backup mirror is pruned of erased objects. The required test (erase a venue; nothing under its prefix remains; its rows
+  are unreadable through the API) is `ErasureTest.aPublicLinkStopsReachingAnErasedVersionAndDiesWithAnErasedVenue`.
+  **Residual:** dated database dumps keep erased rows for 14 days, and restoring one brings them back. There is no
+  person-level erasure of account traces. Section 8 of that document lists every store that cannot participate yet.
+- **S-7 closed further.** The 2026-10-03 fix purged only PII artifacts that had been *registered*. A finished run's
+  prefixes are now listed, and every `*/pii/*` object no row names is deleted. The worker no longer uploads outputs
+  for a job it was told to stop, and it removes job directories left by a killed process. Required test:
+  `ErasureTest.aRunThatFailedBeforePrivacyLosesEvenItsUnregisteredStagingOnceRetentionEnds`.

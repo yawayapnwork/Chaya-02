@@ -39,6 +39,7 @@ paths:
     post: { summary: Create a capture session, responses: { "201": { description: Created (status CREATED) } } }
   /api/v1/venues/{venueId}/captures/{captureId}:
     get: { summary: Inspect a capture session, responses: { "200": { description: Capture session } } }
+    delete: { summary: "Erase the capture and everything derived from it: raw media, frames, PII staging, reconstruction artifacts, versions, detections and their embeddings (docs/privacy-erasure.md). Admin or the venue's manager. Query cascade=true also erases re-scans derived from it. Idempotent.", responses: { "200": { description: "Erasure record, COMPLETED" }, "202": { description: "Erasure record, OBJECTS_PENDING: rows gone, objects still being deleted" }, "403": { description: ERASURE_NOT_PERMITTED }, "409": { description: "ERASURE_HAS_DEPENDENTS (repeat with cascade=true)" } } }
   /api/v1/venues/{venueId}/captures/{captureId}/media:
     get: { summary: List capture artifacts, responses: { "200": { description: Media items } } }
     post:
@@ -105,6 +106,14 @@ paths:
     post: { summary: "Calibrate: body distanceReferences (>= 2 measured distances between reconstruction points) and optional gravity {source: RECONSTRUCTED_FLOOR_PLANE | OPERATOR_FLOOR_POINTS (floorPoints, pointAboveFloor) | NONE}, or controlPoints (>= 3 reconstruction/venue pairs). Stores a new immutable version X_canonical = s R X_reconstruction + t (metres, +Z up) and supersedes the previous one (admin, venue-manager, operator)", responses: { "201": { description: Frame version }, "400": { description: INVALID_CALIBRATION }, "409": { description: "RECONSTRUCTION_FRAME_UNAVAILABLE, GRAVITY_UNAVAILABLE" }, "422": { description: "CALIBRATION_INCONSISTENT: the references disagree beyond chaya.frames limits" } } }
   /api/v1/venues/{venueId}/floors/{floorId}/coordinate-frame:
     get: { summary: "The floor's current canonical coordinate frame: the frame its POIs, anchors and navigation graphs are in", responses: { "200": { description: Frame version }, "404": { description: NOT_CALIBRATED } } }
+  /api/v1/venues/{venueId}:
+    delete: { summary: "Erase the venue: every capture, version, artifact, POI, anchor, floor, search query and public link; the venue is 404 afterwards (docs/privacy-erasure.md). Organization admin only. Idempotent.", responses: { "200": { description: "Erasure record, COMPLETED" }, "202": { description: "Erasure record, OBJECTS_PENDING" }, "403": { description: ERASURE_NOT_PERMITTED } } }
+  /api/v1/venues/{venueId}/scan-versions/{scanVersionId}:
+    delete: { summary: "Erase a scan version, its run's outputs and every version derived from it; the capture it was made from is kept (docs/privacy-erasure.md). Admin or the venue's manager. Query cascade=true erases derived re-scans. Idempotent.", responses: { "200": { description: "Erasure record, COMPLETED" }, "202": { description: "Erasure record, OBJECTS_PENDING" }, "403": { description: ERASURE_NOT_PERMITTED }, "409": { description: ERASURE_HAS_DEPENDENTS } } }
+  /api/v1/erasures:
+    get: { summary: "The organization's erasure records, newest first (admin; query: limit<=500)", responses: { "200": { description: Erasure records } } }
+  /api/v1/erasures/{erasureId}:
+    get: { summary: "One erasure record (an admin of its organization, or its requester): status OBJECTS_PENDING | COMPLETED, attempts, last error, counts", responses: { "200": { description: Erasure record } } }
 components:
   schemas:
     Health:

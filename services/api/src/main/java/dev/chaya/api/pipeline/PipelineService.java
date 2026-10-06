@@ -322,8 +322,7 @@ public class PipelineService {
 
     /** Keys a stage attempt may write: everything under this prefix, and nothing else. */
     static String prefix(RunRow run, JobStage stage, int attempt) {
-        return TenantKeys.prefix(run.orgId(), run.venueId())
-            + "scan/%s/run/%s/%s/attempt-%d/".formatted(run.scanId(), run.id(), stage, attempt);
+        return runPrefix(run) + "%s/attempt-%d/".formatted(stage, attempt);
     }
 
     /**
@@ -983,7 +982,83 @@ public class PipelineService {
         for (UUID id : runs) {
             purgePii(loadRun(id), "retention-sweep", false);
         }
+        sweepUnregisteredStaging();
         return runs.size();
+    }
+
+    /**
+     * Runs whose storage prefixes are due for a listing (V30, review S-7): the run no longer needs its staging (as in
+     * {@link #PII_PURGE_DUE}), it ended at least {@code :settle} seconds ago -- longer than any worker lease, so no worker
+     * can still be uploading for it -- and it has not been listed since it last ended. Shared with the
+     * {@code chaya_pii_staging_unswept_runs} gauge.
+     */
+    public static final String STAGING_SWEEP_DUE = """
+          FROM pipeline_run r
+         WHERE (r.status IN ('SUCCEEDED', 'PARTIAL', 'CANCELLED')
+                OR (r.status = 'FAILED' AND r.finished_at < now() - make_interval(secs => :retention)))
+           AND r.finished_at < now() - make_interval(secs => :settle)
+           AND NOT EXISTS (SELECT 1 FROM pii_staging_sweep s
+                            WHERE s.run_id = r.id AND s.swept_at >= r.finished_at + make_interval(secs => :settle))
+        """;
+
+    /** Seconds after which no worker can still write for a job: its lease, plus the deadline grace. */
+    public long settleSeconds() {
+        return (long) props.leaseSeconds() + props.deadlineGraceSeconds();
+    }
+
+    /**
+     * Deletes every {@code pii/} object under a finished run's prefixes that no artifact row names: what a stage uploaded
+     * but never registered (it failed, crashed, lost its lease, or its report was refused), and a sealed copy whose
+     * discard did not happen. {@link #purgePii} only knows registered artifacts. A run is listed only once its registered
+     * PII is purged, so a purge record never goes missing for an object this deletes. Returns the runs swept.
+     */
+    int sweepUnregisteredStaging() {
+        List<UUID> due = jdbc.sql("SELECT r.id " + STAGING_SWEEP_DUE + " ORDER BY r.finished_at LIMIT 200")
+            .param("retention", (double) props.piiStagingRetention().toSeconds()).param("settle", (double) settleSeconds())
+            .query(UUID.class).list();
+        int swept = 0;
+        for (UUID id : due) {
+            RunRow run = loadRun(id);
+            boolean registeredLeft = jdbc.sql("""
+                    SELECT EXISTS (SELECT 1 FROM processing_artifact a JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id
+                                    WHERE sr.run_id = :r AND a.contains_pii
+                                      AND NOT EXISTS (SELECT 1 FROM pii_staging_purge p WHERE p.artifact_id = a.id))
+                    """).param("r", id).query(Boolean.class).single();
+            if (registeredLeft) {
+                continue; // purgePii could not delete them yet; it is retried first, every sweep
+            }
+            String own = runPrefix(run);
+            int deleted = 0;
+            try {
+                for (String prefix : List.of(own, TenantKeys.SEALED_ROOT + own)) {
+                    for (String key : derived.list(prefix)) {
+                        if (key.contains("/pii/")) {
+                            derived.delete(key);
+                            deleted++;
+                        }
+                    }
+                }
+            } catch (RuntimeException e) {
+                log.error("could not sweep the PII staging of run {}: {}", id, e.getMessage());
+                continue; // no sweep record: retried next time, and counted by the gauge meanwhile
+            }
+            jdbc.sql("""
+                    INSERT INTO pii_staging_sweep (run_id, swept_at, objects_deleted) VALUES (:r, now(), :n)
+                    ON CONFLICT (run_id) DO UPDATE SET swept_at = now(), objects_deleted = excluded.objects_deleted
+                    """).param("r", id).param("n", deleted).update();
+            if (deleted > 0) {
+                final int d = deleted;
+                tx.executeWithoutResult(s -> audit.successInOrganization(SYSTEM, run.orgId(), run.venueId(),
+                    "pipeline.pii_orphans_purged", "pipeline_run", run.id(), Map.of("deleted", d)));
+            }
+            swept++;
+        }
+        return swept;
+    }
+
+    /** Everything any stage attempt of the run may write lives under this prefix (see {@link #prefix}). */
+    static String runPrefix(RunRow run) {
+        return TenantKeys.prefix(run.orgId(), run.venueId()) + "scan/%s/run/%s/".formatted(run.scanId(), run.id());
     }
 
     /** Whether retrying {@code stage} would need a PII staging artifact that has been purged. */

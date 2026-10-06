@@ -91,6 +91,9 @@ A refused venue access is audited (`venue.access`, outcome `DENIED`, in the *cal
 | `GET .../floors/{f}/anchors[/{a}]`, `POST .../anchors/relocalize` | ✔ | ✔ | ✔ | ✔ | ✔ | ✘ |
 | `POST/PUT/DELETE .../floors/{f}/anchors`, `POST .../anchors/{a}/calibrate` | ✔ | ✔ | ✔ | ✘ | ✘ | ✘ |
 | `POST/GET/DELETE /venues/{id}/public-links` | ✔ | ✔ | ✘ | ✘ | ✘ | ✘ |
+| `DELETE /venues/{id}/captures/{c}`, `DELETE /venues/{id}/scan-versions/{sv}` (erasure, docs/privacy-erasure.md) | ✔ | ✔ | ✘ | ✘ | ✘ | ✘ |
+| `DELETE /venues/{id}` (venue erasure) | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ |
+| `GET /api/v1/erasures/{id}` (own org; requester or admin), `GET /api/v1/erasures` | ✔ | ✔ (own) | ✘ | ✘ | ✘ | ✘ |
 | `POST /api/v1/public/viewer-token` | public (link secret is the credential) | | | | | |
 | `GET /api/v1/audit-log` (own org) | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ |
 | `POST /api/v1/internal/jobs/claim`, `/{id}/heartbeat`, `/{id}/report`, `/{id}/complete`, `/{id}/fail` | ✘ | ✘ | ✘ | ✘ | ✘ | ✔ |
@@ -245,10 +248,11 @@ table to `services/api/target/tenant-inventory.md` and fails if a table breaks t
   run's artifact, or of one its parent version pinned, and the parent is same-venue by composite key.
 - Tables without tenant columns: `organization` (the tenant itself), and `capture_media_part`, `pii_staging_purge` and
   `public_viewer_token`, which reference a `capture_media`, `processing_artifact` or `public_viewer_link` row that has them
-  and are only ever reached through it.
+  and are only ever reached through it. Likewise `pii_staging_sweep` (a `pipeline_run`), and `erasure_item` and
+`erasure_object` (an `erasure_request`, which has both tenant columns).
 
 ## Audit
-Written in the same transaction as the operation (so both commit or neither): `venue.create`, `venue.update`, `scan.create`, `job.enqueue`, `job.cancel`, `job.retry`, `job.claim`, `job.complete`, `job.fail`, `poi.create`, `poi.update`, `poi.delete`, `public_link.create`, `public_link.revoke`, `public_link.exchange`. Refused venue access (`venue.access`, `DENIED`) is written in its own transaction so it survives the rejection. Secrets and tokens are never written to the log. The table is append-only at the database level.
+Written in the same transaction as the operation (so both commit or neither): `venue.create`, `venue.update`, `scan.create`, `job.enqueue`, `job.cancel`, `job.retry`, `job.claim`, `job.complete`, `job.fail`, `poi.create`, `poi.update`, `poi.delete`, `public_link.create`, `public_link.revoke`, `public_link.exchange`, `erasure.capture`, `erasure.scan_version`, `erasure.venue` (counts and ids only, docs/privacy-erasure.md; a refusal is `DENIED` in its own transaction). Refused venue access (`venue.access`, `DENIED`) is written in its own transaction so it survives the rejection. Secrets and tokens are never written to the log. The table is append-only at the database level.
 
 ## Keycloak setup
 `infra/keycloak/chaya-realm.json` is imported by Docker Compose (`start-dev --import-realm`). It defines the five realm roles; client scopes for `sub`, realm roles, the API audience and the tenant claims; the public PKCE client `chaya-web`; the bearer-only `chaya-api`; and the confidential `chaya-worker` service account. It contains no users with passwords and no secrets (`${CHAYA_WORKER_CLIENT_SECRET}` is substituted from the environment). The realm also declares `org_id` and `venue_id` in the Keycloak user profile, editable and visible by administrators only. This is required: without it Keycloak silently drops unmanaged attributes and the claims never reach the token (verified against Keycloak 26.0). After the first start, create users in the admin console and set their `org_id` / `venue_id` attributes and roles.

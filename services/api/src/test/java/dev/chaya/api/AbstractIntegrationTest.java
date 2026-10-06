@@ -34,6 +34,8 @@ import org.testcontainers.utility.DockerImageName;
     // The POI embedding backfill must not race assertions; PoiEmbeddingServiceTest drives it directly.
     "chaya.search.embedding-backfill-initial-delay=PT24H",
     "chaya.search.embedding-backfill-interval=PT24H",
+    // ErasureTest drives the erasure sweep itself and asserts states between passes.
+    "chaya.erasure.sweep-initial-delay=PT24H",
     // The production relevance margin (0.078) is calibrated for CLIP. The test embeddings are random unit vectors
     // (TestEmbeddingConfig), whose unrelated pairs sit near cosine 0 +- 0.04: 0.3 separates them unambiguously.
     "chaya.search.relevance-min-margin=0.3"

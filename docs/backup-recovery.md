@@ -32,10 +32,11 @@ the same host. For production, add an off-host copy of `$BACKUP_DIR` with its ow
 borg to separate storage), or MinIO bucket versioning with object locking. This is a residual risk until one of them
 is in place.
 
-**Erasure requests:** because deletions no longer propagate, deleting a person's captures from the live buckets does
-not remove them from `$BACKUP_DIR`. The application has no erasure feature today (docs/security-hardening.md, finding
-15). When one is added, it must also delete the matching keys under `$BACKUP_DIR/minio/` and state how long dated
-dumps keep the database rows (`BACKUP_KEEP_DAYS`).
+**Erasure requests** (docs/privacy-erasure.md): deletions do not propagate through the mirror, so `backup.sh` applies
+erasures to it itself. On every run, it deletes each key and prefix listed in `erasure_object` from
+`$BACKUP_DIR/minio/`. Dated database dumps still hold erased rows until they age out (`BACKUP_KEEP_DAYS`, 14 days).
+**Restoring a dump older than an erasure brings the erased rows back.** Before restoring, save the list of erasures
+(`GET /api/v1/erasures`). After restoring, issue again every erasure that is later than the dump.
 
 ## Running backups
 

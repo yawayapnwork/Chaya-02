@@ -49,6 +49,23 @@ if [ "$what" = all ] || [ "$what" = minio ]; then
       org/*/venue/*/capture/*/raw/*) rm -f "$BACKUP_DIR/minio/$S3_BUCKET_RAW/$key" ;;
     esac
   done
+  # Erasures (docs/privacy-erasure.md): every key and prefix an erasure deleted from the live buckets is removed from the
+  # mirror too, on every run, since a mirror may have copied it before the erasure. Only the two buckets and well-formed
+  # tenant paths are acted on; anything else is ignored rather than used as a path.
+  compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At -F ' ' \
+    -c "SELECT bucket, object_key, is_prefix FROM erasure_object" | tr -d '\r' | while read -r bucket key prefix; do
+    case "$bucket" in "$S3_BUCKET_RAW"|"$S3_BUCKET_DERIVED") ;; *) continue ;; esac
+    case "$key" in
+      *..*|*//*) continue ;;
+      org/*/venue/*/*|sealed/org/*/venue/*/*) ;;
+      *) continue ;;
+    esac
+    if [ "$prefix" = t ]; then
+      rm -rf "$BACKUP_DIR/minio/$bucket/$key"
+    else
+      rm -f "$BACKUP_DIR/minio/$bucket/$key"
+    fi
+  done
   echo "$ts" > "$BACKUP_DIR/minio/LAST_MIRROR_UTC"
   echo "minio: ok"
 fi

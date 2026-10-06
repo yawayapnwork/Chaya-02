@@ -27,7 +27,14 @@ public interface ObjectStore {
     /** Server-side copy within the bucket: the bytes never pass through the API. Replaces the target if it exists. */
     void copy(String sourceKey, String targetKey);
 
+    /** Deleting a key that does not exist succeeds (S3 semantics), so a deletion can always be repeated. */
     void delete(String key);
+
+    /** Every key under the prefix (all pages). Used by erasure and the PII staging sweep to find objects no row names. */
+    List<String> list(String prefix);
+
+    /** Aborts every unfinished multipart upload under the prefix, so no uploaded part outlives an erasure. Returns how many. */
+    int abortUploads(String prefix);
 
     /** The SHA-256 (lowercase hex) of an object's bytes, computed by reading all of them. */
     default String sha256(String key) {

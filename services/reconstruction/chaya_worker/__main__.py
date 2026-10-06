@@ -35,6 +35,7 @@ def main(argv: list[str] | None = None) -> None:
     alive = liveness_file(settings)
     orchestrator = Orchestrator(HttpControlPlane(settings), S3Storage(settings), settings, toolchain=toolchain,
                                 on_alive=lambda: mark_alive(alive))
+    orchestrator.purge_stale_workdirs()
 
     stopping = False
 

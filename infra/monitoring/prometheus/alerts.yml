@@ -79,3 +79,15 @@ groups:
         for: 15m
         annotations:
           summary: "Unanonymised PII staging frames past their retention are still stored: the purge sweep cannot delete them (review S-7)"
+
+      - alert: ChayaPiiStagingUnswept
+        expr: chaya_pii_staging_unswept_runs > 0
+        for: 15m
+        annotations:
+          summary: "Finished runs have not been checked for unregistered pii/ uploads: the staging sweep cannot list or delete under their prefixes (review S-7)"
+
+      - alert: ChayaErasureIncomplete
+        expr: chaya_erasure_pending_overdue > 0
+        for: 15m
+        annotations:
+          summary: "An erasure removed its rows but its objects are still not all deleted an hour later (docs/privacy-erasure.md)"

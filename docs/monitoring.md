@@ -41,6 +41,8 @@ Every port is bound to 127.0.0.1. Loki and Alloy have no published port.
 | Storage usage (physical) | `minio_cluster_capacity_usable_free_bytes`, `minio_cluster_capacity_usable_total_bytes`, `minio_bucket_usage_total_bytes{bucket}` | MinIO's own cluster metrics (`/minio/v2/metrics/cluster`, bearer token). Alerts: `ChayaStorageLow` (< 15% free), `ChayaStorageMetricsMissing`. Checked on 2026-09-24 against `quay.io/minio/minio:latest`: the two capacity series are exported and the endpoint answers 403 without the token. `minio_bucket_usage_total_bytes` did not appear on that empty instance (it follows MinIO's usage scan) and is **unconfirmed**. The alert uses only the capacity series. |
 | Reconstruction success rate | `chaya_pipeline_runs_finished_24h{status}`. Rate = SUCCEEDED / all finished | `pipeline_run`, last 24 h. PARTIAL is not counted as a success. |
 | PII staging past retention | `chaya_pii_staging_overdue_artifacts` | `processing_artifact` PII rows with no `pii_staging_purge` row whose run no longer needs them (`PipelineService.PII_PURGE_DUE`). The sweep clears these within a minute; a lasting non-zero value means deletions are failing. |
+| Runs not checked for unregistered PII uploads | `chaya_pii_staging_unswept_runs` | Finished runs whose prefixes the staging sweep has not listed (and cleared of `pii/` objects no row names) for 15 min after they became due (`PipelineService.STAGING_SWEEP_DUE`). |
+| Erasures with objects left | `chaya_erasure_pending_overdue` | `erasure_request` rows still `OBJECTS_PENDING` an hour after their objects could all have been deleted (docs/privacy-erasure.md). |
 | Freshness of the above | `chaya_metrics_refresh_ok`, `chaya_metrics_refreshed_seconds` | `PlatformMetrics` |
 
 The `chaya_*` gauges are recomputed from the database every 30 s (`dev.chaya.api.metrics.PlatformMetrics`). They are
@@ -57,7 +59,7 @@ ids) and no user data.
 `ChayaApiDown`, `ChayaApiHighErrorRate` (more than 5% 5xx), `ChayaApiSlow` (p95 above 2 s), `ChayaRateLimiting`,
 `ChayaMetricsRefreshFailing`, `ChayaQueueStalled` (oldest job waiting over 15 min with nothing running),
 `ChayaStageFailureRateHigh`, `ChayaReconstructionSuccessLow`, `ChayaStorageLow` (MinIO under 15% usable capacity),
-`ChayaStorageMetricsMissing` (MinIO not scraped, so storage usage is unknown rather than assumed fine). `ChayaPiiStagingNotPurged` (unanonymised staging frames past their retention still stored for 15 min). The thresholds are starting points and have not been
+`ChayaStorageMetricsMissing` (MinIO not scraped, so storage usage is unknown rather than assumed fine). `ChayaPiiStagingNotPurged` (unanonymised staging frames past their retention still stored for 15 min). `ChayaPiiStagingUnswept` (finished runs not checked for unregistered `pii/` uploads). `ChayaErasureIncomplete` (an erasure's objects still not all deleted). The thresholds are starting points and have not been
 tuned against real traffic. No Alertmanager is configured: alerts show in Prometheus and Grafana only. Add
 Alertmanager with a receiver to get paged.
 

@@ -9,7 +9,9 @@ Guarantees:
     silent success and never a fabricated artifact;
   * logs are uploaded and registered whether the stage succeeded or failed;
   * with privacy enabled, a stage after PRIVACY_PREPROCESS refuses to start if any input may contain PII;
-  * the local working directory (which may hold unblurred frames) is always deleted afterwards.
+  * the local working directory (which may hold unblurred frames) is always deleted afterwards, and directories left
+    by a killed process are deleted at startup;
+  * a job the control plane cancelled while it ran uploads nothing.
 """
 
 from __future__ import annotations
@@ -82,6 +84,21 @@ class Orchestrator:
         self.registry = registry or default_registry()
         self.clock = clock
 
+    def purge_stale_workdirs(self) -> int:
+        """Delete job directories a previous process left behind (it was killed mid-job, so its `finally` never ran).
+        They may hold unblurred frames. Called once at startup, before any job is claimed. Returns how many."""
+        root = Path(self.settings.workdir)
+        if not root.is_dir():
+            return 0
+        removed = 0
+        for entry in root.iterdir():
+            if entry.is_dir():
+                shutil.rmtree(entry, ignore_errors=True)
+                removed += 1
+        if removed:
+            log.warning("removed stale job directories from a previous run", extra={"count": removed})
+        return removed
+
     # ---- polling ------------------------------------------------------------------------------
 
     def run_once(self) -> bool:
@@ -122,6 +139,11 @@ class Orchestrator:
             finished = self.clock()
             logger.info("stage finished", extra={"status": result.status, "error_code": result.error_code,
                                                  "duration_seconds": round(finished - started, 3)})
+            if cancelled.is_set():
+                # The job is no longer ours (cancelled, lease lost, or its data erased): nothing may be uploaded for it,
+                # since no report will register it and it could be unanonymised frames.
+                log.warning("job was cancelled while running; not uploading or reporting", extra=context)
+                return None
             result = self._publish(order, result, logger)  # uploads outputs; may turn the result into a failure
             heartbeat.stop()
             handler.flush()
