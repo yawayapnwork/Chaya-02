@@ -266,7 +266,7 @@ C="docker compose -p chaya-viewer --env-file <scratch>/viewer.env -f infra/docke
    -f infra/ci/docker-compose.smoke.yml -f infra/ci/docker-compose.e2e.yml -f <scratch>/viewer-override.yml --profile pipeline"
 $C build api web reconstruction-worker
 $C down -v --remove-orphans            # 15:56:16; 0 volumes left
-$C up -d postgres redis minio minio-init keycloak clamav api web reconstruction-worker   # all healthy at 15:58:36 +05:30
+$C up -d postgres minio minio-init keycloak clamav api web reconstruction-worker   # all healthy at 15:58:36 +05:30 (redis, since removed, was also started)
 
 ffmpeg -f lavfi -i testsrc=duration=2:size=640x360:rate=10 -c:v libx264 -pix_fmt yuv420p carrier.mp4
 services/reconstruction/.venv/Scripts/python scripts/e2e/viewer_format_validation.py --env-file <scratch>/viewer.env \
@@ -397,7 +397,7 @@ secret value used in the run found none.
 | Container runtime | Docker Desktop, engine 29.6.2, Compose 5.3.1. WSL2 VM with 7.5 GiB RAM and 18 CPUs. Other, unrelated projects' containers were using about 1.9 GiB of it. |
 | Compose project | `chaya-e2e` = `infra/docker/docker-compose.yml` + `infra/ci/docker-compose.smoke.yml` + `infra/ci/docker-compose.e2e.yml`, profile `pipeline` |
 | PostgreSQL + pgvector | `pgvector/pgvector:pg17`. `vector 0.8.6`, `pg_trgm 1.6`. All 16 Flyway migrations applied by the API at start. |
-| Redis | `redis:7-alpine`, password-protected. Reachable, but **unused by every Chaya service** (F4). |
+| Redis | `redis:7-alpine`, password-protected. Reachable, but **unused by every Chaya service** (F4). Removed from the stack on 2026-10-07. |
 | MinIO | `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14ce…936e`, pinned. Private buckets `chaya-raw` and `chaya-derived`. Five accounts from `minio-init`: api, worker, recon, backup, plus root. |
 | ClamAV | `clamav/clamav:1.4`, real signatures. Uploads are never accepted unscanned. |
 | Keycloak | `quay.io/keycloak/keycloak:26.0`, realm imported from `infra/keycloak/chaya-realm.json` |
@@ -425,7 +425,7 @@ docker volume ls -q --filter label=com.docker.compose.project=chaya-e2e   # -> n
 $C build --no-cache --pull
 
 # 2. Start everything; all services reported healthy after about 2 minutes (vision downloads CLIP weights on start)
-$C up -d postgres redis minio minio-init keycloak clamav api web vision reconstruction-worker toolchain-worker
+$C up -d postgres minio minio-init keycloak clamav api web vision reconstruction-worker toolchain-worker   # the run also started redis, since removed
 
 # 3. Capture fixture: 11 real photographs of a real building, encoded as an H.264 video
 #    (not committed: the photographs carry the photographer's copyright; see section 3)
@@ -513,7 +513,7 @@ The *Evidence* column gives the `step` id in `results.json` / `run-log.txt`, or 
 | 0.4 | Database | 16 migrations; vector and pg_trgm installed | 16 of 16; `vector 0.8.6`, `pg_trgm 1.6` | PASS |
 | 0.5 | Web `/api/health` | 200, API reachable | 200; backend reachable, UP | PASS |
 | 0.6 | Vision `/health/ready` | CLIP loaded | 200, `open_clip:ViT-B-32:openai`, modelAvailable=true | PASS |
-| 0.7 | Redis | PONG | PONG (unused by Chaya, F4) | PASS |
+| 0.7 | Redis | PONG | PONG (unused by Chaya, F4; check removed with Redis on 2026-10-07) | PASS |
 
 ### 4.2 Workflow
 
@@ -765,7 +765,8 @@ The first run of this validation had a third FAIL: step 22, admin audit log, HTT
 - **F2: `venue-manager` cannot create a venue.** Venue creation is admin-only (3.0), so step 3 was done as an
   admin. This looks intentional.
 - **F3: no organization API.** Organizations are created in SQL, as documented in DEPLOYMENT.md §3.
-- **F4: Redis is provisioned but unused** (documented in the compose file).
+- **F4: Redis is provisioned but unused** (documented in the compose file). **Resolved 2026-10-07:** removed from the
+  stack and the checks (review O-5; ARCHITECTURE.md §3.1).
 - **F5: the privacy stage over-masks architecture.**
   - On 11 photographs of a building with no people, the Haar face detector reported **55 faces**: windows and
     dormers.

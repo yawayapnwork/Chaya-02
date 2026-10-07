@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 /**
  * In-process fixed-window counters. Correct for the single API instance this project deploys (ARCHITECTURE.md: one
  * monolith). With several instances each enforces its own budget, so the effective limit multiplies; a shared store
- * (Redis) would then be needed -- recorded in docs/security-hardening.md.
+ * would then be needed; there is none today (ARCHITECTURE.md section 3.1).
  */
 @Component
 public class RateLimiter {

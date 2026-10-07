@@ -4,7 +4,7 @@ import FoundationNetworking
 #endif
 
 /// Thin client around the shared backend path/anchor API (docs/ar.md, docs/navigation.md, docs/security.md).
-/// It never talks to Postgres/MinIO/Redis directly and never computes its own route -- exactly the same
+/// It never talks to Postgres/MinIO directly and never computes its own route -- exactly the same
 /// `/api/v1` surface the web app's apps/web/lib/ar-api.ts and lib/navigation-api.ts call.
 public struct APIError: Error, Equatable, Sendable {
     public let status: Int

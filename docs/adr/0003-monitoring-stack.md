@@ -17,8 +17,8 @@ while jobs sat unclaimed.
 - **Dashboards:** Grafana, with provisioned data sources and a dashboard kept in git.
 - **Errors:** GlitchTip, a Sentry-protocol-compatible and self-hostable tracker. It keeps error data (which can contain
   request context) on our infrastructure.
-- Everything runs as a **separate compose project** (`infra/monitoring`). It never shares a network, database or Redis
-  with the application.
+- Everything runs as a **separate compose project** (`infra/monitoring`). It never shares a network or database with the
+  application.
 
 ## Consequences
 

@@ -82,7 +82,7 @@ reclaimed by autovacuum (section 7).
 ### Caches
 
 The API caches no capture data. The health check caches only its own status. The HUD broadcaster keeps only
-subscriber lists. Redis is provisioned in `infra/docker` but nothing uses it. Artifact downloads carry
+subscriber lists. There is no Redis or other cache server. Artifact downloads carry
 `Cache-Control: private, max-age=3600`: no shared cache may store them, but a **viewer's own browser** may keep bytes it
 already downloaded for up to an hour (section 7). The web app has no service worker or IndexedDB cache, and the iOS app
 has no artifact cache.

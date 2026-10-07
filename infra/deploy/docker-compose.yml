@@ -60,6 +60,7 @@ services:
     depends_on:
       api: { condition: service_healthy }
 
+  # Exactly one instance: rate limits, HUD fan-out and the periodic sweeps are in-process (ARCHITECTURE.md §3.1).
   api:
     <<: *hardening
     image: ${CHAYA_REGISTRY:?set CHAYA_REGISTRY, e.g. ghcr.io/<owner>}/chaya-api:${CHAYA_VERSION:?set CHAYA_VERSION}

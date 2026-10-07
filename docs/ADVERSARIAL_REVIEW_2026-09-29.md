@@ -657,3 +657,20 @@ This section was added after the review; the sections above are unchanged.
   prefixes are now listed, and every `*/pii/*` object no row names is deleted. The worker no longer uploads outputs
   for a job it was told to stop, and it removes job directories left by a killed process. Required test:
   `ErasureTest.aRunThatFailedBeforePrivacyLosesEvenItsUnregisteredStagingOnceRetentionEnds`.
+
+## 14. Addendum (2026-10-07): O-5
+
+This section was added after the review; the sections above are unchanged.
+
+- **O-5 resolved by removal.** A repository-wide search found no Redis client, dependency or connection in the API,
+  the workers, the vision service, the web app or the iOS app. The only coordination the system needs is in
+  PostgreSQL (job claims use `FOR UPDATE SKIP LOCKED`), and the only consumers a shared in-memory store would serve
+  (rate limits, HUD fan-out) are in-process by design for the single API instance that is deployed. Redis was
+  therefore removed rather than wired in: from `infra/docker/docker-compose.yml`, `.env.example`,
+  `scripts/ci/stack-smoke.sh`, the E2E check 0.7, the ARCHITECTURE.md diagram and sections 1, 10 and 11, PROJECT_PLAN.md
+  M2's scope, THIRD_PARTY_LICENSES.md and docs/security-hardening.md (D-7's Redis part).
+- **The constraint is now written down (D-3 from the 2026-09-28 review, documentation half).** ARCHITECTURE.md §3.1
+  lists each mechanism, what it shares through, and whether it survives a second API instance; DEPLOYMENT.md and the
+  production compose file state that `api` runs as exactly one instance.
+- **Still open:** nothing *enforces* one instance; `docker compose up --scale api=2` would start a second. Scaling out
+  needs the shared limiter and HUD store plus advisory locks for the sweeps (D-3's code half).

@@ -165,10 +165,6 @@ def step0_health() -> None:
     check("0.5", "Web readiness (/api/health)", "200 (public config complete, API reachable)", w.status_code == 200, short(w))
     vr = requests.get(VISION + "/health/ready", timeout=30)
     check("0.6", "Vision service readiness (CLIP loaded)", "200", vr.status_code == 200, short(vr))
-    red = subprocess.run(["docker", "exec", "chaya-e2e-redis-1", "redis-cli", "-a", ENV["REDIS_PASSWORD"], "--no-auth-warning", "ping"],
-                         capture_output=True, text=True)
-    check("0.7", "Redis reachable (password-protected)", "PONG", red.stdout.strip() == "PONG",
-          red.stdout.strip() + " (note: no Chaya service uses Redis today; see compose comment)")
 
 
 def step1_2_3_auth_org_venue() -> None:

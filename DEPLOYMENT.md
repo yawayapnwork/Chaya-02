@@ -4,6 +4,10 @@ How Chaya 02 is built, shipped, started, checked, rolled back, backed up and rec
 
 - **Target:** one Docker host per environment (staging, production), using Docker Compose. There is no Kubernetes
   (DEVELOPMENT_RULES.md, rule 20).
+- **One API instance.** Do not scale `api` (no `--scale api=N`, no `deploy.replicas`): rate limits, the capture HUD
+  stream, media-validation resume and the periodic sweeps are in-process, and PostgreSQL is the only shared store.
+  There is no Redis. Workers may be scaled freely; job claims are row-locked in the database. ARCHITECTURE.md §3.1
+  lists what would have to change first.
 - **GPU workers** run on separate GPU hosts ([GPU workers](#gpu-workers)).
 - **Deployment files:** `infra/deploy/`.
 - **Pipeline files:** `.github/workflows/`.

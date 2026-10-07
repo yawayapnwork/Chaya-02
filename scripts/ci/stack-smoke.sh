@@ -33,7 +33,6 @@ POSTGRES_USER=postgres
 POSTGRES_PASSWORD=$(rand)
 POSTGRES_APP_USER=chaya
 POSTGRES_APP_PASSWORD=$(rand)
-REDIS_PASSWORD=$(rand)
 MINIO_ROOT_USER=smokeroot
 MINIO_ROOT_PASSWORD=$(rand)
 S3_ACCESS_KEY=smoke-api
@@ -52,9 +51,8 @@ API_PORT=${SMOKE_API_PORT:-8080}
 MINIO_API_PORT=${SMOKE_MINIO_PORT:-9000}
 # Only MinIO, Keycloak and the API are used from the host (override SMOKE_MINIO_PORT / SMOKE_KEYCLOAK_PORT /
 # SMOKE_API_PORT if taken locally); the rest go to unlikely ports so the smoke stack does not collide with a local
-# Postgres/Redis/ClamAV.
+# Postgres/ClamAV.
 POSTGRES_PORT=55432
-REDIS_PORT=56379
 CLAMAV_PORT=53310
 MINIO_CONSOLE_PORT=59001
 EOF
