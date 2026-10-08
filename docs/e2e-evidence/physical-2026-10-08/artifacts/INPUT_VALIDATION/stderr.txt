@@ -1,0 +1,13 @@
+Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '/tmp/run/work/b824f5ef-1804-4a67-aaa8-f112edd3c003/inputs/d7e88ffa-d2e3-491c-b505-790f8f9c53cc-3a3faa2c-d54c-4242-ad25-e17f69dc64df':
+  Metadata:
+    major_brand     : isom
+    minor_version   : 512
+    compatible_brands: isomiso2avc1mp41
+    encoder         : Lavf59.27.100
+  Duration: 00:00:05.50, start: 0.000000, bitrate: 7153 kb/s
+  Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(tv, bt470bg/unknown/unknown, progressive), 1600x1202, 7151 kb/s, 2 fps, 2 tbr, 16384 tbn (default)
+    Metadata:
+      handler_name    : VideoHandler
+      vendor_id       : [0][0][0][0]
+      encoder         : Lavc59.37.100 libx264
+At least one output file must be specified

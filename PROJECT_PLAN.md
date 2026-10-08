@@ -24,6 +24,42 @@ Each milestone is independently testable and committable. "Done" means its tests
 | M17 | Operations dashboard | Freshness, job state, coverage gaps, search analytics | Dashboard tests against real data |
 | M18 | CI/CD | GitHub Actions, GHCR images, independent deploys | Green pipeline |
 
+## Validation levels (reconstruction → digital twin chain)
+
+Each level is a separate claim. A higher level is never implied by a lower one.
+
+- **Code implemented:** the stage exists and does real work when its dependencies are present.
+- **Fixture validated:** automated tests exercise the real code on committed or downloaded fixtures, synthetic or
+  public.
+- **Real venue executed:** it ran on a real indoor venue capture through this pipeline.
+- **Physical device validated:** it ran on the target hardware: a phone capture or AR device, or a CUDA GPU worker.
+
+Last checked 2026-10-08 at `20ef642` (docs/E2E_VALIDATION.md §R). **No row is real-venue executed, because no real
+venue capture exists.** "Real media" means the public outdoor Sceaux photographs (E2E §R and §0): real camera input,
+but not a venue, and with no measurements.
+
+| Stage | Code implemented | Fixture validated | Real venue executed | Physical device validated |
+|---|---|---|---|---|
+| Capture (web capture UI, HUD) | Yes (M5, M14) | Yes (unit/Playwright) | No | No (never field-captured on a phone) |
+| Media ingestion (upload, Tika/ClamAV) | Yes (M5) | Yes (real MinIO) | No | n/a |
+| INPUT_VALIDATION, FFMPEG_PREPROCESS, FRAME_QUALITY_FILTER | Yes | Yes | No; **real media: yes** (§R, HEAD) | n/a (CPU) |
+| PRIVACY_PREPROCESS (+ masks) | Yes | Yes | No; real media: yes. It over-masks (CV-6). | n/a (CPU) |
+| Camera metadata / intrinsics, distortion | Yes | Yes (synthetic cameras) | No; real media: SfM self-calibration only, no device intrinsics | No |
+| POSE_ESTIMATION (SfM) | Yes; COLMAP only, GLOMAP never in a run image | gpu-marked tests skip in CI | No; **real media: yes**, CPU COLMAP, 11/11 registered, 0.398 px | No GPU run |
+| Metric calibration (`coordinate-frames`) | Yes | Yes (synthetic-calibration fixture) | **No**: no measured references exist | n/a |
+| Gravity alignment | Yes | Yes (synthetic planes) | No | No |
+| SPLAT_RECONSTRUCTION (gsplat) | Yes | CPU training mechanics with a test renderer only | **No (blocked: no CUDA)** | **No** |
+| GEOMETRIC_CLEANUP, PLANE_FITTING | Yes | Yes (unit tests; B2 on real geometry) | No | No |
+| SEMANTIC_SEGMENTATION, SEMANTIC_INDEXING | Yes | Yes (unit tests; B3 on COCO crops) | No | No |
+| NAVIGATION_BAKING (Recast) | Yes (recastnavigation 1.6.0) | Yes (synthetic venue fixtures, real tool) | No | n/a (CPU) |
+| `.ksplat` export → pinned viewer | Yes | Yes (viewer-scene format fixture, pixel-checked) | No | No |
+| Semantic search API | Yes | Yes (integration tests, B3) | No | n/a |
+| Route generation | Yes | Yes (on real Recast output of fixtures) | No | n/a |
+| AR navigation (Android WebXR, iOS ARKit) | Yes (M15) | Unit tests; the iOS app builds in CI | No | **No**: never run on a phone |
+
+An end-to-end regression test from a real venue run is deliberately **not** added yet. It may be cut from a compact
+fixture only after the first successful real-venue run (E2E §R.4).
+
 CI (a minimal lint/test workflow) is added with M2/M4 as each component appears; M18 covers image publishing.
 
 Order note: M14 may move earlier if capture-quality feedback blocks reconstruction quality work.

@@ -1,0 +1,24 @@
+{
+  "camera_calibration": "NOT_PROVIDED",
+  "count": 11,
+  "frames": [
+    "v00-000001.jpg",
+    "v00-000002.jpg",
+    "v00-000003.jpg",
+    "v00-000004.jpg",
+    "v00-000005.jpg",
+    "v00-000006.jpg",
+    "v00-000007.jpg",
+    "v00-000008.jpg",
+    "v00-000009.jpg",
+    "v00-000010.jpg",
+    "v00-000011.jpg"
+  ],
+  "sources": [
+    {
+      "artifact_id": "d7e88ffa-d2e3-491c-b505-790f8f9c53cc",
+      "frames": 11,
+      "kind": "RAW_VIDEO"
+    }
+  ]
+}

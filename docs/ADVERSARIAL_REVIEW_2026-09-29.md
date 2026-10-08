@@ -734,3 +734,44 @@ This section was added after the review; the sections above are unchanged. Rules
   the hash proves only that the bytes are the ones the worker produced. Pre-V31 KSPLATs carry no recorded format.
   Hashing needs the whole file in memory: about twice the file size at peak, bounded by the 512 MiB limit. No real
   reconstruction has been loaded (G-4).
+
+---
+
+## 17. Addendum (2026-10-08): G-4, first reconstruction-to-digital-twin integration attempt
+
+This section was added after the review; the sections above are unchanged. Details: docs/E2E_VALIDATION.md §R.
+
+**G-4 stays CRITICAL and open.** A real indoor-venue run was attempted at HEAD `20ef642` and could not happen:
+
+- **No real venue capture exists.** There is no dataset in the repository and no capture session on the workstation,
+  and no tape-measured distances or control points anywhere. So nothing can be metrically calibrated, independent of
+  hardware.
+- **There is still no CUDA device.** `SPLAT_RECONSTRUCTION` fails `DEPENDENCY_UNAVAILABLE` (torch, gsplat, cuda).
+
+**What did run.** The real worker claim loop was re-run at HEAD on the public outdoor Sceaux photographs, because §0
+predates the camera-model, privacy-mask and pose-estimation changes:
+
+- 5 of 12 stages SUCCEEDED; every output was re-hashed.
+- SfM registered 11/11 images, 4,830 points, 0.398 px.
+- POSES now carry `SIMPLE_RADIAL` k1 = −0.150, so G-1's fix is present on real input up to the stage boundary.
+- PRIVACY_PREPROCESS still flags 55 "faces" on a façade (CV-6 unchanged).
+
+**Status vocabulary, applied from now on.** Every claim says which of these it is (PROJECT_PLAN.md, "Validation
+levels"):
+
+1. code implemented;
+2. fixture validated;
+3. real venue executed;
+4. physical device validated.
+
+As of this addendum:
+
+- **No capability in §1 is at level 3 or 4.**
+- Stages 1–5 have run on real non-venue media.
+- §1 items 1, 2, 4, 5, 7, 8, 13, 14 have not left level 2.
+
+**Not done, by design.** No end-to-end regression test was added. A test cut from a run that never happened would be a
+mock of the stages it claims to cover.
+
+**Required to close G-4:** E2E §R.4. That means a measured indoor capture plus a CUDA worker, run through the full stack
+to a route.

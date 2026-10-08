@@ -1,5 +1,136 @@
 # Chaya 02: end-to-end validation
 
+## R. Reconstruction-to-digital-twin integration validation, 2026-10-08 (HEAD `20ef642`)
+
+**Goal:** run the full chain on a real indoor venue capture: capture → ingestion → FFmpeg → camera metadata → SfM →
+metric calibration → Gaussian training → cleanup → semantics → navigation geometry → Recast → `.ksplat` → viewer →
+search → route.
+
+**Verdict: NOT SUCCESSFUL. No real venue reconstruction exists. Execution stops at two independent missing prerequisites.**
+
+| Prerequisite | State on 2026-10-08 | Stage it blocks |
+|---|---|---|
+| A real **indoor** venue capture with **≥2 tape-measured distances or ≥3 surveyed control points** | **Absent.** The repository holds no capture dataset. `~/Videos/Captures` is empty. No Chaya capture session exists. Unrelated personal and stock videos on the workstation were not used: they are not venue captures and carry no measurements. | **Capture**, so every stage for a venue; for any capture, **metric calibration** |
+| An NVIDIA CUDA worker (torch + gsplat, Open3D, transformers) | **Absent.** The only adapter is `Intel(R) Graphics`. Docker has the `nvidia` runtime registered, but there is no device behind it. | **SPLAT_RECONSTRUCTION**, and every stage after it |
+
+So the request's own rule applies: **stop at the exact missing stage and report it.** Nothing below is, or is called, a
+venue reconstruction.
+
+**What was run instead:** the part of the chain that this host *can* execute, re-run at HEAD.
+
+- The worker code for stages 1–5 changed substantially since §0 (`4a537d1`): camera model and distortion
+  (`camera_model.py`), privacy masks, FFmpeg, input validation and pose estimation. §0's evidence no longer describes
+  the code.
+- It uses the same real, external, **outdoor** capture as §0. Not an indoor venue.
+- It is the same driver (`scripts/e2e/physical_pipeline.py`): the real `Orchestrator.run_once` claim loop, real
+  toolchain, every stage class unmodified. Nothing is inserted.
+
+### R.1 Commands
+
+```bash
+docker build -t chaya-physical-worker:base services/reconstruction
+docker build -t chaya-physical-worker:colmap -f infra/ci/worker-colmap.Dockerfile \
+  --build-context base=docker-image://chaya-physical-worker:base infra/ci
+# capture: openMVG ImageDataset_SceauxCastle 100_7100..100_7110, encoded as in §0.2 (from a script file; see R.5)
+#   -> sceaux-castle.mp4, 4,917,797 B, 11 frames 1600x1202, sha256 f960743d…21fb (byte-identical to §0)
+docker run --rm --memory 2g -e COLMAP_NUM_THREADS=2 -u 0 -v <repo>/scripts:/repo/scripts:ro -v <cap>:/cap:ro -v <out>:/out \
+  chaya-physical-worker:colmap python /repo/scripts/e2e/physical_pipeline.py \
+  --media /cap/sceaux-castle.mp4 --out /out/physical-pipeline.json --store /tmp/run
+#   -> exit 2 (INCOMPLETE), 2026-10-08 13:05:56 to 13:06:58 UTC
+```
+
+**Evidence:** `docs/e2e-evidence/physical-2026-10-08/`.
+
+- `physical-pipeline.json`: per-stage inputs, outputs, hashes, configuration, frame and failure.
+- `run-log.txt`.
+- `capture-images.sha256`: the 11 source photographs. The original media is preserved unmodified.
+- `artifacts/<STAGE>/`: every non-PII JSON output, plus that stage's structured stdout/stderr.
+
+Frame archives, masks and the sparse model are identified by SHA-256 only. They are not committed, because of the
+photographs' copyright.
+
+### R.2 Per-stage record
+
+**Scan and run:** every artifact is stored under one run, `231272c1-c55f-4e94-9e04-2e7cbf095e21`, of scan `e2e-scan`.
+
+- **No scan version exists.** A version is created and finalized only by the control plane on a completed run. The
+  run did not complete, and the driver has no control plane.
+
+**Coordinate frame:** `coordinateFrame` was `null` on every work order. Nothing was calibrated.
+
+**Status of every output:** every output was stored, and re-read and re-hashed from storage (`verified: true`).
+
+| # | Stage | Status | Time | Output (bytes, SHA-256) | Output frame | Error |
+|---|---|---|---:|---|---|---|
+| 1 | INPUT_VALIDATION | SUCCEEDED | 0.52 s | INPUT_REPORT (508, `340fd5c8…`) | none (media) | |
+| 2 | FFMPEG_PREPROCESS | SUCCEEDED | 0.49 s | FRAME_ARCHIVE (3,409,920, `d69b47fc…`, PII); FRAME_MANIFEST (456, `38e384cc…`) | image pixels | |
+| 3 | FRAME_QUALITY_FILTER | SUCCEEDED | 0.27 s | FRAME_ARCHIVE_SELECTED (3,409,920, `71a61709…`, PII); FRAME_QUALITY_REPORT (6,825, `e0377c6b…`); 11 of 11 kept | image pixels | |
+| 4 | PRIVACY_PREPROCESS | SUCCEEDED | 17.39 s | FRAME_ARCHIVE_ANON (3,502,080, `55fa02b2…`); **PRIVACY_MASKS** (102,400, `38cf6073…`, new since §0); PRIVACY_REPORT (19,608, `0101e5fb…`) | image pixels | Over-masking persists (CV-6): 55 "faces" on a façade, 10 of 11 frames escalated, 13.3 % of pixels masked |
+| 5 | POSE_ESTIMATION | SUCCEEDED | 43.97 s | SPARSE_MODEL (2,764,800, `6ca201f7…`); POSES (4,752, `698885af…`) | RECONSTRUCTION frame: arbitrary scale, rotation and origin | |
+| 6 | SPLAT_RECONSTRUCTION | **FAILED** | 0.03 s | none | — | `DEPENDENCY_UNAVAILABLE`: "missing: torch, gsplat, cuda" |
+| 7–12 | SEMANTIC_SEGMENTATION, GEOMETRIC_CLEANUP, PLANE_FITTING, ARTIFACT_GENERATION, SEMANTIC_INDEXING, NAVIGATION_BAKING | NOT_RUN | — | — | — | need SPLAT; 11–12 also need a canonical frame |
+| — | Calibration, viewer load, search, route | NOT_RUN | — | — | — | no splat, no measurements, no graph |
+
+**Camera metadata and calibration:** one `SIMPLE_RADIAL` camera, f = 1506.3 px, c = (719, 540), **k1 = −0.150**.
+
+- The radial term is now carried in POSES for training (G-1 fix).
+- It is self-calibrated by SfM. There are no device intrinsics, because the capture has no capture-app metadata.
+
+**SfM quality** (`colmap model_analyzer` on the stored SPARSE_MODEL):
+
+| Measure | Value |
+|---|---|
+| Images registered | **11 of 11** |
+| Points | 4,830 |
+| Observations | 20,274 |
+| Mean track length | 4.20 |
+| **Mean reprojection error** | **0.398 px** |
+
+§0, on older code, gave 5,814 points and 0.399 px. COLMAP is not deterministic across runs.
+
+### R.3 Requested checks: what was and was not verified
+
+| Check | Result |
+|---|---|
+| Real indoor venue capture used | **No.** None exists (above). |
+| Original media preserved | Yes: source JPEG hashes and the video hash are recorded. The encode is byte-identical to §0. |
+| Metric scale verified | **Not possible.** There are no measured distances or control points. SfM scale is arbitrary. |
+| Gravity alignment verified | **Not run.** It needs PLANE_FITTING on a splat. |
+| Reconstruction quality | **SfM only:** 11/11 registered, 0.398 px. No splat, so no PSNR, SSIM or held-out views. |
+| Splat artifact in the pinned viewer | **Not run.** No splat. The viewer is validated on the synthetic format fixture only (§V). |
+| Navigation from reconstructed geometry, obstacles | **Not run.** `chaya-navmesh 1.0.0 / recastnavigation 1.6.0` is present in the image but received no input. |
+| Semantic objects, search | **Not run.** |
+| Route generation | **Not run.** There is no navigation graph. |
+| Artifacts under one scan version | Partial: one run, one scan id. No version, because the run did not complete. |
+| Logs, metrics, hashes | Yes (R.1). Screenshots: there is nothing visual to capture. |
+| Regression test (item 15) | **Not added, deliberately.** The request permits it only after the real pipeline succeeds, and it has not. |
+
+### R.4 What unblocks a real run
+
+Unchanged from §0.5. All of the following are needed:
+
+1. A real indoor walk-through captured with the Chaya capture flow, plus at least two tape-measured distances (or
+   three surveyed points), recorded at capture time.
+2. A CUDA worker (compute capability ≥ 7.0) built per DEPLOYMENT.md "GPU workers".
+3. Run → `NOT_CALIBRATED` at SEMANTIC_INDEXING → `POST …/coordinate-frames` → retry → route, through the full stack
+   (`e2e_validate.py`).
+
+Only after that run succeeds should a compact regression fixture be cut from it.
+
+### R.5 Harness incident (not a product defect)
+
+The first encode attempt produced a 1-frame video and overwrote 10 of the 11 downloaded photographs.
+
+- **Cause:** `-i "*.JPG"` was passed through Windows PowerShell 5.1 to `docker run … sh -c '…'`. PowerShell 5.1 strips
+  embedded double quotes from native-command arguments, so `sh` expanded the glob, and FFmpeg treated the remaining
+  files as outputs.
+- **Detection:** caught by the frame count (`nb_read_frames=1`) and the file sizes.
+- **Fix:** the photographs were re-downloaded, and their sizes checked against `Content-Length`. The encode now runs
+  from a script file.
+- **Result:** the recorded video is byte-identical to §0's.
+
+---
+
 ## 0. Physical pipeline validation, 2026-09-28
 
 **Goal:** prove capture → FFmpeg → COLMAP/GLOMAP → canonical metric frame → Gaussian/geometry → Recast navmesh →

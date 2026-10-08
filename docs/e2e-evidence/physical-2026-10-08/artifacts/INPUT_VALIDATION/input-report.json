@@ -1,0 +1,21 @@
+{
+  "camera_calibration": null,
+  "camera_calibration_status": "NOT_PROVIDED",
+  "files": [
+    {
+      "artifact_id": "d7e88ffa-d2e3-491c-b505-790f8f9c53cc",
+      "codec": "h264",
+      "duration_seconds": 5.5,
+      "fps": 2.0,
+      "height": 1202,
+      "kind": "RAW_VIDEO",
+      "rotation_degrees": 0.0,
+      "sha256": "f960743de6220499436815d55489bd052323d67160367c2e41301cc8cb6921fb",
+      "size_bytes": 4917797,
+      "width": 1600
+    }
+  ],
+  "images": 0,
+  "metadata_files": 0,
+  "videos": 1
+}

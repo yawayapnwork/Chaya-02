@@ -1,0 +1,54 @@
+[13:05:56] INPUT_VALIDATION ...
+INFO:chaya_worker.job.b824f5ef-1804-4a67-aaa8-f112edd3c003:stage started
+INFO:chaya_worker.job.b824f5ef-1804-4a67-aaa8-f112edd3c003:input downloaded
+INFO:chaya_worker.job.b824f5ef-1804-4a67-aaa8-f112edd3c003:stage finished
+[13:05:56] INPUT_VALIDATION SUCCEEDED  in 0.52 s
+[13:05:56] FFMPEG_PREPROCESS ...
+INFO:chaya_worker.job.55171aeb-7652-48fc-983c-e0a4a9fe2127:stage started
+INFO:chaya_worker.job.55171aeb-7652-48fc-983c-e0a4a9fe2127:input downloaded
+INFO:chaya_worker.job.55171aeb-7652-48fc-983c-e0a4a9fe2127:input downloaded
+INFO:chaya_worker.job.55171aeb-7652-48fc-983c-e0a4a9fe2127:frames extracted
+INFO:chaya_worker.job.55171aeb-7652-48fc-983c-e0a4a9fe2127:stage finished
+[13:05:57] FFMPEG_PREPROCESS SUCCEEDED  in 0.49 s
+[13:05:57] FRAME_QUALITY_FILTER ...
+INFO:chaya_worker.job.423eccc2-8602-4a02-ac76-4fd0b4a374b2:stage started
+INFO:chaya_worker.job.423eccc2-8602-4a02-ac76-4fd0b4a374b2:input downloaded
+INFO:chaya_worker.job.423eccc2-8602-4a02-ac76-4fd0b4a374b2:input downloaded
+INFO:chaya_worker.job.423eccc2-8602-4a02-ac76-4fd0b4a374b2:input downloaded
+INFO:chaya_worker.job.423eccc2-8602-4a02-ac76-4fd0b4a374b2:frame quality filtered
+INFO:chaya_worker.job.423eccc2-8602-4a02-ac76-4fd0b4a374b2:stage finished
+[13:05:57] FRAME_QUALITY_FILTER SUCCEEDED  in 0.27 s
+[13:05:57] PRIVACY_PREPROCESS ...
+INFO:chaya_worker.job.83db8b60-bac5-40ec-9622-4327565bbfc3:stage started
+INFO:chaya_worker.job.83db8b60-bac5-40ec-9622-4327565bbfc3:input downloaded
+INFO:chaya_worker.job.83db8b60-bac5-40ec-9622-4327565bbfc3:input downloaded
+INFO:chaya_worker.job.83db8b60-bac5-40ec-9622-4327565bbfc3:input downloaded
+INFO:chaya_worker.job.83db8b60-bac5-40ec-9622-4327565bbfc3:input downloaded
+INFO:chaya_worker.job.83db8b60-bac5-40ec-9622-4327565bbfc3:input downloaded
+INFO:chaya_worker.job.83db8b60-bac5-40ec-9622-4327565bbfc3:privacy preprocessing done
+INFO:chaya_worker.job.83db8b60-bac5-40ec-9622-4327565bbfc3:stage finished
+[13:06:14] PRIVACY_PREPROCESS SUCCEEDED  in 17.39 s
+[13:06:14] POSE_ESTIMATION ...
+INFO:chaya_worker.job.f945c059-a1b5-4f00-8950-1c31cbe02164:stage started
+INFO:chaya_worker.job.f945c059-a1b5-4f00-8950-1c31cbe02164:input downloaded
+INFO:chaya_worker.job.f945c059-a1b5-4f00-8950-1c31cbe02164:input downloaded
+INFO:chaya_worker.job.f945c059-a1b5-4f00-8950-1c31cbe02164:input downloaded
+INFO:chaya_worker.job.f945c059-a1b5-4f00-8950-1c31cbe02164:input downloaded
+INFO:chaya_worker.job.f945c059-a1b5-4f00-8950-1c31cbe02164:input downloaded
+INFO:chaya_worker.job.f945c059-a1b5-4f00-8950-1c31cbe02164:input downloaded
+INFO:chaya_worker.job.f945c059-a1b5-4f00-8950-1c31cbe02164:stage finished
+[13:06:58] POSE_ESTIMATION SUCCEEDED  in 43.97 s
+[13:06:58] SPLAT_RECONSTRUCTION ...
+INFO:chaya_worker.job.7d6e57ae-4e80-4db4-ad7a-cf8c5ed65183:stage started
+INFO:chaya_worker.job.7d6e57ae-4e80-4db4-ad7a-cf8c5ed65183:input downloaded
+INFO:chaya_worker.job.7d6e57ae-4e80-4db4-ad7a-cf8c5ed65183:input downloaded
+INFO:chaya_worker.job.7d6e57ae-4e80-4db4-ad7a-cf8c5ed65183:input downloaded
+INFO:chaya_worker.job.7d6e57ae-4e80-4db4-ad7a-cf8c5ed65183:input downloaded
+INFO:chaya_worker.job.7d6e57ae-4e80-4db4-ad7a-cf8c5ed65183:input downloaded
+INFO:chaya_worker.job.7d6e57ae-4e80-4db4-ad7a-cf8c5ed65183:input downloaded
+INFO:chaya_worker.job.7d6e57ae-4e80-4db4-ad7a-cf8c5ed65183:input downloaded
+INFO:chaya_worker.job.7d6e57ae-4e80-4db4-ad7a-cf8c5ed65183:input downloaded
+ERROR:chaya_worker.job.7d6e57ae-4e80-4db4-ad7a-cf8c5ed65183:stage failed
+INFO:chaya_worker.job.7d6e57ae-4e80-4db4-ad7a-cf8c5ed65183:stage finished
+[13:06:58] SPLAT_RECONSTRUCTION FAILED DEPENDENCY_UNAVAILABLE in 0.03 s
+result INCOMPLETE; stopped at SPLAT_RECONSTRUCTION; evidence -> /out/physical-pipeline.json
