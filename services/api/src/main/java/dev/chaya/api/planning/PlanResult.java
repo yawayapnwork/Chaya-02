@@ -1,5 +1,6 @@
 package dev.chaya.api.planning;
 
+import io.swagger.v3.oas.annotations.media.Schema;
 import java.util.List;
 
 /** Everything the planner returns. All areas are m2, distances m, times s, angles degrees, percentages 0..100. */
@@ -20,6 +21,7 @@ public record PlanResult(
      * @param type                  CORNER, DOORWAY, OCCLUSION, BOUNDARY or COVERAGE, derived from what the waypoint measurably adds
      * @param expectedCoverageGainM2 covered area this waypoint (and the leg that leads to it) adds, in route order
      */
+    @Schema(name = "PlannedCaptureWaypoint") // NavigationDtos.Waypoint is the published "Waypoint"
     public record Waypoint(int order, double x, double y, double yawDegrees, String type, String reason,
                            double expectedCoverageGainM2, double expectedCoverageGainPercentPoints,
                            double legDistanceMeters, double cumulativeDistanceMeters, double cumulativeCaptureSeconds) {}

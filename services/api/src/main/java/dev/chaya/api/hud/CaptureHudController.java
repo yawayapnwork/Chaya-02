@@ -5,6 +5,9 @@ import dev.chaya.api.hud.CaptureHudDtos.PoseBatchRequest;
 import dev.chaya.api.hud.CaptureHudDtos.QualityBatchRequest;
 import dev.chaya.api.hud.CaptureHudDtos.SetSceneRequest;
 import dev.chaya.api.security.ActorAuthentication;
+import dev.chaya.api.web.ProblemResponse;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import jakarta.validation.Valid;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -34,24 +37,38 @@ public class CaptureHudController {
         this.service = service;
     }
 
+    @Operation(summary = "Set (or replace) the room outline the live HUD measures coverage against",
+            description = "Validated immediately against the planner. See docs/capture-hud.md.")
+    @ApiResponse(responseCode = "204", description = "Stored")
+    @ProblemResponse(status = 409, description = "CAPTURE_NOT_CAPTURING: the capture is no longer being captured")
+    @ProblemResponse(status = 422, description = "Invalid geometry")
     @PutMapping("/scene")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void setScene(@PathVariable UUID venueId, @PathVariable UUID captureId, @Valid @RequestBody SetSceneRequest body) {
         service.setScene(ActorAuthentication.currentActor(), venueId, captureId, body);
     }
 
+    @Operation(summary = "Append device pose samples (position, optional heading) reported while capturing")
+    @ApiResponse(responseCode = "202", description = "Accepted")
+    @ProblemResponse(status = 400, description = "TOO_MANY_SAMPLES in one request, or invalid samples")
     @PostMapping("/pose")
     @ResponseStatus(HttpStatus.ACCEPTED)
     public void addPoses(@PathVariable UUID venueId, @PathVariable UUID captureId, @Valid @RequestBody PoseBatchRequest body) {
         service.addPoses(ActorAuthentication.currentActor(), venueId, captureId, body);
     }
 
+    @Operation(summary = "Append client-computed frame-quality samples (blur/motion/exposure/feature/spacing; never image bytes)")
+    @ApiResponse(responseCode = "202", description = "Accepted")
+    @ProblemResponse(status = 400, description = "TOO_MANY_SAMPLES in one request, or invalid samples")
     @PostMapping("/quality")
     @ResponseStatus(HttpStatus.ACCEPTED)
     public void addQuality(@PathVariable UUID venueId, @PathVariable UUID captureId, @Valid @RequestBody QualityBatchRequest body) {
         service.addQuality(ActorAuthentication.currentActor(), venueId, captureId, body);
     }
 
+    @Operation(summary = "Durable, poll-friendly HUD status",
+            description = "Tracking, coverage, uncovered zones, planned path, quality summary, reshoot "
+                + "recommendations.")
     @GetMapping("/status")
     public HudStatus status(@PathVariable UUID venueId, @PathVariable UUID captureId) {
         return service.status(ActorAuthentication.currentActor(), venueId, captureId);

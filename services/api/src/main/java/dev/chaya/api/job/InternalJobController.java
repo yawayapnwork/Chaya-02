@@ -13,6 +13,9 @@ import dev.chaya.api.security.Actor;
 import dev.chaya.api.security.ActorAuthentication;
 import dev.chaya.api.web.ApiException;
 import dev.chaya.api.web.NotFoundException;
+import dev.chaya.api.web.ProblemResponse;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import java.util.ArrayList;
@@ -112,6 +115,13 @@ public class InternalJobController {
         this.legacy = legacy;
     }
 
+    @Operation(summary = "Worker: claim the oldest queued job of the given stage(s)",
+            description = "Returns a work order (inputs, output prefix, deadline, coordinateFrame and, for "
+                + "REGION_ALIGNMENT/REGION_SPLICE, parentCoordinateFrame, each null when not calibrated) and the lease "
+                + "token to send as X-Chaya-Lease-Token. Service role only.")
+    @ApiResponse(responseCode = "200", description = "Work order")
+    @ApiResponse(responseCode = "204", description = "Nothing queued")
+    @ProblemResponse(status = 400, description = "STAGE_REQUIRED")
     @PostMapping("/claim")
     public ResponseEntity<WorkOrder> claim(@RequestBody ClaimRequest body) {
         List<JobStage> stages = new ArrayList<>();
@@ -125,23 +135,37 @@ public class InternalJobController {
         return pipeline.claim(worker, stages, workerId).map(ResponseEntity::ok).orElseGet(() -> ResponseEntity.noContent().build());
     }
 
+    @Operation(summary = "Worker: extend the lease",
+            description = "keepGoing=false means stop (cancelled, or the lease was lost).")
     @PostMapping("/{jobId}/heartbeat")
     public Heartbeat heartbeat(@PathVariable UUID jobId, @Valid @RequestBody HeartbeatRequest body,
                                @RequestHeader(name = JobLease.HEADER, required = false) String leaseToken) {
         return pipeline.heartbeat(jobId, leaseToken); // keepGoing=false without the current lease: the worker stops
     }
 
+    @Operation(summary = "Worker: submit the stage record",
+            description = "Command, timings, exit status, checksums, log locations, artifacts, error. Verified before "
+                + "it is applied.")
+    @ApiResponse(responseCode = "200", description = "Applied")
+    @ProblemResponse(status = 409, description = "Rejected (ARTIFACT_MISSING, PII_AFTER_PRIVACY, JOB_NOT_RUNNING, "
+            + "ARTIFACT_FRAME_MISMATCH, LEASE_MISMATCH, ...)")
     @PostMapping("/{jobId}/report")
     public void report(@PathVariable UUID jobId, @RequestBody StageReport body,
                        @RequestHeader(name = JobLease.HEADER, required = false) String leaseToken) {
         pipeline.report(ActorAuthentication.currentActor(), jobId, leaseToken, body);
     }
 
+    @Operation(summary = "Worker: complete a job outside a pipeline run (legacy scan job)")
+    @ProblemResponse(status = 409, description = "USE_STAGE_REPORT (the job belongs to a run), LEASE_MISMATCH, "
+            + "INVALID_JOB_TRANSITION")
     @PostMapping("/{jobId}/complete")
     public void complete(@PathVariable UUID jobId, @RequestHeader(name = JobLease.HEADER, required = false) String leaseToken) {
         legacy.complete(ActorAuthentication.currentActor(), jobId, leaseToken);
     }
 
+    @Operation(summary = "Worker: fail a job outside a pipeline run (legacy scan job)")
+    @ProblemResponse(status = 409, description = "USE_STAGE_REPORT (the job belongs to a run), LEASE_MISMATCH, "
+            + "INVALID_JOB_TRANSITION")
     @PostMapping("/{jobId}/fail")
     public void fail(@PathVariable UUID jobId, @Valid @RequestBody FailRequest body,
                      @RequestHeader(name = JobLease.HEADER, required = false) String leaseToken) {

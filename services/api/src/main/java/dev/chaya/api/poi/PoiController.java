@@ -3,6 +3,7 @@ package dev.chaya.api.poi;
 import dev.chaya.api.poi.PoiService.Poi;
 import dev.chaya.api.poi.PoiService.PoiData;
 import dev.chaya.api.security.ActorAuthentication;
+import io.swagger.v3.oas.annotations.Operation;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -40,6 +41,9 @@ public class PoiController {
     }
 
     /** scanVersionId: only the POIs of that FINALIZED scan version, each at its position in that version's frame. */
+    @Operation(summary = "List the venue's POIs",
+            description = "scanVersionId: only the POIs of that FINALIZED scan version, each at its position in that "
+                + "version's frame. all=true (without scanVersionId): every POI regardless of version.")
     @GetMapping
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR','VIEWER','PUBLIC_VIEWER')")
     public List<Poi> list(@PathVariable UUID venueId, @RequestParam(required = false) UUID scanVersionId,
@@ -50,12 +54,14 @@ public class PoiController {
         return pois.list(ActorAuthentication.currentActor(), venueId, scanVersionId);
     }
 
+    @Operation(summary = "One POI")
     @GetMapping("/{poiId}")
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR','VIEWER','PUBLIC_VIEWER')")
     public Poi get(@PathVariable UUID venueId, @PathVariable UUID poiId) {
         return pois.get(ActorAuthentication.currentActor(), venueId, poiId);
     }
 
+    @Operation(summary = "Create a POI (admin, venue-manager)")
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER')")
@@ -63,12 +69,14 @@ public class PoiController {
         return pois.create(ActorAuthentication.currentActor(), venueId, body.toData());
     }
 
+    @Operation(summary = "Replace a POI (admin, venue-manager)")
     @PutMapping("/{poiId}")
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER')")
     public Poi update(@PathVariable UUID venueId, @PathVariable UUID poiId, @Valid @RequestBody PoiRequest body) {
         return pois.update(ActorAuthentication.currentActor(), venueId, poiId, body.toData());
     }
 
+    @Operation(summary = "Delete a POI (admin, venue-manager)")
     @DeleteMapping("/{poiId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER')")

@@ -8,6 +8,11 @@ import dev.chaya.api.security.Actor;
 import dev.chaya.api.security.ActorAuthentication;
 import dev.chaya.api.storage.ObjectStore;
 import dev.chaya.api.storage.VerifyingInputStream.IntegrityException;
+import dev.chaya.api.web.ProblemResponse;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import java.io.InputStream;
 import java.util.List;
 import java.util.UUID;
@@ -44,18 +49,21 @@ public class ReconstructionController {
         this.audit = audit;
     }
 
+    @Operation(summary = "The floor's reconstruction versions, newest first")
     @GetMapping("/venues/{venueId}/floors/{floorId}/reconstructions")
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR','VIEWER','PUBLIC_VIEWER')")
     public List<ReconstructionVersion> list(@PathVariable UUID venueId, @PathVariable UUID floorId) {
         return reconstructions.listForFloor(ActorAuthentication.currentActor(), venueId, floorId);
     }
 
+    @Operation(summary = "The floor's current reconstruction (its current FINALIZED scan version)")
     @GetMapping("/venues/{venueId}/floors/{floorId}/reconstructions/latest")
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR','VIEWER','PUBLIC_VIEWER')")
     public Reconstruction latest(@PathVariable UUID venueId, @PathVariable UUID floorId) {
         return reconstructions.latestForFloor(ActorAuthentication.currentActor(), venueId, floorId);
     }
 
+    @Operation(summary = "One reconstruction run and its artifacts")
     @GetMapping("/venues/{venueId}/reconstructions/{runId}")
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR','VIEWER','PUBLIC_VIEWER')")
     public Reconstruction get(@PathVariable UUID venueId, @PathVariable UUID runId) {
@@ -63,12 +71,21 @@ public class ReconstructionController {
     }
 
     /** A FINALIZED ScanVersion's reconstruction: exactly its pinned artifacts and its recorded coordinate frame. */
+    @Operation(summary = "A FINALIZED scan version's reconstruction",
+            description = "Exactly its pinned artifacts and its recorded coordinate frame.")
+    @ProblemResponse(status = 409, description = "VERSION_NOT_FINALIZED")
     @GetMapping("/venues/{venueId}/scan-versions/{scanVersionId}/reconstruction")
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR','VIEWER','PUBLIC_VIEWER')")
     public Reconstruction version(@PathVariable UUID venueId, @PathVariable UUID scanVersionId) {
         return reconstructions.getVersion(ActorAuthentication.currentActor(), venueId, scanVersionId);
     }
 
+    @Operation(summary = "Stream one artifact pinned by a scan version",
+            description = "Bytes are verified against the registered SHA-256 while streaming; a mismatch ends the "
+                + "response early.")
+    @ApiResponse(responseCode = "200", description = "The artifact's bytes; Content-Type is its registered type",
+        content = @Content(mediaType = "*/*", schema = @Schema(type = "string", format = "binary")))
+    @ProblemResponse(status = 400, description = "BAD_REQUEST: unknown viewer artifact kind")
     @GetMapping("/venues/{venueId}/scan-versions/{scanVersionId}/artifacts/{kind}")
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR','VIEWER','PUBLIC_VIEWER')")
     public ResponseEntity<StreamingResponseBody> versionArtifact(@PathVariable UUID venueId, @PathVariable UUID scanVersionId,
@@ -79,6 +96,12 @@ public class ReconstructionController {
 
     /** Streams the artifact bytes through the backend rather than a presigned S3 URL, so venue/org scope and
      * the contains_pii check are enforced on every read, including for a short-lived public viewer token. */
+    @Operation(summary = "Stream one artifact of a reconstruction run",
+            description = "Through the backend, not a presigned URL, so venue/org scope and the contains_pii check "
+                + "apply to every read. Bytes are verified against the registered SHA-256 while streaming.")
+    @ApiResponse(responseCode = "200", description = "The artifact's bytes; Content-Type is its registered type",
+        content = @Content(mediaType = "*/*", schema = @Schema(type = "string", format = "binary")))
+    @ProblemResponse(status = 400, description = "BAD_REQUEST: unknown viewer artifact kind")
     @GetMapping("/venues/{venueId}/reconstructions/{runId}/artifacts/{kind}")
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR','VIEWER','PUBLIC_VIEWER')")
     public ResponseEntity<StreamingResponseBody> artifact(@PathVariable UUID venueId, @PathVariable UUID runId, @PathVariable String kind) {

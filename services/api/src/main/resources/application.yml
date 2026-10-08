@@ -145,3 +145,14 @@ management:
         # balancers use.
         readiness:
           include: readinessState,db,dependencies
+
+# The OpenAPI document is generated from the controllers (dev.chaya.api.web.OpenApiConfig) and served, to authenticated
+# callers only, at /api/v1/openapi (JSON) and /api/v1/openapi.yaml. packages/contracts/openapi/v1.yaml is its committed
+# output; OpenApiContractTest fails when the two differ.
+springdoc:
+  api-docs:
+    path: /api/v1/openapi
+  paths-to-match: /api/**
+  writer-with-order-by-keys: true       # stable output, so the committed contract diffs cleanly
+  override-with-generic-response: false # error responses are added by OpenApiConfig from the real handlers and filters
+  default-produces-media-type: application/json

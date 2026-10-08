@@ -2,6 +2,7 @@ package dev.chaya.api.venue;
 
 import dev.chaya.api.security.ActorAuthentication;
 import dev.chaya.api.venue.VenueService.Venue;
+import io.swagger.v3.oas.annotations.Operation;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
@@ -31,24 +32,28 @@ public class VenueController {
         this.venues = venues;
     }
 
+    @Operation(summary = "List the venues the caller can see")
     @GetMapping
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR','VIEWER')")
     public List<Venue> list() {
         return venues.list(ActorAuthentication.currentActor());
     }
 
+    @Operation(summary = "Create a venue (organization admin)")
     @PostMapping
     @PreAuthorize("hasRole('ADMIN')")
     public Venue create(@Valid @RequestBody CreateVenue body) {
         return venues.create(ActorAuthentication.currentActor(), body.slug(), body.name(), body.timezone());
     }
 
+    @Operation(summary = "One venue")
     @GetMapping("/{venueId}")
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR','VIEWER','PUBLIC_VIEWER')")
     public Venue get(@PathVariable UUID venueId) {
         return venues.get(ActorAuthentication.currentActor(), venueId);
     }
 
+    @Operation(summary = "Rename a venue or change its timezone (admin, venue-manager)")
     @PatchMapping("/{venueId}")
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER')")
     public Venue update(@PathVariable UUID venueId, @RequestBody UpdateVenue body) {

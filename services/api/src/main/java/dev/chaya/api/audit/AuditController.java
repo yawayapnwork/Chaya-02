@@ -1,6 +1,7 @@
 package dev.chaya.api.audit;
 
 import dev.chaya.api.security.ActorAuthentication;
+import io.swagger.v3.oas.annotations.Operation;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -25,6 +26,7 @@ public class AuditController {
         this.jdbc = jdbc;
     }
 
+    @Operation(summary = "The organization's audit trail, newest first (query: limit<=500)")
     @GetMapping
     @PreAuthorize("hasRole('ADMIN')")
     public List<Entry> list(@RequestParam(defaultValue = "100") int limit) {

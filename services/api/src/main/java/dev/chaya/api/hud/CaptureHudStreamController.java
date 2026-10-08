@@ -3,6 +3,10 @@ package dev.chaya.api.hud;
 import dev.chaya.api.capture.CaptureService;
 import dev.chaya.api.security.Actor;
 import dev.chaya.api.security.ActorAuthentication;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import java.util.UUID;
 import org.springframework.http.MediaType;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -30,6 +34,11 @@ public class CaptureHudStreamController {
         this.broadcaster = broadcaster;
     }
 
+    @Operation(summary = "The HUD status, pushed over Server-Sent Events as it changes",
+            description = "Each event's data is a HudStatus; comment heartbeats keep the connection open. The server "
+                + "closes the stream after chaya.hud.emitter-timeout-ms and the client reconnects.")
+    @ApiResponse(responseCode = "200", description = "text/event-stream of HudStatus",
+        content = @Content(mediaType = "text/event-stream", schema = @Schema(implementation = CaptureHudDtos.HudStatus.class)))
     @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream(@PathVariable UUID venueId, @PathVariable UUID captureId) {
         Actor actor = ActorAuthentication.currentActor();

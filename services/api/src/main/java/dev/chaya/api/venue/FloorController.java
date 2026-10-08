@@ -4,6 +4,7 @@ import dev.chaya.api.audit.AuditService;
 import dev.chaya.api.security.Actor;
 import dev.chaya.api.security.ActorAuthentication;
 import dev.chaya.api.security.TenantGuard;
+import io.swagger.v3.oas.annotations.Operation;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import java.util.List;
@@ -40,6 +41,7 @@ public class FloorController {
         this.audit = audit;
     }
 
+    @Operation(summary = "List floors of a venue")
     @GetMapping
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR','VIEWER','PUBLIC_VIEWER')")
     @Transactional(readOnly = true)
@@ -51,6 +53,7 @@ public class FloorController {
             .query((rs, i) -> new Floor(rs.getObject("id", UUID.class), rs.getInt("level"), rs.getString("name"))).list();
     }
 
+    @Operation(summary = "Create a floor (admin, venue-manager)")
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER')")

@@ -1,5 +1,6 @@
 package dev.chaya.api.health;
 
+import io.swagger.v3.oas.annotations.Operation;
 import org.springframework.boot.info.BuildProperties;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -17,6 +18,7 @@ public class VersionController {
         this.build = build;
     }
 
+    @Operation(summary = "Build and API version")
     @GetMapping("/version")
     public VersionInfo version() {
         return new VersionInfo(build.getName(), build.getVersion(), API_VERSION);

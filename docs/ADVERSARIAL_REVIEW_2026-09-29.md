@@ -412,7 +412,7 @@ conditions; **MEDIUM** edge-case errors or misleading output; **LOW** hygiene.
 | S-2, S-8 | Open. |
 | S-6, S-7 | Fixed on 2026-10-03 after this review (see §6); local tests only. |
 | O-1, O-3 | Open. |
-| D-6 OpenAPI | Open. |
+| D-6 OpenAPI | Fixed on 2026-10-08 after this review (see §15); local tests only. |
 
 ---
 
@@ -674,3 +674,32 @@ This section was added after the review; the sections above are unchanged.
   production compose file state that `api` runs as exactly one instance.
 - **Still open:** nothing *enforces* one instance; `docker compose up --scale api=2` would start a second. Scaling out
   needs the shared limiter and HUD store plus advisory locks for the sweeps (D-3's code half).
+
+## 15. Addendum (2026-10-08): D-6
+
+This section was added after the review; the sections above are unchanged.
+
+- **D-6 fixed.** `packages/contracts/openapi/v1.yaml` is no longer written by hand. springdoc generates it from the
+  controllers (`springdoc-openapi-starter-webmvc-api`), and the committed file is that output. The API serves the
+  document to authenticated callers at `/api/v1/openapi`. At the parent commit the file had 37 paths and 43
+  operations. The controllers declare 87 method mappings, which are 87 operations on 69 paths. The generated
+  document has exactly those 87 operations on 69 paths, and no endpoint is hidden.
+- **Derived, not duplicated.** Security requirements come from `SecurityConfig.isPublic`, which is the same list the
+  filter chain uses. The viewer-token scheme and `x-chaya-roles` come from `@PreAuthorize`. The common error responses
+  come from the filters and the exception handler that produce them; all are RFC 9457 problems, as served.
+  Operation-specific error codes sit on each handler (`@ProblemResponse`).
+- **Defects the hand-written file had.** Its `Health` schema lacked `identityProvider`, `malwareScanner`, `processing`
+  and `checkedAt` and gave `status` as UP/DOWN only (DEGRADED exists). It also had no request or response schema for
+  any feature endpoint. Generation exposed one more defect: two different `Waypoint` records (the navigation route's
+  and the capture planner's) would have shared one schema. The planner's is now `PlannedCaptureWaypoint`, and
+  generation fails on any future schema-name collision.
+- **Required test.** `OpenApiContractTest` fails when a controller mapping is missing from the document, when an
+  operation of the committed contract disappears, when the committed file drifts from the generated document, when an
+  unauthenticated call is not answered 401 exactly where the document requires credentials, and when real responses
+  of version, health, venues, floors and the ops overview/access carry properties their schemas lack or omit required
+  ones. `apps/web/lib/api-contract.test.ts` fails when the web client calls a path missing from the contract.
+- **Residual.** Schemas mark as required only fields with a bean-validation constraint, so most response properties are
+  optional in the document even when the server always sends them. Free-form JSON fields (`Map<String, Object>`, e.g.
+  `CaptureView.device`, `StageReport.command`) are open objects. Operation-specific error codes are written by hand
+  next to each handler and are not checked against the codes the services throw. The iOS and worker clients are not
+  checked automatically; their paths were compared by hand on 2026-10-08, and all exist.

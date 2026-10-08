@@ -3,6 +3,7 @@ package dev.chaya.api.security;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Base64;
+import java.util.List;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -16,6 +17,7 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.context.SecurityContextHolderFilter;
+import org.springframework.util.AntPathMatcher;
 
 /**
  * Two ways in: a Keycloak-issued JWT (Authorization: Bearer) or a public-viewer token
@@ -32,6 +34,20 @@ public class SecurityConfig {
 
     static final String METRICS_USER = "prometheus";
 
+    /** Reachable without credentials, any method. The OpenAPI document reads these too (OpenApiConfig#isPublic). */
+    public static final List<String> PUBLIC_PATHS = List.of("/api/v1/health", "/api/v1/version", "/actuator/health/**");
+
+    /** Reachable without credentials by POST only: the link secret in the body is the credential. */
+    public static final List<String> PUBLIC_POST_PATHS = List.of("/api/v1/public/viewer-token");
+
+    private static final AntPathMatcher PATHS = new AntPathMatcher();
+
+    /** Whether the filter chain lets this request through without authentication. */
+    public static boolean isPublic(HttpMethod method, String path) {
+        return PUBLIC_PATHS.stream().anyMatch(p -> PATHS.match(p, path))
+            || HttpMethod.POST.equals(method) && PUBLIC_POST_PATHS.stream().anyMatch(p -> PATHS.match(p, path));
+    }
+
     @Bean
     SecurityFilterChain securityFilterChain(HttpSecurity http, PublicViewerAuthenticator viewerAuthenticator,
                                             ObjectProvider<RateLimiter> rateLimiter,
@@ -42,8 +58,8 @@ public class SecurityConfig {
             .csrf(AbstractHttpConfigurer::disable) // stateless token API, no cookie sessions
             .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(a -> a
-                .requestMatchers("/api/v1/health", "/api/v1/version", "/actuator/health/**").permitAll()
-                .requestMatchers(HttpMethod.POST, "/api/v1/public/viewer-token").permitAll()
+                .requestMatchers(PUBLIC_PATHS.toArray(String[]::new)).permitAll()
+                .requestMatchers(HttpMethod.POST, PUBLIC_POST_PATHS.toArray(String[]::new)).permitAll()
                 .requestMatchers("/actuator/prometheus").access((auth, ctx) ->
                     new AuthorizationDecision(metricsCredentialsMatch(ctx.getRequest().getHeader("Authorization"), metricsPassword)))
                 .requestMatchers("/api/v1/internal/**").hasRole(Role.SERVICE.name())

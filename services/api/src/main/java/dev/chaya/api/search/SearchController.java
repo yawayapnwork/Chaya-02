@@ -2,6 +2,7 @@ package dev.chaya.api.search;
 
 import dev.chaya.api.search.SearchDtos.SearchResponse;
 import dev.chaya.api.security.ActorAuthentication;
+import io.swagger.v3.oas.annotations.Operation;
 import java.util.UUID;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -23,6 +24,10 @@ public class SearchController {
     /** q: natural-language query (required). floorId: restrict to one floor. topK: result count (server
      * clamps to chaya.search.max-top-k). accessible: only POIs whose attributes mark them accessible. scanVersionId: only
      * the POIs of that FINALIZED scan version. */
+    @Operation(summary = "Semantic POI search",
+            description = "q: natural-language query (required). floorId: restrict to one floor. topK: result count "
+                + "(clamped to chaya.search.max-top-k). accessible: only POIs marked accessible. scanVersionId: only the "
+                + "POIs of that FINALIZED scan version. Rate limited per caller (chaya.rate-limit.search-per-minute).")
     @GetMapping
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR','VIEWER','PUBLIC_VIEWER')")
     public SearchResponse search(@PathVariable UUID venueId, @RequestParam String q, @RequestParam(required = false) UUID floorId,

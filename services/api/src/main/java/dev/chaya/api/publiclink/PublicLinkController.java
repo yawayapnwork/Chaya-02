@@ -4,6 +4,8 @@ import dev.chaya.api.publiclink.PublicViewerService.CreatedLink;
 import dev.chaya.api.publiclink.PublicViewerService.LinkInfo;
 import dev.chaya.api.publiclink.PublicViewerService.ViewerToken;
 import dev.chaya.api.security.ActorAuthentication;
+import dev.chaya.api.web.ProblemResponse;
+import io.swagger.v3.oas.annotations.Operation;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -35,6 +37,10 @@ public class PublicLinkController {
         this.links = links;
     }
 
+    @Operation(summary = "Create a public viewer link",
+            description = "The response carries the link secret once; it is never retrievable again. ttl is an "
+                + "ISO-8601 duration up to chaya.security.public-link-max-ttl.")
+    @ProblemResponse(status = 400, description = "BAD_REQUEST: ttl not positive or above the maximum, or a failed validation")
     @PostMapping("/venues/{venueId}/public-links")
     @ResponseStatus(HttpStatus.CREATED)
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER')")
@@ -42,12 +48,14 @@ public class PublicLinkController {
         return links.createLink(ActorAuthentication.currentActor(), venueId, body.label(), body.ttl());
     }
 
+    @Operation(summary = "List the venue's public viewer links (never their secrets)")
     @GetMapping("/venues/{venueId}/public-links")
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER')")
     public List<LinkInfo> list(@PathVariable UUID venueId) {
         return links.listLinks(ActorAuthentication.currentActor(), venueId);
     }
 
+    @Operation(summary = "Revoke a public viewer link")
     @DeleteMapping("/venues/{venueId}/public-links/{linkId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER')")
@@ -56,6 +64,10 @@ public class PublicLinkController {
     }
 
     /** Unauthenticated by design: the link secret is the credential. */
+    @Operation(summary = "Exchange a public link secret for a short-lived viewer token",
+            description = "Unauthenticated by design: the secret is the credential. Send the token as "
+                + "X-Chaya-Viewer-Token.")
+    @ProblemResponse(status = 404, description = "NOT_FOUND: unknown, revoked or expired link")
     @PostMapping("/public/viewer-token")
     public ViewerToken exchange(@Valid @RequestBody Exchange body) {
         return links.exchange(body.secret());
