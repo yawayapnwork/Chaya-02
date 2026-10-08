@@ -464,11 +464,69 @@ PKCE sign-in as the venue manager.
 - **REAL VENUE RECONSTRUCTION VALIDATION** needs a real reconstruction: a GPU worker and a real, measured capture
   (section 0.5).
 - **Route overlay.** It needs `NAVIGATION_BAKING` on a real, calibrated reconstruction; no navmesh exists here.
-- **Integrity check.** The viewer does not check the downloaded bytes against the `sha256` the API returns. The tests
-  above do that check themselves. A mismatch in the app today would surface only as a load error or a wrong scene.
-  This is a product gap and was left open.
+- **Integrity check.** ~~The viewer does not check the downloaded bytes against the `sha256` the API returns.~~
+  Fixed 2026-10-08 (F-1, ADVERSARIAL_REVIEW_2026-09-29 §16): the viewer checks size, SHA-256 and format before loading.
 - **Headless rendering only.** Rendering was measured in headless Chromium with software WebGL. No physical GPU or
   mobile browser was used.
+
+### V.6 Real-artifact viewer validation, attempted 2026-10-08: NOT POSSIBLE
+
+**Goal:** load a `.ksplat` produced by the actual reconstruction pipeline into the pinned viewer, with no handcrafted
+fixture as primary proof. The viewer is `@mkkellogg/gaussian-splats-3d` **0.4.7**, exact pin and lockfile integrity
+`sha512-0vy9/i9s…A5RWRA==`.
+
+**Result: no such artifact exists, so the validation stops at task 1, "obtain a real .ksplat".** Checked on
+2026-10-08:
+
+| Where | Found |
+|---|---|
+| Workstation (`C:\Dev`, Downloads), `*.ksplat` | Only `packages/contracts/fixtures/ksplat/scene.ksplat` and `fixtures/viewer-scene/scene.ksplat`. Both are the production exporter's output **from synthetic, generated PLYs** (their `fixture.json` / generator scripts say so). Excluded as primary proof. |
+| Full-stack MinIO volume `chaya-e2e_minio-data` | Buckets `chaya-raw` and `chaya-derived` are **empty**. |
+| Pipeline runs (§R, §0, §4.2) | Every run stops at `SPLAT_RECONSTRUCTION` with `DEPENDENCY_UNAVAILABLE` (no CUDA). `ARTIFACT_GENERATION` has never run on a trained splat. |
+
+**Not done, deliberately:**
+
+- **Training a splat on CPU.** The stage has no CPU path by design.
+- **Exporting COLMAP's sparse points as "a reconstruction".** The stage defines an unoptimised SfM seed as not a
+  reconstruction.
+- **Editing any splat.**
+
+Each would substitute for the missing stage. No regression fixture was added, because there is no real artifact to
+derive one from.
+
+**Procedure once a GPU run produces a KSPLAT** (from §R.4: a measured indoor capture on a CUDA worker):
+
+1. **Identity.** From `GET …/reconstructions/{runId}` record the KSPLAT `ArtifactRef`: `sha256`, `sizeBytes`,
+   `format` (V31 headers: version, compression level, SH degree, splat count; it records **no bounds**, so bounds come
+   from decoding, step 2), `scanVersionId` and `coordinateFrameId`.
+   - Re-hash the object from MinIO.
+   - Check that the frame is ACTIVE and belongs to that version.
+2. **Source correspondence.** Decode the KSPLAT and compare it with the SPLAT / SPLAT_CLEAN PLY it came from:
+   - Gaussian count equal;
+   - per-Gaussian position within the format's quantisation;
+   - scale and rotation (as covariance, sign-free);
+   - colour `SH_C0·f_dc+0.5` within one byte;
+   - opacity `sigmoid(o)` within one byte;
+   - axis-aligned bounds equal to the PLY's, and finite.
+
+   `apps/web/lib/ksplat-compat.test.ts` already does this against the library's own PLY loader. Point it at the real
+   pair.
+3. **Viewer.** Load it through the authenticated app (`e2e/ksplat-viewer.spec.ts` path, real bytes, not the fixture).
+   - Assert the splat count from `getSplatMesh().getSplatCount()`.
+   - Project 3–5 identifiable reconstruction points (e.g. door-frame corners, picked from SfM `points3D` and mapped
+     through the canonical similarity) with the viewer camera. Check that the rendered pixels there are
+     non-background and colour-consistent with the source frames.
+   - Check +Z up: the floor plane's normal maps to screen-up at a level camera.
+   - Check handedness: a known left/right pair keeps its order from the matching training camera pose.
+4. **Manual.** Take screenshots from 2–3 training camera poses side by side with the corresponding (privacy-masked)
+   source frames.
+5. **Regression fixture.** Only if a real venue's licence allows redistribution, crop a compact deterministic subset
+   (e.g. ≤ 20k Gaussians in one region) with the production exporter, plus a `fixture.json` naming the source run and
+   SHA-256.
+   - If the venue cannot be redistributed (expected for a private venue), the fixture **cannot** be committed.
+   - Then CI must regenerate the artifact on a GPU runner (gpu-marked job: capture → … → ARTIFACT_GENERATION, then
+     steps 2–3).
+   - Until such a runner exists, this check is **not reproducible in CI**, and must not be described as such.
 
 ---
 
