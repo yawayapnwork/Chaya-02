@@ -5,10 +5,10 @@ name: python
 
 on:
   pull_request:
-    paths: ["services/reconstruction/**", "services/vision/**", "packages/contracts/fixtures/**", "scripts/ci/check-fixtures.sh", ".github/workflows/python.yml"]
+    paths: ["services/reconstruction/**", "services/vision/**", "packages/contracts/fixtures/**", "packages/contracts/viewer/**", "scripts/ci/check-fixtures.sh", ".github/workflows/python.yml"]
   push:
     branches: [main]
-    paths: ["services/reconstruction/**", "services/vision/**", "packages/contracts/fixtures/**", "scripts/ci/check-fixtures.sh", ".github/workflows/python.yml"]
+    paths: ["services/reconstruction/**", "services/vision/**", "packages/contracts/fixtures/**", "packages/contracts/viewer/**", "scripts/ci/check-fixtures.sh", ".github/workflows/python.yml"]
   workflow_dispatch:
 
 permissions:

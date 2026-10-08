@@ -93,6 +93,9 @@ final class Fixtures {
         return version;
     }
 
+    static final String KSPLAT_METADATA = """
+        {"format":"ksplat","contract":"@mkkellogg/gaussian-splats-3d@0.4.7","version":"0.1","compressionLevel":0,        "sphericalHarmonicsDegree":0,"sectionCount":1,"splatCount":1}""";
+
     /** A processing_artifact row of `kind` published by a SUCCEEDED `stage` of `run` (its object is never read). */
     UUID publishedArtifact(UUID org, UUID venue, UUID scan, UUID run, String stage, String kind) {
         UUID job = jdbc.sql("""
@@ -107,9 +110,12 @@ final class Fixtures {
             .param("o", org).param("v", venue).param("r", run).param("j", job).param("st", stage).query(UUID.class).single();
         return jdbc.sql("""
                 INSERT INTO processing_artifact (organization_id, venue_id, scan_id, job_id, stage, bucket, object_key,
-                    checksum_sha256, content_type, size_bytes, kind, stage_run_id, contains_pii, partial)
-                VALUES (:o, :v, :s, :j, :st, 'chaya-derived-test', :key, :sha, 'application/octet-stream', 1, :k, :sr, false, false)
+                    checksum_sha256, content_type, size_bytes, kind, stage_run_id, contains_pii, partial, format_metadata)
+                VALUES (:o, :v, :s, :j, :st, 'chaya-derived-test', :key, :sha, 'application/octet-stream', 1, :k, :sr, false, false,
+                    CAST(:fmt AS jsonb))
                 RETURNING id""")
+            // A KSPLAT is only ever published with its validated headers (V31); the row says what a 1-splat file's would.
+            .param("fmt", kind.equals("KSPLAT") ? KSPLAT_METADATA : null)
             .param("o", org).param("v", venue).param("s", scan).param("j", job).param("st", stage)
             .param("key", "org/" + org + "/venue/" + venue + "/fixture/" + run + "/" + stage + "/" + kind).param("sha", "0".repeat(64)).param("k", kind).param("sr", stageRun)
             .query(UUID.class).single();

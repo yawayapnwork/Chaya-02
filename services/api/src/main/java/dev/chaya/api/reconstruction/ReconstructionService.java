@@ -59,7 +59,26 @@ public class ReconstructionService {
     public record ReconstructionVersion(UUID runId, UUID floorId, Instant generatedAt, String runStatus, String runQuality,
                                         UUID scanVersionId, Integer versionNumber, UUID parentVersionId, boolean current) {}
 
-    public record ArtifactRef(String kind, String contentType, long sizeBytes, String sha256, String url) {}
+    /** What the API validated when it published the artifact (V31): for a KSPLAT, its headers against the viewer contract
+     * (packages/contracts/viewer/ksplat-contract.json). Null for other kinds and for a KSPLAT published before V31. */
+    public record ArtifactFormat(String format, String contract, String version, int compressionLevel,
+                                 int sphericalHarmonicsDegree, int sectionCount, long splatCount) {}
+
+    /** sizeBytes and sha256 are what the bytes at url must be: a viewer refuses anything else (fail closed). */
+    public record ArtifactRef(String kind, String contentType, long sizeBytes, String sha256, String url, ArtifactFormat format) {}
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper FORMAT_JSON = new com.fasterxml.jackson.databind.ObjectMapper();
+
+    private static ArtifactFormat format(String json) {
+        if (json == null) {
+            return null;
+        }
+        try {
+            return FORMAT_JSON.readValue(json, ArtifactFormat.class);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalStateException("corrupt processing_artifact.format_metadata", e);
+        }
+    }
 
     /** coordinateFrame: how the artifacts (always in their reconstruction frame: arbitrary scale/rotation/origin) are placed
      * in canonical metres; a viewer must not overlay canonical POIs or routes without a canonical one.
@@ -145,7 +164,7 @@ public class ReconstructionService {
         }
         Row row = runRow(actor, venueId, runId);
         List<ArtifactRef> artifacts = jdbc.sql("""
-                SELECT a.kind, a.size_bytes, a.checksum_sha256
+                SELECT a.kind, a.size_bytes, a.checksum_sha256, a.format_metadata::text AS format_metadata
                   FROM processing_artifact a
                   JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id
                  WHERE sr.run_id = :run AND sr.status = 'SUCCEEDED' AND a.kind IN (:kinds) AND a.contains_pii = false
@@ -154,7 +173,8 @@ public class ReconstructionService {
             .param("run", runId).param("kinds", VIEWER_ARTIFACT_KINDS)
             .query((rs, i) -> new ArtifactRef(rs.getString("kind"), SERVED_CONTENT_TYPES.get(rs.getString("kind")), rs.getLong("size_bytes"),
                 rs.getString("checksum_sha256"),
-                "/api/v1/venues/" + venueId + "/reconstructions/" + runId + "/artifacts/" + rs.getString("kind")))
+                "/api/v1/venues/" + venueId + "/reconstructions/" + runId + "/artifacts/" + rs.getString("kind"),
+                format(rs.getString("format_metadata"))))
             .list();
         requireViewerAsset(artifacts);
         return new Reconstruction(runId, row.scanId(), row.floorId(), row.generatedAt(), row.status(), row.quality(), artifacts,
@@ -167,7 +187,7 @@ public class ReconstructionService {
         ScanVersionService.Scope scope = versions.requireFinalized(actor, venueId, scanVersionId);
         Row row = runRow(actor, venueId, scope.runId());
         List<ArtifactRef> artifacts = jdbc.sql("""
-                SELECT pin.kind, a.size_bytes, a.checksum_sha256
+                SELECT pin.kind, a.size_bytes, a.checksum_sha256, a.format_metadata::text AS format_metadata
                   FROM scan_version_artifact pin
                   JOIN processing_artifact a ON a.id = pin.artifact_id
                   JOIN pipeline_stage_run asr ON asr.id = a.stage_run_id
@@ -179,7 +199,8 @@ public class ReconstructionService {
             .param("sv", scanVersionId).param("kinds", VIEWER_ARTIFACT_KINDS).param("anonymous", anonymous(actor))
             .query((rs, i) -> new ArtifactRef(rs.getString("kind"), SERVED_CONTENT_TYPES.get(rs.getString("kind")), rs.getLong("size_bytes"),
                 rs.getString("checksum_sha256"),
-                "/api/v1/venues/" + venueId + "/scan-versions/" + scanVersionId + "/artifacts/" + rs.getString("kind")))
+                "/api/v1/venues/" + venueId + "/scan-versions/" + scanVersionId + "/artifacts/" + rs.getString("kind"),
+                format(rs.getString("format_metadata"))))
             .list();
         requireViewerAsset(artifacts);
         return new Reconstruction(scope.runId(), row.scanId(), row.floorId(), row.generatedAt(), row.status(), row.quality(),

@@ -22,7 +22,8 @@ class ReconstructionArtifactServingTest extends PipelineTestSupport {
         Started s = startRun();
         runThrough("PLANE_FITTING");
         JsonNode generation = claimExpecting("ARTIFACT_GENERATION");
-        Map<String, Object> ksplat = artifact(generation, "scene.ksplat", "KSPLAT", false, false, "<script>alert(1)</script>");
+        byte[] model = ksplat("served");
+        Map<String, Object> ksplat = artifact(generation, "scene.ksplat", "KSPLAT", false, false, model);
         ksplat.put("contentType", "text/html");
         Map<String, Object> manifest = artifact(generation, "manifest.json", "ARTIFACT_MANIFEST", false, false, "{}");
         manifest.put("contentType", "image/svg+xml");
@@ -37,6 +38,6 @@ class ReconstructionArtifactServingTest extends PipelineTestSupport {
         mvc.perform(asyncDispatch(started)).andExpect(status().isOk())
             .andExpect(header().string("Content-Type", "application/octet-stream"))
             .andExpect(header().string("X-Content-Type-Options", "nosniff"))
-            .andExpect(content().string("<script>alert(1)</script>"));
+            .andExpect(content().bytes(model));
     }
 }

@@ -15,8 +15,8 @@ import tarfile
 from pathlib import Path
 
 from .. import __version__
-from ..contract import ArtifactSpec, StageContext, StageResult
-from ..ksplat import write_ksplat
+from ..contract import ArtifactSpec, StageContext, StageError, StageResult
+from ..ksplat import MAX_BYTES, KsplatInvalid, encoded_size, validate_file, write_ksplat
 from ..manifest import build_manifest
 from ..ply import read_ply
 from .base import command_record, sha256_file, venue_cloud, write_json
@@ -33,7 +33,17 @@ class ArtifactGeneration:
         cloud = read_ply(splats[0].path)
         s = ctx.settings
         ksplat_path = ctx.workdir / "scene.ksplat"
+        if encoded_size(len(cloud)) > MAX_BYTES:  # known before encoding; the API and the viewer would refuse it anyway
+            raise StageError(f"{len(cloud)} Gaussians make a {encoded_size(len(cloud))}-byte .ksplat; the viewer limit is "
+                             f"{MAX_BYTES} bytes", code="KSPLAT_TOO_LARGE",
+                             details={"gaussian_count": len(cloud), "max_bytes": MAX_BYTES})
         write_ksplat(cloud, ksplat_path, compression_level=s.ksplat_compression_level)
+        try:
+            # The same contract the API checks before publishing: never upload a file the viewer cannot load.
+            ksplat_format = validate_file(ksplat_path)
+        except KsplatInvalid as exc:
+            raise StageError(f"the written .ksplat does not meet the viewer contract: {exc}", code="KSPLAT_INVALID",
+                             details={"reason": exc.reason}) from exc
 
         bundle_members = [ksplat_path]
         if planes_inputs:
@@ -43,7 +53,8 @@ class ArtifactGeneration:
         processing_configuration = s.config_snapshot()
         upstream = [{"name": Path(i.ref["key"]).name, "kind": i.kind, "sha256": i.ref["sha256"], "sizeBytes": i.ref["sizeBytes"]}
                    for i in ctx.inputs]
-        generated = [{"name": "scene.ksplat", "kind": "KSPLAT", "sha256": sha256_file(ksplat_path), "sizeBytes": ksplat_path.stat().st_size}]
+        generated = [{"name": "scene.ksplat", "kind": "KSPLAT", "sha256": sha256_file(ksplat_path), "sizeBytes": ksplat_path.stat().st_size,
+                      "format": ksplat_format}]
         manifest = build_manifest(run_id=str(order.get("runId")), scan_id=str(order.get("scanId")),
                                   source_scan_version=order.get("scanVersionId"), worker_version=__version__,
                                   processing_configuration=processing_configuration, upstream_artifacts=upstream,

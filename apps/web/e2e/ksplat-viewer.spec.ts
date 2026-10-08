@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { test, expect } from "@playwright/test";
-import { FIXTURE, KSPLAT_SHA256, SCENE_TIMEOUT, colourAbove, frameDifference, mockViewerApi, sampleCanvas } from "./viewer-fixture";
+import { FIXTURE, KSPLAT, KSPLAT_SHA256, SCENE_TIMEOUT, colourAbove, frameDifference, mockViewerApi, sampleCanvas } from "./viewer-fixture";
 
 // FORMAT VALIDATION (not a real venue reconstruction): the production exporter's .ksplat of the synthetic viewer-scene
 // fixture (e2e/viewer-fixture.ts), delivered byte for byte to the viewer's real download path and loaded, rendered and
@@ -59,3 +59,19 @@ test("FORMAT VALIDATION: the exported fixture downloads, loads every splat, rend
 
   expect(pageErrors).toEqual([]);
 });
+
+// Review F-1: the viewer refuses bytes that are not exactly the registered artifact, and never hands them to the library.
+for (const tampered of [
+  { name: "one flipped byte (same size, different SHA-256)", bytes: () => { const b = Buffer.from(KSPLAT); b[6000] ^= 0xff; return b; },
+    message: /checksum does not match/ },
+  { name: "a truncated download", bytes: () => KSPLAT.subarray(0, KSPLAT.length - 44), message: /registered as \d+/ },
+]) {
+  test(`INTEGRITY: ${tampered.name} is refused with an error, and nothing is rendered`, async ({ page }) => {
+    test.setTimeout(SCENE_TIMEOUT);
+    await mockViewerApi(page, RUN_ID, { calibrated: true, served: tampered.bytes() });
+    await page.goto(`/viewer?link=good-secret`);
+    await expect(page.getByText(tampered.message)).toBeVisible({ timeout: SCENE_TIMEOUT });
+    await expect(page.locator("dt", { hasText: /^Splats$/ })).toHaveCount(0);
+    await expect(page.getByTestId("splat-canvas")).toHaveCount(0);
+  });
+}

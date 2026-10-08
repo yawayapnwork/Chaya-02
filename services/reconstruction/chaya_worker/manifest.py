@@ -15,23 +15,28 @@ def _iso_now() -> str:
 
 def manifest_entry(*, name: str, kind: str, sha256: str, size_bytes: int, artifact_version: str,
                    source_scan_version: str | None, processing_configuration: dict[str, Any],
-                   created_at: str | None = None) -> dict[str, Any]:
-    return {
+                   created_at: str | None = None, file_format: dict[str, Any] | None = None) -> dict[str, Any]:
+    entry = {
         "name": name, "kind": kind, "checksum": {"algorithm": "sha256", "value": sha256}, "sizeBytes": size_bytes,
         "artifactVersion": artifact_version, "sourceScanVersion": source_scan_version,
         "processingConfiguration": processing_configuration, "createdAt": created_at or _iso_now(),
     }
+    if file_format is not None:  # what a validated file's headers say (a KSPLAT: chaya_worker.ksplat.validate)
+        entry["format"] = file_format
+    return entry
 
 
 def build_manifest(*, run_id: str, scan_id: str, source_scan_version: str | None, worker_version: str,
                    processing_configuration: dict[str, Any], upstream_artifacts: list[dict[str, Any]],
                    generated_artifacts: list[dict[str, Any]]) -> dict[str, Any]:
-    """`upstream_artifacts` / `generated_artifacts` entries need at least: name, kind, sha256, sizeBytes."""
+    """`upstream_artifacts` / `generated_artifacts` entries need at least: name, kind, sha256, sizeBytes; an optional
+    `format` is recorded as given."""
     created_at = _iso_now()
     entries = [
         manifest_entry(name=a["name"], kind=a["kind"], sha256=a["sha256"], size_bytes=a["sizeBytes"],
                        artifact_version=worker_version, source_scan_version=source_scan_version,
-                       processing_configuration=processing_configuration, created_at=created_at)
+                       processing_configuration=processing_configuration, created_at=created_at,
+                       file_format=a.get("format"))
         for a in (*upstream_artifacts, *generated_artifacts)
     ]
     # The splat is published in its reconstruction frame (arbitrary scale, rotation, origin). Canonical placement comes

@@ -439,14 +439,14 @@ public class PipelineService {
         if (!claimed.status().equals("RUNNING")) {
             throw new ApiException(HttpStatus.CONFLICT, "JOB_NOT_RUNNING", "job is " + claimed.status() + "; the report was not applied");
         }
-        Map<String, String> sealed = new LinkedHashMap<>();
+        Map<String, ArtifactSealer.Sealed> sealed = new LinkedHashMap<>();
         Runnable afterCommit;
         try {
             ReportScope scope = reportScope(claimed, loadRun(claimed.runId()));
             for (ArtifactReport a : reportedObjects(r)) {
                 validateArtifact(a, scope.prefix(), scope.afterPrivacy(), scope.beforePrivacy());
                 if (!sealed.containsKey(a.key())) {
-                    sealed.put(a.key(), sealer.seal(a.key(), a.sha256(), a.sizeBytes(), claimed.orgId(), claimed.venueId()));
+                    sealed.put(a.key(), sealer.seal(a.kind(), a.key(), a.sha256(), a.sizeBytes(), claimed.orgId(), claimed.venueId()));
                 }
             }
             afterCommit = tx.execute(s -> {
@@ -462,7 +462,7 @@ public class PipelineService {
                 return applyReport(worker, job, run, r, sealed);
             });
         } catch (RuntimeException e) {
-            sealed.values().forEach(sealer::discard);
+            sealed.values().forEach(x -> sealer.discard(x.key()));
             throw e;
         }
         sealed.keySet().forEach(sealer::deleteOriginal);
@@ -490,9 +490,9 @@ public class PipelineService {
     // Applying a report (shared by workers and the system enforcer)
     // =========================================================================================
 
-    /** {@code sealedKeys}: worker key -> sealed key for every reported object (worker reports); empty for the control
+    /** {@code sealedKeys}: worker key -> sealed copy for every reported object (worker reports); empty for the control
      * plane's own synthetic reports, which carry no objects. */
-    private Runnable applyReport(Actor actor, JobRow job, RunRow run, StageReport r, Map<String, String> sealedKeys) {
+    private Runnable applyReport(Actor actor, JobRow job, RunRow run, StageReport r, Map<String, ArtifactSealer.Sealed> sealedKeys) {
         boolean ok = "SUCCEEDED".equals(r.status());
         if (!ok && !"FAILED".equals(r.status())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_REPORT", "status must be SUCCEEDED or FAILED");
@@ -516,7 +516,7 @@ public class PipelineService {
             }
         }
         // From here on every object is referred to by its sealed key.
-        List<ArtifactReport> stored = outputs.stream().map(a -> withKey(a, sealedKeys.get(a.key()))).toList();
+        List<ArtifactReport> stored = outputs.stream().map(a -> withKey(a, sealedKeys.get(a.key()).key())).toList();
 
         UUID stageRunId = UUID.randomUUID();
         UUID stdoutId = r.stdout() == null ? null : UUID.randomUUID();
@@ -935,15 +935,17 @@ public class PipelineService {
 
     /** A re-scan run's artifacts name the (DRAFT) version they are produced for; the V4 guard refuses any once it is
      * finalized. A full run's artifacts have no version yet: a bootstrap pins them (scan_version_artifact). */
-    private void insertArtifact(UUID id, JobRow job, UUID scanVersionId, UUID stageRunId, ArtifactReport a, String sealedKey) {
+    private void insertArtifact(UUID id, JobRow job, UUID scanVersionId, UUID stageRunId, ArtifactReport a, ArtifactSealer.Sealed sealed) {
         jdbc.sql("INSERT INTO processing_artifact (id, organization_id, venue_id, scan_id, scan_version_id, job_id, stage, bucket, "
-                + "object_key, checksum_sha256, content_type, size_bytes, kind, stage_run_id, contains_pii, partial, sealed, worker_object_key) "
-                + "VALUES (:id, :o, :v, :s, :sv, :j, :st, :b, :k, :sha, :ct, :sz, :kind, :sr, :pii, :part, true, :wk)")
+                + "object_key, checksum_sha256, content_type, size_bytes, kind, stage_run_id, contains_pii, partial, sealed, worker_object_key, "
+                + "format_metadata) VALUES (:id, :o, :v, :s, :sv, :j, :st, :b, :k, :sha, :ct, :sz, :kind, :sr, :pii, :part, true, :wk, "
+                + "CAST(:fmt AS jsonb))")
             .param("id", id).param("o", job.orgId()).param("v", job.venueId()).param("s", job.scanId())
             .param("sv", scanVersionId).param("j", job.id()).param("wk", a.key())
-            .param("st", job.stage().name()).param("b", derivedBucketName).param("k", sealedKey).param("sha", a.sha256())
+            .param("st", job.stage().name()).param("b", derivedBucketName).param("k", sealed.key()).param("sha", a.sha256())
             .param("ct", a.contentType()).param("sz", a.sizeBytes()).param("kind", a.kind()).param("sr", stageRunId)
-            .param("pii", a.containsPii()).param("part", a.partial()).update();
+            .param("pii", a.containsPii()).param("part", a.partial())
+            .param("fmt", sealed.format() == null ? null : json(sealed.format())).update();
     }
 
     private static String outputChecksum(List<ArtifactReport> outputs) {

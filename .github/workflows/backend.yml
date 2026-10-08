@@ -3,10 +3,10 @@ name: backend
 
 on:
   pull_request:
-    paths: ["services/api/**", "infra/mirror/**", "scripts/ci/minio-preflight.sh", ".github/workflows/backend.yml"]
+    paths: ["services/api/**", "packages/contracts/**", "infra/mirror/**", "scripts/ci/minio-preflight.sh", ".github/workflows/backend.yml"]
   push:
     branches: [main]
-    paths: ["services/api/**", "infra/mirror/**", "scripts/ci/minio-preflight.sh", ".github/workflows/backend.yml"]
+    paths: ["services/api/**", "packages/contracts/**", "infra/mirror/**", "scripts/ci/minio-preflight.sh", ".github/workflows/backend.yml"]
   workflow_dispatch:
 
 permissions:

@@ -1,6 +1,7 @@
 "use client";
 
 import { ApiError, api } from "./capture-api";
+import { type ArtifactRef, ArtifactIntegrityError, checkBeforeDownload, readExactly, verifyArtifact } from "./artifact-integrity";
 import type { CoordinateFrame } from "./coordinate-frame";
 import { publicConfig } from "./env";
 import { currentAuthHeaders } from "./session";
@@ -19,15 +20,7 @@ export interface ReconstructionVersion {
   current: boolean;
 }
 
-/** Mirrors dev.chaya.api.reconstruction.ReconstructionService.ArtifactRef. `url` is a path on this
- * backend (never a raw object-storage URL), so every download stays venue/organization scoped. */
-export interface ArtifactRef {
-  kind: string;
-  contentType: string;
-  sizeBytes: number;
-  sha256: string;
-  url: string;
-}
+export type { ArtifactFormat, ArtifactRef } from "./artifact-integrity";
 
 /** Mirrors dev.chaya.api.reconstruction.ReconstructionService.Reconstruction. The artifacts are in the
  * reconstruction's own frame; `coordinateFrame` (null until calibrated) is how they are placed in canonical metres.
@@ -78,28 +71,25 @@ export async function exchangePublicLink(secret: string): Promise<PublicViewerTo
 }
 
 /**
- * Downloads an artifact `url` (as returned in ArtifactRef, e.g. the .ksplat) with the caller's
- * credentials (bearer or public-viewer token) and reports real download progress from the stream, so the viewer can show it without guessing.
- * Returns a Blob; the caller turns it into an object URL for the GaussianSplats3D loader, since that
- * loader fetches the path itself and cannot be handed an Authorization header directly.
+ * Downloads an artifact (e.g. the .ksplat) with the caller's credentials (bearer or public-viewer token), reporting real
+ * progress from the stream, and returns its bytes only once they are verified: exactly the registered size (a larger
+ * download is cut off, a shorter one refused), the registered SHA-256, and for a KSPLAT the viewer contract and the
+ * format the API recorded (lib/artifact-integrity). Anything else throws -- the viewer never hands unverified bytes to
+ * GaussianSplats3D. The caller turns the Blob into an object URL, since that loader fetches the path itself and cannot
+ * be handed an Authorization header.
  */
-export async function fetchArtifact(url: string, onProgress?: (loadedBytes: number, totalBytes: number | null) => void): Promise<Blob> {
-  const res = await fetch(`${publicConfig().apiBaseUrl}${url}`, { headers: await currentAuthHeaders() });
+export async function fetchArtifact(ref: ArtifactRef, onProgress?: (loadedBytes: number, totalBytes: number) => void): Promise<Blob> {
+  checkBeforeDownload(ref);
+  const res = await fetch(`${publicConfig().apiBaseUrl}${ref.url}`, { headers: await currentAuthHeaders() });
   if (!res.ok) throw new ApiError(res.status, "ARTIFACT_FETCH_FAILED", `Could not load the reconstruction asset (HTTP ${res.status}).`);
-  const contentType = res.headers.get("Content-Type") ?? "application/octet-stream";
-  const totalHeader = res.headers.get("Content-Length");
-  const total = totalHeader ? Number(totalHeader) : null;
-  if (!res.body || !onProgress) return res.blob();
-
-  const reader = res.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let loaded = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    loaded += value.byteLength;
-    onProgress(loaded, total);
+  const length = res.headers.get("Content-Encoding") ? null : res.headers.get("Content-Length"); // encoded: of the encoding
+  if (length !== null && Number(length) !== ref.sizeBytes) {
+    await res.body?.cancel().catch(() => {});
+    throw new ArtifactIntegrityError("SIZE_MISMATCH",
+      `The server is sending ${length} bytes but the reconstruction is registered as ${ref.sizeBytes}.`);
   }
-  return new Blob(chunks as BlobPart[], { type: contentType });
+  if (!res.body) throw new ArtifactIntegrityError("SIZE_MISMATCH", "The reconstruction download has no body.");
+  const bytes = await readExactly(res.body, ref.sizeBytes, (loaded) => onProgress?.(loaded, ref.sizeBytes));
+  await verifyArtifact(bytes, ref);
+  return new Blob([bytes], { type: "application/octet-stream" });
 }

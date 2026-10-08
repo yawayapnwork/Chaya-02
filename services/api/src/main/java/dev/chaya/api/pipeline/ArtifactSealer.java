@@ -4,6 +4,9 @@ import dev.chaya.api.storage.ObjectStore;
 import dev.chaya.api.storage.StorageException;
 import dev.chaya.api.storage.TenantKeys;
 import dev.chaya.api.web.ApiException;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,9 +36,17 @@ public class ArtifactSealer {
         this.derived = derived;
     }
 
-    /** Seals one reported object of this tenant and returns the sealed key. Refuses (409) a missing object, a size or a
-     * SHA-256 that does not match the report, and a key outside the tenant's own prefix. */
-    public String seal(String workerKey, String reportedSha256, long reportedSize, UUID organizationId, UUID venueId) {
+    /** A sealed copy and, for a format the API validates (KSPLAT), what its headers say; stored with the artifact. */
+    public record Sealed(String key, Map<String, Object> format) {}
+
+    /** Seals one reported object of this tenant. Refuses (409) a missing object, a size or a SHA-256 that does not match
+     * the report, a key outside the tenant's own prefix and, for a KSPLAT, a file that does not meet the viewer contract
+     * (KsplatValidator) -- checked on the sealed copy, after its hash, so what was validated is what will be served. */
+    public Sealed seal(String kind, String workerKey, String reportedSha256, long reportedSize, UUID organizationId, UUID venueId) {
+        boolean ksplat = "KSPLAT".equals(kind);
+        if (ksplat) {
+            KsplatValidator.requirePlausibleSize(reportedSize); // before copying anything
+        }
         String target;
         try {
             target = TenantKeys.sealed(workerKey, organizationId, venueId, UUID.randomUUID());
@@ -58,7 +69,15 @@ public class ArtifactSealer {
                 throw new ApiException(HttpStatus.CONFLICT, "ARTIFACT_CHECKSUM_MISMATCH",
                     "artifact " + workerKey + " hashes to " + sha + " in storage but was reported as " + reportedSha256);
             }
-            return target;
+            if (!ksplat) {
+                return new Sealed(target, null);
+            }
+            try (InputStream in = derived.open(target)) {
+                return new Sealed(target, KsplatValidator.validate(in, size).asMetadata());
+            }
+        } catch (IOException e) {
+            discard(target);
+            throw new ApiException(HttpStatus.CONFLICT, "ARTIFACT_MISSING", "artifact " + workerKey + " could not be read back");
         } catch (RuntimeException e) {
             discard(target);
             throw e;

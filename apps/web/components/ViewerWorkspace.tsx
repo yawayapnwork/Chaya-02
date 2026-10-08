@@ -17,6 +17,7 @@ import {
 } from "@/lib/reconstruction-api";
 import { detectDeviceProfile, type DeviceProfile } from "@/lib/device-profile";
 import { formatBytes, formatDate } from "@/lib/viewer-format";
+import { checkSceneScope } from "@/lib/artifact-integrity";
 import { type Scoped, forScene, initialVersion, sceneKey, versionLabel } from "@/lib/version-scope";
 import { type SearchResult } from "@/lib/search-api";
 import { type RouteResponse, planRoute } from "@/lib/navigation-api";
@@ -56,6 +57,7 @@ export default function ViewerWorkspace() {
   const [floorId, setFloorId] = useState("");
 
   const [versions, setVersions] = useState<ReconstructionVersion[]>([]);
+  const versionsRef = useRef<ReconstructionVersion[]>([]); // read when a reconstruction arrives, not a reason to refetch it
   const [runId, setRunId] = useState("");
   const [reconstruction, setReconstruction] = useState<Reconstruction | null>(null);
   const [reconstructionError, setReconstructionError] = useState<string | null>(null);
@@ -163,6 +165,7 @@ export default function ViewerWorkspace() {
       (vs) => {
         if (cancelled) return;
         setVersions(vs);
+        versionsRef.current = vs;
         setRunId(initialVersion(vs)?.runId ?? "");
         if (vs.length === 0) {
           setReconstruction(null);
@@ -185,6 +188,16 @@ export default function ViewerWorkspace() {
     getReconstruction(venueId, runId).then(
       (r) => {
         if (cancelled) return;
+        try {
+          // Fail closed: never show a model with another version's frame, or a version without the asset it pinned.
+          const listed = versionsRef.current.find((v) => v.runId === runId);
+          checkSceneScope(r, { venueId, runId, scanVersionId: listed?.scanVersionId ?? null });
+        } catch (e) {
+          setReconstruction(null);
+          setReconstructionError(message(e));
+          setSceneLoad({ phase: "idle" });
+          return;
+        }
         setReconstruction(r);
         setReconstructionError(null);
       },
@@ -233,9 +246,10 @@ export default function ViewerWorkspace() {
       setSceneLoad({ phase: "downloading", percent: 0 });
       setSelectedPoiId(null);
       try {
-        const blob = await fetchArtifact(ksplat.url, (loaded, total) => {
+        // Verified before it is returned: registered size, SHA-256, the .ksplat contract and the published format.
+        const blob = await fetchArtifact(ksplat, (loaded, total) => {
           if (cancelled) return;
-          setSceneLoad({ phase: "downloading", percent: total ? Math.round((loaded / total) * 100) : 0 });
+          setSceneLoad({ phase: "downloading", percent: Math.round((loaded / total) * 100) });
         });
         if (cancelled) return;
         if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);

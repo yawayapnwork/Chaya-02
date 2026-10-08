@@ -98,6 +98,22 @@ abstract class PipelineTestSupport extends CaptureTestSupport {
 
     private static final Path NAVMESH_FIXTURE = Path.of("../../packages/contracts/fixtures/navmesh");
 
+    /** The committed production-encoder output (packages/contracts/fixtures/ksplat/scene.ksplat, 3 splats): a KSPLAT is
+     * only published if it meets the viewer contract (KsplatValidator), so tests publish real ones. */
+    static final Path KSPLAT_FIXTURE = Path.of("../../packages/contracts/fixtures/ksplat/scene.ksplat");
+
+    /** The fixture with its scene-centre x (stored, never used to read splats) set from {@code variant}: a valid .ksplat
+     * whose bytes and hash differ per variant, so tests can tell models apart. */
+    protected static byte[] ksplat(String variant) {
+        try {
+            byte[] b = Files.readAllBytes(KSPLAT_FIXTURE);
+            java.nio.ByteBuffer.wrap(b).order(java.nio.ByteOrder.LITTLE_ENDIAN).putFloat(24, variant.hashCode());
+            return b;
+        } catch (IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
+    }
+
     /** NAVIGATION_BAKING's outputs in the worker's real shape: the committed real Recast navmesh fixture
      * (packages/contracts/fixtures/navmesh), its manifest, and its graph in `frameId`, naming the order's version. */
     @SuppressWarnings("unchecked")
@@ -182,7 +198,7 @@ abstract class PipelineTestSupport extends CaptureTestSupport {
             // pins its cloud and viewer asset, and cannot be finalized without them.
             case "GEOMETRIC_CLEANUP" -> List.of(artifact(order, "splat-clean.ply", "SPLAT_CLEAN", false, false, "clean-cloud-bytes"));
             case "REGION_SPLICE" -> List.of(artifact(order, "splat-merged.ply", "SPLAT_MERGED", false, false, "merged-cloud-bytes"));
-            case "ARTIFACT_GENERATION" -> List.of(artifact(order, "scene.ksplat", "KSPLAT", false, false, "ksplat-bytes"),
+            case "ARTIFACT_GENERATION" -> List.of(artifact(order, "scene.ksplat", "KSPLAT", false, false, ksplat("run")),
                 artifact(order, "manifest.json", "ARTIFACT_MANIFEST", false, false, "{}"));
             default -> List.of(artifact(order, stage.toLowerCase() + ".json", stage, false, false, "{}"));
         };

@@ -66,6 +66,13 @@ BYTES_PER_SPLAT = 44
 DATA_OFFSET = FILE_HEADER_SIZE + SECTION_HEADER_SIZE
 SH_C0 = 0.28209479177387814
 SH_8BIT_HALF_RANGE = 1.5  # the library's DefaultSphericalHarmonics8BitCompressionHalfRange (range 3 / 2)
+COMPRESSION_LEVEL = 0
+SH_DEGREE = 0
+SECTION_COUNT = 1
+MIN_SPLAT_COUNT = 1
+# 512 MiB, about 12.2 million splats: more than a browser tab can hold as download, parsed buffer and GPU textures.
+# The shared viewer contract: packages/contracts/viewer/ksplat-contract.json (tests/unit/test_ksplat_validation.py).
+MAX_BYTES = 512 * 1024 * 1024
 
 _RECORD = np.dtype({"names": ["center", "scale", "rotation", "rgba"],
                     "formats": [("<f4", (3,)), ("<f4", (3,)), ("<f4", (4,)), ("u1", (4,))],
@@ -74,6 +81,64 @@ _RECORD = np.dtype({"names": ["center", "scale", "rotation", "rgba"],
 
 class KsplatUnsupported(ValueError):
     """Requested a compression level or feature this encoder does not implement."""
+
+
+class KsplatInvalid(ValueError):
+    """A file that does not meet the viewer contract. `reason` is one of TRUNCATED, TRAILING_BYTES, TOO_LARGE,
+    UNSUPPORTED_VERSION, UNSUPPORTED_LAYOUT, UNSUPPORTED_COMPRESSION, UNSUPPORTED_SH_DEGREE, INCONSISTENT_COUNTS, EMPTY."""
+
+    def __init__(self, reason: str, detail: str):
+        super().__init__(f"{reason}: {detail}")
+        self.reason = reason
+
+
+def encoded_size(splat_count: int) -> int:
+    """The exact size of a file of `splat_count` splats, known before encoding."""
+    return DATA_OFFSET + splat_count * BYTES_PER_SPLAT
+
+
+def validate(head: bytes, size: int) -> dict[str, object]:
+    """Checks a whole file of `size` bytes against the viewer contract from its first DATA_OFFSET bytes -- the same rules
+    as the API's KsplatValidator and the viewer's lib/ksplat-validation.ts. The pinned library checks only the version
+    bytes; anything else it would read past the end, or render garbage. Returns what the headers say."""
+    if size > MAX_BYTES:
+        raise KsplatInvalid("TOO_LARGE", f"{size} bytes; the limit is {MAX_BYTES}")
+    if size < encoded_size(MIN_SPLAT_COUNT) or len(head) < DATA_OFFSET:
+        raise KsplatInvalid("TRUNCATED", f"{size} bytes is shorter than the headers and one splat")
+    h = np.frombuffer(head, dtype=np.uint8, count=DATA_OFFSET)
+    u32, u16 = h[:FILE_HEADER_SIZE].view("<u4"), h[:FILE_HEADER_SIZE].view("<u2")
+    s32, s16 = h[FILE_HEADER_SIZE:].view("<u4"), h[FILE_HEADER_SIZE:].view("<u2")
+    major, minor = int(h[0]), int(h[1])
+    if (major, minor) != (VERSION_MAJOR, VERSION_MINOR):
+        raise KsplatInvalid("UNSUPPORTED_VERSION", f"version {major}.{minor}; only {VERSION_MAJOR}.{VERSION_MINOR}")
+    if int(u32[1]) != SECTION_COUNT or int(u32[2]) != SECTION_COUNT:
+        raise KsplatInvalid("UNSUPPORTED_LAYOUT", f"{int(u32[1])} section slots, {int(u32[2])} sections; only {SECTION_COUNT}")
+    if int(u16[10]) != COMPRESSION_LEVEL:
+        raise KsplatInvalid("UNSUPPORTED_COMPRESSION", f"compression level {int(u16[10])}; only {COMPRESSION_LEVEL}")
+    if int(s16[20]) != SH_DEGREE:
+        raise KsplatInvalid("UNSUPPORTED_SH_DEGREE", f"spherical-harmonics degree {int(s16[20])}; only {SH_DEGREE}")
+    if any(int(v) for v in (s32[2], s32[3], s16[10], s32[8], s32[9])):
+        raise KsplatInvalid("UNSUPPORTED_LAYOUT", "bucket fields are set; compression level 0 has no buckets")
+    counts = {int(u32[3]), int(u32[4]), int(s32[0]), int(s32[1])}
+    if len(counts) != 1:
+        raise KsplatInvalid("INCONSISTENT_COUNTS", f"splat counts disagree: {sorted(counts)}")
+    n = counts.pop()
+    if n < MIN_SPLAT_COUNT:
+        raise KsplatInvalid("EMPTY", "the file has no splats")
+    if int(s32[7]) != n * BYTES_PER_SPLAT:
+        raise KsplatInvalid("INCONSISTENT_COUNTS", f"section storage size {int(s32[7])} is not {n} x {BYTES_PER_SPLAT}")
+    if size < encoded_size(n):
+        raise KsplatInvalid("TRUNCATED", f"{size} bytes; {n} splats need {encoded_size(n)}")
+    if size > encoded_size(n):
+        raise KsplatInvalid("TRAILING_BYTES", f"{size} bytes; {n} splats need exactly {encoded_size(n)}")
+    return {"format": "ksplat", "contract": VIEWER_LIBRARY, "version": f"{major}.{minor}",
+            "compressionLevel": COMPRESSION_LEVEL, "sphericalHarmonicsDegree": SH_DEGREE, "sectionCount": SECTION_COUNT,
+            "splatCount": n}
+
+
+def validate_file(path: Path) -> dict[str, object]:
+    with path.open("rb") as f:
+        return validate(f.read(DATA_OFFSET), path.stat().st_size)
 
 
 def _to_byte(values01_times_255: np.ndarray) -> np.ndarray:

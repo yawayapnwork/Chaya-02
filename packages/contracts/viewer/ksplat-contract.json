@@ -1,0 +1,15 @@
+{
+  "description": "The .ksplat files Chaya publishes and its viewer loads. Derived from the pinned viewer library's own reader (SplatBuffer.parseHeader, parseSectionHeaders, calculateComponentStorage, KSplatLoader.checkVersion in build/gaussian-splats-3d.module.js) and narrowed to the one layout the worker writes and apps/web/lib/ksplat-compat.test.ts proves. Checked by the worker before upload (chaya_worker.ksplat.validate), by the API before publishing (dev.chaya.api.pipeline.KsplatValidator) and by the viewer before loading (apps/web/lib/ksplat-validation.ts); each has a test that its constants equal these. See packages/contracts/viewer/README.md.",
+  "library": "@mkkellogg/gaussian-splats-3d",
+  "libraryVersion": "0.4.7",
+  "versionMajor": 0,
+  "versionMinor": 1,
+  "fileHeaderBytes": 4096,
+  "sectionHeaderBytes": 1024,
+  "compressionLevel": 0,
+  "sphericalHarmonicsDegree": 0,
+  "bytesPerSplat": 44,
+  "sectionCount": 1,
+  "minSplatCount": 1,
+  "maxBytes": 536870912
+}

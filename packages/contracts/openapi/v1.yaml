@@ -6430,6 +6430,27 @@ components:
       - markerIdentifier
       - markerType
       - physicalPose
+    ArtifactFormat:
+      type: object
+      properties:
+        compressionLevel:
+          type: integer
+          format: int32
+        contract:
+          type: string
+        format:
+          type: string
+        sectionCount:
+          type: integer
+          format: int32
+        sphericalHarmonicsDegree:
+          type: integer
+          format: int32
+        splatCount:
+          type: integer
+          format: int64
+        version:
+          type: string
     ArtifactKind:
       type: object
       properties:
@@ -6449,6 +6470,8 @@ components:
       properties:
         contentType:
           type: string
+        format:
+          $ref: "#/components/schemas/ArtifactFormat"
         kind:
           type: string
         sha256:

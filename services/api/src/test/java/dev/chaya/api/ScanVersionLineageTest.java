@@ -72,8 +72,8 @@ class ScanVersionLineageTest extends PipelineTestSupport {
             + "\"embedding_model\":\"open_clip:ViT-B-32:openai\",\"objects\":[" + String.join(",", objects) + "]}";
     }
 
-    private List<Map<String, Object>> model(JsonNode order, String bytes) {
-        return List.of(artifact(order, "scene.ksplat", "KSPLAT", false, false, bytes),
+    private List<Map<String, Object>> model(JsonNode order, String label) {
+        return List.of(artifact(order, "scene.ksplat", "KSPLAT", false, false, ksplat(label)),
             artifact(order, "manifest.json", "ARTIFACT_MANIFEST", false, false, "{}"));
     }
 
@@ -215,9 +215,9 @@ class ScanVersionLineageTest extends PipelineTestSupport {
             .query(UUID.class).single();
     }
 
-    private String download(String url) throws Exception {
+    private byte[] download(String url) throws Exception {
         MvcResult started = get(url, viewerToken()).andExpect(request().asyncStarted()).andReturn();
-        return mvc.perform(asyncDispatch(started)).andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        return mvc.perform(asyncDispatch(started)).andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray();
     }
 
     // ---- the test ----------------------------------------------------------------------------------------------------
@@ -315,10 +315,10 @@ class ScanVersionLineageTest extends PipelineTestSupport {
                     .startsWith("/api/v1/venues/" + c.venue() + "/scan-versions/" + version + "/artifacts/");
                 if (a.get("kind").asText().equals("KSPLAT")) {
                     ksplatUrl = a.get("url").asText();
-                    assertThat(a.get("sha256").asText()).isEqualTo(sha256(modelOf.get(version).getBytes(StandardCharsets.UTF_8)));
+                    assertThat(a.get("sha256").asText()).isEqualTo(sha256(ksplat(modelOf.get(version))));
                 }
             }
-            assertThat(download(ksplatUrl)).isEqualTo(modelOf.get(version));
+            assertThat(download(ksplatUrl)).isEqualTo(ksplat(modelOf.get(version)));
             assertThat(getJson("/api/v1/venues/" + c.venue() + "/scan-versions/" + version + "/reconstruction"))
                 .as("the version endpoint and the run endpoint agree").isEqualTo(scene);
         }

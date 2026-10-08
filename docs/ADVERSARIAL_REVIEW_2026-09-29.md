@@ -389,7 +389,7 @@ conditions; **MEDIUM** edge-case errors or misleading output; **LOW** hygiene.
 
 | Finding | Now |
 |---|---|
-| R-1 `.ksplat` layout | Fixed in code; evidence not reproducible from the repository (C-2). |
+| R-1 `.ksplat` layout | Fixed in code; the evidence is committed since 2026-09-30 (C-2, `f99b8a6`) and the contract is enforced since 2026-10-08 (see §16). |
 | R-2 metric/gravity | Implemented; never run on real data (G-4). |
 | R-3, R-4, R-5 | Addressed in code; gsplat never executed. |
 | R-6 frames in RAM | Open (G-3). |
@@ -703,3 +703,34 @@ This section was added after the review; the sections above are unchanged.
   `CaptureView.device`, `StageReport.command`) are open objects. Operation-specific error codes are written by hand
   next to each handler and are not checked against the codes the services throw. The iOS and worker clients are not
   checked automatically; their paths were compared by hand on 2026-10-08, and all exist.
+
+## 16. Addendum (2026-10-08): F-1, viewer artifact validation
+
+This section was added after the review; the sections above are unchanged. Rules: packages/contracts/viewer/README.md.
+
+- **C-2 was already fixed** (`f99b8a6`, 2026-09-30): the four fixture binaries are committed and re-included in
+  `.gitignore` by path, and `scripts/ci/check-fixtures.sh` fails CI when a loaded fixture is ignored or untracked.
+  This change adds no binary fixture. Every broken-file case is generated in the test from the committed production files.
+- **One contract, three enforcement points.** `packages/contracts/viewer/ksplat-contract.json` is the layout the
+  pinned GaussianSplats3D 0.4.7 reads, narrowed to what the worker writes and `ksplat-compat.test.ts` proves: version
+  0.1, one section, compression level 0, SH degree 0, 44-byte records, consistent counts, an exact size, and at most
+  512 MiB. Run against the real library, `ksplat-validation.test.ts` shows it silently accepts a file one byte short,
+  trailing bytes, disagreeing splat counts and version 0.2. The worker validates before upload (`KSPLAT_TOO_LARGE`
+  before encoding, then `KSPLAT_INVALID`). The API validates the sealed copy after its hash (409 `KSPLAT_INVALID`,
+  `ARTIFACT_TOO_LARGE` before copying). Each enforcement point's constants are tested equal to the JSON. `package.json` now pins the library
+  exactly (it was `^0.4.7`).
+- **Integrity metadata stored with the artifact.** V31 adds `processing_artifact.format_metadata` (the validated
+  headers), returned as `ArtifactRef.format` next to `sha256` and `sizeBytes`. A `NOT VALID` CHECK refuses any new KSPLAT row without it. The
+  worker's manifest records the same object.
+- **F-1 fixed.** `fetchArtifact` checks the advertised size before requesting, refuses a mismatched
+  `Content-Length`, cuts off a body longer than registered and refuses a shorter one. It checks the SHA-256 (Web Crypto;
+  outside a secure context it refuses rather than skipping), then the format rules, then agreement with
+  `ArtifactRef.format`. Only then does it hand the bytes to the library. Before downloading, `checkSceneScope` refuses a
+  reconstruction that is not the requested run or scan version, a version's asset not served from that version, a
+  version without its frame, a frame of another floor, or a non-finite canonical similarity. Required test met:
+  `e2e/ksplat-viewer.spec.ts` "INTEGRITY: one flipped byte" shows the error and renders nothing. With the checksum
+  check disabled, that test fails.
+- **Residual.** Per-splat values are not range-checked (NaN positions in a correctly hashed file would load), because
+  the hash proves only that the bytes are the ones the worker produced. Pre-V31 KSPLATs carry no recorded format.
+  Hashing needs the whole file in memory: about twice the file size at peak, bounded by the 512 MiB limit. No real
+  reconstruction has been loaded (G-4).

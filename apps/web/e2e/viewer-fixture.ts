@@ -58,8 +58,15 @@ export function fixturePois(frameId: string | null) {
   }));
 }
 
-/** Mocks the public-link viewer API for one reconstruction whose KSPLAT is the fixture. Returns the artifact path. */
-export async function mockViewerApi(page: Page, runId: string, opts: { calibrated: boolean; runStatus?: string }) {
+/** What the API records when it publishes the fixture (ArtifactRef.format; dev.chaya.api.pipeline.KsplatValidator). */
+export const KSPLAT_FORMAT = {
+  format: "ksplat", contract: "@mkkellogg/gaussian-splats-3d@0.4.7", version: "0.1", compressionLevel: 0,
+  sphericalHarmonicsDegree: 0, sectionCount: 1, splatCount: FIXTURE.splat_count,
+};
+
+/** Mocks the public-link viewer API for one reconstruction whose KSPLAT is the fixture. Returns the artifact path.
+ * `served`: different bytes for the artifact URL than the ones registered (size, SHA-256 and format stay the fixture's). */
+export async function mockViewerApi(page: Page, runId: string, opts: { calibrated: boolean; runStatus?: string; served?: Buffer }) {
   const expiresAt = new Date(Date.now() + 60_000).toISOString();
   const generatedAt = new Date().toISOString();
   const artifactPath = `/api/v1/venues/${VENUE_ID}/reconstructions/${runId}/artifacts/KSPLAT`;
@@ -68,16 +75,19 @@ export async function mockViewerApi(page: Page, runId: string, opts: { calibrate
   await mockJson(page, "**/mock-api/api/v1/public/viewer-token", { token: "cvt_test", expiresAt, venueId: VENUE_ID });
   await mockJson(page, `**/mock-api/api/v1/venues/${VENUE_ID}/floors`, [{ id: FLOOR_ID, level: 0, name: "Ground Floor" }]);
   await mockJson(page, `**/mock-api/api/v1/venues/${VENUE_ID}/floors/${FLOOR_ID}/reconstructions`, [
-    { runId, floorId: FLOOR_ID, generatedAt, runStatus, runQuality },
+    { runId, floorId: FLOOR_ID, generatedAt, runStatus, runQuality, scanVersionId: null, versionNumber: null, parentVersionId: null, current: false },
   ]);
   await mockJson(page, `**/mock-api/api/v1/venues/${VENUE_ID}/pois`, fixturePois(opts.calibrated ? FRAME_ID : null));
   await mockJson(page, `**/mock-api/api/v1/venues/${VENUE_ID}/reconstructions/${runId}`, {
     runId, scanId: "scan-1", floorId: FLOOR_ID, generatedAt, runStatus, runQuality,
-    artifacts: [{ kind: "KSPLAT", contentType: "application/octet-stream", sizeBytes: KSPLAT.length, sha256: KSPLAT_SHA256, url: artifactPath }],
+    artifacts: [{ kind: "KSPLAT", contentType: "application/octet-stream", sizeBytes: KSPLAT.length, sha256: KSPLAT_SHA256, url: artifactPath,
+      format: KSPLAT_FORMAT }],
     coordinateFrame: opts.calibrated ? fixtureFrame(runId) : null,
+    scanVersionId: null, versionNumber: null, parentVersionId: null,
   });
+  const body = opts.served ?? KSPLAT;
   await page.route(`**/mock-api${artifactPath}`, (route) =>
-    route.fulfill({ status: 200, contentType: "application/octet-stream", body: KSPLAT, headers: { "content-length": String(KSPLAT.length) } }));
+    route.fulfill({ status: 200, contentType: "application/octet-stream", body, headers: { "content-length": String(body.length) } }));
   return artifactPath;
 }
 

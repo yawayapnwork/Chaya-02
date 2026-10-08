@@ -5,10 +5,10 @@ name: frontend
 
 on:
   pull_request:
-    paths: ["apps/web/**", "packages/contracts/fixtures/**", "services/reconstruction/chaya_worker/ksplat.py", "scripts/ci/check-fixtures.sh", ".github/workflows/frontend.yml"]
+    paths: ["apps/web/**", "packages/contracts/fixtures/**", "packages/contracts/viewer/**", "services/reconstruction/chaya_worker/ksplat.py", "scripts/ci/check-fixtures.sh", ".github/workflows/frontend.yml"]
   push:
     branches: [main]
-    paths: ["apps/web/**", "packages/contracts/fixtures/**", "services/reconstruction/chaya_worker/ksplat.py", "scripts/ci/check-fixtures.sh", ".github/workflows/frontend.yml"]
+    paths: ["apps/web/**", "packages/contracts/fixtures/**", "packages/contracts/viewer/**", "services/reconstruction/chaya_worker/ksplat.py", "scripts/ci/check-fixtures.sh", ".github/workflows/frontend.yml"]
   workflow_dispatch:
 
 permissions:

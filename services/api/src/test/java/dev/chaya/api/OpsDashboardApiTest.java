@@ -173,9 +173,10 @@ class OpsDashboardApiTest extends ApiTest {
         UUID job = insertJob(t, "ARTIFACT_GENERATION", "SUCCEEDED", 0, null);
         jdbc.sql("""
                 INSERT INTO processing_artifact (organization_id, venue_id, scan_id, job_id, stage, bucket, object_key,
-                    checksum_sha256, content_type, size_bytes, kind)
-                VALUES (:o, :v, :s, :j, 'ARTIFACT_GENERATION', 'chaya-derived-test', :k, :sha, 'application/octet-stream', 1234, 'KSPLAT')
-                """)
+                    checksum_sha256, content_type, size_bytes, kind, format_metadata)
+                VALUES (:o, :v, :s, :j, 'ARTIFACT_GENERATION', 'chaya-derived-test', :k, :sha, 'application/octet-stream', 1234, 'KSPLAT',
+                    CAST(:fmt AS jsonb))
+                """).param("fmt", Fixtures.KSPLAT_METADATA)
             .param("o", t.org()).param("v", t.venue()).param("s", t.scan()).param("j", job)
             .param("k", "org/" + t.org() + "/venue/" + t.venue() + "/ops-test/" + UUID.randomUUID()).param("sha", "a".repeat(64)).update();
 
