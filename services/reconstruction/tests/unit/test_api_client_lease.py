@@ -40,7 +40,7 @@ class _Session:
 
 def _client() -> tuple[HttpControlPlane, _Session]:
     session = _Session()
-    settings = Settings(api_url="https://api.example", token_url="https://idp.example/token", client_secret="s")
+    settings = Settings(api_url="https://api.example", token_url="https://idp.example/token", client_secret="s")  # noqa: S106
     return HttpControlPlane(settings, session=session), session  # type: ignore[arg-type]
 
 

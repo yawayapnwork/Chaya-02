@@ -126,7 +126,10 @@ def test_real_worker_runs_the_first_stages_and_stops_honestly_at_the_first_missi
     s3 = boto3.client("s3", endpoint_url=settings.s3_endpoint, aws_access_key_id=settings.s3_access_key, aws_secret_access_key=settings.s3_secret_key,
                       region_name="us-east-1", config=Config(s3={"addressing_style": "path"}))
     bucket = os.environ.get("CHAYA_IT_DERIVED_BUCKET", "chaya-derived")
-    keys = [o["Key"] for o in s3.list_objects_v2(Bucket=bucket, Prefix="org/").get("Contents", [])]
+    # Registered artifacts live under sealed/org/... (the API's verified copy); the worker's originals under org/... are
+    # deleted once registration commits (docs/security.md, "Object storage"). PII must be gone from both.
+    keys = [o["Key"] for prefix in ("org/", "sealed/org/")
+            for o in s3.list_objects_v2(Bucket=bucket, Prefix=prefix).get("Contents", [])]
     run_keys = [k for k in keys if f"/run/{run['id']}/" in k]
     assert run_keys and not [k for k in run_keys if "/pii/" in k], "unblurred frames must have been deleted"
     for name in ("PRIVACY_PREPROCESS",):
