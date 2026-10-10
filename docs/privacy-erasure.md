@@ -46,6 +46,8 @@ There are no thumbnails. Neither the API nor the worker generates any. The viewe
 |---|---|---|---|
 | `capture_session` | operator subject, device, timings, re-scan region | deleted | deleted |
 | `capture_media`, `capture_media_part` | **original filename**, checksums, object key | deleted | deleted |
+| `capture_measurement`, `capture_measurement_observation` | calibration measurements, their creator, and the pixels they were marked at | deleted | deleted |
+| `capture_calibration_attempt`, `coordinate_frame_measurement` | calibration attempts and frame-to-measurement links | deleted (also when only the frame or run is erased) | deleted |
 | `capture_hud_scene`, `capture_hud_pose_sample`, `capture_hud_quality_sample` | operator's walked path and frame-quality numbers | deleted | deleted |
 | `scan`, `pipeline_run`, `processing_job`, `pipeline_stage_run`, `processing_artifact` | processing metadata: commands, errors, object keys | deleted | deleted |
 | `pii_staging_purge`, `pii_staging_sweep` | purge records | deleted | deleted |

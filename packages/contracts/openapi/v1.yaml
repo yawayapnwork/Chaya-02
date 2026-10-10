@@ -1270,6 +1270,244 @@ paths:
       - ADMIN
       - VENUE_MANAGER
       - OPERATOR
+  /api/v1/venues/{venueId}/captures/{captureId}/calibration:
+    get:
+      description: "state: NO_EVIDENCE, EVIDENCE_INCOMPLETE, AWAITING_RECONSTRUCTION,\
+        \ READY_TO_CALIBRATE, CALIBRATED or REJECTED. reconstructionFrame: NO_RECONSTRUCTION,\
+        \ ARBITRARY_SCALE, METRIC_NOT_ALIGNED or CANONICAL."
+      operationId: captureCalibrationStatus
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: captureId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CalibrationStatus"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Malformed request: an unparseable parameter or body, or a\
+            \ failed validation (code BAD_REQUEST or an operation-specific code)"
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "The caller's roles do not allow this operation (empty body),\
+            \ or an operation-specific refusal (problem with a code)"
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Not found, or not visible to the caller's organization or\
+            \ venue (code NOT_FOUND)"
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      summary: Calibration status of this capture and what the operator must still
+        provide
+      tags:
+      - capture-calibration-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
+      - OPERATOR
+    post:
+      description: "Body: resolvedPoints (measurementId, point A/B/P, reconstruction\
+        \ [x, y, z]) for every measurement to use; optional gravity and note as for\
+        \ POST .../reconstructions/{runId}/coordinate-frames. Measured values come\
+        \ from the recorded measurements, never from this request. Accepted and refused\
+        \ attempts are both recorded."
+      operationId: captureCalibrationCalibrate
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: captureId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CalibrateCapture"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CalibrationStatus"
+          description: Created
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "UNRESOLVED_POINTS, INVALID_CALIBRATION"
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: CAPTURE_NOT_OWNED
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Not found, or not visible to the caller's organization or\
+            \ venue (code NOT_FOUND)"
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "RECONSTRUCTION_FRAME_UNAVAILABLE, GRAVITY_UNAVAILABLE, MEASUREMENT_WITHDRAWN,\
+            \ INVALID_CAPTURE_STATE"
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "CALIBRATION_INCONSISTENT: the measurements disagree beyond\
+            \ chaya.frames limits"
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      summary: Calibrate the capture's reconstruction from its recorded measurements
+      tags:
+      - capture-calibration-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
+      - OPERATOR
+  /api/v1/venues/{venueId}/captures/{captureId}/calibration/attempts:
+    get:
+      operationId: captureCalibrationAttempts
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: captureId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AttemptView"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Malformed request: an unparseable parameter or body, or a\
+            \ failed validation (code BAD_REQUEST or an operation-specific code)"
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "The caller's roles do not allow this operation (empty body),\
+            \ or an operation-specific refusal (problem with a code)"
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Not found, or not visible to the caller's organization or\
+            \ venue (code NOT_FOUND)"
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      summary: "Calibration attempts of this capture, newest first (accepted and refused)"
+      tags:
+      - capture-calibration-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
+      - OPERATOR
   /api/v1/venues/{venueId}/captures/{captureId}/complete-upload:
     post:
       operationId: captureCompleteUpload
@@ -1722,6 +1960,260 @@ paths:
       summary: "The HUD status, pushed over Server-Sent Events as it changes"
       tags:
       - capture-hud-stream-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
+      - OPERATOR
+  /api/v1/venues/{venueId}/captures/{captureId}/measurements:
+    get:
+      operationId: captureCalibrationList
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: captureId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MeasurementView"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Malformed request: an unparseable parameter or body, or a\
+            \ failed validation (code BAD_REQUEST or an operation-specific code)"
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "The caller's roles do not allow this operation (empty body),\
+            \ or an operation-specific refusal (problem with a code)"
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Not found, or not visible to the caller's organization or\
+            \ venue (code NOT_FOUND)"
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      summary: "Every measurement of this capture, active and withdrawn, with its\
+        \ observations"
+      tags:
+      - capture-calibration-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
+      - OPERATOR
+    post:
+      description: "DISTANCE: value and unit, points A and B. CONTROL_POINT: venue\
+        \ x, y, z in unit and a survey datum, point P. Every point needs observations\
+        \ in at least two accepted images or video frames of this capture. Immutable\
+        \ once recorded; withdraw to replace."
+      operationId: captureCalibrationRecord
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: captureId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MeasurementInput"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MeasurementView"
+          description: Created
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "INVALID_MEASUREMENT, MISSING_MEASUREMENT, MISSING_UNIT, INVALID_UNIT,\
+            \ INCONSISTENT_UNITS, INCONSISTENT_DATUM, MISSING_DATUM, INCONSISTENT_MEASUREMENT,\
+            \ MEASUREMENT_OUT_OF_RANGE, MEASUREMENT_TOO_UNCERTAIN, DEGENERATE_GEOMETRY,\
+            \ INSUFFICIENT_OBSERVATIONS, INVALID_OBSERVATION"
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "CAPTURE_NOT_OWNED: not the capture's operator, a venue manager\
+            \ or an admin"
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Not found, or not visible to the caller's organization or\
+            \ venue (code NOT_FOUND)"
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "FLOOR_REQUIRED, INVALID_CAPTURE_STATE, DUPLICATE_MEASUREMENT"
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "MEDIA_NOT_OBSERVABLE: the media is not an accepted image or\
+            \ video of this capture"
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      summary: Record a measured distance or a surveyed control point
+      tags:
+      - capture-calibration-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
+      - OPERATOR
+  /api/v1/venues/{venueId}/captures/{captureId}/measurements/{measurementId}/withdraw:
+    post:
+      operationId: captureCalibrationWithdraw
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: captureId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: measurementId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WithdrawRequest"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MeasurementView"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Malformed request: an unparseable parameter or body, or a\
+            \ failed validation (code BAD_REQUEST or an operation-specific code)"
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: CAPTURE_NOT_OWNED
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Not found, or not visible to the caller's organization or\
+            \ venue (code NOT_FOUND)"
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "MEASUREMENT_WITHDRAWN, MEASUREMENT_IN_USE: the active frame\
+            \ was computed from it"
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      summary: "Withdraw a measurement (body: reason)"
+      tags:
+      - capture-calibration-controller
       x-chaya-roles:
       - ADMIN
       - VENUE_MANAGER
@@ -6522,6 +7014,34 @@ components:
         sizeBytes:
           type: integer
           format: int64
+    AttemptView:
+      type: object
+      properties:
+        coordinateFrameId:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        id:
+          type: string
+          format: uuid
+        measurementIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        outcome:
+          type: string
+        runId:
+          type: string
+          format: uuid
     Audit:
       type: object
       properties:
@@ -6577,6 +7097,17 @@ components:
           format: double
       required:
       - floorId
+    CalibrateCapture:
+      type: object
+      properties:
+        gravity:
+          $ref: "#/components/schemas/GravitySpec"
+        note:
+          type: string
+        resolvedPoints:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResolvedPoint"
     CalibrationRequest:
       type: object
       properties:
@@ -6591,6 +7122,46 @@ components:
         gravity:
           $ref: "#/components/schemas/GravitySpec"
         note:
+          type: string
+    CalibrationStatus:
+      type: object
+      properties:
+        activeControlPoints:
+          type: integer
+          format: int32
+        activeDistances:
+          type: integer
+          format: int32
+        activeFrame:
+          $ref: "#/components/schemas/FrameView"
+        captureId:
+          type: string
+          format: uuid
+        captureStage:
+          type: string
+        captureStatus:
+          type: string
+        floorId:
+          type: string
+          format: uuid
+        lastAttempt:
+          $ref: "#/components/schemas/AttemptView"
+        reconstructionFrame:
+          type: string
+        requiredControlPoints:
+          type: integer
+          format: int32
+        requiredDistances:
+          type: integer
+          format: int32
+        requirements:
+          type: array
+          items:
+            type: string
+        runId:
+          type: string
+          format: uuid
+        state:
           type: string
     CandidateDto:
       type: object
@@ -7751,6 +8322,95 @@ components:
         weightedCoveragePercent:
           type: number
           format: double
+    MeasurementInput:
+      type: object
+      properties:
+        datum:
+          type: string
+        kind:
+          type: string
+        label:
+          type: string
+        method:
+          type: string
+        observations:
+          type: array
+          items:
+            $ref: "#/components/schemas/ObservationInput"
+        uncertainty:
+          type: number
+          format: double
+        unit:
+          type: string
+        value:
+          type: number
+          format: double
+        venue:
+          type: array
+          items:
+            type: number
+            format: double
+    MeasurementView:
+      type: object
+      properties:
+        captureId:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+        datum:
+          type: string
+        floorId:
+          type: string
+          format: uuid
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+        label:
+          type: string
+        measuredMetres:
+          type: number
+          format: double
+        method:
+          type: string
+        observations:
+          type: array
+          items:
+            $ref: "#/components/schemas/ObservationView"
+        status:
+          type: string
+        uncertaintyMetres:
+          type: number
+          format: double
+        unit:
+          type: string
+        usedByActiveFrame:
+          type: boolean
+        value:
+          type: number
+          format: double
+        venue:
+          type: array
+          items:
+            type: number
+            format: double
+        venueMetres:
+          type: array
+          items:
+            type: number
+            format: double
+        withdrawnAt:
+          type: string
+          format: date-time
+        withdrawnBy:
+          type: string
+        withdrawnReason:
+          type: string
     MediaBucket:
       type: object
       properties:
@@ -7786,6 +8446,12 @@ components:
         partSizeBytes:
           type: integer
           format: int32
+        pixelHeight:
+          type: integer
+          format: int32
+        pixelWidth:
+          type: integer
+          format: int32
         rejectionCode:
           type: string
         rejectionMessage:
@@ -7811,6 +8477,43 @@ components:
           items:
             type: integer
             format: int32
+    ObservationInput:
+      type: object
+      properties:
+        frameTimeSeconds:
+          type: number
+          format: double
+        mediaId:
+          type: string
+          format: uuid
+        point:
+          type: string
+        u:
+          type: number
+          format: double
+        v:
+          type: number
+          format: double
+    ObservationView:
+      type: object
+      properties:
+        frameTimeSeconds:
+          type: number
+          format: double
+        id:
+          type: string
+          format: uuid
+        mediaId:
+          type: string
+          format: uuid
+        point:
+          type: string
+        u:
+          type: number
+          format: double
+        v:
+          type: number
+          format: double
     ObservedRegionDto:
       type: object
       properties:
@@ -8514,6 +9217,19 @@ components:
         "y":
           type: number
           format: double
+    ResolvedPoint:
+      type: object
+      properties:
+        measurementId:
+          type: string
+          format: uuid
+        point:
+          type: string
+        reconstruction:
+          type: array
+          items:
+            type: number
+            format: double
     Rotation:
       type: object
       properties:
@@ -9226,6 +9942,11 @@ components:
         z:
           type: number
           format: double
+    WithdrawRequest:
+      type: object
+      properties:
+        reason:
+          type: string
     WorkOrder:
       type: object
       properties:

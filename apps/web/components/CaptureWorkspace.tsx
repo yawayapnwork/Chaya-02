@@ -14,13 +14,17 @@ import {
   createCapture,
   getCapture,
   getProcessing,
+  listCaptures,
   listFloors,
+  listMedia,
   listVenues,
+  type MediaItem,
   retryProcessing,
   startProcessing,
 } from "@/lib/capture-api";
 import ProcessingPanel from "@/components/ProcessingPanel";
 import CaptureHud from "@/components/CaptureHud";
+import CalibrationPanel from "@/components/CalibrationPanel";
 import { type UploadState, retryValidation, uploadFile } from "@/lib/uploader";
 import { checkFileLocally, explainCode, formatBytes } from "@/lib/upload-plan";
 
@@ -40,15 +44,35 @@ const PHASE_LABEL: Record<UploadState["phase"], string> = {
   error: "Failed",
 };
 
-function deviceMetadata(): Record<string, unknown> {
-  // Real values reported by this browser; nothing is invented.
-  return {
+/**
+ * What this browser actually reports about the device. Nothing is inferred or filled in: camera intrinsics, lens
+ * distortion and sensor capabilities are not observable from a browser, so they are absent (an operator who knows the
+ * intrinsics uploads them as a cameraCalibration metadata file, docs/capture-ingestion.md).
+ */
+async function deviceMetadata(): Promise<Record<string, unknown>> {
+  const nav = navigator as Navigator & {
+    deviceMemory?: number;
+    userAgentData?: { getHighEntropyValues(hints: string[]): Promise<Record<string, unknown>> };
+  };
+  const device: Record<string, unknown> = {
+    source: "browser",
     userAgent: navigator.userAgent,
     platform: navigator.platform,
     language: navigator.language,
     screen: `${window.screen.width}x${window.screen.height}`,
     devicePixelRatio: window.devicePixelRatio,
+    hardwareConcurrency: navigator.hardwareConcurrency,
   };
+  if (nav.deviceMemory !== undefined) device.deviceMemoryGiB = nav.deviceMemory;
+  if (nav.userAgentData) {
+    try {
+      // Chromium only; the browser decides which values it reveals.
+      device.userAgentData = await nav.userAgentData.getHighEntropyValues(["model", "platform", "platformVersion", "mobile"]);
+    } catch {
+      /* not revealed */
+    }
+  }
+  return device;
 }
 
 function message(e: unknown): string {
@@ -69,12 +93,18 @@ export default function CaptureWorkspace() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [timeBudgetMinutes, setTimeBudgetMinutes] = useState(60);
+  const [openCaptures, setOpenCaptures] = useState<Capture[]>([]);
+  const [serverMedia, setServerMedia] = useState<MediaItem[]>([]);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const fail = useCallback((e: unknown) => {
     if (e instanceof NotSignedInError) setSignedIn(false);
     setError(message(e));
   }, []);
+
+  const captureId = capture?.id;
+  const venueOfCapture = capture?.venueId;
+  const captureStatus = capture?.status;
 
   // Sign-in state and venues.
   useEffect(() => {
@@ -101,12 +131,17 @@ export default function CaptureWorkspace() {
   useEffect(() => {
     if (!venueId) return;
     listFloors(venueId).then(setFloors, fail);
+    listCaptures(venueId).then((cs) => setOpenCaptures(cs.filter((c) => !["COMPLETED", "FAILED"].includes(c.status))), fail);
   }, [venueId, fail]);
 
+  // What the server holds for this capture: after a reload, interrupted uploads are resumed by choosing the same file again.
+  const settledRows = rows.filter((r) => ["accepted", "rejected", "quarantined", "error"].includes(r.state.phase)).length;
+  useEffect(() => {
+    if (!captureId || !venueOfCapture) return;
+    listMedia(venueOfCapture, captureId).then(setServerMedia, fail);
+  }, [captureId, venueOfCapture, settledRows, fail]);
+
   // Poll processing status while processing is going on (or has failed and may be retried).
-  const captureId = capture?.id;
-  const venueOfCapture = capture?.venueId;
-  const captureStatus = capture?.status;
   useEffect(() => {
     if (!captureId || !venueOfCapture || captureStatus !== "PROCESSING") return;
     const tick = async () => {
@@ -133,7 +168,7 @@ export default function CaptureWorkspace() {
       setCapture(
         await createCapture(venueId, {
           floorId: floorId || undefined,
-          device: deviceMetadata(),
+          device: await deviceMetadata(),
           startedAt: new Date().toISOString(),
         }),
       );
@@ -167,6 +202,23 @@ export default function CaptureWorkspace() {
       await uploadFile(capture.venueId, capture.id, row.file, (s) => patchRow(row.key, s));
     }
   }
+
+  async function onResumeCapture(c: Capture) {
+    setError(null);
+    setBusy(true);
+    try {
+      const fresh = await getCapture(c.venueId, c.id);
+      setCapture(fresh);
+      if (fresh.status === "PROCESSING") setProcessing(await getProcessing(fresh.venueId, fresh.id));
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const localFiles = new Map(rows.filter((r) => r.state.mediaId).map((r) => [r.state.mediaId as string, r.file]));
+  const unfinishedOnServer = serverMedia.filter((m) => ["PENDING", "QUARANTINED"].includes(m.status) && !localFiles.has(m.id));
 
   const resume = (row: FileRow) =>
     capture && uploadFile(capture.venueId, capture.id, row.file, (s) => patchRow(row.key, s), row.state.mediaId);
@@ -290,10 +342,32 @@ export default function CaptureWorkspace() {
               {floors.map((f) => <option key={f.id} value={f.id}>{f.name} (level {f.level})</option>)}
             </select>
           </label>
-          <p className="text-sm text-zinc-600">This device&apos;s details are recorded with the session.</p>
+          {floorId === "" && venueId && (
+            <p className="text-sm text-amber-800">Without a floor, no calibration measurements can be recorded for this capture.</p>
+          )}
+          <p className="text-sm text-zinc-600">
+            What this browser reports about the device (user agent, screen, platform) is recorded with the session. Camera
+            intrinsics are not visible to a browser and are not recorded unless you upload a camera calibration metadata file.
+          </p>
           <button className="rounded bg-black px-4 py-2 text-white disabled:opacity-50" disabled={!venueId || busy} onClick={onCreate}>
             Create capture session
           </button>
+          {openCaptures.length > 0 && (
+            <div className="space-y-2 border-t pt-4">
+              <h3 className="text-sm font-medium">Or continue an unfinished capture</h3>
+              <ul className="space-y-1 text-sm">
+                {openCaptures.map((c) => (
+                  <li key={c.id} className="flex items-center justify-between gap-2">
+                    <span>
+                      {new Date(c.startedAt).toLocaleString()} · {floors.find((f) => f.id === c.floorId)?.name ?? "no floor"} ·{" "}
+                      <span className="font-mono">{c.status}</span> · {c.acceptedMediaCount}/{c.mediaCount} files accepted
+                    </span>
+                    <button className="underline" disabled={busy} onClick={() => onResumeCapture(c)}>Continue</button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </section>
       )}
 
@@ -312,6 +386,19 @@ export default function CaptureWorkspace() {
             onChange={(e) => onFiles(e.target.files)}
             aria-label="Choose files to upload"
           />
+          {unfinishedOnServer.length > 0 && (
+            <div role="status" className="rounded border border-amber-400 bg-amber-50 p-3 text-sm text-amber-900">
+              <p className="font-medium">Unfinished on the server</p>
+              <ul className="mt-1 list-disc pl-5">
+                {unfinishedOnServer.map((m) => (
+                  <li key={m.id}>
+                    {m.filename} — {m.status === "PENDING" ? `${m.uploadedParts.length} of ${m.totalParts} parts received` : explainCode(m.rejectionCode, m.status)}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-1">Choose the same file again to resume: its checksum is matched and only the missing parts are sent.</p>
+            </div>
+          )}
           <ul className="space-y-3">
             {rows.map((r) => (
               <li key={r.key} className="rounded border p-3">
@@ -393,6 +480,10 @@ export default function CaptureWorkspace() {
             </div>
           )}
         </section>
+      )}
+
+      {capture && (
+        <CalibrationPanel venueId={capture.venueId} captureId={capture.id} captureStatus={capture.status} localFiles={localFiles} />
       )}
 
       {processing && (

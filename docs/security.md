@@ -216,12 +216,16 @@ table to `services/api/target/tenant-inventory.md` and fails if a table breaks t
 | `ar_anchor` | NOT NULL | NOT NULL | nullable |
 | `ar_anchor_pose` | NOT NULL | NOT NULL | NOT NULL |
 | `audit_log` | NOT NULL | nullable | — |
+| `capture_calibration_attempt` | NOT NULL | NOT NULL | — |
 | `capture_hud_pose_sample` | NOT NULL | NOT NULL | — |
 | `capture_hud_quality_sample` | NOT NULL | NOT NULL | — |
 | `capture_hud_scene` | NOT NULL | NOT NULL | — |
+| `capture_measurement` | NOT NULL | NOT NULL | — |
+| `capture_measurement_observation` | NOT NULL | NOT NULL | — |
 | `capture_media` | NOT NULL | NOT NULL | — |
 | `capture_session` | NOT NULL | NOT NULL | — |
 | `coordinate_frame` | NOT NULL | NOT NULL | — |
+| `erasure_request` | NOT NULL | NOT NULL | — |
 | `floor` | NOT NULL | NOT NULL | — |
 | `floor_connection` | NOT NULL | NOT NULL | — |
 | `navigation_edge` | NOT NULL | NOT NULL | — |

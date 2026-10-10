@@ -1,8 +1,8 @@
 "use client";
 
 import { createSHA256 } from "hash-wasm";
-import { ApiError, completeMedia, getMedia, initMedia, putPart } from "./capture-api";
-import { kindForType, normalizeType, planParts } from "./upload-plan";
+import { ApiError, completeMedia, getMedia, initMedia, listMedia, putPart } from "./capture-api";
+import { kindForType, matchStoredMedia, normalizeType, planParts } from "./upload-plan";
 
 export type Phase = "hashing" | "uploading" | "validating" | "accepted" | "rejected" | "quarantined" | "error";
 
@@ -65,15 +65,27 @@ export async function uploadFile(
     } else {
       update({ phase: "hashing", progress: 0 });
       const sha256 = await sha256Of(file, (p) => update({ phase: "hashing", progress: p }));
-      const init = await initMedia(venueId, captureId, {
-        kind,
-        filename: file.name,
-        contentType: normalizeType(file.type),
-        sizeBytes: file.size,
-        sha256,
-      });
-      mediaId = init.mediaId;
-      partSizeBytes = init.partSizeBytes;
+      // The same bytes may already be on the server, for example from before a page reload: resume that upload (or
+      // report its verdict) instead of storing a second copy.
+      const known = matchStoredMedia(await listMedia(venueId, captureId), { size: file.size, sha256 });
+      if (known?.action === "existing") {
+        await awaitVerdict(venueId, captureId, known.mediaId, update);
+        return;
+      }
+      if (known?.action === "resume") {
+        mediaId = known.mediaId;
+        partSizeBytes = (await getMedia(venueId, captureId, mediaId)).partSizeBytes;
+      } else {
+        const init = await initMedia(venueId, captureId, {
+          kind,
+          filename: file.name,
+          contentType: normalizeType(file.type),
+          sizeBytes: file.size,
+          sha256,
+        });
+        mediaId = init.mediaId;
+        partSizeBytes = init.partSizeBytes;
+      }
     }
     const id = mediaId;
     const parts = planParts(file.size, partSizeBytes);

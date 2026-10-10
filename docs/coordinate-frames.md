@@ -220,4 +220,7 @@ What they cover:
   device. `apps/web/components/ArWorkspace.tsx` still has the unrelated defects listed in review finding AR-1. The iOS
   package (`apps/ios-ar`) has **not** been updated to the device-frame boundary: it cannot be compiled here.
 - **No picking UI.** An operator must supply reconstruction coordinates for distance references, floor points and
-  control points. The viewer has no point-picking tool yet.
+  control points. The viewer has no point-picking tool yet. Measured values can now be recorded with the capture,
+  with their units and the image pixels where each point is seen ([capture-calibration.md](capture-calibration.md)).
+  Triangulating those pixels into reconstruction coordinates is not implemented, so the reconstruction coordinates
+  are still entered by hand.

@@ -116,6 +116,46 @@ class CaptureIngestionTest extends CaptureTestSupport {
             .andExpect(jsonPath("$.status").value("READY_FOR_PROCESSING"));
     }
 
+    /** What the web client does after a page reload (lib/upload-plan.ts matchStoredMedia): it hashes the re-selected file,
+     * finds the half-finished upload in the capture's media list by checksum and size, and sends only what is missing. */
+    @Test
+    void anInterruptedUploadIsFoundAgainByItsChecksumAfterAReloadAndKeepsTheOriginalBytes() throws Exception {
+        var c = ctx();
+        UUID capture = newCapture(c);
+        byte[] video = mp4(PART + 2048);
+        String sha = sha256(video);
+        var u = init(c, capture, "VIDEO", "walkthrough.mp4", "video/mp4", video, sha);
+        byte[] head = Arrays.copyOfRange(video, 0, PART);
+        byte[] tail = Arrays.copyOfRange(video, PART, video.length);
+
+        // A part damaged in transit is refused (the client retries it), then the connection drops after part 1.
+        sendPart(c, capture, u, 1, head, sha256(tail)).andExpect(status().isUnprocessableEntity())
+            .andExpect(jsonPath("$.code").value("CHECKSUM_MISMATCH"));
+        sendPart(c, capture, u, 1, head, sha256(head)).andExpect(status().isNoContent());
+
+        // After the reload the client knows nothing but the file: the list names the upload by checksum and size.
+        get(capUrl(c, capture) + "/media", c.operator()).andExpect(status().isOk())
+            .andExpect(jsonPath("$[0].id").value(u.mediaId().toString()))
+            .andExpect(jsonPath("$[0].sha256").value(sha))
+            .andExpect(jsonPath("$[0].sizeBytes").value(video.length))
+            .andExpect(jsonPath("$[0].status").value("PENDING"))
+            .andExpect(jsonPath("$[0].uploadedParts.length()").value(1))
+            .andExpect(jsonPath("$[0].uploadedParts[0]").value(1));
+        sendPart(c, capture, u, 2, tail, sha256(tail)).andExpect(status().isNoContent());
+        completeMedia(c, capture, u);
+        String settled = awaitSettled(c, capture, u.mediaId());
+        assertThat(field(settled, "status")).as(settled).isEqualTo("ACCEPTED");
+        assertThat(field(settled, "sha256")).isEqualTo(sha);
+        // One file, stored once, byte for byte the original.
+        assertThat(jdbc.sql("SELECT count(*) FROM capture_media WHERE capture_session_id = :c").param("c", capture)
+            .query(Integer.class).single()).isEqualTo(1);
+        assertThat(jdbc.sql("SELECT verified_sha256 FROM capture_media WHERE id = :m").param("m", u.mediaId())
+            .query(String.class).single()).isEqualTo(sha);
+        try (var in = store.open(objectKey(u.mediaId()))) {
+            assertThat(in.readAllBytes()).isEqualTo(video);
+        }
+    }
+
     @Test
     void storageIntegrityIsCheckedBeforeACaptureBecomesReady() throws Exception {
         var c = ctx();

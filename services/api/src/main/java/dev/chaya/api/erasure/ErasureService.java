@@ -463,6 +463,12 @@ public class ErasureService {
         u("UPDATE coordinate_frame SET source_artifact_id = NULL WHERE id IN " + F);
         u("UPDATE capture_session SET parent_scan_version_id = NULL, region_geometry = NULL WHERE id IN " + C);
 
+        // Calibration evidence: links and attempts name frames, runs and measurements, so they go first.
+        String measurements = "(SELECT id FROM capture_measurement WHERE capture_session_id IN " + C + ")";
+        n.put("coordinate_frame_measurement", u("DELETE FROM coordinate_frame_measurement WHERE coordinate_frame_id IN " + F
+            + " OR measurement_id IN " + measurements));
+        n.put("capture_calibration_attempt", u("DELETE FROM capture_calibration_attempt WHERE capture_session_id IN " + C
+            + " OR run_id IN " + R + " OR coordinate_frame_id IN " + F));
         n.put("scan_version_artifact", u("DELETE FROM scan_version_artifact WHERE scan_version_id IN " + V + " OR owner_version_id IN " + V));
         n.put("pii_staging_purge", u("DELETE FROM pii_staging_purge WHERE artifact_id IN " + A + " OR run_id IN " + R));
         n.put("pii_staging_sweep", u("DELETE FROM pii_staging_sweep WHERE run_id IN " + R));
@@ -476,6 +482,8 @@ public class ErasureService {
         n.put("capture_hud_pose_sample", u("DELETE FROM capture_hud_pose_sample WHERE capture_session_id IN " + C));
         n.put("capture_hud_quality_sample", u("DELETE FROM capture_hud_quality_sample WHERE capture_session_id IN " + C));
         n.put("capture_hud_scene", u("DELETE FROM capture_hud_scene WHERE capture_session_id IN " + C));
+        n.put("capture_measurement_observation", u("DELETE FROM capture_measurement_observation WHERE capture_session_id IN " + C));
+        n.put("capture_measurement", u("DELETE FROM capture_measurement WHERE capture_session_id IN " + C));
         n.put("capture_media_part", u("DELETE FROM capture_media_part WHERE media_id IN " + in("media")));
         n.put("capture_media", u("DELETE FROM capture_media WHERE id IN " + in("media")));
         n.put("scan", u("DELETE FROM scan WHERE id IN " + in("scan")));

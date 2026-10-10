@@ -44,7 +44,7 @@ public class MediaService {
     public record MediaView(UUID id, MediaKind kind, MediaStatus status, String filename, String claimedContentType,
                             String detectedContentType, long sizeBytes, String sha256, String rejectionCode,
                             String rejectionMessage, int totalParts, int partSizeBytes, List<Integer> uploadedParts,
-                            Instant createdAt) {}
+                            Instant createdAt, Integer pixelWidth, Integer pixelHeight) {}
 
     private static final Pattern SHA256 = Pattern.compile("^[0-9a-f]{64}$");
 
@@ -235,11 +235,13 @@ public class MediaService {
 
     private record Row(UUID id, MediaKind kind, MediaStatus status, String filename, String claimed, String detected,
                        long size, String sha, String verifiedSha, String objectKey, String uploadId, int partSize,
-                       int totalParts, String rejectionCode, String rejectionMessage, Instant createdAt) {}
+                       int totalParts, String rejectionCode, String rejectionMessage, Instant createdAt,
+                       Integer pixelWidth, Integer pixelHeight) {}
 
     private static final String ROW_SELECT = "SELECT m.id, m.kind, m.status, m.original_filename, m.claimed_content_type, "
         + "m.detected_content_type, m.declared_size_bytes, m.declared_sha256, m.verified_sha256, m.object_key, m.upload_id, "
-        + "m.part_size_bytes, m.total_parts, m.rejection_code, m.rejection_message, m.created_at FROM capture_media m";
+        + "m.part_size_bytes, m.total_parts, m.rejection_code, m.rejection_message, m.created_at, m.pixel_width, m.pixel_height "
+        + "FROM capture_media m";
 
     private static Row mapRow(java.sql.ResultSet rs, int i) throws java.sql.SQLException {
         return new Row(rs.getObject("id", UUID.class), MediaKind.valueOf(rs.getString("kind")),
@@ -248,7 +250,7 @@ public class MediaService {
             rs.getLong("declared_size_bytes"), rs.getString("declared_sha256"), rs.getString("verified_sha256"),
             rs.getString("object_key"), rs.getString("upload_id"), rs.getInt("part_size_bytes"),
             rs.getInt("total_parts"), rs.getString("rejection_code"), rs.getString("rejection_message"),
-            rs.getTimestamp("created_at").toInstant());
+            rs.getTimestamp("created_at").toInstant(), (Integer) rs.getObject("pixel_width"), (Integer) rs.getObject("pixel_height"));
     }
 
     private Row require(Actor actor, UUID venueId, UUID captureId, UUID mediaId) {
@@ -261,7 +263,8 @@ public class MediaService {
         List<Integer> parts = jdbc.sql("SELECT part_number FROM capture_media_part WHERE media_id = :m ORDER BY part_number")
             .param("m", m.id()).query(Integer.class).list();
         return new MediaView(m.id(), m.kind(), m.status(), m.filename(), m.claimed(), m.detected(), m.size(), m.sha(),
-            m.rejectionCode(), m.rejectionMessage(), m.totalParts(), m.partSize(), parts, m.createdAt());
+            m.rejectionCode(), m.rejectionMessage(), m.totalParts(), m.partSize(), parts, m.createdAt(), m.pixelWidth(),
+            m.pixelHeight());
     }
 
     private List<Integer> missingParts(UUID mediaId, int total) {

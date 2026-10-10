@@ -3,6 +3,7 @@
 import { accessToken } from "./auth";
 import { publicConfig } from "./env";
 import { currentAuthHeaders } from "./session";
+import type { CalibrationState, CaptureStage, LengthUnit, MeasurementKind, MeasurementMethod, PointName } from "./calibration";
 import type { MediaKind } from "./upload-plan";
 
 export class ApiError extends Error {
@@ -21,7 +22,9 @@ export interface Capture {
   id: string;
   venueId: string;
   floorId: string | null;
+  operatorId: string;
   status: string;
+  device: Record<string, unknown>;
   startedAt: string;
   endedAt: string | null;
   durationSeconds: number | null;
@@ -38,6 +41,10 @@ export interface MediaItem {
   filename: string;
   detectedContentType: string | null;
   sizeBytes: number;
+  sha256: string;
+  /** Decoded size the server read from an accepted image's header; null when unknown (video, HEIC). */
+  pixelWidth: number | null;
+  pixelHeight: number | null;
   rejectionCode: string | null;
   rejectionMessage: string | null;
   totalParts: number;
@@ -138,6 +145,11 @@ export const listFloors = (venueId: string) => api<Floor[]>(`/venues/${venueId}/
 export const createCapture = (venueId: string, body: { floorId?: string; device: Record<string, unknown>; startedAt: string }) =>
   api<Capture>(`/venues/${venueId}/captures`, { method: "POST", body: JSON.stringify(body) });
 
+export const listCaptures = (venueId: string) => api<Capture[]>(`/venues/${venueId}/captures`);
+
+export const listMedia = (venueId: string, captureId: string) =>
+  api<MediaItem[]>(`/venues/${venueId}/captures/${captureId}/media`);
+
 export const getCapture = (venueId: string, captureId: string) =>
   api<Capture>(`/venues/${venueId}/captures/${captureId}`);
 
@@ -204,3 +216,106 @@ export async function putPart(
     xhr.send(data);
   });
 }
+
+// ---- calibration evidence (docs/capture-calibration.md) ----------------------------------------------------------
+
+export interface ObservationView {
+  id: string;
+  point: PointName;
+  mediaId: string;
+  frameTimeSeconds: number | null;
+  u: number;
+  v: number;
+}
+export interface MeasurementView {
+  id: string;
+  captureId: string;
+  floorId: string;
+  kind: MeasurementKind;
+  label: string;
+  method: MeasurementMethod;
+  unit: LengthUnit;
+  value: number | null;
+  measuredMetres: number | null;
+  datum: string | null;
+  venue: number[] | null;
+  venueMetres: number[] | null;
+  uncertaintyMetres: number | null;
+  status: "ACTIVE" | "WITHDRAWN";
+  withdrawnReason: string | null;
+  withdrawnBy: string | null;
+  withdrawnAt: string | null;
+  createdBy: string;
+  createdAt: string;
+  usedByActiveFrame: boolean;
+  observations: ObservationView[];
+}
+export interface CalibrationAttempt {
+  id: string;
+  runId: string;
+  outcome: "ACCEPTED" | "REJECTED";
+  coordinateFrameId: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  measurementIds: string[];
+  createdBy: string;
+  createdAt: string;
+}
+export interface CalibrationFrame {
+  id: string;
+  version: number;
+  canonical: boolean;
+  metricStatus: string;
+  gravityStatus: string;
+  horizontalDatum: string;
+  scale: number | null;
+  scaleSource: string | null;
+  scaleRelativeSpread: number | null;
+  controlPointRmsM: number | null;
+  method: string;
+}
+export interface CalibrationStatus {
+  captureId: string;
+  floorId: string | null;
+  captureStatus: string;
+  captureStage: CaptureStage;
+  state: CalibrationState;
+  reconstructionFrame: string;
+  runId: string | null;
+  activeDistances: number;
+  activeControlPoints: number;
+  requiredDistances: number;
+  requiredControlPoints: number;
+  activeFrame: CalibrationFrame | null;
+  lastAttempt: CalibrationAttempt | null;
+  requirements: string[];
+}
+export interface ResolvedPoint {
+  measurementId: string;
+  point: PointName;
+  reconstruction: [number, number, number];
+}
+export type GravitySource = "RECONSTRUCTED_FLOOR_PLANE" | "OPERATOR_FLOOR_POINTS" | "NONE";
+
+const captureBase = (venueId: string, captureId: string) => `/venues/${venueId}/captures/${captureId}`;
+
+export const listMeasurements = (venueId: string, captureId: string) =>
+  api<MeasurementView[]>(`${captureBase(venueId, captureId)}/measurements`);
+
+export const recordMeasurement = (venueId: string, captureId: string, body: Record<string, unknown>) =>
+  api<MeasurementView>(`${captureBase(venueId, captureId)}/measurements`, { method: "POST", body: JSON.stringify(body) });
+
+export const withdrawMeasurement = (venueId: string, captureId: string, measurementId: string, reason: string) =>
+  api<MeasurementView>(`${captureBase(venueId, captureId)}/measurements/${measurementId}/withdraw`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  });
+
+export const getCalibration = (venueId: string, captureId: string) =>
+  api<CalibrationStatus>(`${captureBase(venueId, captureId)}/calibration`);
+
+export const calibrateCapture = (
+  venueId: string,
+  captureId: string,
+  body: { resolvedPoints: ResolvedPoint[]; gravity?: { source: GravitySource }; note?: string },
+) => api<CalibrationStatus>(`${captureBase(venueId, captureId)}/calibration`, { method: "POST", body: JSON.stringify(body) });

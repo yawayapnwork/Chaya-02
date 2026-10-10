@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { checkFileLocally, explainCode, formatBytes, kindForType, planParts } from "./upload-plan.ts";
+import { checkFileLocally, explainCode, formatBytes, kindForType, matchStoredMedia, planParts } from "./upload-plan.ts";
 
 test("planParts splits into full parts plus a remainder", () => {
   const parts = planParts(12, 5);
@@ -33,4 +33,19 @@ test("formatBytes and explainCode", () => {
   assert.equal(formatBytes(5 * 1024 ** 2), "5.0 MiB");
   assert.match(explainCode("MALWARE_DETECTED", "x"), /malware/i);
   assert.equal(explainCode("SOMETHING_NEW", "server said this"), "server said this");
+});
+
+test("matchStoredMedia resumes a partial upload of the same bytes after a reload", () => {
+  const sha = "a".repeat(64);
+  const stored = [
+    { id: "rejected", status: "REJECTED" as const, sizeBytes: 10, sha256: sha },
+    { id: "partial", status: "PENDING" as const, sizeBytes: 10, sha256: sha },
+    { id: "other", status: "ACCEPTED" as const, sizeBytes: 10, sha256: "b".repeat(64) },
+  ];
+  assert.deepEqual(matchStoredMedia(stored, { size: 10, sha256: sha }), { action: "resume", mediaId: "partial" });
+  // Same checksum but a different size is a different file.
+  assert.equal(matchStoredMedia(stored, { size: 11, sha256: sha }), null);
+  // A file the server already holds is not sent again; a rejected copy is never reused.
+  assert.deepEqual(matchStoredMedia(stored, { size: 10, sha256: "b".repeat(64) }), { action: "existing", mediaId: "other" });
+  assert.equal(matchStoredMedia([stored[0]], { size: 10, sha256: sha }), null);
 });

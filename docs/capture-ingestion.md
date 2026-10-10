@@ -100,10 +100,19 @@ A capture yields at most one `scan`, created when processing starts.
 
 ## Web UI (`/capture`)
 Sign in with Keycloak (authorization code + PKCE, tokens in memory) -> pick venue and optional floor ->
-create session (this browser's real user agent/screen recorded as device metadata) -> choose files ->
-per-file checksum and upload progress bars, validation verdicts with actionable messages, Resume /
+create session (what this browser reports -- user agent, platform, screen, pixel ratio, cores, and client hints where
+exposed -- recorded as device metadata; camera intrinsics are not observable from a browser and are not recorded) ->
+choose files -> per-file checksum and upload progress bars, validation verdicts with actionable messages, Resume /
 Retry-validation buttons -> Finish upload -> Start processing -> job table polled every 3 s. There is no
-coverage heat map yet. The page does not restore an in-progress session after a full reload.
+coverage heat map yet.
+
+After a full reload, "continue an unfinished capture" lists the venue's open captures and what the server holds for
+each. Choosing a partly uploaded file again resumes it: it is matched by SHA-256 and size (`lib/upload-plan.ts`
+`matchStoredMedia`) and only the missing parts are sent; a file the server already has is not stored twice.
+
+Accepted images record their decoded size (`pixelWidth`/`pixelHeight`, read from the file's own header; `null` for
+video and HEIC). Calibration measurements and the pixels they are marked at are recorded with the capture:
+[capture-calibration.md](capture-calibration.md).
 
 ## What is verified
 - `mvn verify`: real PostgreSQL + real MinIO in Testcontainers, real files (PNG/JPEG via ImageIO, MP4-signature fixtures, JSON). The malware scanner is replaced by a stand-in only in those tests.

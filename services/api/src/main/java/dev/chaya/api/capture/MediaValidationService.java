@@ -17,12 +17,16 @@ import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
+import javax.imageio.stream.ImageInputStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -193,7 +197,37 @@ public class MediaValidationService {
             }
         }
 
-        finish(mediaId, new Outcome_(true, false, null, null), j, actualSha, detected);
+        int[] pixelSize = j.kind() == MediaKind.IMAGE ? imagePixelSize(j.key()) : null;
+        finish(mediaId, new Outcome_(true, false, null, null), j, actualSha, detected, pixelSize);
+    }
+
+    /**
+     * The width and height an image's own header states, read without decoding the pixels; null when no installed
+     * reader understands the format (HEIC) or the header cannot be read. Calibration observations are bounds-checked
+     * against it; nothing is assumed when it is null.
+     */
+    private int[] imagePixelSize(String key) {
+        try (InputStream in = store.open(key); ImageInputStream iis = ImageIO.createImageInputStream(in)) {
+            if (iis == null) {
+                return null;
+            }
+            Iterator<ImageReader> readers = ImageIO.getImageReaders(iis);
+            if (!readers.hasNext()) {
+                return null;
+            }
+            ImageReader reader = readers.next();
+            try {
+                reader.setInput(iis, true, true);
+                int w = reader.getWidth(0);
+                int h = reader.getHeight(0);
+                return w > 0 && h > 0 ? new int[]{w, h} : null;
+            } finally {
+                reader.dispose();
+            }
+        } catch (IOException | RuntimeException e) {
+            log.info("could not read the pixel size of {}: {}", key, e.getMessage());
+            return null;
+        }
     }
 
     private Outcome_ checkContentType(Job j, String detected) {
@@ -216,6 +250,10 @@ public class MediaValidationService {
 
     /** Records the outcome and its audit row atomically. Rejected files are removed from storage. */
     private void finish(UUID mediaId, Outcome_ o, Job j, String sha, String detected) {
+        finish(mediaId, o, j, sha, detected, null);
+    }
+
+    private void finish(UUID mediaId, Outcome_ o, Job j, String sha, String detected, int[] pixelSize) {
         if (!o.accepted() && !o.quarantined() && j != null) {
             try {
                 store.delete(j.key());
@@ -226,10 +264,11 @@ public class MediaValidationService {
         String status = o.accepted() ? "ACCEPTED" : o.quarantined() ? "QUARANTINED" : "REJECTED";
         tx.executeWithoutResult(s -> {
             int rows = jdbc.sql("UPDATE capture_media SET status = :st, verified_sha256 = :sha, detected_content_type = :dt, "
-                    + "scan_result = :scan, rejection_code = :rc, rejection_message = :rm, validated_at = now() "
-                    + "WHERE id = :id AND status = 'VALIDATING'")
+                    + "scan_result = :scan, rejection_code = :rc, rejection_message = :rm, pixel_width = :pw, pixel_height = :ph, "
+                    + "validated_at = now() WHERE id = :id AND status = 'VALIDATING'")
                 .param("st", status).param("sha", sha).param("dt", detected).param("scan", o.accepted() ? "CLEAN" : null)
-                .param("rc", o.code()).param("rm", o.message()).param("id", mediaId).update();
+                .param("rc", o.code()).param("rm", o.message()).param("id", mediaId)
+                .param("pw", pixelSize == null ? null : pixelSize[0]).param("ph", pixelSize == null ? null : pixelSize[1]).update();
             if (rows == 1 && j != null) {
                 auditWriter.record(new AuditEvent(j.orgId(), j.venueId(), SYSTEM_ACTOR, ActorType.SERVICE,
                     o.accepted() ? "media.accept" : o.quarantined() ? "media.quarantine" : "media.reject",

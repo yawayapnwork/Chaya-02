@@ -91,3 +91,28 @@ export function explainCode(code: string | null | undefined, fallback: string): 
       return fallback;
   }
 }
+
+/** The server's record of a file, as far as resuming needs it. */
+export interface StoredMedia {
+  id: string;
+  status: "PENDING" | "VALIDATING" | "ACCEPTED" | "REJECTED" | "QUARANTINED";
+  sizeBytes: number;
+  sha256: string;
+}
+
+/**
+ * Whether a local file is one the server already knows: the same bytes (SHA-256 and size), uploaded or partly uploaded
+ * earlier, for example before the page was reloaded. "resume" sends only the missing parts of a PENDING upload,
+ * "existing" means the server already has the whole file (validating, accepted or quarantined) and nothing is sent again.
+ * A REJECTED copy is never reused: the file is uploaded afresh.
+ */
+export function matchStoredMedia(
+  stored: readonly StoredMedia[],
+  file: { size: number; sha256: string },
+): { action: "resume" | "existing"; mediaId: string } | null {
+  const same = stored.filter((m) => m.sha256 === file.sha256 && m.sizeBytes === file.size && m.status !== "REJECTED");
+  const settled = same.find((m) => m.status !== "PENDING");
+  if (settled) return { action: "existing", mediaId: settled.id };
+  const pending = same.find((m) => m.status === "PENDING");
+  return pending ? { action: "resume", mediaId: pending.id } : null;
+}
