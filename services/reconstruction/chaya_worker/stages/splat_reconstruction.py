@@ -39,6 +39,17 @@ identity. SPLAT_TRAINING_REPORT records how much of the training signal was mask
 Needs torch + gsplat + a CUDA device (gsplat's rasteriser is CUDA-only) and COLMAP (to convert the binary sparse model
 to TEXT). If any of that is missing the stage fails with DEPENDENCY_UNAVAILABLE and nothing is produced. There is no CPU
 or "fake" fallback path.
+
+Preflight (chaya_worker.splat_preflight) runs first, before any archive is unpacked: the environment (packages and their
+versions, a CUDA build of torch, a usable device of sufficient compute capability, gsplat's compiled CUDA kernels,
+COLMAP), the settings, and any offered checkpoint. Every environment problem is reported at once in
+`details.preflight`, with a fix for each. Training runs on the device preflight selected, not on torch's default device.
+
+Failures during training become structured stage failures, never a crashed worker (the orchestrator reports them and the
+lease ends with the report): CANCELLED, CAMERA_CONVENTION_INVALID, SPLAT_TRAINING_DIVERGED, GSPLAT_INCOMPATIBLE,
+SPLAT_GPU_OUT_OF_MEMORY, GPU_RUNTIME_ERROR, SPLAT_CHECKPOINT_WRITE_FAILED (`training_failure`). Exporting the cloud is
+checked too: SPLAT_EXPORT_FAILED (the PLY could not be written), SPLAT_EXPORT_INVALID (it does not read back), and
+SPLAT_INVALID for a cloud the viewer contract would refuse (packages/contracts/viewer/ksplat-contract.json).
 """
 
 from __future__ import annotations
@@ -50,16 +61,55 @@ from typing import Any
 
 import numpy as np
 
-from .. import archive
+from .. import archive, splat_preflight
 from ..camera_model import Camera, CameraModelError, FrameRectifier
 from ..colmap_txt import parse_cameras_txt, parse_points3d_txt
 from ..contract import ArtifactSpec, StageContext, StageError, StageResult
+from ..errors import DependencyError
 from ..ply import read_ply, write_ply
 from ..privacy import masks as privacy_masks
 from ..splat_color import rgb_bytes_to_sh0
 from .base import command_record, sha256_file, write_json
 
-REQUIREMENTS = ["py:torch", "py:gsplat", "cuda", "colmap"]
+
+def training_failure(exc: BaseException) -> StageError | None:
+    """Pure: the structured stage failure for an exception raised by training, or None for one that is a bug (which the
+    orchestrator then reports as INTERNAL_ERROR with its traceback)."""
+    import torch  # noqa: PLC0415
+
+    from .. import splat_training as st  # noqa: PLC0415
+
+    if isinstance(exc, InterruptedError):
+        return StageError("cancelled by the control plane", code="CANCELLED")
+    if isinstance(exc, st.CameraConventionError):
+        return StageError(str(exc), code="CAMERA_CONVENTION_INVALID")
+    if isinstance(exc, st.TrainingDiverged):
+        return StageError(f"training diverged: {exc}; no splat or checkpoint of the diverged state is published",
+                          code="SPLAT_TRAINING_DIVERGED")
+    if isinstance(exc, st.GsplatContractError):
+        return StageError(f"{exc}. Install gsplat {st.GSPLAT_VALIDATED_VERSION} (the GPU worker image)", code="GSPLAT_INCOMPATIBLE")
+    if isinstance(exc, torch.cuda.OutOfMemoryError):
+        return StageError("the GPU ran out of memory during training. Lower GSPLAT_MAX_GAUSSIANS or the frame resolution "
+                          "(FFMPEG_PREPROCESS), or run on a GPU with more memory, then retry", code="SPLAT_GPU_OUT_OF_MEMORY",
+                          details={"error": str(exc)[:500]})
+    if isinstance(exc, OSError):
+        return StageError(f"the training checkpoint could not be written: {exc}. Check the worker's free disk space, then retry",
+                          code="SPLAT_CHECKPOINT_WRITE_FAILED")
+    text = str(exc)
+    if isinstance(exc, RuntimeError) and any(m in text for m in ("CUDA", "cuda", "CUBLAS", "cudaError", "device-side")):
+        return StageError(f"the GPU failed during training: {text[:300]}. The worker keeps running; if this repeats, restart "
+                          "it and check the GPU with nvidia-smi", code="GPU_RUNTIME_ERROR", details={"error": text[:2000]})
+    return None
+
+
+def _release_gpu_memory() -> None:
+    try:
+        import torch  # noqa: PLC0415
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:  # noqa: BLE001, S110 - best effort after a failure that is already being reported
+        pass
 
 
 def quat_wxyz_to_rotmat(q: np.ndarray) -> np.ndarray:
@@ -188,6 +238,7 @@ def publish_outcome(ctx: StageContext, outcome, *, source: dict[str, Any], camer
     iteration for SPLAT, the parameters pass validate_trained_state, and the written PLY reads back bit-identical. A
     COMPLETED outcome that fails any of that is FAILED (SPLAT_NOT_TRAINED / SPLAT_INVALID / SPLAT_EXPORT_INVALID) with
     the report only: no splat and no checkpoint of an invalid state."""
+    from ..ksplat import MAX_BYTES, MIN_SPLAT_COUNT, encoded_size  # noqa: PLC0415
     from ..splat_training import SH_DEGREE, STATUS_COMPLETED, STATUS_PARTIAL, to_cloud, validate_trained_state  # noqa: PLC0415
 
     artifacts: list[ArtifactSpec] = []
@@ -202,18 +253,26 @@ def publish_outcome(ctx: StageContext, outcome, *, source: dict[str, Any], camer
         problems = validate_trained_state(outcome.params)
         if problems:
             invalid = ("SPLAT_INVALID", "the trained state is not a usable cloud: " + "; ".join(problems))
+        elif not MIN_SPLAT_COUNT <= outcome.gaussian_count or encoded_size(outcome.gaussian_count) > MAX_BYTES:
+            invalid = ("SPLAT_INVALID", f"{outcome.gaussian_count} Gaussians would make a {encoded_size(outcome.gaussian_count)}-byte "
+                                        f".ksplat; the viewer contract allows {MIN_SPLAT_COUNT} splat(s) to {MAX_BYTES} bytes")
     if invalid is None and outcome.completed_iterations > 0:  # a cloud that was never optimised is the SfM seed, not a reconstruction
         cloud = to_cloud(outcome.params)
         partial = outcome.status == STATUS_PARTIAL
         splat_name = "splat-partial.ply" if partial else "splat.ply"
-        ply_path = write_ply(cloud, ctx.workdir / splat_name)
-        mismatch = export_mismatch(cloud, ply_path)
-        if mismatch:
-            invalid, splat_name = ("SPLAT_EXPORT_INVALID", f"the written PLY does not read back as the trained cloud: {mismatch}"), None
+        try:
+            ply_path = write_ply(cloud, ctx.workdir / splat_name)
+            mismatch = export_mismatch(cloud, ply_path)
+        except OSError as exc:
+            invalid, splat_name = ("SPLAT_EXPORT_FAILED", f"the trained cloud could not be written: {exc}. Check the worker's "
+                                                          "free disk space, then retry"), None
         else:
-            splat_sha = sha256_file(ply_path)
-            artifacts.append(ArtifactSpec("SPLAT_PARTIAL" if partial else "SPLAT", ply_path, splat_name, "application/octet-stream",
-                                          partial=partial))
+            if mismatch:
+                invalid, splat_name = ("SPLAT_EXPORT_INVALID", f"the written PLY does not read back as the trained cloud: {mismatch}"), None
+            else:
+                splat_sha = sha256_file(ply_path)
+                artifacts.append(ArtifactSpec("SPLAT_PARTIAL" if partial else "SPLAT", ply_path, splat_name, "application/octet-stream",
+                                              partial=partial))
     checkpoint_sha = None
     if invalid is None and outcome.checkpoint_path is not None and outcome.checkpoint_path.is_file():
         checkpoint_sha = sha256_file(outcome.checkpoint_path)
@@ -269,8 +328,27 @@ class SplatReconstruction:
     name = "SPLAT_RECONSTRUCTION"
 
     def run(self, ctx: StageContext) -> StageResult:
-        ctx.toolchain.require(REQUIREMENTS, stage=self.name)
-        ctx.toolchain.require_cuda_compute_capability(ctx.settings.gsplat_min_compute_capability, stage=self.name)
+        s = ctx.settings
+        preflight = splat_preflight.environment_report(
+            ctx.toolchain, min_compute_capability=s.gsplat_min_compute_capability, allow_jit=s.gsplat_allow_jit_backend,
+            lock=splat_preflight.load_lock(splat_preflight.DEFAULT_LOCK_PATH))
+        if not preflight["ok"]:
+            raise DependencyError(
+                f"{self.name} cannot run on this worker: " + "; ".join(p["message"] for p in preflight["problems"]),
+                details={"missing": splat_preflight.missing_names(preflight), "preflight": preflight})
+
+        import cv2
+        import gsplat
+        import torch
+
+        from .. import ksplat
+        from .. import splat_training as st
+
+        config = st.TrainingConfig.from_settings(s)
+        bad_config = splat_preflight.config_problems(config, max_ksplat_bytes=ksplat.MAX_BYTES, encoded_size=ksplat.encoded_size)
+        if bad_config:
+            raise StageError("; ".join(p.message for p in bad_config), code="CONFIG_INVALID",
+                             details={"problems": [p.as_dict() for p in bad_config]})
 
         sparse_archives = ctx.inputs_of("SPARSE_MODEL")
         poses_inputs = ctx.inputs_of("POSES")
@@ -279,11 +357,21 @@ class SplatReconstruction:
             raise StageError("SPLAT_RECONSTRUCTION needs SPARSE_MODEL, POSES and FRAME_ARCHIVE_ANON from POSE_ESTIMATION",
                              code="INPUT_INVALID")
 
-        import cv2
-        import gsplat
-        import torch
-
-        from .. import splat_training as st
+        index = preflight["selected_device"]["index"]
+        device = torch.device("cuda", index)
+        torch.cuda.set_device(device)
+        source = training_source(ctx.order, ctx.inputs)
+        resume = None
+        checkpoints = ctx.inputs_of("SPLAT_CHECKPOINT")
+        if checkpoints:  # checked before any frame is prepared: a checkpoint of another job fails in seconds
+            try:
+                resume = st.load_checkpoint(checkpoints[0].path, config=config, source=source, device=device)
+            except st.CheckpointCorrupt as exc:
+                raise StageError(f"{exc}. Retry without it (the run starts from the SfM seed)", code="CHECKPOINT_CORRUPT",
+                                 details={"checkpoint": checkpoints[0].artifact_id}) from exc
+            except st.CheckpointMismatch as exc:
+                raise StageError(str(exc), code="CHECKPOINT_MISMATCH", details={"checkpoint": checkpoints[0].artifact_id}) from exc
+            ctx.logger.info("resuming from checkpoint", extra={"iteration": resume[0], "gaussians": len(resume[1]["means"])})
 
         sparse_dir = ctx.workdir / "sparse-bin"
         archive.unpack(sparse_archives[0].path, sparse_dir)
@@ -297,9 +385,10 @@ class SplatReconstruction:
         except CameraModelError as exc:
             raise StageError(f"the sparse model's camera cannot be used: {exc}", code=exc.code) from exc
         points = parse_points3d_txt((txt_dir / "points3D.txt").read_text(encoding="utf-8"))
-        if len(points["ids"]) < 4:
-            raise StageError(f"only {len(points['ids'])} 3D points from SfM; not enough to seed a splat",
-                             code="SPLAT_INIT_INSUFFICIENT", details={"points": len(points["ids"])})
+        too_few = splat_preflight.input_problems(posed_frames=None, sfm_points=len(points["ids"]), min_frames=s.gsplat_min_training_frames)
+        if too_few:
+            raise StageError(too_few[0].message, code="SPLAT_INIT_INSUFFICIENT",
+                             details={"points": len(points["ids"]), "problems": [p.as_dict() for p in too_few]})
 
         poses_doc = json.loads(poses_inputs[0].path.read_text(encoding="utf-8"))
         cams = build_cameras(poses_doc["poses"], cameras_model)
@@ -308,26 +397,15 @@ class SplatReconstruction:
         masks = privacy_masks.from_inputs(ctx)
         rectifier = FrameRectifier()
         cams = prepare_training_cameras(cams, images_dir, rectifier, masks)
-        if len(cams) < 3:
-            raise StageError(f"only {len(cams)} posed frames could be matched to images; need at least 3 to train",
-                             code="SPLAT_INIT_INSUFFICIENT", details={"posed_frames_with_images": len(cams)})
+        too_few = splat_preflight.input_problems(posed_frames=len(cams), sfm_points=len(points["ids"]),
+                                                 min_frames=s.gsplat_min_training_frames)
+        if too_few:
+            raise StageError(too_few[0].message, code="SPLAT_INIT_INSUFFICIENT",
+                             details={"posed_frames_with_images": len(cams), "problems": [p.as_dict() for p in too_few]})
 
-        s = ctx.settings
-        config = st.TrainingConfig.from_settings(s)
-        device = torch.device("cuda")
         torch.manual_seed(config.seed)
-        source = training_source(ctx.order, ctx.inputs)
         xyz = np.array(points["xyz"], dtype=np.float32)
         params = st.init_params(xyz, rgb_bytes_to_sh0(np.array(points["rgb"])), initial_scale_log(xyz), device)
-
-        resume = None
-        checkpoints = ctx.inputs_of("SPLAT_CHECKPOINT")
-        if checkpoints:
-            try:
-                resume = st.load_checkpoint(checkpoints[0].path, config=config, source=source, device=device)
-            except st.CheckpointMismatch as exc:
-                raise StageError(str(exc), code="CHECKPOINT_MISMATCH", details={"checkpoint": checkpoints[0].artifact_id}) from exc
-            ctx.logger.info("resuming from checkpoint", extra={"iteration": resume[0], "gaussians": len(resume[1]["means"])})
 
         keyframes_dir = ctx.workdir / "keyframes"
         keyframes_dir.mkdir()
@@ -337,23 +415,25 @@ class SplatReconstruction:
                 frame_uint8 = (pred.clamp(0, 1).cpu().numpy() * 255).astype(np.uint8)
                 cv2.imwrite(str(keyframes_dir / f"iter-{it:06d}.png"), cv2.cvtColor(frame_uint8, cv2.COLOR_RGB2BGR))
 
+        started = time.time()
         try:
             outcome = st.train(params=params, cams=cams, rasterize=st.gsplat_rasterizer(device), config=config,
                                loss_fn=st.l1_dssim_loss, checkpoint_path=ctx.workdir / "splat-checkpoint.pt", source=source,
                                deadline=ctx.deadline, stop_margin_seconds=s.gsplat_stop_margin_seconds, clock=time.time,
                                is_cancelled=ctx.cancelled.is_set, resume=resume, on_iteration=keyframe)
-        except InterruptedError as exc:
-            raise StageError("cancelled by the control plane", code="CANCELLED") from exc
-        except st.CameraConventionError as exc:
-            raise StageError(str(exc), code="CAMERA_CONVENTION_INVALID") from exc
-        except st.TrainingDiverged as exc:
-            raise StageError(f"training diverged: {exc}; no splat or checkpoint of the diverged state is published",
-                             code="SPLAT_TRAINING_DIVERGED") from exc
+        except Exception as exc:
+            failure = training_failure(exc)
+            if failure is None:
+                raise
+            _release_gpu_memory()
+            raise failure from exc
+        training_seconds = round(time.time() - started, 3)
 
         keyframes_tar = ctx.workdir / "keyframes.tar"
         archive.pack(keyframes_dir, keyframes_tar)
-        versions = {"torch": torch.__version__, "gsplat": getattr(gsplat, "__version__", None),
-                    "gsplat_validated": st.GSPLAT_VALIDATED_VERSION,
-                    "cuda_devices": ctx.toolchain.cuda_devices()}
+        versions = {"torch": torch.__version__, "torch_cuda": torch.version.cuda, "gsplat": getattr(gsplat, "__version__", None),
+                    "gsplat_validated": st.GSPLAT_VALIDATED_VERSION, "gsplat_backend": preflight["versions"].get("gsplat_backend"),
+                    "cuda_devices": ctx.toolchain.cuda_devices(), "training_device": preflight["selected_device"],
+                    "training_seconds": training_seconds, "lock": preflight["lock"]}
         return publish_outcome(ctx, outcome, source=source, cameras_used=len(cams), versions=versions, keyframes_tar=keyframes_tar,
                                training_cameras=training_cameras_doc(rectifier, poses_doc), privacy=privacy_mask_summary(cams))

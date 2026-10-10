@@ -132,6 +132,80 @@ class Toolchain:
         except Exception:  # noqa: BLE001 - device introspection failing means "treat as unavailable"
             return []
 
+    def select_cuda_device(self, minimum: float) -> dict | None:
+        """The device training should run on: the most capable one at or above `minimum` (ties: the lowest index),
+        or None. torch's default device is index 0, which may be the one that does not qualify."""
+        qualifying = [d for d in self.cuda_devices() if d["compute_capability_value"] >= minimum]
+        if not qualifying:
+            return None
+        return max(qualifying, key=lambda d: (d["compute_capability_value"], -d["index"]))
+
+    def module_version(self, name: str) -> str | None:
+        """The installed distribution version of a Python module, or None (not installed, or no version metadata)."""
+        dist = {"cv2": None}.get(name, name)
+        candidates = ["opencv-python-headless", "opencv-python"] if dist is None else [dist]
+        from importlib import metadata  # noqa: PLC0415
+
+        for candidate in candidates:
+            try:
+                return metadata.version(candidate)
+            except metadata.PackageNotFoundError:
+                continue
+        return None
+
+    def torch_build(self) -> dict:
+        """What the installed torch was built for: its version and CUDA runtime version (None for a CPU-only build)."""
+        if importlib.util.find_spec("torch") is None:
+            return {"version": None, "cuda": None, "error": "torch is not installed"}
+        try:
+            import torch
+
+            return {"version": torch.__version__, "cuda": torch.version.cuda, "error": None}
+        except Exception as exc:  # noqa: BLE001 - a broken torch install is reported, not raised
+            return {"version": None, "cuda": None, "error": f"torch failed to import: {exc}"}
+
+    def gsplat_backend(self, *, allow_jit: bool) -> ToolStatus:
+        """Whether gsplat's CUDA kernels can be loaded. gsplat 1.5.3 on PyPI is a pure-Python wheel: without the compiled
+        extension (`gsplat.csrc`, built from source with CUDA) it compiles its kernels on first use with nvcc, and with
+        no CUDA toolkit it silently leaves its backend unset, so the first rasterisation fails deep inside training.
+        Production workers carry the compiled extension (services/reconstruction/Dockerfile.gpu); JIT is opt-in."""
+        key = f"gsplat-backend:{allow_jit}"
+        if key in self._cache:
+            return self._cache[key]
+        name = "gsplat-cuda-backend"
+        if importlib.util.find_spec("gsplat") is None:
+            status = ToolStatus(name, False, detail="gsplat is not installed")
+        else:
+            try:
+                prebuilt = importlib.util.find_spec("gsplat.csrc") is not None
+            except (ImportError, ValueError) as exc:
+                prebuilt, status = False, ToolStatus(name, False, detail=f"gsplat failed to import: {exc}")
+            else:
+                status = None
+            if status is None and prebuilt:
+                try:
+                    importlib.import_module("gsplat.csrc")
+                    status = ToolStatus(name, True, version="prebuilt")
+                except Exception as exc:  # noqa: BLE001 - e.g. an undefined symbol: built against another torch
+                    status = ToolStatus(name, False, detail=f"gsplat's compiled CUDA extension does not load ({exc}); it was built "
+                                                            "against a different torch or CUDA. Rebuild gsplat against the installed torch")
+            elif status is None and allow_jit:
+                try:
+                    from gsplat.cuda import _backend  # noqa: PLC0415 - compiles the kernels if they are not cached yet
+
+                    ok = _backend._C is not None
+                    status = ToolStatus(name, ok, version="jit" if ok else None,
+                                        detail=None if ok else "gsplat found no CUDA toolkit (nvcc) to compile its kernels")
+                except Exception as exc:  # noqa: BLE001
+                    status = ToolStatus(name, False, detail=f"gsplat's JIT compilation failed: {exc}")
+            elif status is None:
+                status = ToolStatus(name, False, detail=(
+                    "gsplat has no compiled CUDA extension (gsplat.csrc). The PyPI wheel is pure Python and compiles its kernels "
+                    "with nvcc on first use, inside the training job's time budget. Build gsplat from source with CUDA "
+                    "(services/reconstruction/Dockerfile.gpu), or set GSPLAT_ALLOW_JIT_BACKEND=true on a host with the CUDA toolkit"))
+        self._cache[key] = status
+        return status
+
     def require_cuda_compute_capability(self, minimum: float, *, stage: str) -> None:
         """Raise a structured DependencyError if no CUDA device meets the minimum compute capability."""
         devices = self.cuda_devices()

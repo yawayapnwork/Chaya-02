@@ -1,0 +1,52 @@
+# The full dependency closure of the GPU worker image, as resolved on 2026-10-10 for Python 3.12 / Linux x86_64 from
+# requirements-gpu.txt plus torch==2.7.1+cu126 (pip --dry-run --report against PyPI and download.pytorch.org/whl/cu126).
+# Dockerfile.gpu applies it to every pip install, so no transitive version floats. Regenerate it together with
+# requirements-gpu.txt; never edit one without the other.
+boto3==1.39.0
+botocore==1.39.17
+certifi==2026.7.22
+charset-normalizer==3.5.2
+filelock==4.1.0
+fsspec==2026.9.0
+idna==3.20
+jaxtyping==0.3.2
+Jinja2==3.1.6
+jmespath==1.1.0
+markdown-it-py==4.2.0
+MarkupSafe==3.0.4
+mdurl==0.1.2
+mpmath==1.3.0
+networkx==3.7
+ninja==1.11.1.4
+numpy==2.2.6
+nvidia-cublas-cu12==12.6.4.1
+nvidia-cuda-cupti-cu12==12.6.80
+nvidia-cuda-nvrtc-cu12==12.6.77
+nvidia-cuda-runtime-cu12==12.6.77
+nvidia-cudnn-cu12==9.5.1.17
+nvidia-cufft-cu12==11.3.0.4
+nvidia-cufile-cu12==1.11.1.6
+nvidia-curand-cu12==10.3.7.77
+nvidia-cusolver-cu12==11.7.1.2
+nvidia-cusparse-cu12==12.5.4.2
+nvidia-cusparselt-cu12==0.6.3
+nvidia-nccl-cu12==2.26.2
+nvidia-nvjitlink-cu12==12.6.85
+nvidia-nvtx-cu12==12.6.77
+opencv-python-headless==4.11.0.86
+packaging==25.0
+Pygments==2.21.0
+python-dateutil==2.9.0.post0
+requests==2.32.4
+rich==14.0.0
+s3transfer==0.13.1
+scipy==1.15.3
+setuptools==80.9.0
+six==1.17.0
+sympy==1.14.0
+torch==2.7.1+cu126
+triton==3.3.1
+typing_extensions==4.16.0
+urllib3==2.8.0
+wadler_lindig==0.1.7
+wheel==0.45.1

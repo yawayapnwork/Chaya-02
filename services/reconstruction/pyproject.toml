@@ -25,6 +25,8 @@ ffmpeg-bundled = ["imageio-ffmpeg>=0.5"]
 # (CVE-2025-32434). open_clip loads its CLIP checkpoint through torch.load (docs/security-hardening.md, "Model files").
 # gsplat==1.5.3: chaya_worker.splat_training.gsplat_rasterizer was written against this version's rasterization() (its
 # source, sha256 343f080c...a906 on PyPI); the adapter checks the output shapes and fails loudly on an incompatible one.
+# gsplat's PyPI wheel is pure Python, with no compiled CUDA kernels, so this extra alone cannot train: build gsplat from
+# source with CUDA (Dockerfile.gpu). chaya_worker.splat_preflight refuses to train without the kernels.
 reconstruction = [
   "torch>=2.6", "gsplat==1.5.3", "open3d>=0.18", "transformers>=4.40", "huggingface-hub>=0.23",
   "open_clip_torch>=2.24", "pillow>=10.0",

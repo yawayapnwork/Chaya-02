@@ -256,8 +256,9 @@ py -3.12 -m venv .venv && .venv/Scripts/pip install -e ".[dev]"      # bash: .ve
 CHAYA_API_URL=... CHAYA_TOKEN_URL=... CHAYA_CLIENT_SECRET=... S3_ENDPOINT=... S3_ACCESS_KEY=... S3_SECRET_KEY=... python -m chaya_worker
 ```
 or `docker compose --env-file .env -f infra/docker/docker-compose.yml --profile pipeline up`. The image contains FFmpeg
-and OpenCV only. A GPU worker image needs COLMAP, GLOMAP, PyTorch/CUDA and gsplat on a CUDA base; set `COLMAP_BIN` /
-`GLOMAP_BIN` if they are not on PATH.
+and OpenCV only. The GPU worker image for SPLAT_RECONSTRUCTION (and COLMAP's POSE_ESTIMATION) is
+`services/reconstruction/Dockerfile.gpu` ("GPU worker image" below); set `COLMAP_BIN` / `GLOMAP_BIN` if they are not on
+PATH.
 
 ## Splat training
 
@@ -321,9 +322,58 @@ gsplat 1.5.3 evaluates SH as `clamp_min(SH + 0.5, 0)`, so for degree 0 this is t
 `tests/gpu/test_gsplat_cuda.py` checks it on CUDA.
 
 **gsplat version.** The adapter (`splat_training.gsplat_rasterizer`) was written against gsplat **1.5.3**'s
-`rasterization()`, read from its source distribution (PyPI sha256 `343f080c…a906`). The `reconstruction` extra pins
-`gsplat==1.5.3`. The adapter checks the output shapes (`renders [1, H, W, 3]`, `means2d [1, N, 2]`, `radii [1, N, …]`)
-and fails loudly on a mismatch. The report records the installed and the validated version.
+`rasterization()`, read from its source distribution (PyPI sha256 `343f080c…a906`; re-read on 2026-10-10: the
+signature, `packed=False` output `means2d [C, N, 2]` and `radii [C, N, 2]`, and RGB colours with `sh_degree=None`
+are as the adapter assumes). The `reconstruction` extra pins `gsplat==1.5.3`. The adapter checks the output shapes
+and raises `GsplatContractError` (stage code `GSPLAT_INCOMPATIBLE`) on a mismatch. The report records the installed and
+the validated version.
+
+**gsplat's CUDA kernels (a real defect, found in its source).** On PyPI, gsplat 1.5.3 is a pure-Python
+`py3-none-any` wheel. Its `gsplat/cuda/_backend.py` imports the compiled `gsplat.csrc` if present. Otherwise it
+JIT-compiles the kernels with nvcc on first use. With no CUDA toolkit it prints a warning and leaves `_C = None`, so
+the first rasterisation fails with `AttributeError: 'NoneType' object has no attribute …`, deep inside training.
+`pip install .[reconstruction]` therefore did not give a worker that can train. And on a host that did have nvcc, the
+first job spent minutes compiling inside its time budget. Now:
+
+- the GPU image builds gsplat from its sdist with the CUDA extension compiled in;
+- preflight (below) loads `gsplat.csrc` and refuses to train without it (`GSPLAT_CUDA_BACKEND_MISSING`), unless
+  `GSPLAT_ALLOW_JIT_BACKEND=true` is set on a development host with the toolkit.
+
+**Preflight** (`chaya_worker.splat_preflight`). Before any archive is unpacked or frame decoded, the stage checks the
+environment and reports every problem at once in `errorDetails.preflight`, each with a fix. It fails with
+`DEPENDENCY_UNAVAILABLE`, and `details.missing` names what is missing. The environment checks are:
+
+- `PACKAGE_MISSING`: torch, gsplat, numpy, scipy or OpenCV;
+- `PACKAGE_VERSION_UNSUPPORTED`: gsplat ≠ 1.5.3, torch < 2.6, or Python < 3.11;
+- `PACKAGE_VERSION_DRIFT`: a version differs from the image's `/opt/chaya/gpu-lock.json`;
+- `TORCH_WITHOUT_CUDA`: a CPU build of torch;
+- `CUDA_UNAVAILABLE`;
+- `GPU_CAPABILITY_UNSUPPORTED`: below `GSPLAT_MIN_COMPUTE_CAPABILITY`, default 7.0;
+- `GSPLAT_CUDA_BACKEND_MISSING`;
+- `TOOL_MISSING`: COLMAP.
+
+Then come the settings (`CONFIG_INVALID`: no iterations, densification ending before it starts, or a
+`GSPLAT_MAX_GAUSSIANS` whose `.ksplat` would exceed the viewer limit), and any offered checkpoint, which is loaded
+before frames are prepared. Too few SfM points or posed frames fail as `SPLAT_INIT_INSUFFICIENT`, with the frame
+minimum from `GSPLAT_MIN_TRAINING_FRAMES` (default 3). `python -m chaya_worker.splat_preflight` prints the same report
+and exits 0 only when training can start.
+
+**Device selection (a real defect).** The old check accepted a worker if *any* GPU reached the minimum compute
+capability, then trained on `torch.device("cuda")`, which is device 0. On a host whose device 0 is the weaker card,
+training ran on the device that failed the check. Preflight now selects the most capable qualifying device, and
+training runs there (`training_device` in the report).
+
+**Failures during training** are structured stage failures, so the worker process keeps running and the report ends
+the job's lease:
+
+- `SPLAT_GPU_OUT_OF_MEMORY` (lower `GSPLAT_MAX_GAUSSIANS` or the frame resolution);
+- `GPU_RUNTIME_ERROR` (a CUDA error);
+- `GSPLAT_INCOMPATIBLE`;
+- `SPLAT_CHECKPOINT_WRITE_FAILED` (disk);
+- `CANCELLED`, `CAMERA_CONVENTION_INVALID`, `SPLAT_TRAINING_DIVERGED`.
+
+GPU memory is released before the report. Any other exception is a bug and is reported as `INTERNAL_ERROR` with its
+traceback; it is not relabelled as a GPU failure.
 
 **Conventions and divergence.** Before the first iteration every training camera is checked: a 4×4 world-to-camera
 matrix with a proper rotation (det +1; OpenCV/COLMAP axes), a pinhole K with no skew and the principal point inside
@@ -341,9 +391,13 @@ so far.
 - If zero iterations ran, no splat is published.
 - Nothing is published as a splat unless it is a valid trained state. That means: at least one iteration ran, and
   every configured iteration ran for `SPLAT`; parameters are finite with consistent shapes and non-zero quaternions,
-  with at least one Gaussian left; and the PLY reads back bit-identical to the trained cloud. Otherwise the stage
-  fails with `SPLAT_NOT_TRAINED`, `SPLAT_INVALID` or `SPLAT_EXPORT_INVALID`. It then publishes only the report, with no
-  splat and no checkpoint, and the report's `validation` field says why.
+  with at least one Gaussian left; the cloud fits the viewer contract (at least `minSplatCount` splats, and a `.ksplat` of
+  at most `maxBytes`, packages/contracts/viewer/ksplat-contract.json), which applies to `SPLAT_PARTIAL` as much as to
+  `SPLAT`; and the PLY was written and reads back bit-identical to the trained cloud. Otherwise the stage fails with
+  `SPLAT_NOT_TRAINED`, `SPLAT_INVALID`, `SPLAT_EXPORT_FAILED` (the PLY could not be written) or `SPLAT_EXPORT_INVALID`.
+  It then publishes only the report, with no splat and no checkpoint, and the report's `validation` field says why.
+- `SPLAT_PARTIAL` is never a viewer source: ARTIFACT_GENERATION takes only `SPLAT` (or the cleaned/merged clouds), so a
+  partial result never becomes the published `.ksplat` (`tests/smoke/test_splat_artifact_smoke.py`).
 
 In both cases `splat-training-report.json` records the status, stop reason, completed and target iterations, initial
 and final Gaussian count, densification events, loss history, and provenance: the input identity, the splat and
@@ -363,7 +417,9 @@ always at the end, atomically. They hold:
 A SPLAT_RECONSTRUCTION job given a `SPLAT_CHECKPOINT` input resumes from it. Only the iteration target and checkpoint
 cadence may differ. The stage refuses with `CHECKPOINT_MISMATCH`: different inputs or other settings; a format-1
 checkpoint (written with a constant position rate); and an internally inconsistent one (non-finite values, row counts
-that disagree, density statistics of the wrong length). Randomness is derived
+that disagree, density statistics of the wrong length, Adam moments of another shape than their parameter). A file that
+is not a readable checkpoint at all (truncated, not a torch archive, missing or mistyped fields, non-float32
+parameters) fails with `CHECKPOINT_CORRUPT`, before any frame is prepared, instead of crashing the stage. Randomness is derived
 from (seed, iteration), so a resumed run takes the same steps an uninterrupted one would have. The test asserts the
 parameters are bit-identical on CPU.
 
@@ -377,6 +433,69 @@ be retried. So in production a checkpoint is recorded, but nothing resumes it au
 | Pipeline implemented | Yes: the loop, density control, checkpoints, budget, PARTIAL reporting and colour convention are in the stage. |
 | Local fixture validated | **Mechanics only, on CPU.** `tests/splat` (including `test_training_lifecycle.py`: LR schedule, resume across a time-box stop, checkpoint format/consistency, camera conventions, divergence, publish validation) runs the real training loop with a small CPU test renderer (`tests/splat/renderer.py`: isotropic, not gsplat). It checks colour round trip through the viewer bytes, Gaussian count changes, clone/split/prune/cap, bit-exact resume, deadline stop, PARTIAL status, artifacts and provenance, and the report the control plane receives through the orchestrator. `tests/unit/test_splat_color.py` checks the colour chain without training. **gsplat's CUDA rasteriser has not been executed**: no NVIDIA GPU was available, and gsplat has no CPU path (its PyTorch reference still calls CUDA kernels). The GPU-marked tests were skipped: `tests/gpu/test_reconstruction_toolchain.py`, which asserts that densification changed the count, and `tests/gpu/test_gsplat_cuda.py`, which checks the gsplat version, the degree-0 colour against gsplat's own SH path, the adapter contract, and a short synthetic training run with resume on CUDA (synthetic, not a reconstruction). They have never run. |
 | Real venue reconstruction validated | **No.** No capture has been reconstructed end to end (docs/E2E_VALIDATION.md). |
+
+Added on 2026-10-10 (CPU, no NVIDIA GPU on the host):
+
+- `tests/splat/test_splat_preflight_and_failures.py`: preflight decisions (with a stub toolchain stating what an
+  environment reports), the real preflight on this host, the real stage failing `DEPENDENCY_UNAVAILABLE` through the
+  orchestrator with the worker processing its next job, corrupt and inconsistent checkpoints, a training run
+  interrupted mid-way resuming from its last periodic checkpoint to the bit-identical uninterrupted result, the
+  OOM/CUDA/IO error mapping, export failure, and the viewer-contract size check for SPLAT and SPLAT_PARTIAL.
+- `tests/smoke/test_splat_artifact_smoke.py`: training with the CPU test renderer, through the orchestrator, then the
+  real ARTIFACT_GENERATION. It checks upload/read-back checksums, the `.ksplat` contract, exact positions and colour
+  bytes, the manifest and the bundle. It then loads the result with the pinned viewer library
+  (`apps/web/scripts/verify-ksplat-artifact.ts`).
+- `tests/splat/test_splat_dataset.py`: the GPU acceptance dataset. Its binary COLMAP model was also read by real
+  COLMAP (`model_converter`, `model_analyzer`: 16 images, 3168 points, mean track length 11.1).
+
+**GPU training is still NOT VALIDATED: `tests/gpu/test_splat_acceptance.py` has not run** ("GPU acceptance" below).
+
+### GPU worker image
+
+`services/reconstruction/Dockerfile.gpu` contains:
+
+- CUDA 12.6.3 on Ubuntu 24.04 with Python 3.12, base images pinned by digest;
+- torch 2.7.1+cu126, sha256-checked;
+- gsplat 1.5.3 built from its sha256-checked sdist with the CUDA extension, for `TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0+PTX"`;
+- every other Python package at an exact version: `gpu/requirements-gpu.txt`, plus the full resolved closure
+  `gpu/constraints-gpu.txt`, resolved on 2026-10-10 with a pip dry run against PyPI and the cu126 index;
+- Ubuntu's COLMAP.
+
+`gpu/write_lock.py` runs the worker's own preflight during the build. The build fails unless the only problem is the
+build host's missing GPU, which includes gsplat's compiled kernels failing to load against the installed torch. The
+step writes `/opt/chaya/gpu-lock.json`, and a running worker refuses to train if its versions drift from it.
+
+Host requirements: an NVIDIA GPU with compute capability ≥ 7.0, a driver supporting CUDA 12.6 (≥ 560), and the NVIDIA
+Container Toolkit. The image has not been built here, because the workstation lacks the disk space for a CUDA build.
+`docker build --check` passes, and both base digests resolve.
+
+### GPU acceptance
+
+On a GPU worker:
+
+```
+docker build -f services/reconstruction/Dockerfile.gpu -t chaya-worker-gpu services/reconstruction
+docker run --rm --gpus all chaya-worker-gpu python -m chaya_worker.splat_preflight      # must print "ok": true
+docker run --rm --gpus all --user 0 -e CHAYA_REQUIRE_GPU=1 -e CHAYA_GPU_ACCEPTANCE_REPORT=/out/gpu-acceptance.json \
+  -v "$PWD/services/reconstruction/tests:/src/tests:ro" -v "$PWD/gpu-acceptance:/out" -w /src chaya-worker-gpu \
+  sh -c "pip install pytest==8.4.1 && python -m pytest -p no:cacheprovider -m gpu tests/gpu/test_splat_acceptance.py -v -rs -s"
+cd apps/web && node --experimental-strip-types scripts/verify-ksplat-artifact.ts ../../gpu-acceptance/viewer-check
+```
+
+The test runs the real SPLAT_RECONSTRUCTION through the orchestrator. It checks:
+
+- training ran on the preflight-selected CUDA device, with gsplat 1.5.3, every iteration, and density control;
+- the trained cloud renders, through gsplat, at least 3 dB PSNR above the untrained SfM seed over the training views;
+- a second job resumes exactly from the first job's checkpoint;
+- a corrupt checkpoint fails `CHECKPOINT_CORRUPT`;
+- the SPLAT becomes a contract-valid `.ksplat`, with checksums, manifest and bundle verified.
+
+`gpu-acceptance.json` records the device, the versions, timings and sizes. With `CHAYA_REQUIRE_GPU=1` a missing
+requirement fails the test instead of skipping it.
+
+The default dataset is SYNTHETIC: a ray-traced textured room corner with exact cameras
+(`tests/gpu/splat_dataset.py`). Set `CHAYA_SPLAT_DATASET` to a real COLMAP project (`images/` and `sparse/0`) to train
+on real data.
 
 ## Tests (three separate tiers)
 | Tier | Where | Needs | Run |

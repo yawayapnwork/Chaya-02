@@ -1,0 +1,87 @@
+# syntax=docker/dockerfile:1.7
+# Chaya 02 GPU reconstruction worker: SPLAT_RECONSTRUCTION (gsplat on CUDA) and POSE_ESTIMATION (COLMAP).
+#
+# Everything that decides whether training works is pinned, and checked while the image is built:
+#   * CUDA 12.6.3 on Ubuntu 24.04 (Python 3.12), the base images pinned by digest;
+#   * torch 2.7.1+cu126, downloaded and checked against its sha256;
+#   * gsplat 1.5.3 built from its sdist (sha256-checked) WITH its CUDA extension compiled for TORCH_CUDA_ARCH_LIST.
+#     The PyPI wheel is pure Python: it compiles the kernels with nvcc on first use, inside a job's time budget, and with
+#     no CUDA toolkit its backend is silently unset. So the PyPI wheel is not used here;
+#   * the remaining Python packages at exact versions (gpu/requirements-gpu.txt), and every transitive dependency too
+#     (gpu/constraints-gpu.txt, the resolved closure);
+#   * gpu/write_lock.py runs the worker's own preflight (chaya_worker.splat_preflight). The build fails unless the only
+#     problem is the build host's missing GPU. It writes /opt/chaya/gpu-lock.json, and a running worker refuses to
+#     train if its versions drift from it.
+#
+# Build (no GPU needed; about 15 GB of layers and tens of minutes of nvcc; lower MAX_JOBS on a small build host):
+#   docker build -f services/reconstruction/Dockerfile.gpu -t chaya-worker-gpu services/reconstruction
+# Check on the GPU host (exit 0 only if training can start):
+#   docker run --rm --gpus all chaya-worker-gpu python -m chaya_worker.splat_preflight
+# Host requirements: an NVIDIA GPU of compute capability >= 7.0 (Volta or newer), a driver that supports CUDA 12.6
+# (>= 560), and the NVIDIA Container Toolkit.
+#
+# COLMAP is Ubuntu's package (3.9.x, built without CUDA). SPLAT_RECONSTRUCTION only uses it to convert the sparse model.
+# POSE_ESTIMATION's SIFT runs on the CPU with it; bound COLMAP_NUM_THREADS (DEPLOYMENT.md, "GPU workers").
+# No secrets in the image.
+
+ARG CUDA_DEVEL=nvidia/cuda:12.6.3-devel-ubuntu24.04@sha256:392c0df7b577ecae17a17f6ba7f2009c217bb4422f8431c053ae9af61a8c148a
+ARG CUDA_RUNTIME=nvidia/cuda:12.6.3-runtime-ubuntu24.04@sha256:92906d87596d638d35015c6353053121bd299d25943b875763321653884ba924
+
+FROM ${CUDA_DEVEL} AS build
+ARG TORCH_WHEEL=torch-2.7.1+cu126-cp312-cp312-manylinux_2_28_x86_64.whl
+ARG TORCH_URL=https://download-r2.pytorch.org/whl/cu126/torch-2.7.1%2Bcu126-cp312-cp312-manylinux_2_28_x86_64.whl
+ARG TORCH_SHA256=63bce0590bc540fc16139e2be0177847585182b8c5e68d7f9213789d1d96c978
+ARG GSPLAT_URL=https://files.pythonhosted.org/packages/6d/94/a0963873708223385ac926112dc3e40ab08297784ac53d95309b4cb5a801/gsplat-1.5.3.tar.gz
+ARG GSPLAT_SHA256=343f080c470e891ba3c697c03bdf0952cb982d1d535fdc24adb23c2cb4fba906
+# Volta .. Hopper as native code, plus PTX for newer GPUs to JIT from.
+ARG TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0+PTX"
+ARG MAX_JOBS=4
+ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_TIMEOUT=60 PIP_RETRIES=10 DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 python3-venv python3-dev build-essential ca-certificates curl \
+ && rm -rf /var/lib/apt/lists/*
+RUN python3 -m venv /opt/venv
+ENV PATH=/opt/venv/bin:$PATH
+WORKDIR /src
+COPY gpu/requirements-gpu.txt gpu/constraints-gpu.txt gpu/
+RUN pip install -r gpu/requirements-gpu.txt -c gpu/constraints-gpu.txt
+RUN curl -fsSL -o "/tmp/${TORCH_WHEEL}" "${TORCH_URL}" \
+ && echo "${TORCH_SHA256}  /tmp/${TORCH_WHEEL}" | sha256sum -c - \
+ && pip install "/tmp/${TORCH_WHEEL}" -c gpu/constraints-gpu.txt \
+ && rm "/tmp/${TORCH_WHEEL}"
+# gsplat's setup.py compiles gsplat.csrc with nvcc when BUILD_NO_CUDA is unset; it imports torch, hence no build isolation.
+RUN curl -fsSL -o /tmp/gsplat-1.5.3.tar.gz "${GSPLAT_URL}" \
+ && echo "${GSPLAT_SHA256}  /tmp/gsplat-1.5.3.tar.gz" | sha256sum -c - \
+ && TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" MAX_JOBS="${MAX_JOBS}" BUILD_NO_CUDA=0 \
+    pip wheel --no-build-isolation --no-deps -w /wheels /tmp/gsplat-1.5.3.tar.gz \
+ && pip install --no-deps /wheels/gsplat-1.5.3-*.whl \
+ && python -c "import importlib.util as u; assert u.find_spec('gsplat.csrc'), 'gsplat was built without its CUDA extension'"
+COPY pyproject.toml ./
+COPY chaya_worker ./chaya_worker
+RUN pip install --no-deps . && pip check
+RUN mkdir -p /opt/chaya && pip freeze > /opt/chaya/pip-freeze.txt && echo "${TORCH_CUDA_ARCH_LIST}" > /opt/chaya/cuda-arch-list
+
+FROM ${CUDA_RUNTIME}
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 colmap \
+ && rm -rf /var/lib/apt/lists/* \
+ && (userdel -r ubuntu 2>/dev/null || true) \
+ && groupadd -g 10001 worker \
+ && useradd -u 10001 -g worker -m -d /home/worker -s /usr/sbin/nologin worker \
+ && mkdir /work && chown worker:worker /work
+COPY --from=build /opt/venv /opt/venv
+COPY --from=build /opt/chaya /opt/chaya
+COPY gpu/write_lock.py /opt/chaya/write_lock.py
+ENV PATH=/opt/venv/bin:$PATH \
+    QT_QPA_PLATFORM=offscreen \
+    WORKER_WORKDIR=/work \
+    WORKER_STAGES=SPLAT_RECONSTRUCTION,POSE_ESTIMATION \
+    LOG_LEVEL=INFO \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+# Fails the build unless the image can train once it has a GPU (see the header).
+RUN python /opt/chaya/write_lock.py /opt/chaya/gpu-lock.json "$(cat /opt/chaya/cuda-arch-list)"
+USER 10001:10001
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 CMD ["python", "-m", "chaya_worker.liveness"]
+CMD ["python", "-m", "chaya_worker"]

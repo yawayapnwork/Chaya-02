@@ -1,0 +1,29 @@
+# Exact versions for the GPU splat worker image (services/reconstruction/Dockerfile.gpu), Python 3.12, Linux x86_64.
+#
+# torch and gsplat are NOT listed here. Dockerfile.gpu downloads both, checks them against their sha256, and installs
+# them first:
+#   torch 2.7.1+cu126  sha256 63bce0590bc540fc16139e2be0177847585182b8c5e68d7f9213789d1d96c978  (download.pytorch.org cu126)
+#   gsplat 1.5.3 sdist sha256 343f080c470e891ba3c697c03bdf0952cb982d1d535fdc24adb23c2cb4fba906  (PyPI, compiled with CUDA in the image)
+# torch's own CUDA runtime libraries (nvidia-*-cu12) are pinned exactly by torch's metadata.
+#
+# Every transitive dependency is pinned too, in constraints-gpu.txt (the resolved closure). Only the two downloads
+# above are pinned by hash; the closure is pinned by version, not hash-locked. The image records what it actually installed in
+# /opt/chaya/pip-freeze.txt and /opt/chaya/gpu-lock.json. chaya_worker.splat_preflight refuses to train when the running
+# versions drift from that lock.
+
+# the worker package's own dependencies (pyproject.toml)
+boto3==1.39.0
+requests==2.32.4
+numpy==2.2.6
+scipy==1.15.3
+opencv-python-headless==4.11.0.86
+
+# gsplat 1.5.3's runtime dependencies (its setup.py install_requires)
+ninja==1.11.1.4
+jaxtyping==0.3.2
+rich==14.0.0
+packaging==25.0
+
+# building the gsplat sdist (setup.py imports torch, so it is built without build isolation)
+setuptools==80.9.0
+wheel==0.45.1

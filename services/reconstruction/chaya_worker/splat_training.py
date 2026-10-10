@@ -74,6 +74,7 @@ import torch
 
 from .ply import GaussianCloud
 from .splat_color import sh0_to_rgb
+from .splat_preflight import GSPLAT_VALIDATED_VERSION as _PREFLIGHT_GSPLAT_VERSION
 
 PARAM_NAMES = ("means", "scales_log", "quats", "opacity_logit", "sh0")
 PARAM_WIDTHS = {"means": 3, "scales_log": 3, "quats": 4, "opacity_logit": None, "sh0": 3}  # None: shape (N,)
@@ -417,13 +418,28 @@ class CheckpointMismatch(ValueError):
     """The checkpoint is not of this training job (different source or incompatible configuration)."""
 
 
+class CheckpointCorrupt(ValueError):
+    """The checkpoint file cannot be read as a training state at all: truncated, not a torch archive, or missing or
+    mistyped fields. Distinct from CheckpointMismatch, which is a readable checkpoint of another job."""
+
+
 # Settings a resumed run may change: how long to train and how often to checkpoint. Changing any other setting would make
 # the resumed run a different optimisation than the one the checkpoint belongs to.
 RESUMABLE_CONFIG_CHANGES = {"iterations", "checkpoint_every"}
 
 
+_CHECKPOINT_KEYS = ("format", "sh_degree", "iteration", "config", "source", "scene_extent", "params", "optimizer", "lrs", "density",
+                    "history")
+
+
 def load_checkpoint(path: Path, *, config: TrainingConfig, source: dict[str, Any], device: torch.device):
-    payload = torch.load(path, map_location="cpu", weights_only=True)
+    try:
+        payload = torch.load(path, map_location="cpu", weights_only=True)
+    except Exception as exc:  # noqa: BLE001 - zip/pickle/EOF errors all mean the same thing here: not a readable checkpoint
+        raise CheckpointCorrupt(f"{path.name} is not a readable training checkpoint ({type(exc).__name__}: {exc})") from exc
+    if not isinstance(payload, dict) or any(k not in payload for k in _CHECKPOINT_KEYS):
+        missing = sorted(set(_CHECKPOINT_KEYS) - set(payload)) if isinstance(payload, dict) else ["(not a mapping)"]
+        raise CheckpointCorrupt(f"{path.name} lacks the fields of a training checkpoint: {missing}")
     if payload.get("format") != CHECKPOINT_FORMAT:
         raise CheckpointMismatch(f"{path.name} is a {payload.get('format')!r} checkpoint, not {CHECKPOINT_FORMAT}: it was written "
                                  "by a training loop with another schedule or layout and cannot be resumed exactly")
@@ -434,10 +450,33 @@ def load_checkpoint(path: Path, *, config: TrainingConfig, source: dict[str, Any
     differing = {k for k, v in config.as_dict().items() if payload["config"].get(k) != v} - RESUMABLE_CONFIG_CHANGES
     if differing:
         raise CheckpointMismatch(f"the checkpoint was trained with different settings: {sorted(differing)}")
+    try:
+        stored = payload["params"]
+        if set(stored) != set(PARAM_NAMES) or any(not torch.is_tensor(stored[k]) or stored[k].dtype != torch.float32 for k in PARAM_NAMES):
+            raise CheckpointCorrupt(f"{path.name}: the parameters are not the float32 tensors {list(PARAM_NAMES)}")
+        if not isinstance(payload["iteration"], int) or payload["iteration"] < 0 or not isinstance(payload["scene_extent"], float):
+            raise CheckpointCorrupt(f"{path.name}: the iteration or scene extent is malformed")
+        if set(payload["lrs"]) != set(PARAM_NAMES) or set(payload["optimizer"]) != set(PARAM_NAMES):
+            raise CheckpointCorrupt(f"{path.name}: the optimiser state does not cover every parameter")
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise CheckpointCorrupt(f"{path.name}: malformed checkpoint ({type(exc).__name__}: {exc})") from exc
     problems = validate_trained_state(payload["params"])
-    d = payload["density"]
-    if problems or len(d["grad2d"]) != len(payload["params"]["means"]) or len(d["count"]) != len(payload["params"]["means"]):
-        raise CheckpointMismatch(f"the checkpoint is not a consistent training state: {problems or 'density statistics do not match'}")
+    try:
+        d = payload["density"]
+        n = len(payload["params"]["means"])
+        if not problems and (len(d["grad2d"]) != n or len(d["count"]) != n):
+            problems = ["density statistics do not match the parameters"]
+        for name in PARAM_NAMES:  # Adam moments must line up with their parameter, or the first step fails mid-training
+            st_ = payload["optimizer"][name]
+            if not problems and st_ and any(torch.is_tensor(st_.get(k)) and st_[k].shape != payload["params"][name].shape
+                                            for k in ("exp_avg", "exp_avg_sq")):
+                problems = [f"the optimiser state of {name} does not match its parameter"]
+        events = [DensifyEvent(**e) for e in d["events"]]
+        resets = list(d["resets"])
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise CheckpointCorrupt(f"{path.name}: malformed density or optimiser state ({type(exc).__name__}: {exc})") from exc
+    if problems:
+        raise CheckpointMismatch(f"the checkpoint is not a consistent training state: {problems}")
     params = {k: torch.nn.Parameter(payload["params"][k].to(device)) for k in PARAM_NAMES}
     optimizer = make_optimizer(params, config, payload["scene_extent"])
     for g in optimizer.param_groups:
@@ -446,7 +485,7 @@ def load_checkpoint(path: Path, *, config: TrainingConfig, source: dict[str, Any
         st = payload["optimizer"][name]
         if st:
             optimizer.state[params[name]] = {k: (v.to(device) if torch.is_tensor(v) else v) for k, v in st.items()}
-    density = DensityControl(d["grad2d"].to(device), d["count"].to(device), [DensifyEvent(**e) for e in d["events"]], list(d["resets"]))
+    density = DensityControl(d["grad2d"].to(device), d["count"].to(device), events, resets)
     return payload["iteration"], params, optimizer, density, payload["scene_extent"], list(payload["history"])
 
 
@@ -462,7 +501,11 @@ class RenderOutput(NamedTuple):
 Rasterizer = Callable[[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]], RenderOutput]
 
 
-GSPLAT_VALIDATED_VERSION = "1.5.3"  # the API this adapter was written against (pyproject.toml pins it)
+class GsplatContractError(RuntimeError):
+    """gsplat returned outputs of another shape than the validated version's: an incompatible gsplat is installed."""
+
+
+GSPLAT_VALIDATED_VERSION = _PREFLIGHT_GSPLAT_VERSION  # the API this adapter was written against (pyproject.toml pins it)
 
 
 def gsplat_rasterizer(device: torch.device) -> Rasterizer:
@@ -484,7 +527,7 @@ def gsplat_rasterizer(device: torch.device) -> Rasterizer:
         radii = meta["radii"]
         if (tuple(renders.shape) != (1, cam["height"], cam["width"], 3) or tuple(means2d.shape) != (1, n, 2)
                 or tuple(radii.shape[:2]) != (1, n)):
-            raise RuntimeError(f"gsplat {getattr(gsplat, '__version__', '?')} returned renders {tuple(renders.shape)}, means2d "
+            raise GsplatContractError(f"gsplat {getattr(gsplat, '__version__', '?')} returned renders {tuple(renders.shape)}, means2d "
                                f"{tuple(means2d.shape)}, radii {tuple(radii.shape)}; this adapter expects gsplat "
                                f"{GSPLAT_VALIDATED_VERSION}'s unpacked shapes")
         means2d.retain_grad()

@@ -306,9 +306,16 @@ splat reconstruction, segmentation, cleanup, plane fitting, semantic indexing an
 with COLMAP/GLOMAP, CUDA, PyTorch, gsplat and Open3D (docs/pipeline.md). Navigation baking also needs chaya-navmesh
 (Recast/Detour; the CPU worker image builds it, and a GPU host builds it from `services/reconstruction/native/chaya-navmesh`
 or sets `CHAYA_NAVMESH_BIN`). No GPU image is built by CI.
-Building one belongs with the GPU host's provisioning, because it depends on the CUDA driver.
 
-A GPU worker needs:
+**Splat reconstruction worker.** Build `services/reconstruction/Dockerfile.gpu` (docs/pipeline.md, "GPU worker
+image"). It pins CUDA 12.6, torch 2.7.1+cu126, and gsplat 1.5.3 compiled with its CUDA kernels, plus every other Python
+package. Its default `WORKER_STAGES` is `SPLAT_RECONSTRUCTION,POSE_ESTIMATION`. Host: an NVIDIA GPU with compute
+capability ≥ 7.0, a driver for CUDA 12.6 (≥ 560), and the NVIDIA Container Toolkit (`docker run --gpus all`). Before
+giving it jobs, run `python -m chaya_worker.splat_preflight` in it (exit 0 = can train), then the GPU acceptance test
+(docs/pipeline.md, "GPU acceptance"). Do **not** `pip install gsplat` from PyPI on a worker: that wheel has no
+compiled kernels (preflight refuses it with `GSPLAT_CUDA_BACKEND_MISSING`).
+
+A GPU worker for the other GPU stages needs:
 
 - the same package (`pip install ./services/reconstruction[reconstruction]`);
 - `WORKER_STAGES` set to the GPU stages, which all run **after** `PRIVACY_PREPROCESS`;

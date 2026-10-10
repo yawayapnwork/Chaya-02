@@ -85,6 +85,10 @@ class Settings:
     gsplat_stop_margin_seconds: float = 120.0
     gsplat_keyframe_every: int = 500
     gsplat_min_compute_capability: float = 7.0
+    gsplat_min_training_frames: int = 3  # posed frames with images below which training is refused (INSUFFICIENT_FRAMES)
+    # gsplat's PyPI wheel compiles its CUDA kernels with nvcc on first use. Production images carry them prebuilt
+    # (Dockerfile.gpu); allowing JIT is for development hosts with the CUDA toolkit (chaya_worker.splat_preflight).
+    gsplat_allow_jit_backend: bool = False
     # SEMANTIC_SEGMENTATION
     semantic_confidence_min: float = 0.5
     semantic_sample_every: int = 1  # segment every Nth registered frame (cost control)
@@ -290,6 +294,8 @@ class Settings:
             gsplat_ssim_weight=_float(e, "GSPLAT_SSIM_WEIGHT", d.gsplat_ssim_weight),
             gsplat_keyframe_every=_int(e, "GSPLAT_KEYFRAME_EVERY", d.gsplat_keyframe_every),
             gsplat_min_compute_capability=_float(e, "GSPLAT_MIN_COMPUTE_CAPABILITY", d.gsplat_min_compute_capability),
+            gsplat_min_training_frames=_int(e, "GSPLAT_MIN_TRAINING_FRAMES", d.gsplat_min_training_frames),
+            gsplat_allow_jit_backend=e.get("GSPLAT_ALLOW_JIT_BACKEND", "false").strip().lower() == "true",
             semantic_confidence_min=_float(e, "SEMANTIC_CONFIDENCE_MIN", d.semantic_confidence_min),
             semantic_sample_every=_int(e, "SEMANTIC_SAMPLE_EVERY", d.semantic_sample_every),
             semantic_segmentation_model=e.get("SEMANTIC_SEGMENTATION_MODEL", d.semantic_segmentation_model),
@@ -404,6 +410,8 @@ class Settings:
             "gsplat_stop_margin_seconds": self.gsplat_stop_margin_seconds,
             "gsplat_keyframe_every": self.gsplat_keyframe_every,
             "gsplat_min_compute_capability": self.gsplat_min_compute_capability,
+            "gsplat_min_training_frames": self.gsplat_min_training_frames,
+            "gsplat_allow_jit_backend": self.gsplat_allow_jit_backend,
             "semantic_confidence_min": self.semantic_confidence_min, "semantic_sample_every": self.semantic_sample_every,
             "semantic_segmentation_model": self.semantic_segmentation_model,
             "semantic_segmentation_revision": self.semantic_segmentation_revision or None,
