@@ -7,6 +7,7 @@ import { CSS2DObject, CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRe
 import type { Poi } from "@/lib/poi-api";
 import type { Similarity } from "@/lib/coordinate-frame";
 import { type DeviceProfile } from "@/lib/device-profile";
+import { initialView, sampleIndices, type Vec3 } from "@/lib/viewer-camera";
 
 interface SplatViewerCanvasProps {
   /** An object URL for the already-downloaded .ksplat bytes (see lib/reconstruction-api.fetchArtifact). */
@@ -146,7 +147,27 @@ export default function SplatViewerCanvas({
       })
       .then(() => {
         if (disposed || !viewer) return;
-        onLoaded(viewer.getSplatMesh().getSplatCount()); // 0.4.7: the count lives on the SplatMesh, not the Viewer
+        const mesh = viewer.getSplatMesh();
+        // Frame what was actually loaded (lib/viewer-camera.ts): centres are read after the scene transform, so in a
+        // canonical frame they are venue metres wherever the datum puts them.
+        const c = new THREE.Vector3();
+        const view = initialView(
+          sampleIndices(mesh.getSplatCount()).map((i) => {
+            mesh.getSplatCenter(i, c, true);
+            return [c.x, c.y, c.z] as Vec3;
+          }),
+          !!toCanonical,
+        );
+        if (view) {
+          camera.up.set(...view.up);
+          camera.position.set(...view.position);
+          camera.far = Math.max(1000, view.extent * 50);
+          camera.updateProjectionMatrix();
+          camera.lookAt(...view.target);
+          viewer.controls?.target.set(...view.target);
+          viewer.controls?.update();
+        }
+        onLoaded(mesh.getSplatCount()); // 0.4.7: the count lives on the SplatMesh, not the Viewer
         const loop = () => {
           if (disposed || !viewer || !cssRenderer) return;
           viewer.update();

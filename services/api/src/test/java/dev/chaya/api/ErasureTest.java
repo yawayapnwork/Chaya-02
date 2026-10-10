@@ -73,12 +73,12 @@ class ErasureTest extends PipelineTestSupport {
         return mapper.readTree(r.andReturn().getResponse().getContentAsString());
     }
 
-    /** Runs every stage, calibrating before the last, so the run succeeds and is published as its floor's current version. */
+    /** Runs every stage, calibrating before the first metric stage, so the run succeeds and is published as its floor's current version. */
     private Started published() throws Exception {
         var s = startRun();
         List<JobStage> plan = PipelineDefinition.STAGES;
         for (JobStage stage : plan) {
-            if (stage == plan.get(plan.size() - 1)) {
+            if (stage == JobStage.SEMANTIC_INDEXING) { // the first stage in canonical metres, as with the real worker
                 calibrateOk(s, controlPointCalibration(0));
             }
             succeed(claimExpecting(stage.name()));

@@ -46,6 +46,10 @@ export default function ViewerWorkspace() {
   // validate them, so an unknown or inaccessible id just leaves the picker on "Select...".
   const prefillVenueId = searchParams.get("venue");
   const prefillFloorId = searchParams.get("floor");
+  // A capture links to exactly its own reconstruction (?run=); used once, and only if that run is a listed (published)
+  // version of the floor -- the list never holds a draft, failed or uncalibrated run.
+  const prefillRunId = searchParams.get("run");
+  const runPrefillConsumedRef = useRef(false);
 
   const [phase, setPhase] = useState<Phase>("checking");
   const [isPublicLink, setIsPublicLink] = useState(false);
@@ -166,7 +170,9 @@ export default function ViewerWorkspace() {
         if (cancelled) return;
         setVersions(vs);
         versionsRef.current = vs;
-        setRunId(initialVersion(vs)?.runId ?? "");
+        const requested = !runPrefillConsumedRef.current && prefillRunId ? vs.find((v) => v.runId === prefillRunId) : undefined;
+        runPrefillConsumedRef.current = true;
+        setRunId(requested?.runId ?? initialVersion(vs)?.runId ?? "");
         if (vs.length === 0) {
           setReconstruction(null);
           setReconstructionError(null);
@@ -180,6 +186,8 @@ export default function ViewerWorkspace() {
     return () => {
       cancelled = true;
     };
+    // prefillRunId is consumed at most once (runPrefillConsumedRef), deliberately not a dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [venueId, floorId, reloadToken]);
 
   useEffect(() => {

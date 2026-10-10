@@ -301,15 +301,33 @@ Every restore should end with `verify.sh`, a green `/api/v1/health`, and a note 
 
 ## 10. GPU workers
 
-The CPU `worker` in this compose file claims only the stages its image can run (`WORKER_STAGES`). Pose estimation,
+The CPU `worker` in this compose file claims only the stages its image can run (`WORKER_STAGES`). Since 2026-10-10
+these include NAVIGATION_BAKING (`chaya-navmesh` is in the CPU image); before that no shipped worker claimed the last
+stage. Pose estimation,
 splat reconstruction, segmentation, cleanup, plane fitting, semantic indexing and navigation baking need a GPU host
 with COLMAP/GLOMAP, CUDA, PyTorch, gsplat and Open3D (docs/pipeline.md). Navigation baking also needs chaya-navmesh
 (Recast/Detour; the CPU worker image builds it, and a GPU host builds it from `services/reconstruction/native/chaya-navmesh`
 or sets `CHAYA_NAVMESH_BIN`). No GPU image is built by CI.
 
-**Splat reconstruction worker.** Build `services/reconstruction/Dockerfile.gpu` (docs/pipeline.md, "GPU worker
-image"). It pins CUDA 12.6, torch 2.7.1+cu126, and gsplat 1.5.3 compiled with its CUDA kernels, plus every other Python
-package. Its default `WORKER_STAGES` is `SPLAT_RECONSTRUCTION,POSE_ESTIMATION`. Host: an NVIDIA GPU with compute
+**GPU worker.** Build `services/reconstruction/Dockerfile.gpu` (docs/pipeline.md, "GPU worker image"). It pins:
+
+- CUDA 12.6;
+- torch 2.7.1+cu126;
+- gsplat 1.5.3, compiled with its CUDA kernels;
+- Open3D 0.19, transformers 4.52.4 and open_clip 2.32;
+- the closure of every other Python package (`gpu/constraints-gpu.txt`).
+
+Its default `WORKER_STAGES` is every stage the CPU worker does not run: POSE_ESTIMATION, SPLAT_RECONSTRUCTION,
+SEMANTIC_SEGMENTATION, GEOMETRIC_CLEANUP, REGION_ALIGNMENT, PLANE_FITTING and SEMANTIC_INDEXING. Model weights are kept
+in a `/models` volume. Fill it once at the pinned revisions:
+
+```
+docker run --rm -v chaya-models:/models chaya-worker-gpu python /opt/chaya/fetch_models.py
+```
+
+The revisions are SegFormer `489d5cd8…`, Grounding DINO `a2bb814d…` and open_clip `ViT-B-32/openai`. The vision
+service must use the same CLIP model (`CLIP_MODEL_NAME`, `CLIP_PRETRAINED`); otherwise image embeddings and search
+queries are in different spaces. Host: an NVIDIA GPU with compute
 capability ≥ 7.0, a driver for CUDA 12.6 (≥ 560), and the NVIDIA Container Toolkit (`docker run --gpus all`). Before
 giving it jobs, run `python -m chaya_worker.splat_preflight` in it (exit 0 = can train), then the GPU acceptance test
 (docs/pipeline.md, "GPU acceptance"). Do **not** `pip install gsplat` from PyPI on a worker: that wheel has no

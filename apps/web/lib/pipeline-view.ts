@@ -61,6 +61,20 @@ export function explainStageError(code: string | null, message: string | null, d
       return "Privacy preprocessing could not be completed, so nothing was passed on. Retry, or capture again.";
     case "POSE_ESTIMATION_INSUFFICIENT":
       return "Camera positions could not be recovered for enough frames. Capture again with more overlap between views.";
+    case "NOT_CALIBRATED":
+      return "The reconstruction has no metric coordinate frame yet. Calibrate it under Measurements and calibration, then retry.";
+    case "STAGE_OUTPUT_MISSING":
+      return `The stage reported success without the outputs the next stages need${Array.isArray(details?.missing) ? ` (${(details?.missing as unknown[]).map(String).join(", ")})` : ""}. The worker and the server disagree on the artifact contract; retry on an up-to-date worker.`;
+    case "ARTIFACT_UNREADABLE":
+      return "An output of this stage could not be read back from storage. Retry the stage.";
+    case "DETECTED_OBJECTS_INVALID":
+      return "Some detected objects could not become searchable points of interest (missing position or embedding). Nothing was dropped silently; retry on an up-to-date worker.";
+    case "NAVIGATION_GRAPH_INVALID":
+      return "Navigation baking produced no routable graph. Retry the stage; if it repeats, check the floor's walkable surface in the capture.";
+    case "SPLAT_GPU_OUT_OF_MEMORY":
+      return "The GPU ran out of memory while training. Retry on a GPU with more memory or with a lower Gaussian limit.";
+    case "GPU_RUNTIME_ERROR":
+      return "The GPU failed during this stage. Retry; if it repeats, the worker's GPU needs checking.";
     case "REPORT_REJECTED":
       return "The control plane refused the stage output. This is a bug; contact support with the run id.";
     default:

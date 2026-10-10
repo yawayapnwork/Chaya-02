@@ -47,7 +47,7 @@ from ..object_localization import METHOD as LOCALIZATION_METHOD
 from ..object_localization import REJECTIONS, Localized, camera_depth, localize_detection
 from ..ply import read_ply
 from ..privacy import masks as privacy_masks
-from .base import command_record, run_provenance, venue_cloud, write_json
+from .base import command_record, frame_archives, run_provenance, venue_cloud, write_json
 from .semantic_segmentation import project_points
 from .splat_reconstruction import build_cameras
 
@@ -180,9 +180,10 @@ class SemanticIndexing:
                 json.loads(reports[0].path.read_text(encoding="utf-8"))["region_to_parent_reconstruction"])
         sparse_archives = ctx.inputs_of("SPARSE_MODEL")
         poses_inputs = ctx.inputs_of("POSES")
-        frame_archives = ctx.inputs_of("FRAME_ARCHIVE_ANON")
-        if not splats or not sparse_archives or not poses_inputs or not frame_archives:
-            raise StageError("SEMANTIC_INDEXING needs a splat, SPARSE_MODEL, POSES and FRAME_ARCHIVE_ANON", code="INPUT_INVALID")
+        frames = frame_archives(ctx)
+        if not splats or not sparse_archives or not poses_inputs or not frames:
+            raise StageError("SEMANTIC_INDEXING needs a splat, SPARSE_MODEL, POSES and a frame archive (FRAME_ARCHIVE_ANON, or "
+                             "FRAME_ARCHIVE_SELECTED with privacy disabled)", code="INPUT_INVALID")
 
         import cv2
 
@@ -204,7 +205,7 @@ class SemanticIndexing:
             for cam in cams:
                 cam["viewmat"] = viewmat_in_other_frame(cam["viewmat"], region_to_parent)
         images_dir = ctx.workdir / "images"
-        archive.unpack(frame_archives[0].path, images_dir)
+        archive.unpack(frames[0].path, images_dir)
         masks = privacy_masks.from_inputs(ctx)
 
         device = "cuda" if ctx.toolchain.cuda().available else "cpu"

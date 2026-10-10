@@ -38,7 +38,7 @@ from ..camera_model import Camera, CameraModelError
 from ..colmap_txt import parse_cameras_txt
 from ..contract import ArtifactSpec, StageContext, StageError, StageResult
 from ..privacy import masks as privacy_masks
-from .base import command_record, write_json
+from .base import command_record, frame_archives, write_json
 
 EXHAUSTIVE_MAX_FRAMES = 300
 
@@ -156,9 +156,10 @@ class PoseEstimation:
 
     def run(self, ctx: StageContext) -> StageResult:
         ctx.toolchain.require(["colmap"], stage=self.name)  # GLOMAP is optional: COLMAP can map on its own
-        archives = ctx.inputs_of("FRAME_ARCHIVE_ANON")
+        archives = frame_archives(ctx)
         if not archives:
-            raise StageError("no anonymised frame archive was provided by the previous stage", code="INPUT_INVALID")
+            raise StageError("no frame archive was provided: FRAME_ARCHIVE_ANON (privacy preprocessing) or, in a run with "
+                             "privacy disabled, FRAME_ARCHIVE_SELECTED", code="INPUT_INVALID")
         colmap = ctx.toolchain.colmap().path
         glomap = ctx.toolchain.glomap()
         images_dir = ctx.workdir / "images"

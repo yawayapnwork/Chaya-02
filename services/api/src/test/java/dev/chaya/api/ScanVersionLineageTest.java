@@ -137,7 +137,8 @@ class ScanVersionLineageTest extends PipelineTestSupport {
             switch (order.get("stage").asText()) {
                 case "REGION_ALIGNMENT" -> {
                     Map<String, Object> r = report("SUCCEEDED", List.of(artifact(order, "alignment-report.json", "ALIGNMENT_REPORT",
-                        false, false, "{}")), null, null);
+                        false, false, "{}"), artifact(order, "splat-aligned.ply", "SPLAT_ALIGNED", false, false, "aligned-cloud-bytes")),
+                        null, null);
                     r.put("command", Map.of("argv", List.of("region-alignment"), "config", Map.of("alignment", acceptedAlignment())));
                     send(order, r, svc).andExpect(status().isOk());
                 }
@@ -280,8 +281,8 @@ class ScanVersionLineageTest extends PipelineTestSupport {
                     .isEqualTo(runOfVersion.get(owner));
             }
         }
-        assertThat(ownersByKind(v1)).containsOnlyKeys("KSPLAT", "ARTIFACT_MANIFEST", "SPLAT_CLEAN", "DETECTED_OBJECTS", "NAVMESH",
-            "NAVMESH_MANIFEST", "NAVIGATION_GRAPH").allSatisfy((kind, owners) -> assertThat(owners).containsOnly(v1Id));
+        assertThat(ownersByKind(v1)).containsOnlyKeys("KSPLAT", "ARTIFACT_MANIFEST", "SPLAT_CLEAN", "PLANE_MODEL", "DETECTED_OBJECTS",
+            "NAVMESH", "NAVMESH_MANIFEST", "NAVIGATION_GRAPH").allSatisfy((kind, owners) -> assertThat(owners).containsOnly(v1Id));
         Map<String, List<UUID>> v2Owners = ownersByKind(v2);
         assertThat(v2Owners).doesNotContainKey("SPLAT_CLEAN").containsKey("SPLAT_MERGED");
         for (String own : List.of("KSPLAT", "SPLAT_MERGED", "NAVMESH", "NAVMESH_MANIFEST", "NAVIGATION_GRAPH")) {

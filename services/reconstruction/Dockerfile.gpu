@@ -1,5 +1,12 @@
 # syntax=docker/dockerfile:1.7
-# Chaya 02 GPU reconstruction worker: SPLAT_RECONSTRUCTION (gsplat on CUDA) and POSE_ESTIMATION (COLMAP).
+# Chaya 02 GPU reconstruction worker: every stage after privacy preprocessing that needs more than the CPU image --
+# POSE_ESTIMATION (COLMAP), SPLAT_RECONSTRUCTION (gsplat on CUDA), SEMANTIC_SEGMENTATION and SEMANTIC_INDEXING
+# (transformers, open_clip), GEOMETRIC_CLEANUP, PLANE_FITTING and REGION_ALIGNMENT (Open3D). With the CPU worker
+# (infra/deploy: the stages before privacy, REGION_SPLICE, ARTIFACT_GENERATION, NAVIGATION_BAKING) every stage of every plan
+# has a worker (tests/unit/test_stage_artifact_contract.py checks it).
+#
+# Model weights are not baked in. They live in a volume mounted at /models, filled once, at the revisions pinned below:
+#   docker run --rm -v chaya-models:/models chaya-worker-gpu python /opt/chaya/fetch_models.py
 #
 # Everything that decides whether training works is pinned, and checked while the image is built:
 #   * CUDA 12.6.3 on Ubuntu 24.04 (Python 3.12), the base images pinned by digest;
@@ -63,8 +70,9 @@ RUN mkdir -p /opt/chaya && pip freeze > /opt/chaya/pip-freeze.txt && echo "${TOR
 
 FROM ${CUDA_RUNTIME}
 ENV DEBIAN_FRONTEND=noninteractive
+# libgl1/libgomp1: Open3D's wheel links them even headless.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 colmap \
+ && apt-get install -y --no-install-recommends python3 colmap libgl1 libgomp1 \
  && rm -rf /var/lib/apt/lists/* \
  && (userdel -r ubuntu 2>/dev/null || true) \
  && groupadd -g 10001 worker \
@@ -72,16 +80,29 @@ RUN apt-get update \
  && mkdir /work && chown worker:worker /work
 COPY --from=build /opt/venv /opt/venv
 COPY --from=build /opt/chaya /opt/chaya
-COPY gpu/write_lock.py /opt/chaya/write_lock.py
+COPY gpu/write_lock.py gpu/fetch_models.py /opt/chaya/
 ENV PATH=/opt/venv/bin:$PATH \
     QT_QPA_PLATFORM=offscreen \
     WORKER_WORKDIR=/work \
-    WORKER_STAGES=SPLAT_RECONSTRUCTION,POSE_ESTIMATION \
+    WORKER_STAGES=POSE_ESTIMATION,SPLAT_RECONSTRUCTION,SEMANTIC_SEGMENTATION,GEOMETRIC_CLEANUP,REGION_ALIGNMENT,PLANE_FITTING,SEMANTIC_INDEXING \
+    HF_HOME=/models/huggingface \
+    XDG_CACHE_HOME=/models/cache \
+    TORCH_HOME=/models/torch \
+    SEMANTIC_SEGMENTATION_MODEL=nvidia/segformer-b0-finetuned-ade-512-512 \
+    SEMANTIC_SEGMENTATION_REVISION=489d5cd81a0b59fab9b7ea758d3548ebe99677da \
+    GROUNDING_DINO_MODEL=IDEA-Research/grounding-dino-tiny \
+    GROUNDING_DINO_REVISION=a2bb814dd30d776dcf7e30523b00659f4f141c71 \
+    CLIP_MODEL_NAME=ViT-B-32 \
+    CLIP_PRETRAINED=openai \
     LOG_LEVEL=INFO \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
-# Fails the build unless the image can train once it has a GPU (see the header).
-RUN python /opt/chaya/write_lock.py /opt/chaya/gpu-lock.json "$(cat /opt/chaya/cuda-arch-list)"
+# Fails the build unless the image can train once it has a GPU (see the header), and unless every other stage's libraries
+# import here (Open3D's native libraries, transformers, open_clip, Pillow).
+RUN python /opt/chaya/write_lock.py /opt/chaya/gpu-lock.json "$(cat /opt/chaya/cuda-arch-list)" \
+ && python -c "import open3d, transformers, open_clip, PIL; print('stage libraries import:', open3d.__version__, transformers.__version__, open_clip.__version__)" \
+ && mkdir -p /models && chown 10001:10001 /models
+VOLUME ["/models"]
 USER 10001:10001
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 CMD ["python", "-m", "chaya_worker.liveness"]
 CMD ["python", "-m", "chaya_worker"]

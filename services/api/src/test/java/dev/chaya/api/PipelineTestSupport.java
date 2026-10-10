@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -184,27 +185,113 @@ abstract class PipelineTestSupport extends CaptureTestSupport {
             leaseToken);
     }
 
-    /** The realistic output of each stage (small real objects). Pre-privacy frames are flagged as PII. */
+    /**
+     * What the real worker publishes for each stage (chaya_worker.stages; packages/contracts/pipeline/stage-artifacts.json),
+     * as small real objects with the real kinds: pre-privacy frames are flagged as PII. FIXTURE CONTENT: the bytes are not
+     * frames, models or clouds; only the kinds, the PII rules, the frame and version references and the documents the
+     * control plane itself reads (DETECTED_OBJECTS, NAVIGATION_GRAPH, the .ksplat) have the real worker's shape.
+     *
+     * <p>SEMANTIC_INDEXING and NAVIGATION_BAKING work in canonical metres: like the real worker, they need the work order's
+     * coordinate frame. Without one, {@link #succeed} reports what the real worker reports, a FAILED NOT_CALIBRATED; a test
+     * that drives a run through them calibrates first ({@link #calibrateRun}).
+     */
     protected List<Map<String, Object>> outputsFor(JsonNode order) {
         String stage = order.get("stage").asText();
-        return switch (stage) {
-            case "INPUT_VALIDATION" -> List.of(artifact(order, "validation.json", "INPUT_REPORT", false, false, "{\"ok\":true}"));
-            case "FFMPEG_PREPROCESS" -> List.of(artifact(order, "frame-000001.png", "FRAME", true, false, "frame-bytes"));
-            case "FRAME_QUALITY_FILTER" -> List.of(artifact(order, "selection.json", "FRAME_SELECTION", true, false, "{\"kept\":1}"));
-            case "PRIVACY_PREPROCESS" -> List.of(artifact(order, "frame-000001.png", "FRAME_ANON", false, false, "blurred-frame-bytes"));
-            case "POSE_ESTIMATION" -> List.of(artifact(order, "poses.json", "POSES", false, false, "{}"));
-            case "SPLAT_RECONSTRUCTION" -> List.of(artifact(order, "scene.ksplat", "SPLAT", false, false, "splat-bytes"));
-            // The kinds chaya_worker.stages.geometric_cleanup / region_splice / artifact_generation publish: a ScanVersion
-            // pins its cloud and viewer asset, and cannot be finalized without them.
-            case "GEOMETRIC_CLEANUP" -> List.of(artifact(order, "splat-clean.ply", "SPLAT_CLEAN", false, false, "clean-cloud-bytes"));
-            case "REGION_SPLICE" -> List.of(artifact(order, "splat-merged.ply", "SPLAT_MERGED", false, false, "merged-cloud-bytes"));
-            case "ARTIFACT_GENERATION" -> List.of(artifact(order, "scene.ksplat", "KSPLAT", false, false, ksplat("run")),
-                artifact(order, "manifest.json", "ARTIFACT_MANIFEST", false, false, "{}"));
-            default -> List.of(artifact(order, stage.toLowerCase() + ".json", stage, false, false, "{}"));
-        };
+        String frameId = frameOf(order);
+        try {
+            return switch (stage) {
+                case "INPUT_VALIDATION" -> List.of(artifact(order, "input-report.json", "INPUT_REPORT", false, false, "{\"ok\":true}"));
+                case "FFMPEG_PREPROCESS" -> List.of(artifact(order, "frames.tar", "FRAME_ARCHIVE", true, false, "frame-archive-bytes"),
+                    artifact(order, "frames-manifest.json", "FRAME_MANIFEST", false, false, "{\"frames\":1}"));
+                case "FRAME_QUALITY_FILTER" -> List.of(artifact(order, "frames-selected.tar", "FRAME_ARCHIVE_SELECTED", true, false,
+                        "selected-frame-bytes"),
+                    artifact(order, "frame-quality-report.json", "FRAME_QUALITY_REPORT", false, false, "{\"kept\":1}"));
+                case "PRIVACY_PREPROCESS" -> List.of(artifact(order, "frames-anon.tar", "FRAME_ARCHIVE_ANON", false, false, "blurred-frame-bytes"),
+                    artifact(order, "privacy-masks.tar", "PRIVACY_MASKS", false, false, "mask-bytes"),
+                    artifact(order, "privacy-report.json", "PRIVACY_REPORT", false, false, "{}"));
+                case "POSE_ESTIMATION" -> List.of(artifact(order, "sparse-model.tar", "SPARSE_MODEL", false, false, "sparse-model-bytes"),
+                    artifact(order, "poses.json", "POSES", false, false, "{}"));
+                case "SPLAT_RECONSTRUCTION" -> List.of(artifact(order, "splat.ply", "SPLAT", false, false, "splat-bytes"));
+                case "SEMANTIC_SEGMENTATION" -> List.of(artifact(order, "semantic-labels.json", "SEMANTIC_LABELS", false, false,
+                    "{\"labels\":[]}"));
+                // The kinds chaya_worker.stages.geometric_cleanup / region_splice / artifact_generation publish: a ScanVersion
+                // pins its cloud and viewer asset, and cannot be finalized without them.
+                case "GEOMETRIC_CLEANUP" -> List.of(artifact(order, "splat-clean.ply", "SPLAT_CLEAN", false, false, "clean-cloud-bytes"),
+                    artifact(order, "semantic-labels-clean.json", "SEMANTIC_LABELS_CLEAN", false, false, "{\"labels\":[]}"));
+                case "REGION_ALIGNMENT" -> List.of(artifact(order, "splat-aligned.ply", "SPLAT_ALIGNED", false, false, "aligned-cloud-bytes"));
+                case "REGION_SPLICE" -> List.of(artifact(order, "splat-merged.ply", "SPLAT_MERGED", false, false, "merged-cloud-bytes"),
+                    artifact(order, "splice-report.json", "SPLICE_REPORT", false, false, "{}"));
+                case "PLANE_FITTING" -> List.of(artifact(order, "planes.json", "PLANE_MODEL", false, false, "{\"planes\":[]}"),
+                    artifact(order, "gravity-estimate.json", "GRAVITY_ESTIMATE", false, false,
+                        "{\"status\":\"NOT_ESTIMATED\",\"reason\":\"fixture\"}"));
+                case "ARTIFACT_GENERATION" -> List.of(artifact(order, "scene.ksplat", "KSPLAT", false, false, ksplat("run")),
+                    artifact(order, "manifest.json", "ARTIFACT_MANIFEST", false, false, "{}"));
+                case "SEMANTIC_INDEXING" -> List.of(detections(order, frameId, List.of()));
+                case "NAVIGATION_BAKING" -> navigationOutputs(order, frameId);
+                default -> throw new AssertionError("no fixture outputs for stage " + stage);
+            };
+        } catch (IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
     }
 
+    /** The canonical frame the work order carries, or null. */
+    protected static String frameOf(JsonNode order) {
+        JsonNode f = order.path("coordinateFrame");
+        return f.isMissingNode() || f.isNull() ? null : f.get("id").asText();
+    }
+
+    static final Set<String> METRIC_STAGES = Set.of("SEMANTIC_INDEXING", "NAVIGATION_BAKING");
+
+    /** DETECTED_OBJECTS in the worker's shape (chaya_worker.stages.semantic_indexing), in `frameId`, naming the order's run and
+     * version. Each object is (label, x, y). */
+    protected Map<String, Object> detections(JsonNode order, String frameId, List<Object[]> objects) throws IOException {
+        List<Double> embedding = new ArrayList<>();
+        for (int i = 0; i < 512; i++) {
+            embedding.add(Math.sin(i * 0.017));
+        }
+        List<Map<String, Object>> objs = new ArrayList<>();
+        for (Object[] o : objects) {
+            objs.add(Map.of("label", o[0], "confidence", 0.9, "position", List.of(o[1], o[2], 0.05), "embedding", embedding,
+                "localization", Map.of("status", "MULTI_VIEW", "uncertainty_m", 0.1)));
+        }
+        Map<String, Object> doc = Map.of(
+            "coordinate_frame", Map.of("id", String.valueOf(frameId), "units", "m", "up_axis", "+Z"),
+            "embedding_model", "open_clip:ViT-B-32:openai",
+            "source", sourceOf(order),
+            "objects", objs);
+        return artifact(order, "detected-objects.json", "DETECTED_OBJECTS", false, false, mapper.writeValueAsString(doc));
+    }
+
+    /** POST .../processing/retry for the order's run, as its operator: re-queues the stage the run failed at. */
+    protected void retryRun(JsonNode order) throws Exception {
+        UUID org = UUID.fromString(order.get("organizationId").asText());
+        UUID venue = UUID.fromString(order.get("venueId").asText());
+        UUID capture = jdbc.sql("SELECT capture_session_id FROM pipeline_run WHERE id = :r")
+            .param("r", UUID.fromString(order.get("runId").asText())).query(UUID.class).single();
+        post("/api/v1/venues/" + venue + "/captures/" + capture + "/processing/retry", TestJwt.user(org, "operator").venues(venue).token(),
+            null).andExpect(status().isAccepted());
+    }
+
+    /** Calibrates the order's run with the synthetic control points (an operator's act, between stages), as a run must be
+     * before its metric stages. Returns the frame id. */
+    protected String calibrateRun(JsonNode order) throws Exception {
+        UUID org = UUID.fromString(order.get("organizationId").asText());
+        UUID venue = UUID.fromString(order.get("venueId").asText());
+        String operator = TestJwt.user(org, "operator").venues(venue).token();
+        String json = post("/api/v1/venues/" + venue + "/reconstructions/" + order.get("runId").asText() + "/coordinate-frames", operator,
+            controlPointCalibration(0)).andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        return mapper.readTree(json).get("id").asText();
+    }
+
+    /** Reports what the real worker would: the stage's outputs, or -- for a metric stage given no coordinate frame -- a FAILED
+     * NOT_CALIBRATED (chaya_worker.frames.require_canonical). */
     protected void succeed(JsonNode order) throws Exception {
+        if (METRIC_STAGES.contains(order.get("stage").asText()) && frameOf(order) == null) {
+            send(order, report("FAILED", List.of(), "NOT_CALIBRATED", "the reconstruction has no canonical coordinate frame"), svc)
+                .andExpect(status().isOk());
+            return;
+        }
         send(order, report("SUCCEEDED", outputsFor(order), null, null), svc).andExpect(status().isOk());
     }
 
@@ -213,6 +300,15 @@ abstract class PipelineTestSupport extends CaptureTestSupport {
         List<JsonNode> orders = new ArrayList<>();
         for (var stage : PipelineDefinition.STAGES) {
             JsonNode order = claimExpecting(stage.name());
+            if (METRIC_STAGES.contains(stage.name()) && frameOf(order) == null) {
+                // The operator calibrates once POSE_ESTIMATION has a frame; a metric stage claimed before that would fail
+                // NOT_CALIBRATED, so this helper calibrates and re-claims it after the retry the operator would start.
+                send(order, report("FAILED", List.of(), "NOT_CALIBRATED", "the reconstruction has no canonical coordinate frame"), svc)
+                    .andExpect(status().isOk());
+                calibrateRun(order);
+                retryRun(order);
+                order = claimExpecting(stage.name());
+            }
             orders.add(order);
             succeed(order);
             if (stage.name().equals(lastStage)) {

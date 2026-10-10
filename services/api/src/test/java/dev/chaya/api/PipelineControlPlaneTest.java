@@ -46,6 +46,9 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
             // Not final while stages remain.
             assertThat(processing(s).get("run").get("status").asText()).isEqualTo("RUNNING");
             assertThat(processing(s).get("run").get("quality").isNull()).isTrue();
+            if (stage.name().equals("SEMANTIC_INDEXING")) {
+                calibrateOk(s, controlPointCalibration(0)); // the operator's step before the first metric stage
+            }
             JsonNode order = claimExpecting(stage.name());
             orders.add(order);
             assertThat(order.get("runId").asText()).isEqualTo(s.run().toString());
@@ -66,8 +69,10 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
             assertThat(last.get("exitStatus").asInt()).isZero();
             assertThat(last.get("command").get("argv").get(0).asText()).isEqualTo("test-stage");
             assertThat(last.get("outputSha256").asText()).matches("[0-9a-f]{64}");
-            // ARTIFACT_GENERATION publishes the viewer asset and its manifest; every other stage one artifact here.
-            assertThat(last.get("artifacts").size()).isEqualTo(stage.get("stage").asText().equals("ARTIFACT_GENERATION") ? 2 : 1);
+            // Every stage published at least what the artifact contract requires of it.
+            List<String> kinds = last.get("artifacts").findValuesAsText("kind");
+            assertThat(kinds).containsAll(PipelineDefinition.REQUIRED_OUTPUTS.get(dev.chaya.api.processing.JobStage.valueOf(
+                stage.get("stage").asText())));
         }
         assertThat(jdbc.sql("SELECT count(*) FROM pipeline_stage_run WHERE run_id = :r").param("r", s.run()).query(Integer.class).single())
             .isEqualTo(12);
@@ -96,7 +101,7 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
 
         JsonNode pose = claimExpecting("POSE_ESTIMATION");
         // The privacy stage's clean output is offered as input, the raw frames are not.
-        assertThat(pose.get("inputs").findValuesAsText("kind")).contains("FRAME_ANON").doesNotContain("FRAME", "FRAME_SELECTION");
+        assertThat(pose.get("inputs").findValuesAsText("kind")).contains("FRAME_ARCHIVE_ANON").doesNotContain("FRAME_ARCHIVE", "FRAME_ARCHIVE_SELECTED");
 
         Map<String, Object> failure = report("FAILED", List.of(), "DEPENDENCY_UNAVAILABLE",
             "Neither GLOMAP nor COLMAP is installed on this worker.");
@@ -126,7 +131,7 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
         JsonNode again = claimExpecting("POSE_ESTIMATION");
         assertThat(again.get("attempt").asInt()).isEqualTo(2);
         assertThat(again.get("outputPrefix").asText()).endsWith("/POSE_ESTIMATION/attempt-2/");
-        assertThat(again.get("inputs").findValuesAsText("kind")).contains("FRAME_ANON");
+        assertThat(again.get("inputs").findValuesAsText("kind")).contains("FRAME_ARCHIVE_ANON");
         succeed(again);
         assertThat(claim().get("stage").asText()).isEqualTo("SPLAT_RECONSTRUCTION");
         assertThat(jdbc.sql("SELECT count(*) FROM pipeline_stage_run WHERE run_id = :r AND stage = 'POSE_ESTIMATION'").param("r", s.run())
@@ -134,7 +139,7 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
     }
 
     private String outputsForKey(JsonNode order) {
-        return jdbc.sql("SELECT a.object_key FROM processing_artifact a WHERE a.job_id = :j AND a.kind = 'FRAME_ANON'")
+        return jdbc.sql("SELECT a.object_key FROM processing_artifact a WHERE a.job_id = :j AND a.kind = 'FRAME_ARCHIVE_ANON'")
             .param("j", UUID.fromString(order.get("id").asText())).query(String.class).single();
     }
 
@@ -160,7 +165,7 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
         JsonNode validation = claimExpecting("INPUT_VALIDATION");
         // A frame reported as "no PII" before faces/screens/documents were anonymised would otherwise be handed to
         // every later stage and never purged.
-        Map<String, Object> unflagged = artifact(validation, "frame.png", "FRAME", false, false, "raw-face");
+        Map<String, Object> unflagged = artifact(validation, "frame.png", "FRAME_ARCHIVE", false, false, "raw-face");
         send(validation, report("SUCCEEDED", List.of(unflagged), null, null), svc).andExpect(status().isConflict())
             .andExpect(jsonPath("$.code").value("PII_FLAG_REQUIRED"));
         // Reports stay unflagged, as the real worker publishes them.
@@ -185,7 +190,7 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
         assertThat(existsInDerived(piiKey)).as("raw frames exist until the privacy stage has finished").isTrue();
         succeed(claimExpecting("FRAME_QUALITY_FILTER"));
         JsonNode privacy = claimExpecting("PRIVACY_PREPROCESS");
-        assertThat(privacy.get("inputs").findValuesAsText("kind")).contains("FRAME");
+        assertThat(privacy.get("inputs").findValuesAsText("kind")).contains("FRAME_ARCHIVE_SELECTED");
         succeed(privacy);
 
         // The unblurred frames are deleted as soon as the privacy stage succeeds.
@@ -194,7 +199,7 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
 
         // A later stage may not smuggle PII forward, and cannot register keys outside its prefix.
         JsonNode pose = claimExpecting("POSE_ESTIMATION");
-        Map<String, Object> smuggled = artifact(pose, "frame.png", "FRAME", true, false, "raw-face");
+        Map<String, Object> smuggled = artifact(pose, "frame.png", "FRAME_ARCHIVE", true, false, "raw-face");
         send(pose, report("SUCCEEDED", List.of(smuggled), null, null), svc).andExpect(status().isConflict())
             .andExpect(jsonPath("$.code").value("PII_AFTER_PRIVACY"));
         Map<String, Object> outside = new java.util.LinkedHashMap<>(artifact(pose, "ok.json", "POSES", false, false, "{}"));
@@ -453,8 +458,21 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
                     detectedObjectsJson(UUID.randomUUID().toString(), order.get("scanVersionId").asText(), 1.5, 2.5, 0.75,
                         "reception chair", 0.87));
                 send(order, report("SUCCEEDED", List.of(wrongFrame), null, null), svc).andExpect(status().isConflict());
-                Map<String, Object> detected = artifact(order, "detected-objects.json", "DETECTED_OBJECTS", false, false,
+                // An object that could not become a POI (here: a malformed localization claim) is a broken contract: the stage
+                // fails, retryably, instead of succeeding with the object silently dropped.
+                Map<String, Object> malformed = artifact(order, "detected-objects.json", "DETECTED_OBJECTS", false, false,
                     detectedObjectsJson(frameId, order.get("scanVersionId").asText(), 1.5, 2.5, 0.75, "reception chair", 0.87));
+                send(order, report("SUCCEEDED", List.of(malformed), null, null), svc).andExpect(status().isOk());
+                JsonNode failed = processing(s).get("run");
+                assertThat(failed.get("status").asText()).isEqualTo("FAILED");
+                assertThat(failed.get("failureStage").asText()).isEqualTo("SEMANTIC_INDEXING");
+                assertThat(failed.get("failureCode").asText()).isEqualTo("DETECTED_OBJECTS_INVALID");
+                assertThat(failed.get("failureMessage").asText()).contains("objects[1]").contains("localization");
+                post(capUrl(s.c(), s.capture()) + "/processing/retry", s.c().operator(), null).andExpect(status().isAccepted());
+                order = claimExpecting("SEMANTIC_INDEXING");
+                String wellFormed = detectedObjectsJson(frameId, order.get("scanVersionId").asText(), 1.5, 2.5, 0.75, "reception chair", 0.87);
+                wellFormed = wellFormed.substring(0, wellFormed.lastIndexOf(",{\"label\":\"bench\"")) + "]}";
+                Map<String, Object> detected = artifact(order, "detected-objects.json", "DETECTED_OBJECTS", false, false, wellFormed);
                 send(order, report("SUCCEEDED", List.of(detected), null, null), svc).andExpect(status().isOk());
                 // Validated, but not a POI yet: only publishing the run's version turns its detections into POIs (V28).
                 assertThat(jdbc.sql("SELECT count(*) FROM poi WHERE venue_id = :v").param("v", s.c().venue())
@@ -484,7 +502,7 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
                 Map.entry("localizationUncertaintyM", rs.getDouble("localization_uncertainty_m"))))
             .list();
 
-        assertThat(rows).as("the object with a malformed localization was skipped").hasSize(1);
+        assertThat(rows).as("only the retried, well-formed detections became POIs").hasSize(1);
         Map<String, Object> row = rows.get(0);
         assertThat(row.get("localizationStatus")).isEqualTo("MULTI_VIEW");
         assertThat(row.get("localizationUncertaintyM")).isEqualTo(0.12);
@@ -572,7 +590,7 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
         var s = startRun();
         String frameId = null;
         for (var stage : PipelineDefinition.STAGES) {
-            if (stage.name().equals("NAVIGATION_BAKING")) {
+            if (stage.name().equals("SEMANTIC_INDEXING")) {
                 frameId = calibrateOk(s, controlPointCalibration(0)).get("id").asText();
             }
             JsonNode order = claimExpecting(stage.name());

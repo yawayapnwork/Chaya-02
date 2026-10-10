@@ -1,0 +1,80 @@
+{
+  "description": "The artifact contract between the control plane (dev.chaya.api.pipeline) and the reconstruction worker (chaya_worker.stages). Every successful stage publishes its requiredOutputs: the control plane refuses a SUCCEEDED report without them (STAGE_OUTPUT_MISSING), because a later stage or the scan version's publication consumes them. optionalOutputs are reports or conditional outputs. requiredInputs is a list of alternatives: for each group, at least one of its kinds must be available, from an earlier stage of the plan or from outside it (externalInputs). optionalInputs are read when present. Checked by services/api OpenPipelineContractTest (plans and requiredOutputs) and services/reconstruction tests/unit/test_stage_artifact_contract.py (what each stage really reads and writes, and that every plan can be satisfied).",
+  "plans": {
+    "full": ["INPUT_VALIDATION", "FFMPEG_PREPROCESS", "FRAME_QUALITY_FILTER", "PRIVACY_PREPROCESS", "POSE_ESTIMATION",
+             "SPLAT_RECONSTRUCTION", "SEMANTIC_SEGMENTATION", "GEOMETRIC_CLEANUP", "PLANE_FITTING", "ARTIFACT_GENERATION",
+             "SEMANTIC_INDEXING", "NAVIGATION_BAKING"],
+    "incremental": ["INPUT_VALIDATION", "FFMPEG_PREPROCESS", "FRAME_QUALITY_FILTER", "PRIVACY_PREPROCESS", "POSE_ESTIMATION",
+                    "SPLAT_RECONSTRUCTION", "SEMANTIC_SEGMENTATION", "GEOMETRIC_CLEANUP", "REGION_ALIGNMENT", "REGION_SPLICE",
+                    "PLANE_FITTING", "ARTIFACT_GENERATION", "SEMANTIC_INDEXING", "NAVIGATION_BAKING"],
+    "optionalStages": ["PRIVACY_PREPROCESS", "NAVIGATION_BAKING"]
+  },
+  "externalInputs": {
+    "always": ["RAW_VIDEO", "RAW_IMAGE", "RAW_METADATA"],
+    "incremental": ["GLOBAL_CLOUD", "GLOBAL_LABELS"]
+  },
+  "stages": {
+    "INPUT_VALIDATION": {
+      "requiredOutputs": [], "optionalOutputs": ["INPUT_REPORT"],
+      "requiredInputs": [["RAW_VIDEO", "RAW_IMAGE"]], "optionalInputs": ["RAW_METADATA"]
+    },
+    "FFMPEG_PREPROCESS": {
+      "requiredOutputs": ["FRAME_ARCHIVE"], "optionalOutputs": ["FRAME_MANIFEST", "CAMERA_CALIBRATION"],
+      "requiredInputs": [["RAW_VIDEO", "RAW_IMAGE"]], "optionalInputs": ["RAW_METADATA"]
+    },
+    "FRAME_QUALITY_FILTER": {
+      "requiredOutputs": ["FRAME_ARCHIVE_SELECTED"], "optionalOutputs": ["FRAME_QUALITY_REPORT"],
+      "requiredInputs": [["FRAME_ARCHIVE"]], "optionalInputs": []
+    },
+    "PRIVACY_PREPROCESS": {
+      "requiredOutputs": ["FRAME_ARCHIVE_ANON", "PRIVACY_MASKS"], "optionalOutputs": ["PRIVACY_REPORT"],
+      "requiredInputs": [["FRAME_ARCHIVE_SELECTED"]], "optionalInputs": []
+    },
+    "POSE_ESTIMATION": {
+      "requiredOutputs": ["SPARSE_MODEL", "POSES"], "optionalOutputs": [],
+      "requiredInputs": [["FRAME_ARCHIVE_ANON", "FRAME_ARCHIVE_SELECTED"]], "optionalInputs": ["CAMERA_CALIBRATION", "PRIVACY_MASKS"]
+    },
+    "SPLAT_RECONSTRUCTION": {
+      "requiredOutputs": ["SPLAT"], "optionalOutputs": ["SPLAT_PARTIAL", "SPLAT_CHECKPOINT", "SPLAT_TRAINING_REPORT", "KEYFRAME_RENDERS", "TRAINING_CAMERAS"],
+      "requiredInputs": [["SPARSE_MODEL"], ["POSES"], ["FRAME_ARCHIVE_ANON", "FRAME_ARCHIVE_SELECTED"]],
+      "optionalInputs": ["SPLAT_CHECKPOINT", "PRIVACY_MASKS"]
+    },
+    "SEMANTIC_SEGMENTATION": {
+      "requiredOutputs": ["SEMANTIC_LABELS"], "optionalOutputs": ["SEMANTIC_REPORT"],
+      "requiredInputs": [["SPLAT"], ["SPARSE_MODEL"], ["POSES"], ["FRAME_ARCHIVE_ANON", "FRAME_ARCHIVE_SELECTED"]],
+      "optionalInputs": ["PRIVACY_MASKS"]
+    },
+    "GEOMETRIC_CLEANUP": {
+      "requiredOutputs": ["SPLAT_CLEAN", "SEMANTIC_LABELS_CLEAN"], "optionalOutputs": ["GEOMETRIC_CLEANUP_REPORT"],
+      "requiredInputs": [["SPLAT"], ["SEMANTIC_LABELS"]], "optionalInputs": []
+    },
+    "REGION_ALIGNMENT": {
+      "requiredOutputs": ["SPLAT_ALIGNED"], "optionalOutputs": ["ALIGNMENT_REPORT"],
+      "requiredInputs": [["GLOBAL_CLOUD"], ["SPLAT_CLEAN"]], "optionalInputs": []
+    },
+    "REGION_SPLICE": {
+      "requiredOutputs": ["SPLAT_MERGED", "SPLICE_REPORT"], "optionalOutputs": ["SPLICE_INDEX", "SEMANTIC_LABELS_MERGED"],
+      "requiredInputs": [["GLOBAL_CLOUD"], ["SPLAT_ALIGNED"]], "optionalInputs": ["GLOBAL_LABELS", "SEMANTIC_LABELS_CLEAN"]
+    },
+    "PLANE_FITTING": {
+      "requiredOutputs": ["PLANE_MODEL", "GRAVITY_ESTIMATE"], "optionalOutputs": [],
+      "requiredInputs": [["SPLAT_MERGED", "SPLAT_CLEAN"]],
+      "optionalInputs": ["POSES", "SEMANTIC_LABELS_MERGED", "SEMANTIC_LABELS_CLEAN"]
+    },
+    "ARTIFACT_GENERATION": {
+      "requiredOutputs": ["KSPLAT", "ARTIFACT_MANIFEST"], "optionalOutputs": ["VIEWER_BUNDLE"],
+      "requiredInputs": [["SPLAT_MERGED", "SPLAT_CLEAN", "SPLAT"]],
+      "optionalInputs": ["PLANE_MODEL", "SEMANTIC_LABELS_MERGED", "SEMANTIC_LABELS_CLEAN", "SEMANTIC_LABELS"]
+    },
+    "SEMANTIC_INDEXING": {
+      "requiredOutputs": ["DETECTED_OBJECTS"], "optionalOutputs": ["SEMANTIC_INDEXING_REPORT"],
+      "requiredInputs": [["SPLAT_MERGED", "SPLAT_CLEAN", "SPLAT"], ["SPARSE_MODEL"], ["POSES"], ["FRAME_ARCHIVE_ANON", "FRAME_ARCHIVE_SELECTED"]],
+      "optionalInputs": ["ALIGNMENT_REPORT", "PRIVACY_MASKS", "SEMANTIC_LABELS_MERGED", "SEMANTIC_LABELS_CLEAN", "SEMANTIC_LABELS"]
+    },
+    "NAVIGATION_BAKING": {
+      "requiredOutputs": ["NAVMESH", "NAVMESH_MANIFEST", "NAVIGATION_GRAPH"], "optionalOutputs": ["NAVMESH_INPUT_GEOMETRY", "NAVIGATION_BAKING_REPORT"],
+      "requiredInputs": [["SPLAT_MERGED", "SPLAT_CLEAN", "SPLAT"], ["SEMANTIC_LABELS_MERGED", "SEMANTIC_LABELS_CLEAN", "SEMANTIC_LABELS"], ["PLANE_MODEL"]],
+      "optionalInputs": ["GLOBAL_CLOUD", "GLOBAL_LABELS", "SPLICE_REPORT"]
+    }
+  }
+}

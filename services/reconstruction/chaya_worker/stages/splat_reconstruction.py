@@ -69,7 +69,7 @@ from ..errors import DependencyError
 from ..ply import read_ply, write_ply
 from ..privacy import masks as privacy_masks
 from ..splat_color import rgb_bytes_to_sh0
-from .base import command_record, sha256_file, write_json
+from .base import FRAMES_ANON, FRAMES_UNANONYMISED, command_record, frame_archives, sha256_file, write_json
 
 
 def training_failure(exc: BaseException) -> StageError | None:
@@ -202,7 +202,8 @@ def training_source(order: dict[str, Any], inputs: list) -> dict[str, Any]:
 
     return source_identity(run_id=order.get("runId"), scan_id=order.get("scanId"), scan_version_id=order.get("scanVersionId"),
                            inputs=sorted(({"kind": i.kind, "artifact_id": i.artifact_id, "sha256": i.ref.get("sha256")} for i in inputs
-                                          if i.kind in ("SPARSE_MODEL", "POSES", "FRAME_ARCHIVE_ANON", privacy_masks.KIND)),
+                                          if i.kind in ("SPARSE_MODEL", "POSES", FRAMES_ANON, FRAMES_UNANONYMISED,
+                                                        privacy_masks.KIND)),
                                          key=lambda d: d["kind"]))
 
 
@@ -352,9 +353,10 @@ class SplatReconstruction:
 
         sparse_archives = ctx.inputs_of("SPARSE_MODEL")
         poses_inputs = ctx.inputs_of("POSES")
-        frame_archives = ctx.inputs_of("FRAME_ARCHIVE_ANON")
-        if not sparse_archives or not poses_inputs or not frame_archives:
-            raise StageError("SPLAT_RECONSTRUCTION needs SPARSE_MODEL, POSES and FRAME_ARCHIVE_ANON from POSE_ESTIMATION",
+        frames = frame_archives(ctx)
+        if not sparse_archives or not poses_inputs or not frames:
+            raise StageError("SPLAT_RECONSTRUCTION needs SPARSE_MODEL, POSES and a frame archive (FRAME_ARCHIVE_ANON, or "
+                             "FRAME_ARCHIVE_SELECTED with privacy disabled)",
                              code="INPUT_INVALID")
 
         index = preflight["selected_device"]["index"]
@@ -393,7 +395,7 @@ class SplatReconstruction:
         poses_doc = json.loads(poses_inputs[0].path.read_text(encoding="utf-8"))
         cams = build_cameras(poses_doc["poses"], cameras_model)
         images_dir = ctx.workdir / "images"
-        archive.unpack(frame_archives[0].path, images_dir)
+        archive.unpack(frames[0].path, images_dir)
         masks = privacy_masks.from_inputs(ctx)
         rectifier = FrameRectifier()
         cams = prepare_training_cameras(cams, images_dir, rectifier, masks)

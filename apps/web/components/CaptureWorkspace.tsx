@@ -25,6 +25,24 @@ import {
 import ProcessingPanel from "@/components/ProcessingPanel";
 import CaptureHud from "@/components/CaptureHud";
 import CalibrationPanel from "@/components/CalibrationPanel";
+import { getCalibration } from "@/lib/capture-api";
+import { listReconstructions, type ReconstructionVersion } from "@/lib/reconstruction-api";
+import { type ItemState, workflowStatus } from "@/lib/workflow-status";
+
+const WORKFLOW_TONE: Record<ItemState, string> = {
+  AVAILABLE: "border-green-300 bg-green-50 text-green-900",
+  IN_PROGRESS: "border-blue-300 bg-blue-50 text-blue-900",
+  WAITING: "border-amber-300 bg-amber-50 text-amber-900",
+  FAILED: "border-red-300 bg-red-50 text-red-900",
+  NOT_AVAILABLE: "border-zinc-300 bg-zinc-50 text-zinc-700",
+};
+const WORKFLOW_LABEL: Record<ItemState, string> = {
+  AVAILABLE: "available",
+  IN_PROGRESS: "in progress",
+  WAITING: "waiting",
+  FAILED: "failed",
+  NOT_AVAILABLE: "not available",
+};
 import { type UploadState, retryValidation, uploadFile } from "@/lib/uploader";
 import { checkFileLocally, explainCode, formatBytes } from "@/lib/upload-plan";
 
@@ -95,6 +113,8 @@ export default function CaptureWorkspace() {
   const [timeBudgetMinutes, setTimeBudgetMinutes] = useState(60);
   const [openCaptures, setOpenCaptures] = useState<Capture[]>([]);
   const [serverMedia, setServerMedia] = useState<MediaItem[]>([]);
+  const [publishedVersions, setPublishedVersions] = useState<ReconstructionVersion[]>([]);
+  const [calibrationState, setCalibrationState] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const fail = useCallback((e: unknown) => {
@@ -140,6 +160,21 @@ export default function CaptureWorkspace() {
     if (!captureId || !venueOfCapture) return;
     listMedia(venueOfCapture, captureId).then(setServerMedia, fail);
   }, [captureId, venueOfCapture, settledRows, fail]);
+
+  // Publication and calibration move with the run: refetched whenever a stage changes state.
+  const stageSignature = processing?.run ? `${processing.run.status}:${processing.run.stages.map((s) => s.state).join(",")}` : "";
+  useEffect(() => {
+    if (!captureId || !venueOfCapture) return;
+    let cancelled = false;
+    getCalibration(venueOfCapture, captureId).then((c) => !cancelled && setCalibrationState(c.state), () => undefined);
+    const floor = capture?.floorId;
+    if (floor) {
+      listReconstructions(venueOfCapture, floor).then((vs) => !cancelled && setPublishedVersions(vs), () => undefined);
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [captureId, venueOfCapture, capture?.floorId, stageSignature]);
 
   // Poll processing status while processing is going on (or has failed and may be retried).
   useEffect(() => {
@@ -229,13 +264,13 @@ export default function CaptureWorkspace() {
   const settled = rows.length > 0 && rows.every((r) => ["accepted", "rejected"].includes(r.state.phase));
   const anyAccepted = rows.some((r) => r.state.phase === "accepted");
 
-  // A real reconstruction exists once ARTIFACT_GENERATION has succeeded -- independent of the run's own
-  // overall status, which is currently never SUCCEEDED end-to-end (NAVIGATION_BAKING/SEMANTIC_INDEXING are
-  // not implemented yet; see services/reconstruction/docs and ReconstructionService on the backend).
-  const hasViewableReconstruction = processing?.run?.stages.some((s) => s.stage === "ARTIFACT_GENERATION" && s.lastRun?.status === "SUCCEEDED") ?? false;
-  const viewerHref = capture
-    ? `/viewer?venue=${capture.venueId}${capture.floorId ? `&floor=${capture.floorId}` : ""}`
-    : "/viewer";
+  // What this run has really produced (lib/workflow-status.ts). The viewer lists only published versions, so it is linked
+  // only once this run is one of them, and then to exactly this run.
+  const workflow = workflowStatus(processing?.run ?? null, publishedVersions, calibrationState);
+  const ownVersion = processing?.run ? publishedVersions.find((v) => v.runId === processing.run!.id) : undefined;
+  const viewerHref = capture && ownVersion
+    ? `/viewer?venue=${capture.venueId}${capture.floorId ? `&floor=${capture.floorId}` : ""}&run=${ownVersion.runId}`
+    : null;
 
   async function onFinish() {
     if (!capture) return;
@@ -489,10 +524,18 @@ export default function CaptureWorkspace() {
       {processing && (
         <section aria-labelledby="processing" className="space-y-3">
           <h2 id="processing" className="text-lg font-medium">4. Processing</h2>
-          {hasViewableReconstruction && (
+          <ul className="grid gap-2 sm:grid-cols-2" data-testid="workflow-status">
+            {workflow.map((item) => (
+              <li key={item.key} className={`rounded border p-2 text-sm ${WORKFLOW_TONE[item.state]}`} data-state={item.state}>
+                <p className="font-medium">{item.label}: {WORKFLOW_LABEL[item.state]}</p>
+                <p className="text-xs">{item.detail}</p>
+              </li>
+            ))}
+          </ul>
+          {viewerHref && (
             <p className="rounded border border-green-300 bg-green-50 p-3 text-sm text-green-900">
-              A reconstruction is ready.{" "}
-              <Link className="underline" href={viewerHref}>View reconstruction</Link>
+              This run is published.{" "}
+              <Link className="underline" href={viewerHref}>View this reconstruction</Link>
             </p>
           )}
           <ProcessingPanel status={processing} busy={busy} onRetry={onRetryProcessing} onCancel={onCancelProcessing} />

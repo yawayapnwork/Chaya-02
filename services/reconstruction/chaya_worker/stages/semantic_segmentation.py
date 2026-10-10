@@ -30,7 +30,7 @@ from ..model_loading import load_pretrained
 from ..ply import read_ply
 from ..privacy import masks as privacy_masks
 from ..semantic_classes import CLUTTER, FLOOR, FURNITURE, STAIRS, UNKNOWN, WALL, bucket_all
-from .base import command_record, write_json
+from .base import command_record, frame_archives, write_json
 from .splat_reconstruction import build_cameras
 
 CLASSES = [FLOOR, WALL, FURNITURE, CLUTTER, STAIRS, UNKNOWN]
@@ -73,9 +73,10 @@ class SemanticSegmentation:
         splats = ctx.inputs_of("SPLAT")
         sparse_archives = ctx.inputs_of("SPARSE_MODEL")
         poses_inputs = ctx.inputs_of("POSES")
-        frame_archives = ctx.inputs_of("FRAME_ARCHIVE_ANON")
-        if not splats or not sparse_archives or not poses_inputs or not frame_archives:
-            raise StageError("SEMANTIC_SEGMENTATION needs SPLAT, SPARSE_MODEL, POSES and FRAME_ARCHIVE_ANON",
+        frames = frame_archives(ctx)
+        if not splats or not sparse_archives or not poses_inputs or not frames:
+            raise StageError("SEMANTIC_SEGMENTATION needs SPLAT, SPARSE_MODEL, POSES and a frame archive (FRAME_ARCHIVE_ANON, or "
+                             "FRAME_ARCHIVE_SELECTED with privacy disabled)",
                              code="INPUT_INVALID")
 
         import cv2
@@ -97,7 +98,7 @@ class SemanticSegmentation:
         poses = json.loads(poses_inputs[0].path.read_text(encoding="utf-8"))["poses"]
         cams = build_cameras(poses, cameras_model)[:: max(1, s.semantic_sample_every)]
         images_dir = ctx.workdir / "images"
-        archive.unpack(frame_archives[0].path, images_dir)
+        archive.unpack(frames[0].path, images_dir)
         masks = privacy_masks.from_inputs(ctx)
 
         device = "cuda" if ctx.toolchain.cuda().available else "cpu"

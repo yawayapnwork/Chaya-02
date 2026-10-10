@@ -518,6 +518,20 @@ public class PipelineService {
         // From here on every object is referred to by its sealed key.
         List<ArtifactReport> stored = outputs.stream().map(a -> withKey(a, sealedKeys.get(a.key()).key())).toList();
 
+        // A SUCCEEDED report is only a success if its outputs keep the contract the next stages and the version rely on.
+        // Checked before anything is recorded, so the stage run itself is FAILED (and retryable), never a success whose
+        // missing or unusable output surfaces stages later.
+        OutputProblem problem = ok ? outputProblem(job.stage(), run, stored) : null;
+        if (problem != null) {
+            ok = false;
+            log.warn("run {} stage {}: a SUCCEEDED report breaks the output contract: {} {}", run.id(), job.stage(), problem.code(),
+                problem.message());
+        }
+        String status = ok ? "SUCCEEDED" : "FAILED";
+        String errorCode = problem != null ? problem.code() : r.errorCode();
+        String errorMessage = problem != null ? problem.message() : r.errorMessage();
+        Map<String, Object> errorDetails = problem != null ? problem.details() : r.errorDetails();
+
         UUID stageRunId = UUID.randomUUID();
         UUID stdoutId = r.stdout() == null ? null : UUID.randomUUID();
         UUID stderrId = r.stderr() == null ? null : UUID.randomUUID();
@@ -527,11 +541,11 @@ public class PipelineService {
                 + "error_code, error_message, error_details, worker_id) VALUES (:id, :o, :v, :run, :job, :stage, :att, :st, "
                 + "CAST(:cmd AS jsonb), CAST(:inputs AS uuid[]), :sa, :fa, :exit, :so, :se, :sha, :ec, :em, CAST(:ed AS jsonb), :w)")
             .param("id", stageRunId).param("o", job.orgId()).param("v", job.venueId()).param("run", run.id()).param("job", job.id())
-            .param("stage", job.stage().name()).param("att", attempt).param("st", r.status()).param("cmd", json(r.command()))
+            .param("stage", job.stage().name()).param("att", attempt).param("st", status).param("cmd", json(r.command()))
             .param("inputs", uuidArray(r.inputArtifactIds())).param("sa", Timestamp.from(r.startedAt()))
             .param("fa", Timestamp.from(r.finishedAt())).param("exit", r.exitStatus()).param("so", stdoutId).param("se", stderrId)
-            .param("sha", outputSha).param("ec", r.errorCode()).param("em", r.errorMessage())
-            .param("ed", r.errorDetails() == null ? null : json(r.errorDetails())).param("w", job.workerId()).update();
+            .param("sha", outputSha).param("ec", errorCode).param("em", errorMessage)
+            .param("ed", errorDetails == null ? null : json(errorDetails)).param("w", job.workerId()).update();
         for (ArtifactReport a : outputs) {
             insertArtifact(UUID.randomUUID(), job, run.scanVersionId(), stageRunId, a, sealedKeys.get(a.key()));
         }
@@ -540,8 +554,8 @@ public class PipelineService {
         if (r.stderr() != null) insertArtifact(stderrId, job, run.scanVersionId(), stageRunId, forceLog(r.stderr(), "LOG_STDERR"),
             sealedKeys.get(r.stderr().key()));
 
-        String failCode = r.errorCode();
-        String failMessage = r.errorMessage();
+        String failCode = errorCode;
+        String failMessage = errorMessage;
         if (job.stage() == JobStage.REGION_ALIGNMENT && run.scanVersionId() != null) {
             if (ok) {
                 String rejection = recordAlignmentAndCheckGate(run, r.command());
@@ -893,6 +907,143 @@ public class PipelineService {
     // =========================================================================================
     // Validation of what a worker claims to have produced
     // =========================================================================================
+
+    /** Why a SUCCEEDED report's outputs cannot be used: a stable code, an actionable message and details. */
+    record OutputProblem(String code, String message, Map<String, Object> details) {}
+
+    /**
+     * The output contract of a SUCCEEDED stage (PipelineDefinition#REQUIRED_OUTPUTS), and the content contract of the two
+     * outputs the control plane ingests itself. DETECTED_OBJECTS and NAVIGATION_GRAPH used to be checked only while being
+     * ingested, where an unreadable document was logged and skipped: SEMANTIC_INDEXING then succeeded with nothing
+     * searchable, and NAVIGATION_BAKING with nothing routable, and the run only failed (if at all) when its version was
+     * published. Null when the outputs are usable.
+     */
+    private OutputProblem outputProblem(JobStage stage, RunRow run, List<ArtifactReport> stored) {
+        Set<String> kinds = new java.util.HashSet<>();
+        stored.forEach(a -> kinds.add(a.kind()));
+        // The ingested documents first: a document in the wrong frame or version, or bound to another navmesh, refuses the
+        // whole report (409), as it always has; only a report that names the right things is judged on what it lacks.
+        if (stage == JobStage.SEMANTIC_INDEXING && kinds.contains("DETECTED_OBJECTS")) {
+            OutputProblem p = detectionsProblem(run, first(stored, "DETECTED_OBJECTS"));
+            if (p != null) {
+                return p;
+            }
+        }
+        if (stage == JobStage.NAVIGATION_BAKING && kinds.contains("NAVIGATION_GRAPH")) {
+            OutputProblem p = navigationGraphProblem(run, first(stored, "NAVIGATION_GRAPH"), stored);
+            if (p != null) {
+                return p;
+            }
+        }
+        List<String> missing = PipelineDefinition.missingOutputs(stage, kinds);
+        if (!missing.isEmpty()) {
+            return new OutputProblem("STAGE_OUTPUT_MISSING", stage + " reported success without " + String.join(", ", missing)
+                + ", which later stages or the scan version need (packages/contracts/pipeline/stage-artifacts.json). The worker's "
+                + "stage and the control plane disagree on the artifact contract; retry the stage on an up-to-date worker",
+                Map.of("missing", missing, "published", kinds.stream().sorted().toList()));
+        }
+        return null;
+    }
+
+    private static ArtifactReport first(List<ArtifactReport> stored, String kind) {
+        return stored.stream().filter(a -> a.kind().equals(kind)).findFirst().orElseThrow();
+    }
+
+    /** The stored document, verified against its checksum; or the problem that it cannot be read. */
+    private Object readDocument(ArtifactReport a, OutputProblem[] problem) {
+        try (InputStream in = derived.openVerified(a.key(), a.sha256())) {
+            return mapper.readValue(in.readAllBytes(), Object.class);
+        } catch (IOException | StorageException e) {
+            problem[0] = new OutputProblem("ARTIFACT_UNREADABLE", a.kind() + " could not be read back from storage as verified JSON ("
+                + e.getMessage() + "); retry the stage", Map.of("kind", a.kind(), "key", a.key()));
+            return null;
+        }
+    }
+
+    /** DETECTED_OBJECTS in the worker's shape (chaya_worker.stages.semantic_indexing): an `objects` list and, when it is not
+     * empty, the `embedding_model`; every object with a 3D position and a 512-d finite image embedding, and a well-formed
+     * localization when it claims one. An object that would not become a POI is a broken contract, not something to drop. */
+    @SuppressWarnings("unchecked")
+    private OutputProblem detectionsProblem(RunRow run, ArtifactReport a) {
+        OutputProblem[] unreadable = new OutputProblem[1];
+        Object raw = readDocument(a, unreadable);
+        if (unreadable[0] != null) {
+            return unreadable[0];
+        }
+        if (raw instanceof Map<?, ?> named) {
+            requireCanonicalArtifactFrame(run, JobStage.SEMANTIC_INDEXING, (Map<String, Object>) named, "DETECTED_OBJECTS");
+            requireArtifactVersion(run, (Map<String, Object>) named, "DETECTED_OBJECTS");
+        }
+        if (!(raw instanceof Map<?, ?> doc) || !(doc.get("objects") instanceof List<?> objects)) {
+            return new OutputProblem("DETECTED_OBJECTS_INVALID", "DETECTED_OBJECTS is not a document with an `objects` list", Map.of());
+        }
+        if (!objects.isEmpty() && (!(doc.get("embedding_model") instanceof String model) || model.isBlank())) {
+            return new OutputProblem("DETECTED_OBJECTS_INVALID", "DETECTED_OBJECTS names no embedding_model, so its embeddings cannot "
+                + "be compared with search queries", Map.of("objects", objects.size()));
+        }
+        List<String> invalid = new ArrayList<>();
+        for (int i = 0; i < objects.size(); i++) {
+            String why = detectionProblem(objects.get(i));
+            if (why != null) {
+                invalid.add("objects[" + i + "]: " + why);
+            }
+        }
+        if (!invalid.isEmpty()) {
+            return new OutputProblem("DETECTED_OBJECTS_INVALID", invalid.size() + " of " + objects.size() + " detected objects cannot "
+                + "become POIs: " + invalid.get(0) + (invalid.size() > 1 ? " (and more)" : ""),
+                Map.of("invalidObjects", invalid.size(), "objects", objects.size(), "examples", invalid.subList(0, Math.min(5, invalid.size()))));
+        }
+        return null;
+    }
+
+    private static String detectionProblem(Object o) {
+        if (!(o instanceof Map<?, ?> obj)) {
+            return "not an object";
+        }
+        if (!(obj.get("position") instanceof List<?> p) || p.size() != 3 || !p.stream().allMatch(PipelineService::finiteNumber)) {
+            return "position is not three finite numbers";
+        }
+        if (!(obj.get("embedding") instanceof List<?> e) || e.size() != PoiEmbeddingService.EMBEDDING_DIM
+                || !e.stream().allMatch(PipelineService::finiteNumber)) {
+            return "embedding is not " + PoiEmbeddingService.EMBEDDING_DIM + " finite numbers";
+        }
+        if (obj.containsKey("localization")) {
+            if (!(obj.get("localization") instanceof Map<?, ?> loc) || !("MULTI_VIEW".equals(loc.get("status"))
+                    || "SINGLE_VIEW".equals(loc.get("status"))) || !(loc.get("uncertainty_m") instanceof Number u)
+                    || !Double.isFinite(u.doubleValue()) || u.doubleValue() < 0) {
+                return "localization is malformed";
+            }
+        }
+        return null;
+    }
+
+    private static boolean finiteNumber(Object v) {
+        return v instanceof Number n && Double.isFinite(n.doubleValue());
+    }
+
+    /** NAVIGATION_GRAPH in the worker's shape (chaya_worker.stages.navigation_baking): a `graphs` map whose STANDARD profile
+     * has nodes. A bake that produced no routable graph has failed, whatever the report says. */
+    @SuppressWarnings("unchecked")
+    private OutputProblem navigationGraphProblem(RunRow run, ArtifactReport a, List<ArtifactReport> stored) {
+        OutputProblem[] unreadable = new OutputProblem[1];
+        Object raw = readDocument(a, unreadable);
+        if (unreadable[0] != null) {
+            return unreadable[0];
+        }
+        if (raw instanceof Map<?, ?> named) {
+            requireCanonicalArtifactFrame(run, JobStage.NAVIGATION_BAKING, (Map<String, Object>) named, "NAVIGATION_GRAPH");
+            requireArtifactVersion(run, (Map<String, Object>) named, "NAVIGATION_GRAPH");
+            checkNavmeshBinding((Map<String, Object>) named, stored);
+        }
+        if (!(raw instanceof Map<?, ?> doc) || !(doc.get("graphs") instanceof Map<?, ?> graphs)) {
+            return new OutputProblem("NAVIGATION_GRAPH_INVALID", "NAVIGATION_GRAPH has no `graphs` map", Map.of());
+        }
+        if (!(graphs.get("STANDARD") instanceof Map<?, ?> standard) || !(standard.get("nodes") instanceof List<?> nodes) || nodes.isEmpty()) {
+            return new OutputProblem("NAVIGATION_GRAPH_INVALID", "NAVIGATION_GRAPH has no STANDARD graph with nodes: the bake produced "
+                + "nothing to route on", Map.of("profiles", graphs.keySet().stream().map(String::valueOf).sorted().toList()));
+        }
+        return null;
+    }
 
     /** Content types a stage before privacy preprocessing may publish WITHOUT the PII flag: reports and logs. */
     static final Set<String> NON_PII_BEFORE_PRIVACY_TYPES = Set.of("application/json", "text/plain");
@@ -1324,6 +1475,17 @@ public class PipelineService {
     /** The NAVIGATION_GRAPH's binding to the NAVMESH artifact of the same stage report (already inserted as
      * processing_artifact rows by this point). Refused, never guessed, when anything does not match. */
     private NavmeshBinding requireNavmeshBinding(Map<String, Object> doc, List<ArtifactReport> outputs) {
+        checkNavmeshBinding(doc, outputs);
+        ArtifactReport navmesh = outputs.stream().filter(a -> a.kind().equals("NAVMESH")).findFirst().orElseThrow();
+        ArtifactReport manifest = outputs.stream().filter(a -> a.kind().equals("NAVMESH_MANIFEST")).findFirst().orElseThrow();
+        Map<?, ?> binding = (Map<?, ?>) doc.get("navmesh");
+        return new NavmeshBinding(artifactIdByKey(navmesh.key()), artifactIdByKey(manifest.key()), navmesh.sha256(),
+            (String) binding.get("tool_version"), (String) binding.get("recastnavigation_version"));
+    }
+
+    /** 409 NAVMESH_BINDING_INVALID unless the graph is bound to this report's NAVMESH (and its manifest). Reads no rows, so it
+     * can run before the report is recorded. */
+    private static void checkNavmeshBinding(Map<String, Object> doc, List<ArtifactReport> outputs) {
         ArtifactReport navmesh = outputs.stream().filter(a -> a.kind().equals("NAVMESH")).findFirst().orElse(null);
         ArtifactReport manifest = outputs.stream().filter(a -> a.kind().equals("NAVMESH_MANIFEST")).findFirst().orElse(null);
         Map<?, ?> binding = doc.get("navmesh") instanceof Map<?, ?> m ? m : Map.of();
@@ -1341,8 +1503,6 @@ public class PipelineService {
             throw new ApiException(HttpStatus.CONFLICT, "NAVMESH_BINDING_INVALID",
                 "NAVIGATION_GRAPH is not bound to this stage's navmesh: " + problem);
         }
-        return new NavmeshBinding(artifactIdByKey(navmesh.key()), artifactIdByKey(manifest.key()), navmesh.sha256(),
-            (String) binding.get("tool_version"), (String) binding.get("recastnavigation_version"));
     }
 
     /** A graph edge's "portal": [[x, y, z], [x, y, z]] in canonical metres, as {ax, ay, az, bx, by, bz}; null unless both

@@ -85,10 +85,20 @@ class ScanVersionPublicationTest extends PipelineTestSupport {
      * the frame the run was calibrated in.
      */
     private String drive(Started s, String lastStage, String label, boolean withKsplat) throws Exception {
+        return drive(s, lastStage, label, withKsplat, false);
+    }
+
+    /** As above; `recalibrateBeforeNavigation` recalibrates the reconstruction once more between SEMANTIC_INDEXING and
+     * NAVIGATION_BAKING, as an operator might, so the run's detections and its navigation are in different frames. */
+    private String drive(Started s, String lastStage, String label, boolean withKsplat, boolean recalibrateBeforeNavigation)
+            throws Exception {
         String frameId = null;
         for (var stage : PipelineDefinition.STAGES) {
             if (stage.name().equals("SEMANTIC_INDEXING")) {
                 frameId = calibrateOk(s, controlPointCalibration(0)).get("id").asText();
+            }
+            if (stage.name().equals("NAVIGATION_BAKING") && recalibrateBeforeNavigation) {
+                frameId = calibrateOk(s, controlPointCalibration(10)).get("id").asText();
             }
             JsonNode order = claimExpecting(stage.name());
             List<Map<String, Object>> outputs = switch (stage.name()) {
@@ -227,15 +237,28 @@ class ScanVersionPublicationTest extends PipelineTestSupport {
         String frame1 = drive(first, null, "reception desk", true);
         UUID v1 = versionOfRun(first.run());
 
-        // Every stage succeeds, but ARTIFACT_GENERATION published no viewer asset: the version cannot be finalized.
+        // ARTIFACT_GENERATION reports success without a viewer asset: that stage fails (the artifact contract), retryably,
+        // instead of every later stage running for a version that could never be published.
+        var noAsset = startRunOn(c);
+        drive(noAsset, "ARTIFACT_GENERATION", "vending machine", false);
+        JsonNode failedAtStage = processing(noAsset).get("run");
+        assertThat(failedAtStage.get("status").asText()).isEqualTo("FAILED");
+        assertThat(failedAtStage.get("failureStage").asText()).isEqualTo("ARTIFACT_GENERATION");
+        assertThat(failedAtStage.get("failureCode").asText()).isEqualTo("STAGE_OUTPUT_MISSING");
+        assertThat(failedAtStage.get("failureMessage").asText()).contains("KSPLAT");
+        assertThat(failedAtStage.get("retryable").asBoolean()).isTrue();
+        assertThat(currentVersion(c.floor())).isEqualTo(v1);
+
+        // Every stage succeeds, but the operator recalibrated between SEMANTIC_INDEXING and NAVIGATION_BAKING: the detections
+        // are in a frame that is no longer the reconstruction's, so the version cannot be published.
         var second = startRunOn(c);
         UUID v2 = versionOfRun(second.run());
-        drive(second, null, "vending machine", false);
+        drive(second, null, "vending machine", true, true);
 
         JsonNode run = processing(second).get("run");
         assertThat(run.get("status").asText()).isEqualTo("FAILED");
         assertThat(jdbc.sql("SELECT failure_code FROM pipeline_run WHERE id = :r").param("r", second.run()).query(String.class).single())
-            .isEqualTo("VERSION_INCOMPLETE");
+            .isEqualTo("ARTIFACT_FRAME_MISMATCH");
         assertThat(captureStatus(second)).isNotEqualTo("COMPLETED");
         // Nothing of the refused promotion survived its savepoint: no pins, no POIs, no live graph, no frame change.
         assertThat(jdbc.sql("SELECT status FROM scan_version WHERE id = :v").param("v", v2).query(String.class).single()).isEqualTo("DRAFT");

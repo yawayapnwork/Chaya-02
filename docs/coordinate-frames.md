@@ -167,6 +167,11 @@ The `.ksplat` stays in its reconstruction frame. The artifact manifest says so (
   frame, plus routes.
 - **No canonical frame.** The splat is shown in its own arbitrary frame, with a stated "Not calibrated" status. No POI
   or route is drawn on it.
+- **Camera start** (`apps/web/lib/viewer-camera.ts`). The camera is framed on the splats actually loaded: a robust centre
+  (per-axis median) and extent (10th–90th percentile) of up to 20 000 splat centres, read after the scene transform. The
+  library's orbit target is set to that centre. Before, the camera started at a fixed (0, −4, 1.7) with the orbit target
+  at the origin. For a `VENUE_CONTROL_POINTS` frame, whose origin is the survey datum, that could leave the whole venue
+  out of view.
 
 ## 6. Failure behaviour without calibration
 

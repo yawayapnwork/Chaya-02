@@ -38,6 +38,23 @@ def run_provenance(ctx: StageContext, frame_id: str | None = None) -> dict[str, 
             "coordinate_frame_id": frame_id}
 
 
+# The frames every stage after privacy preprocessing reads. FRAME_ARCHIVE_ANON is PRIVACY_PREPROCESS's anonymised archive.
+# A run started with privacy disabled (admin only; dev.chaya.api PipelineDefinition#plan) has no PRIVACY_PREPROCESS, so its
+# frames are FRAME_QUALITY_FILTER's FRAME_ARCHIVE_SELECTED, which the control plane offers it because nothing in such a run is
+# "after privacy". Without this the plan the API creates could never get past POSE_ESTIMATION.
+FRAMES_ANON = "FRAME_ARCHIVE_ANON"
+FRAMES_UNANONYMISED = "FRAME_ARCHIVE_SELECTED"
+
+
+def frame_archives(ctx: StageContext) -> list:
+    """The frame archive this run trains and detects on: the anonymised one, or -- only in a run the work order says has
+    privacy disabled -- the selected, unanonymised one. A privacy-enabled run never falls back to unblurred frames."""
+    anon = ctx.inputs_of(FRAMES_ANON)
+    if anon or ctx.order.get("privacyEnabled", True):
+        return anon
+    return ctx.inputs_of(FRAMES_UNANONYMISED)
+
+
 # The semantic labels that describe each splat kind Gaussian for Gaussian.
 LABELS_FOR_SPLAT = {"SPLAT_MERGED": "SEMANTIC_LABELS_MERGED", "SPLAT_CLEAN": "SEMANTIC_LABELS_CLEAN", "SPLAT": "SEMANTIC_LABELS"}
 

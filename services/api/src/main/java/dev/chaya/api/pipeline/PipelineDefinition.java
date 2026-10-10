@@ -2,6 +2,7 @@ package dev.chaya.api.pipeline;
 
 import dev.chaya.api.processing.JobStage;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /** The reconstruction pipeline plan. Stages run strictly in this order, one job at a time. */
@@ -58,6 +59,34 @@ public final class PipelineDefinition {
      * kind chaya_worker.stages.splat_reconstruction actually publishes (SPLAT) for its trained Gaussian
      * cloud, plus SPLAT_PARTIAL for a worker that checkpoints before the time budget is fully spent. */
     public static final Set<String> RECONSTRUCTION_KINDS = Set.of("SPLAT", "SPLAT_PARTIAL");
+
+    /**
+     * What every stage must publish when it reports SUCCEEDED, because a later stage or the scan version's publication
+     * consumes it (packages/contracts/pipeline/stage-artifacts.json, "requiredOutputs"; PipelineArtifactContractTest keeps
+     * the two equal, and the worker's tests/unit/test_stage_artifact_contract.py checks what the worker really writes).
+     * A SUCCEEDED report without them is recorded as FAILED with STAGE_OUTPUT_MISSING: the next stage would otherwise run
+     * without its input, or the version would fail to publish only after every later stage had run.
+     */
+    public static final Map<JobStage, List<String>> REQUIRED_OUTPUTS = Map.ofEntries(
+        Map.entry(JobStage.INPUT_VALIDATION, List.of()),
+        Map.entry(JobStage.FFMPEG_PREPROCESS, List.of("FRAME_ARCHIVE")),
+        Map.entry(JobStage.FRAME_QUALITY_FILTER, List.of("FRAME_ARCHIVE_SELECTED")),
+        Map.entry(JobStage.PRIVACY_PREPROCESS, List.of("FRAME_ARCHIVE_ANON", "PRIVACY_MASKS")),
+        Map.entry(JobStage.POSE_ESTIMATION, List.of("SPARSE_MODEL", "POSES")),
+        Map.entry(JobStage.SPLAT_RECONSTRUCTION, List.of("SPLAT")),
+        Map.entry(JobStage.SEMANTIC_SEGMENTATION, List.of("SEMANTIC_LABELS")),
+        Map.entry(JobStage.GEOMETRIC_CLEANUP, List.of("SPLAT_CLEAN", "SEMANTIC_LABELS_CLEAN")),
+        Map.entry(JobStage.REGION_ALIGNMENT, List.of("SPLAT_ALIGNED")),
+        Map.entry(JobStage.REGION_SPLICE, List.of("SPLAT_MERGED", "SPLICE_REPORT")),
+        Map.entry(JobStage.PLANE_FITTING, List.of("PLANE_MODEL", "GRAVITY_ESTIMATE")),
+        Map.entry(JobStage.ARTIFACT_GENERATION, List.of("KSPLAT", "ARTIFACT_MANIFEST")),
+        Map.entry(JobStage.SEMANTIC_INDEXING, List.of("DETECTED_OBJECTS")),
+        Map.entry(JobStage.NAVIGATION_BAKING, List.of("NAVMESH", "NAVMESH_MANIFEST", "NAVIGATION_GRAPH")));
+
+    /** The required outputs of `stage` that `published` lacks, in contract order. */
+    public static List<String> missingOutputs(JobStage stage, Set<String> published) {
+        return REQUIRED_OUTPUTS.getOrDefault(stage, List.of()).stream().filter(k -> !published.contains(k)).toList();
+    }
 
     public static final String TIME_LIMIT_EXCEEDED = "TIME_LIMIT_EXCEEDED";
     public static final String WORKER_LOST = "WORKER_LOST";

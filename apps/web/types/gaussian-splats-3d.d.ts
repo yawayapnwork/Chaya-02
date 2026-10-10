@@ -44,10 +44,14 @@ declare module "@mkkellogg/gaussian-splats-3d" {
     dispose(): Promise<void> | void;
     /** 0.4.7 has no Viewer.getSplatCount(); the loaded splat count is on the SplatMesh. */
     getSplatMesh(): SplatMesh;
+    /** The built-in OrbitControls (useBuiltInControls); their target starts at initialCameraLookAt, default (0, 0, 0). */
+    controls?: { target: THREE.Vector3; update(): void };
   }
 
   export class SplatMesh {
     getSplatCount(): number;
+    /** applySceneTransform true: the centre after the scene's position/rotation/scale (0.4.7 SplatMesh.getSplatCenter). */
+    getSplatCenter(globalIndex: number, outCenter: THREE.Vector3, applySceneTransform?: boolean): void;
   }
 
   export class DropInViewer extends Viewer {}

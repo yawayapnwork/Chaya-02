@@ -180,7 +180,8 @@ class RescanControlPlaneTest extends PipelineTestSupport {
 
     private Map<String, Object> acceptedAlignmentReport(JsonNode order, Map<String, Object> alignment) {
         Map<String, Object> a = artifact(order, "alignment-report.json", "ALIGNMENT_REPORT", false, false, "{}");
-        Map<String, Object> r = report("SUCCEEDED", List.of(a), null, null);
+        Map<String, Object> aligned = artifact(order, "splat-aligned.ply", "SPLAT_ALIGNED", false, false, "aligned-cloud-bytes");
+        Map<String, Object> r = report("SUCCEEDED", List.of(a, aligned), null, null);
         r.put("command", Map.of("argv", List.of("region-alignment"), "config", Map.of("alignment", alignment)));
         return r;
     }
@@ -438,12 +439,13 @@ class RescanControlPlaneTest extends PipelineTestSupport {
         JsonNode nav = rescanToNavigationBaking(c, parent);
         // A "successful" NAVIGATION_BAKING with no navmesh: the version would otherwise have had no navigation, or (before
         // V26) silently inherited the parent's, baked for geometry the re-scan replaced.
-        // The stage report is kept; publishing the version is refused, so the run ends FAILED and nothing is published.
+        // The stage report is kept but the stage is FAILED: it lacks the outputs the artifact contract requires
+        // (STAGE_OUTPUT_MISSING), so the run ends FAILED at that stage, retryably, and nothing is published.
         send(nav, report("SUCCEEDED", List.of(artifact(nav, "navigation-baking-report.json", "NAVIGATION_BAKING_REPORT", false, false,
             "{}")), null, null), svc).andExpect(status().isOk());
         UUID version = UUID.fromString(nav.get("scanVersionId").asText());
         assertThat(jdbc.sql("SELECT status || ':' || coalesce(failure_code, '-') FROM pipeline_run WHERE scan_version_id = :v")
-            .param("v", version).query(String.class).single()).isEqualTo("FAILED:VERSION_INCOMPLETE");
+            .param("v", version).query(String.class).single()).isEqualTo("FAILED:STAGE_OUTPUT_MISSING");
         assertThat(jdbc.sql("SELECT current_scan_version_id IS NULL FROM floor WHERE id = :f").param("f", c.floor())
             .query(Boolean.class).single()).as("nothing was published").isTrue();
         assertThat(versionRow(version).get("status")).isEqualTo("DRAFT");

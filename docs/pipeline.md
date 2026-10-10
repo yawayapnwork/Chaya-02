@@ -144,6 +144,43 @@ calibration unless the metadata declares one. The declared `source` text is reco
 left it unchanged. gsplat has still never executed (see "Splat training"). No real capture has been trained with
 undistortion, and no accuracy improvement on real data has been measured.
 
+## The stage artifact contract
+
+`packages/contracts/pipeline/stage-artifacts.json` says what every stage reads and publishes. Both sides are tested
+against it:
+
+- `PipelineArtifactContractTest` checks `PipelineDefinition`'s plans and `REQUIRED_OUTPUTS`.
+- `tests/unit/test_stage_artifact_contract.py` reads each worker stage's source and checks what it really reads and
+  writes. It also checks that every plan (full or incremental, with or without privacy preprocessing or navigation
+  baking) satisfies every stage's inputs from the stages before it, and that a shipped worker claims every planned stage.
+
+A `SUCCEEDED` report is accepted as a success only if its outputs keep the contract. Otherwise the stage run is recorded
+as **FAILED** and the run fails at that stage, retryably, before anything downstream runs:
+
+| Code | Meaning |
+|---|---|
+| `STAGE_OUTPUT_MISSING` | a required output is absent: for example ARTIFACT_GENERATION without `KSPLAT`, or NAVIGATION_BAKING without `NAVMESH`/`NAVMESH_MANIFEST`/`NAVIGATION_GRAPH`. Before, the first went unnoticed until publication (`VERSION_INCOMPLETE`, after every later stage had run); a bake without outputs was not caught at all for a full run. |
+| `ARTIFACT_UNREADABLE` | `DETECTED_OBJECTS` or `NAVIGATION_GRAPH` is not JSON when read back from storage. Before, this was logged and skipped: the stage succeeded with nothing searchable or routable. |
+| `DETECTED_OBJECTS_INVALID` | no `objects` list; no `embedding_model`; or an object without a 3D position, without a finite 512-d embedding, or with a malformed localization. Before, such objects were dropped silently. |
+| `NAVIGATION_GRAPH_INVALID` | no `graphs` map, or no STANDARD graph with nodes. Before, this was skipped: the stage succeeded with no routable graph. |
+
+A document in the wrong frame or version, or a graph bound to another navmesh, still refuses the whole report (409
+`ARTIFACT_FRAME_MISMATCH`, `ARTIFACT_VERSION_MISMATCH`, `NAVMESH_BINDING_INVALID`), as before. A checksum or size that
+does not match the stored object refuses it too (`ARTIFACT_CHECKSUM_MISMATCH`, `ARTIFACT_SIZE_MISMATCH`, ArtifactSealer).
+
+**Runs with privacy disabled** (admin only): the plan has no PRIVACY_PREPROCESS, so there is no `FRAME_ARCHIVE_ANON`.
+POSE_ESTIMATION, SPLAT_RECONSTRUCTION, SEMANTIC_SEGMENTATION and SEMANTIC_INDEXING read only that archive, so every such
+run failed at POSE_ESTIMATION with `INPUT_INVALID`. They now read `FRAME_ARCHIVE_SELECTED` when the work order says
+privacy is disabled (`chaya_worker.stages.base.frame_archives`), and never in a privacy-enabled run. A GPU host's
+reconstruction storage account cannot read `pii/` staging (DEPLOYMENT.md), so a privacy-disabled run's GPU stages
+need a worker with access to it.
+
+**Who runs what.** The shipped CPU worker (`infra/deploy`) claims the stages before privacy, plus REGION_SPLICE,
+ARTIFACT_GENERATION and **NAVIGATION_BAKING**. NAVIGATION_BAKING needs only numpy and `chaya-navmesh`, which the CPU image
+builds. No shipped worker claimed it before, so every run waited at the last stage until its deadline. The GPU image
+(`Dockerfile.gpu`) claims POSE_ESTIMATION, SPLAT_RECONSTRUCTION, SEMANTIC_SEGMENTATION, GEOMETRIC_CLEANUP,
+REGION_ALIGNMENT, PLANE_FITTING and SEMANTIC_INDEXING.
+
 ## The stage contract
 Every attempt of every stage produces one immutable `pipeline_stage_run` row (returned by
 `GET .../processing`), submitted by the worker in a single `POST /api/v1/internal/jobs/{id}/report`:

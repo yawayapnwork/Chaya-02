@@ -5,11 +5,13 @@
 //
 //   node --experimental-strip-types scripts/verify-ksplat-artifact.ts <dir>
 //
-// <dir> holds scene.ksplat (the ARTIFACT_GENERATION output), splat.ply (the trained SPLAT it was made from) and
-// cloud.json (that PLY's fields: positions, scales_log, rotations_wxyz, opacity_logit, colors_dc). Prints a JSON summary
-// and exits 1 on the first disagreement. Nothing here decodes the format itself.
+// <dir> holds scene.ksplat (the ARTIFACT_GENERATION output) and, when the cloud it was made from is available,
+// splat.ply (that cloud) and cloud.json (its fields: positions, scales_log, rotations_wxyz, opacity_logit, colors_dc).
+// With the cloud, every splat is compared with it and with the library's own PLY route. Without it (an artifact downloaded
+// from the API, which serves only the viewer's files), the library must accept the file and read every splat with finite
+// values. Prints a JSON summary and exits 1 on the first problem. Nothing here decodes the format itself.
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as THREE from "three";
 import { KSplatLoader, PlyLoader, type SplatBuffer } from "@mkkellogg/gaussian-splats-3d/build/gaussian-splats-3d.module.js";
@@ -56,11 +58,23 @@ function close(actual: number[], wanted: number[], relTol: number, what: string)
 }
 
 const dir = process.argv[2];
-if (!dir) fail("usage: verify-ksplat-artifact.ts <dir with scene.ksplat, splat.ply, cloud.json>");
-const cloud: Cloud = JSON.parse(readFileSync(join(dir, "cloud.json"), "utf8"));
+if (!dir) fail("usage: verify-ksplat-artifact.ts <dir with scene.ksplat [, splat.ply, cloud.json]>");
 const ksplatBytes = buffer(join(dir, "scene.ksplat"));
 if (KSplatLoader.checkVersion(ksplatBytes) !== true) fail("the pinned KSplatLoader rejects the version");
 const fromKsplat = await KSplatLoader.loadFromFileData(ksplatBytes);
+if (!existsSync(join(dir, "cloud.json"))) {
+  const count = fromKsplat.getSplatCount();
+  if (count < 1) fail("the file holds no splats");
+  if (ksplatBytes.byteLength !== 4096 + 1024 + 44 * count) fail(`${ksplatBytes.byteLength} bytes for ${count} splats`);
+  for (let i = 0; i < count; i++) {
+    const s = read(fromKsplat, i);
+    if (![...s.center, ...s.scale, ...s.rotationXYZW, ...s.rgba].every(Number.isFinite)) fail(`splat ${i} has a non-finite value`);
+  }
+  console.log(JSON.stringify({ ok: true, mode: "library-load-only", library: "@mkkellogg/gaussian-splats-3d@0.4.7", splats: count,
+    ksplatBytes: ksplatBytes.byteLength }));
+  process.exit(0);
+}
+const cloud: Cloud = JSON.parse(readFileSync(join(dir, "cloud.json"), "utf8"));
 const fromPly = await PlyLoader.loadFromFileData(buffer(join(dir, "splat.ply")), 0, 0, false, 0);
 const n = cloud.positions.length;
 if (fromKsplat.compressionLevel !== 0) fail(`compression level ${fromKsplat.compressionLevel}`);

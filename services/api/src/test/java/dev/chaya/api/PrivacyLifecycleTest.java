@@ -110,11 +110,11 @@ class PrivacyLifecycleTest extends PipelineTestSupport {
         return new Started(c, capture, UUID.fromString(n.get("scanId").asText()), UUID.fromString(n.get("run").get("id").asText()));
     }
 
-    /** Runs every stage, calibrating the reconstruction before the last one, so the run succeeds with a canonical frame and
+    /** Runs every stage, calibrating the reconstruction before its first metric stage, so the run succeeds with a canonical frame and
      * is published as its floor's current scan version (V28): only a published version is ever shown to a viewer. */
     private void runPlan(Started s, List<JobStage> plan) throws Exception {
         for (JobStage stage : plan) {
-            if (stage == plan.get(plan.size() - 1)) {
+            if (stage == JobStage.SEMANTIC_INDEXING) { // the first stage in canonical metres, as with the real worker
                 calibrateOk(s, controlPointCalibration(0));
             }
             succeed(claimExpecting(stage.name()));

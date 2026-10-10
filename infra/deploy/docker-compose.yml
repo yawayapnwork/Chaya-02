@@ -106,8 +106,10 @@ services:
       S3_ACCESS_KEY: ${S3_WORKER_ACCESS_KEY:?set S3_WORKER_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_WORKER_SECRET_KEY:?set S3_WORKER_SECRET_KEY}
       WORKER_ID: cpu-worker
-      # The CPU image can run only these; GPU stages are claimed by GPU workers on a GPU host (DEPLOYMENT.md).
-      WORKER_STAGES: INPUT_VALIDATION,FFMPEG_PREPROCESS,FRAME_QUALITY_FILTER,PRIVACY_PREPROCESS,REGION_SPLICE,ARTIFACT_GENERATION
+      # The CPU image can run only these; GPU stages are claimed by GPU workers on a GPU host (DEPLOYMENT.md,
+      # services/reconstruction/Dockerfile.gpu). NAVIGATION_BAKING needs only numpy and chaya-navmesh, which this image
+      # builds: without it here no shipped worker claimed the last stage, and every run waited at it until its deadline.
+      WORKER_STAGES: INPUT_VALIDATION,FFMPEG_PREPROCESS,FRAME_QUALITY_FILTER,PRIVACY_PREPROCESS,REGION_SPLICE,ARTIFACT_GENERATION,NAVIGATION_BAKING
     volumes:
       - worker-work:/work
     networks: [internal]

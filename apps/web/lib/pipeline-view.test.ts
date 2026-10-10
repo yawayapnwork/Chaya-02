@@ -49,3 +49,10 @@ test("labels and formatting helpers", () => {
   assert.equal(shortSha(null), "—");
   assert.equal(durationSeconds("2026-01-01T00:00:00Z", "2026-01-01T00:00:02.500Z"), 2.5);
 });
+
+test("contract and calibration failures are explained with what to do next", () => {
+  assert.match(explainStageError("STAGE_OUTPUT_MISSING", "m", { missing: ["KSPLAT"] }), /\(KSPLAT\).*retry/);
+  assert.match(explainStageError("NOT_CALIBRATED", "m", null), /Calibrate it/);
+  assert.match(explainStageError("DETECTED_OBJECTS_INVALID", "m", null), /Nothing was dropped silently/);
+  assert.match(explainStageError("NAVIGATION_GRAPH_INVALID", "m", null), /no routable graph/);
+});
