@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.within;
 
 import dev.chaya.api.ar.AnchorService;
 import dev.chaya.api.ar.ArDeviceFrame;
+import dev.chaya.api.ar.ArDtos;
 import dev.chaya.api.ar.ArDtos.Anchor;
 import dev.chaya.api.ar.ArDtos.AnchorObservation;
 import dev.chaya.api.ar.ArDtos.AnchorRequest;
@@ -121,10 +122,58 @@ class AnchorServiceTest extends AbstractIntegrationTest {
         Anchor a2 = anchors.calibrate(actor, t.venue(), t.floor(),
             anchors.create(actor, t.venue(), t.floor(), markerAt(0.3, 0, 0)).id());
 
+        // Both are reported at the same spot, but are registered 0.3 m apart: under the best transform each lands 0.15 m
+        // from its registered position. That per-anchor disagreement is the residual.
         RelocalizationResponse response = anchors.relocalize(actor, t.venue(), t.floor(),
             List.of(new AnchorObservation(a1.id(), SEEN_FROM_DEVICE_ORIGIN), new AnchorObservation(a2.id(), SEEN_FROM_DEVICE_ORIGIN)));
         assertThat(response.anchorsUsed()).isEqualTo(2);
-        assertThat(response.residualMeters()).isCloseTo(0.3, within(1e-9));
+        assertThat(response.residualMeters()).isCloseTo(0.15, within(1e-9));
+        assertThat(response.anchorResiduals()).extracting(ArDtos.AnchorResidual::translationMeters)
+            .allSatisfy(m -> assertThat(m).isCloseTo(0.15, within(1e-9)));
+        assertThat(response.rejectedAnchorIds()).isEmpty();
+    }
+
+    /** Where the device sees a marker registered at venue (x, y, z) when TRUE device -> venue is the bare axis change. */
+    private static Pose seen(double x, double y, double z) {
+        // venue = AXES * device, so device = AXES^-1 * venue: (x, y, z) venue -> (x, z, -y) device.
+        return new Pose(x, z, -y, SEEN_FROM_DEVICE_ORIGIN.qx(), SEEN_FROM_DEVICE_ORIGIN.qy(), SEEN_FROM_DEVICE_ORIGIN.qz(),
+            SEEN_FROM_DEVICE_ORIGIN.qw());
+    }
+
+    @Test
+    void aMovedAnchorAmongThreeIsRejectedAndNamedAndTheOthersLocalize() {
+        var t = calibratedTree();
+        Actor actor = actorFor(t.org(), t.venue());
+        Anchor a1 = anchors.calibrate(actor, t.venue(), t.floor(), anchors.create(actor, t.venue(), t.floor(), markerAt(0, 0, 1)).id());
+        Anchor a2 = anchors.calibrate(actor, t.venue(), t.floor(), anchors.create(actor, t.venue(), t.floor(), markerAt(6, 0, 1)).id());
+        Anchor a3 = anchors.calibrate(actor, t.venue(), t.floor(), anchors.create(actor, t.venue(), t.floor(), markerAt(3, 5, 1)).id());
+
+        // The third print was moved 1 m after it was registered.
+        RelocalizationResponse response = anchors.relocalize(actor, t.venue(), t.floor(), List.of(
+            new AnchorObservation(a1.id(), seen(0, 0, 1)), new AnchorObservation(a2.id(), seen(6, 0, 1)),
+            new AnchorObservation(a3.id(), seen(4, 5, 1))));
+        assertThat(response.rejectedAnchorIds()).containsExactly(a3.id());
+        assertThat(response.anchorsUsed()).isEqualTo(2);
+        assertThat(response.residualMeters()).isCloseTo(0, within(1e-9));
+        assertThat(response.deviceToVenueTransform().x()).isCloseTo(0, within(1e-9));
+        assertThat(response.anchorResiduals()).filteredOn(r -> r.anchorId().equals(a3.id()))
+            .singleElement().satisfies(r -> {
+                assertThat(r.used()).isFalse();
+                assertThat(r.translationMeters()).isCloseTo(1, within(1e-6));
+            });
+    }
+
+    @Test
+    void twoAnchorsThatDisagreeAreRefusedRatherThanAveraged() {
+        var t = calibratedTree();
+        Actor actor = actorFor(t.org(), t.venue());
+        Anchor a1 = anchors.calibrate(actor, t.venue(), t.floor(), anchors.create(actor, t.venue(), t.floor(), markerAt(0, 0, 1)).id());
+        Anchor a2 = anchors.calibrate(actor, t.venue(), t.floor(), anchors.create(actor, t.venue(), t.floor(), markerAt(6, 0, 1)).id());
+        assertThatThrownBy(() -> anchors.relocalize(actor, t.venue(), t.floor(), List.of(
+            new AnchorObservation(a1.id(), seen(0, 0, 1)), new AnchorObservation(a2.id(), seen(7, 0, 1)))))
+            .isInstanceOf(ApiException.class)
+            .satisfies(e -> assertThat(((ApiException) e).code()).isEqualTo("RELOCALIZATION_INCONSISTENT"))
+            .hasMessageContaining(a1.id().toString());
     }
 
     @Test

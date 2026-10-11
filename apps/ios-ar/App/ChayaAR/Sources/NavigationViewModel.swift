@@ -25,6 +25,8 @@ final class NavigationViewModel: ObservableObject {
     @Published private(set) var loading: String?
     @Published private(set) var error: String?
     @Published private(set) var snapshot: ARSessionManager.Snapshot?
+    /// Route step-free (elevators and ramps with measured, passing clearances only).
+    @Published var stepFree = false
     @Published var selectedFloorId: UUID? { didSet { if selectedFloorId != oldValue { Task { await loadFloor() } } } }
     @Published var selectedDestinationId: UUID?
 
@@ -113,14 +115,16 @@ final class NavigationViewModel: ObservableObject {
             refreshCapability()
         }
         guard capability == .ready else { return }
+        let stepFree = self.stepFree
         let manager = ARSessionManager(
             registry: registry, floorId: floorId,
             relocalize: { observations, scanVersionId in
                 try await api.relocalize(venueId: venue.id, floorId: floorId, observations: observations, scanVersionId: scanVersionId)
             },
-            planRoute: { start, scanVersionId in
+            planRoute: { [stepFree] start, scanVersionId in
+                // The same authenticated, venue-scoped route contract as the web client, on the localization's scan version.
                 try await api.planRoute(venueId: venue.id, floorId: floorId, start: start, destinationPoiId: destinationId,
-                                        scanVersionId: scanVersionId)
+                                        scanVersionId: scanVersionId, accessibility: stepFree ? "STEP_FREE" : "STANDARD")
             })
         manager.onUpdate = { [weak self] snapshot in Task { @MainActor in self?.snapshot = snapshot } }
         self.manager = manager

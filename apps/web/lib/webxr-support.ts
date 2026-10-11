@@ -134,3 +134,13 @@ export function trackableAnchors<
 >(anchors: T[]): T[] {
   return anchors.filter((a) => anchorSupport(a) === "TRACKABLE");
 }
+
+/** iPhone/iPad (including iPadOS reporting itself as a Mac): there is no WebXR there at all, and the iOS AR client is the
+ * native ARKit app (apps/ios-ar), so the page says so instead of only reporting WEBXR_UNAVAILABLE. */
+export function isAppleMobile(userAgent: string, maxTouchPoints: number): boolean {
+  return /iPhone|iPad|iPod/.test(userAgent) || (/Macintosh/.test(userAgent) && maxTouchPoints > 1);
+}
+
+export const IOS_NATIVE_TEXT =
+  "On iPhone and iPad, AR navigation runs in the Chaya AR app (native ARKit): Safari has no WebXR. Open this venue's viewer " +
+  "link in the app.";

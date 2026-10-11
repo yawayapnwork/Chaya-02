@@ -46,10 +46,19 @@ public final class ArDtos {
         }
     }
 
-    /** The device_frame -> venue_frame transform solved from the reported observations, plus a residual
-     * (meters) reporting how much the anchors disagreed when more than one was used -- never a claimed
-     * accuracy figure, an actual measured spread across the anchors that took part. */
+    /** The device_frame -> venue_frame transform solved from the reported observations. residualMeters / residualDegrees:
+     * the largest distance (orientation difference) between a used anchor's observation mapped through the transform and
+     * its registered pose -- null with one anchor, where there is nothing to compare against; never a claimed accuracy
+     * figure. anchorResiduals has one entry per observation; rejectedAnchorIds are anchors set aside as inconsistent with
+     * the others (with three or more observed). anchorsUsed counts the anchors the transform was solved from. */
     public record RelocalizationResponse(Pose deviceToVenueTransform, Double residualMeters, int anchorsUsed,
                                          double gravityTiltDegrees, String deviceFrameConvention, UUID coordinateFrameId,
-                                         UUID scanVersionId) {}
+                                         UUID scanVersionId, Double residualDegrees, List<AnchorResidual> anchorResiduals,
+                                         List<UUID> rejectedAnchorIds) {}
+
+    /**
+     * One observed anchor, mapped through the solved transform and compared with its registered pose. Measured, not
+     * assumed. used=false: set aside as inconsistent with the other anchors (moved, misidentified or mis-registered).
+     */
+    public record AnchorResidual(UUID anchorId, double translationMeters, double rotationDegrees, boolean used) {}
 }

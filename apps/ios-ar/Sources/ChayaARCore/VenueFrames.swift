@@ -63,6 +63,25 @@ public enum VenueFrames {
         AnchorMath.compose(deviceToVenue, AnchorMath.compose(anchorAtSolve, AnchorMath.invert(anchorNow)))
     }
 
+    /// How far ARKit moved a world anchor between two of its poses (metres): how much it re-anchored its map meanwhile.
+    public static func anchorJumpMeters(from a: Pose, to b: Pose) -> Double {
+        ((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z)).squareRoot()
+    }
+
+    /// Whether a return from `limited` may resume the localization: the world anchor is tracked (`anchorNow` not nil) and
+    /// moved at most `RelocalizationStateMachine.recoveryMaxJumpMeters` since the spell began. nil when it may; otherwise why not.
+    public static func recoveryProblem(anchorAtLimitedStart: Pose?, anchorNow: Pose?) -> String? {
+        guard let before = anchorAtLimitedStart, let now = anchorNow else {
+            return "tracking returned, but the world anchor the route is attached to is not tracked: relocalize"
+        }
+        let jump = anchorJumpMeters(from: before, to: now)
+        if jump > RelocalizationStateMachine.recoveryMaxJumpMeters {
+            return "tracking returned, but ARKit moved the route's world anchor \(String(format: "%.2f", jump)) m meanwhile "
+                + "(it re-anchored its map): relocalize"
+        }
+        return nil
+    }
+
     /// Angle, in degrees, between where the transform sends the device's up (+Y) and canonical +Z.
     public static func gravityTiltDegrees(_ deviceToVenue: Pose) -> Double {
         let (x, y, z) = AnchorMath.rotate(AnchorMath.normalize(deviceToVenue), 0, 1, 0)

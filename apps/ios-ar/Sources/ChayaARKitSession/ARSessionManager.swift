@@ -19,7 +19,12 @@ import Foundation
 ///      (RouteGeometry.leg(of:for:)), re-checked on every later localization. Each frame the route is placed with the
 ///      corrected transform and progress is advanced from ARKit's camera transform, only while localized.
 ///   5. ARKit's camera tracking state, session interruptions, errors, and the world anchor's disappearance drive
-///      RelocalizationStateMachine (normal / limited / relocalizing / lost / recovered).
+///      RelocalizationStateMachine (normal / limited / relocalizing / lost / recovered). A short `limited` spell holds the
+///      route frozen; the return to normal is validated (the world anchor still tracked and barely moved,
+///      VenueFrames.recoveryProblem), otherwise it is a loss that needs a marker.
+///   6. Failed requests are classified (ArFailure): an expired viewer link stops relocalization and routing; a network
+///      failure is retried (the route too, while localized); a marker the server will no longer use is dropped for the
+///      session; an answer that set markers aside as inconsistent says which.
 ///
 /// Every value comes from an ARFrame/ARAnchor/ARCamera callback or from the server; nothing is fabricated, and where
 /// ARKit has not detected something the value stays absent. It needs a physical device: the iOS Simulator does not
@@ -43,6 +48,10 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
         /// Why there is no route to draw: the route request failed, or its leg was refused for this localization
         /// (VERSION_MISMATCH, FRAME_MISMATCH, ROUTE_SOURCE_MISSING, NO_LEG_ON_FLOOR).
         public var routeError: String?
+        /// The meaning of the last failed request (session expired, network, marker unavailable, markers inconsistent ...).
+        public var failure: ArFailure?
+        /// Markers the last localization set aside as inconsistent with the others (moved, misidentified, mis-registered).
+        public var setAsideMarkers: [String] = []
     }
 
     public let session = ARSession()
@@ -60,6 +69,14 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
     private var worldAnchor: (anchor: ARAnchor, poseAtSolve: Pose, addedAt: TimeInterval, seen: Bool)?
     private var lastFailureAt: TimeInterval = -.infinity
     private var lastPublishAt: TimeInterval = 0
+    /// Set when retrying cannot help (an expired viewer link): no relocalization or route request is sent after it.
+    private var blocked: ArFailure?
+    /// Markers the server will no longer use: not sent again this session.
+    private var unavailableAnchors = Set<UUID>()
+    /// The world anchor's pose when a `limited` spell began, to validate the recovery.
+    private var anchorAtLimitedStart: Pose?
+    private var lastRouteAttemptAt: TimeInterval = -.infinity
+    static let routeRetryInterval: TimeInterval = 5
 
     static let retryAfterFailure: TimeInterval = 1.5
     /// How long a newly added world anchor may be missing from ARFrame.anchors before that counts as a loss.
@@ -122,8 +139,25 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
 
     public func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
         let at = session.currentFrame?.timestamp ?? ProcessInfo.processInfo.systemUptime
+        let before = snapshot.state.phase
+        if before == .localized { anchorAtLimitedStart = currentWorldAnchorPose(session.currentFrame) }
         dispatch(.trackingChanged(TrackingQuality(camera.trackingState), at: at))
+        if before == .limited && snapshot.state.phase == .localized {
+            // Validated recovery: the world anchor must be tracked and barely moved while tracking was limited.
+            if let problem = VenueFrames.recoveryProblem(anchorAtLimitedStart: anchorAtLimitedStart,
+                                                         anchorNow: currentWorldAnchorPose(session.currentFrame)) {
+                dispatch(.recoveryRejected(problem))
+            }
+            anchorAtLimitedStart = nil
+        }
         if !snapshot.state.routeVisible { renderer.hide() }
+    }
+
+    private func currentWorldAnchorPose(_ frame: ARFrame?) -> Pose? {
+        guard let world = worldAnchor, let anchor = frame?.anchors.first(where: { $0.identifier == world.anchor.identifier }) else {
+            return nil
+        }
+        return Pose(anchor.transform)
     }
 
     public func sessionWasInterrupted(_ session: ARSession) {
@@ -161,10 +195,10 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
 
     private func observeMarkers(in frame: ARFrame) {
         let phase = snapshot.state.phase
-        guard phase == .searching || phase == .recovered, snapshot.state.deviceTracking == .normal,
+        guard phase == .searching || phase == .recovered, snapshot.state.deviceTracking == .normal, blocked == nil,
               frame.timestamp - lastFailureAt > Self.retryAfterFailure else { return }
         let detections = frame.anchors.compactMap { $0 as? ARImageAnchor }.map { ImageDetection($0, timestamp: frame.timestamp) }
-        let observations = MarkerObservations.observe(detections, registry: registry)
+        let observations = MarkerObservations.observe(detections, registry: registry).filter { !unavailableAnchors.contains($0.anchorId) }
         guard !observations.isEmpty else { return }
         let eligible = MarkerObservations.eligible(observations)
         if eligible.isEmpty {
@@ -191,7 +225,7 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
                 self?.solved(requestId: requestId, result: result, anchorIds: eligible.map(\.anchorId), anchor: anchor,
                              anchorPose: anchorPose, cameraPose: cameraPose)
             } catch {
-                self?.failed(requestId: requestId, error: error, anchor: anchor)
+                self?.failed(requestId: requestId, error: error, anchor: anchor, anchorIds: eligible.map(\.anchorId))
             }
         }
     }
@@ -199,7 +233,10 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
     private func solved(requestId: Int, result: RelocalizationResponse, anchorIds: [UUID], anchor: ARAnchor,
                         anchorPose: Pose, cameraPose: Pose) {
         let now = ProcessInfo.processInfo.systemUptime
-        let localization = Localization(deviceToVenue: result.deviceToVenueTransform, anchorIds: anchorIds,
+        let setAside = Set(result.rejectedAnchorIds ?? [])
+        snapshot.setAsideMarkers = registry.markers.filter { setAside.contains($0.anchor.id) }.map(\.anchor.markerIdentifier)
+        snapshot.failure = nil
+        let localization = Localization(deviceToVenue: result.deviceToVenueTransform, anchorIds: anchorIds.filter { !setAside.contains($0) },
                                         residualMeters: result.residualMeters, coordinateFrameId: result.coordinateFrameId,
                                         scanVersionId: result.scanVersionId, floorId: floorId, solvedAt: now)
         dispatch(.relocalizationSucceeded(requestId: requestId, localization))
@@ -223,16 +260,29 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
         }
     }
 
-    private func failed(requestId: Int, error: Error, anchor: ARAnchor) {
+    private func failed(requestId: Int, error: Error, anchor: ARAnchor, anchorIds: [UUID]) {
         session.remove(anchor: anchor)
         lastFailureAt = session.currentFrame?.timestamp ?? ProcessInfo.processInfo.systemUptime
-        let text = (error as? APIError).map { "\($0.code): \($0.detail)" } ?? error.localizedDescription
-        dispatch(.relocalizationFailed(requestId: requestId, error: text))
+        let failure = ArFailure.classify(error)
+        snapshot.failure = failure
+        switch failure.kind {
+        case .sessionExpired:
+            blocked = failure
+        case .anchorUnavailable:
+            // The server named the anchor, or there was only one in the request: drop it for this session.
+            if let id = failure.anchorId { unavailableAnchors.insert(id) } else if anchorIds.count == 1 { unavailableAnchors.insert(anchorIds[0]) }
+        default:
+            break
+        }
+        dispatch(.relocalizationFailed(requestId: requestId, error: "\(failure.kind.rawValue): \(failure.code): \(failure.detail)"))
+        publish(force: true)
     }
 
     /// Planned once, from where the device was when first localized, on the scan version that localization was solved in.
     /// A failure is a routing error, not a localization one: the localization stays.
     private func fetchRoute(from start: Vec3, scanVersionId: UUID) {
+        guard blocked == nil else { return }
+        lastRouteAttemptAt = ProcessInfo.processInfo.systemUptime
         let planRoute = self.planRoute
         Task { @MainActor [weak self] in
             do {
@@ -242,8 +292,11 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
                 self.applyRoute()
             } catch {
                 guard let self else { return }
-                self.routeRequested = false // retried at the next localization
-                self.snapshot.routeError = (error as? APIError).map { "\($0.code): \($0.detail)" } ?? error.localizedDescription
+                let failure = ArFailure.classify(error)
+                if failure.kind == .sessionExpired { self.blocked = failure }
+                self.routeRequested = false // retried while localized (updateRoute), or at the next localization
+                self.snapshot.failure = failure
+                self.snapshot.routeError = "\(failure.kind.rawValue): \(failure.code): \(failure.detail)"
                 self.publish(force: true)
             }
         }
@@ -288,6 +341,13 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
         let deviceToVenue = VenueFrames.anchorCorrectedDeviceToVenue(localization.deviceToVenue, anchorAtSolve: world.poseAtSolve,
                                                                       anchorNow: Pose(current.transform))
         let device = VenueFrames.devicePositionInVenue(camera: Pose(frame.camera.transform), deviceToVenue: deviceToVenue)
+        // A route that failed to load (for example while offline) is retried while localized.
+        let uptime = ProcessInfo.processInfo.systemUptime
+        if snapshot.route == nil && !routeRequested && blocked == nil && state.canAdvanceRoute
+            && uptime - lastRouteAttemptAt > Self.routeRetryInterval {
+            routeRequested = true
+            fetchRoute(from: device, scanVersionId: localization.scanVersionId)
+        }
         snapshot.progress = RouteGeometry.advance(snapshot.progress, canAdvance: state.canAdvanceRoute, points: routePoints, device: device)
         renderer.update(venueToWorld: VenueFrames.venueToWorld(deviceToVenue: deviceToVenue),
                         nextIndex: snapshot.progress?.nextIndex ?? 0, visible: !routePoints.isEmpty)

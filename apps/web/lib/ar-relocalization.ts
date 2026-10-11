@@ -7,6 +7,8 @@
 //   LOCALIZED --MARKERS_OBSERVED--> LOCALIZED with a refresh pending (re-solve from a marker seen again; the current
 //                                   transform is kept until the answer, and kept if the answer is refused)
 //   LOCALIZED --FLOOR_HANDOFF--> FLOOR_TRANSITION --MARKERS_OBSERVED (new floor's markers)--> RELOCALIZING --> LOCALIZED
+//   LOCALIZED --TRACKING_LIMITED--> LIMITED --TRACKING_RESTORED (recovery validated)--> LOCALIZED
+//   LIMITED --TICK after MAX_LIMITED_MS, TRACKING_LOST, or TRACKING_RESTORED with a failed check--> TRACKING_LOST
 //   anything --SESSION_ENDED--> ENDED
 //
 // `deviceTracking` is the platform's own per-frame verdict (TRACKING_LOST / TRACKING_RESTORED). Before the first
@@ -18,6 +20,11 @@
 //     `pending.observations` holds what the camera saw; `localization.deviceToVenue` holds only what the server solved
 //     from those observations.
 //   * The route advances only in LOCALIZED (`canAdvanceRoute`).
+//   * Limited tracking (the platform reports an emulated position: it still tracks orientation, but not position) is held
+//     briefly, as on iOS: the route stays drawn where it was (frozen), progress stops, and the user is told to stand still.
+//     It returns to LOCALIZED only when 6-DoF tracking returns within MAX_LIMITED_MS AND the recovery is validated: the
+//     world anchor the transform is attached to is tracked again and moved less than RECOVERY_MAX_JUMP_METERS during the
+//     spell (a larger move means the platform re-anchored its map, and the old transform is no longer trusted).
 //   * Tracking loss is sticky. When the platform's tracking comes back, the state stays TRACKING_LOST until a registered
 //     marker is observed again and the server relocalizes from it. The device's AR world frame may have been reset or
 //     re-anchored by the platform during the loss, so the old transform is not trusted again.
@@ -30,7 +37,13 @@
 import type { Pose } from "./ar-anchor-math.ts";
 import type { MarkerObservation } from "./ar-marker-tracking.ts";
 
-export type ArState = "IDLE" | "SEARCHING" | "RELOCALIZING" | "LOCALIZED" | "TRACKING_LOST" | "FLOOR_TRANSITION" | "ENDED";
+export type ArState = "IDLE" | "SEARCHING" | "RELOCALIZING" | "LOCALIZED" | "LIMITED" | "TRACKING_LOST" | "FLOOR_TRANSITION" | "ENDED";
+
+/** How long a localized session may stay LIMITED (position emulated) before the localization is considered lost. Same as
+ * iOS (RelocalizationStateMachine.maxLimitedSeconds). */
+export const MAX_LIMITED_MS = 3000;
+/** A recovery from LIMITED in which the world anchor moved more than this is not trusted (the platform re-anchored). */
+export const RECOVERY_MAX_JUMP_METERS = 0.3;
 
 /** A server-solved localization (POST .../anchors/relocalize). It is only valid on `floorId` (every floor has its own
  * canonical frame) and in the scan version and coordinate frame the server solved it in. */
@@ -62,6 +75,9 @@ export interface ArSessionState {
   deviceTracking: boolean;
   /** Why device tracking was last reported lost (kept while TRACKING_LOST, cleared on a new localization). */
   lostReason: string | null;
+  /** When LIMITED began (ms, the frame clock), and why. */
+  limitedSinceMs: number | null;
+  limitedReason: string | null;
   lastError: string | null;
   nextRequestId: number;
 }
@@ -72,7 +88,11 @@ export type ArEvent =
   | { type: "RELOCALIZATION_SUCCEEDED"; requestId: number; localization: Localization }
   | { type: "RELOCALIZATION_FAILED"; requestId: number; error: string }
   | { type: "TRACKING_LOST"; reason: string }
-  | { type: "TRACKING_RESTORED" }
+  | { type: "TRACKING_LIMITED"; reason: string; atMs: number }
+  /** 6-DoF tracking is back. From LIMITED, `anchorJumpMeters` is how far the world anchor moved during the spell (null: the
+   * anchor is not tracked, so the recovery cannot be validated). */
+  | { type: "TRACKING_RESTORED"; anchorJumpMeters?: number | null }
+  | { type: "TICK"; atMs: number }
   | { type: "DRIFT_EXCEEDED"; reason: string }
   | { type: "FLOOR_HANDOFF"; toFloorId: string }
   | { type: "SESSION_ENDED" };
@@ -80,13 +100,21 @@ export type ArEvent =
 export function initialArSessionState(): ArSessionState {
   return {
     state: "IDLE", floorId: null, pinnedVersions: {}, localization: null, pending: null, deviceTracking: false,
-    lostReason: null, lastError: null, nextRequestId: 1,
+    lostReason: null, limitedSinceMs: null, limitedReason: null, lastError: null, nextRequestId: 1,
   };
 }
 
 export function canAdvanceRoute(s: ArSessionState): boolean {
   return s.state === "LOCALIZED" && s.localization !== null;
 }
+
+/** The route is drawn while localized, and held (frozen, not advancing) through a short LIMITED spell. */
+export function routeShown(s: ArSessionState): boolean {
+  return (s.state === "LOCALIZED" || s.state === "LIMITED") && s.localization !== null;
+}
+
+const lostFromLimited = (s: ArSessionState, reason: string): ArSessionState =>
+  ({ ...s, state: "TRACKING_LOST", pending: null, deviceTracking: false, lostReason: reason, limitedSinceMs: null, limitedReason: null });
 
 /** Why a server answer cannot be used in this session, or null. */
 function refusal(s: ArSessionState, l: Localization): string | null {
@@ -143,7 +171,20 @@ export function reduceArSession(s: ArSessionState, e: ArEvent): ArSessionState {
       if (s.state === "LOCALIZED") return { ...s, pending: null, lastError: e.error }; // a failed refresh keeps the transform
       if (s.state !== "RELOCALIZING") return s;
       return { ...s, state: s.pending.resumeTo, pending: null, lastError: e.error };
+    case "TRACKING_LIMITED":
+      if (s.state === "LOCALIZED") {
+        return { ...s, state: "LIMITED", pending: null, deviceTracking: false, limitedSinceMs: e.atMs, limitedReason: e.reason };
+      }
+      if (s.state === "LIMITED") return s;
+      // Not localized: a limited device is simply not tracking yet (or still lost).
+      return reduceArSession(s, { type: "TRACKING_LOST", reason: e.reason });
+    case "TICK":
+      if (s.state === "LIMITED" && s.limitedSinceMs !== null && e.atMs - s.limitedSinceMs > MAX_LIMITED_MS) {
+        return lostFromLimited(s, `tracking was limited for more than ${MAX_LIMITED_MS / 1000} s (${s.limitedReason})`);
+      }
+      return s;
     case "TRACKING_LOST":
+      if (s.state === "LIMITED") return lostFromLimited(s, e.reason);
       if (s.state === "IDLE" || (!s.deviceTracking && s.lostReason === e.reason)) return s;
       if (s.state === "LOCALIZED") return { ...s, state: "TRACKING_LOST", pending: null, deviceTracking: false, lostReason: e.reason };
       if (s.state === "RELOCALIZING") {
@@ -152,17 +193,29 @@ export function reduceArSession(s: ArSessionState, e: ArEvent): ArSessionState {
       }
       return { ...s, deviceTracking: false, lostReason: e.reason };
     case "TRACKING_RESTORED":
+      if (s.state === "LIMITED") {
+        const jump = e.anchorJumpMeters;
+        if (jump === undefined || jump === null) {
+          return lostFromLimited(s, "tracking returned, but the world anchor the route is attached to is not tracked: relocalize");
+        }
+        if (jump > RECOVERY_MAX_JUMP_METERS) {
+          return lostFromLimited(s, `tracking returned, but the platform moved the route's world anchor ${jump.toFixed(2)} m meanwhile ` +
+            "(it re-anchored its map): relocalize");
+        }
+        return { ...s, state: "LOCALIZED", deviceTracking: true, limitedSinceMs: null, limitedReason: null };
+      }
       // Device tracking is back, but TRACKING_LOST stays until a marker is seen again and the server relocalizes.
       return s.deviceTracking || s.state === "IDLE" ? s : { ...s, deviceTracking: true };
     case "DRIFT_EXCEEDED":
       // The platform still tracks, but a registered marker is no longer where the transform puts it: the transform has
       // drifted. It is dropped like a loss; the marker in view relocalizes the session from scratch.
+      if (s.state === "LIMITED") return lostFromLimited(s, e.reason);
       if (s.state !== "LOCALIZED") return s;
       return { ...s, state: "TRACKING_LOST", pending: null, lostReason: e.reason };
     case "FLOOR_HANDOFF":
       // A transform is valid on one floor only (each floor has its own canonical frame). The next floor starts unlocalized
       // and is localized from one of its own markers.
-      if (s.state !== "LOCALIZED" || e.toFloorId === s.floorId) return s;
+      if (s.state !== "LOCALIZED" || e.toFloorId === s.floorId) return s; // never from LIMITED: progress is frozen there
       return { ...s, state: "FLOOR_TRANSITION", floorId: e.toFloorId, localization: null, pending: null, lostReason: null, lastError: null };
     case "SESSION_ENDED":
       return { ...s, state: "ENDED", pending: null };
@@ -171,14 +224,16 @@ export function reduceArSession(s: ArSessionState, e: ArEvent): ArSessionState {
   }
 }
 
-/** The platform's own verdict on device tracking for one frame. No viewer pose, or a viewer pose whose position is
- * emulated (the platform has fallen back to orientation-only tracking), means 6-DoF tracking is lost. */
+/** The platform's own verdict on device tracking for one frame. No viewer pose, or a hidden session, is a loss. A viewer
+ * pose whose position is emulated (the platform has fallen back to orientation-only tracking) is LIMITED: 6-DoF tracking
+ * is not available this frame, but the platform still holds its world, so a localized session may survive it briefly. */
 export function frameTrackingSignal(viewerPose: { emulatedPosition: boolean } | null, visibility: string = "visible"): {
   ok: boolean;
+  kind: "OK" | "LIMITED" | "LOST";
   reason: string | null;
 } {
-  if (visibility !== "visible") return { ok: false, reason: `the AR session is ${visibility}` };
-  if (!viewerPose) return { ok: false, reason: "the platform reports no device pose" };
-  if (viewerPose.emulatedPosition) return { ok: false, reason: "the platform lost positional tracking (position is emulated)" };
-  return { ok: true, reason: null };
+  if (visibility !== "visible") return { ok: false, kind: "LOST", reason: `the AR session is ${visibility}` };
+  if (!viewerPose) return { ok: false, kind: "LOST", reason: "the platform reports no device pose" };
+  if (viewerPose.emulatedPosition) return { ok: false, kind: "LIMITED", reason: "the platform lost positional tracking (position is emulated)" };
+  return { ok: true, kind: "OK", reason: null };
 }

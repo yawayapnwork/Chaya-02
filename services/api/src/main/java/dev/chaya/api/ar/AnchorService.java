@@ -294,7 +294,7 @@ public class AnchorService {
             throw new ApiException(HttpStatus.CONFLICT, ScanVersionService.VERSION_MISMATCH, "the client shows scan version "
                 + clientVersionId + " but floor " + floorId + " publishes " + version.id() + "; reload the current version");
         }
-        List<Pose> candidates = new ArrayList<>();
+        List<CoordinateTransform.AnchorPair> pairs = new ArrayList<>();
         double tilt = 0;
         for (AnchorObservation obs : observations) {
             Anchor anchor = get(actor, venueId, floorId, obs.anchorId());
@@ -306,7 +306,7 @@ public class AnchorService {
             requireInCurrentVersion(anchor, version);
             Pose candidate = CoordinateTransform.deviceToVenueFromAnchor(anchor.digitalPose(), obs.observedPose());
             tilt = Math.max(tilt, ArDeviceFrame.gravityTiltDegrees(candidate));
-            candidates.add(candidate);
+            pairs.add(new CoordinateTransform.AnchorPair(anchor.digitalPose(), obs.observedPose()));
         }
         if (tilt > frameProps.maxDeviceGravityTiltDeg()) {
             throw new ApiException(HttpStatus.CONFLICT, "RELOCALIZATION_GRAVITY_MISMATCH", "the solved transform tilts the device's "
@@ -314,11 +314,28 @@ public class AnchorService {
                 + frameProps.maxDeviceGravityTiltDeg() + "); an anchor's digital orientation or the observation's axis convention ("
                 + ArDeviceFrame.CONVENTION + ") is wrong");
         }
-        CoordinateTransform.Blended blended = CoordinateTransform.blend(candidates);
+        CoordinateTransform.Solution solution = CoordinateTransform.solve(pairs, frameProps.maxAnchorResidualM(),
+            frameProps.maxAnchorResidualDeg());
+        List<ArDtos.AnchorResidual> residuals = solution.residuals().stream()
+            .map(r -> new ArDtos.AnchorResidual(observations.get(r.index()).anchorId(), r.translationMeters(), r.rotationDegrees(), r.used()))
+            .toList();
+        if (!solution.consistent()) {
+            // Two anchors left that disagree: nothing says which one was moved, misidentified or mis-registered.
+            throw new ApiException(HttpStatus.CONFLICT, "RELOCALIZATION_INCONSISTENT", "the observed anchors disagree: under the best "
+                + "transform they land up to " + Math.round(solution.maxResidualMeters() * 100) / 100.0 + " m / "
+                + Math.round(solution.maxResidualDegrees() * 10) / 10.0 + " degrees from their registered poses (limits "
+                + frameProps.maxAnchorResidualM() + " m / " + frameProps.maxAnchorResidualDeg() + " degrees); one of "
+                + residuals.stream().filter(ArDtos.AnchorResidual::used).map(r -> r.anchorId().toString()).toList()
+                + " was moved, misidentified or mis-registered. Observe a third registered marker, or re-check their poses");
+        }
+        List<UUID> rejected = residuals.stream().filter(r -> !r.used()).map(ArDtos.AnchorResidual::anchorId).toList();
+        int used = pairs.size() - rejected.size();
         // One anchor gives nothing to compare against: its residual is unknown, not zero.
-        Double residual = candidates.size() == 1 ? null : blended.residualMeters();
-        return new RelocalizationResponse(blended.transform(), residual, candidates.size(),
-            ArDeviceFrame.gravityTiltDegrees(blended.transform()), ArDeviceFrame.CONVENTION, current.id(), version.id());
+        Double residualM = used == 1 ? null : solution.maxResidualMeters();
+        Double residualDeg = used == 1 ? null : solution.maxResidualDegrees();
+        return new RelocalizationResponse(solution.transform(), residualM, used,
+            ArDeviceFrame.gravityTiltDegrees(solution.transform()), ArDeviceFrame.CONVENTION, current.id(), version.id(),
+            residualDeg, residuals, rejected);
     }
 
     private static final int MAX_OBSERVATIONS = 16;

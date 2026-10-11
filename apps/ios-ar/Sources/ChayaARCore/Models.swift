@@ -107,6 +107,20 @@ public struct RelocalizationResponse: Codable, Equatable, Sendable {
     public var deviceFrameConvention: String
     public var coordinateFrameId: UUID
     public var scanVersionId: UUID
+    /// The largest orientation difference between a used anchor's mapped observation and its registered pose (nil: one anchor).
+    public var residualDegrees: Double? = nil
+    /// One per observed anchor: how far it lands from its registered pose under the solved transform, and whether it was used.
+    public var anchorResiduals: [AnchorResidual]? = nil
+    /// Anchors set aside as inconsistent with the others (moved, misidentified or mis-registered).
+    public var rejectedAnchorIds: [UUID]? = nil
+}
+
+/// Mirrors dev.chaya.api.ar.ArDtos.AnchorResidual.
+public struct AnchorResidual: Codable, Equatable, Sendable {
+    public var anchorId: UUID
+    public var translationMeters: Double
+    public var rotationDegrees: Double
+    public var used: Bool
 }
 
 public enum WaypointKind: String, Codable, Sendable {

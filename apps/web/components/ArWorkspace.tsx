@@ -15,9 +15,11 @@
 //   4. Route: fetched from POST /navigation/routes with the device's canonical position as the start, placed in the AR
 //      world frame with the anchor-corrected transform, and drawn by lib/ar-route-renderer.ts. Progress along it
 //      updates from the platform's viewer pose every frame, only while localized.
-//   5. Tracking loss (no viewer pose, emulated position, session hidden, world anchor no longer tracked): the route is
-//      hidden and frozen, the UI says tracking is lost, and only a fresh marker observation followed by a successful
-//      relocalization brings it back. Before the first localization, a loss only means "waiting for device tracking".
+//   5. Tracking loss (no viewer pose, session hidden, world anchor no longer tracked): the route is hidden and frozen, the
+//      UI says tracking is lost, and only a fresh marker observation followed by a successful relocalization brings it
+//      back. Limited tracking (emulated position) while localized holds the last valid overlay for up to 3 s, frozen, and
+//      asks the user to stand still; it resumes only if the world anchor is tracked again and barely moved (validated
+//      recovery), else it is a loss. Before the first localization, a loss only means "waiting for device tracking".
 //   6. Versions (lib/ar-relocalization.ts, lib/ar-navigation.ts): only anchors whose pose was entered against a scan
 //      version are registered; each floor's version is pinned at its first localization and sent with every later
 //      relocalization (the server refuses another one); a route leg is drawn only if the server routed that floor in the
@@ -28,6 +30,9 @@
 //   8. Floors: every floor's markers are registered for the session. Near the end of this floor's leg (a TRANSITION) the
 //      session hands off: the transform is dropped (each floor has its own canonical frame) and the next floor is
 //      localized from its own markers.
+//   9. Failures (lib/ar-errors.ts): an expired sign-in/viewer link stops relocalization and routing until the user signs in
+//      again; a network failure is retried and a route already drawn stays usable; a marker the server will no longer use
+//      is dropped for the session; markers that disagree (one moved) ask for one marker at a time or a third.
 //
 // It cannot be exercised on this development machine (no WebXR). docs/ar-android-validation.md is the device procedure.
 
@@ -42,9 +47,11 @@ import {
   type ArProblem,
   type EnvironmentReport,
   PROBLEM_TEXT,
+  IOS_NATIVE_TEXT,
   anchorSupport,
   classifySessionError,
   detectArEnvironment,
+  isAppleMobile,
   trackableAnchors,
 } from "@/lib/webxr-support";
 import {
@@ -63,7 +70,9 @@ import {
   frameTrackingSignal,
   initialArSessionState,
   reduceArSession,
+  routeShown,
 } from "@/lib/ar-relocalization";
+import { type ClassifiedFailure, classifyArFailure } from "@/lib/ar-errors";
 import {
   type RouteProgress,
   advanceProgress,
@@ -75,6 +84,7 @@ import type { Vec3 } from "@/lib/coordinate-frame";
 import type { Pose } from "@/lib/ar-anchor-math";
 import { ArRouteRenderer } from "@/lib/ar-route-renderer";
 import {
+  arRouteRequest,
   arSessionInit,
   blendedTransform,
   driftExceeded,
@@ -124,7 +134,11 @@ export default function ArWorkspace() {
   const [venueAnchors, setVenueAnchors] = useState<Anchor[]>([]);
   const [pois, setPois] = useState<Poi[]>([]);
   const [destinationId, setDestinationId] = useState("");
+  const [stepFree, setStepFree] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** The last failed request's meaning (lib/ar-errors.ts), shown in the overlay. */
+  const [failure, setFailure] = useState<ClassifiedFailure | null>(null);
+  const [online, setOnline] = useState(true);
 
   const [env, setEnv] = useState<EnvironmentReport | null>(null);
   const [sessionProblem, setSessionProblem] = useState<{ problem: ArProblem; detail: string } | null>(null);
@@ -150,11 +164,42 @@ export default function ArWorkspace() {
   /** The WebXR world anchor created where the localizing marker was observed, and its pose then (lib/ar-route.ts). */
   const worldAnchorRef = useRef<{ anchor: XRAnchor; poseAtSolve: Pose; createdAtMs: number; seenTracked: boolean } | null>(null);
   const onFrameRef = useRef<(time: number, frame: XRFrame) => void>(() => {});
+  const fetchRouteRef = useRef<(viewerPose: Pose, deviceToVenue: Pose) => Promise<void>>(async () => {});
   const lastFailureAtRef = useRef(0);
+  /** Requests are not retried on their own after this (an expired sign-in or viewer link). */
+  const blockedRef = useRef<ClassifiedFailure | null>(null);
+  /** Markers the server will no longer use (deleted, not calibrated, stale): not sent again this session. */
+  const unavailableRef = useRef<Set<string>>(new Set());
+  /** The world anchor's pose when a LIMITED spell began, to validate the recovery. */
+  const limitedAnchorRef = useRef<Pose | null>(null);
+  const lastViewerRef = useRef<Pose | null>(null);
+  const stepFreeRef = useRef(false);
+  useEffect(() => { stepFreeRef.current = stepFree; }, [stepFree]);
   const lastUiAtRef = useRef(0);
   const overlayRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => { detectArEnvironment().then(setEnv); }, []);
+  const [appleMobile, setAppleMobile] = useState(false);
+  useEffect(() => {
+    Promise.resolve().then(() => setAppleMobile(isAppleMobile(navigator.userAgent, navigator.maxTouchPoints ?? 0)));
+  }, []);
+  // Network loss is shown as a state; when the connection returns, a route that could not be fetched is fetched again.
+  useEffect(() => {
+    const update = () => {
+      setOnline(navigator.onLine);
+      const localization = stateRef.current.localization;
+      if (navigator.onLine && !routeRef.current && localization && lastViewerRef.current && canAdvanceRoute(stateRef.current)) {
+        void fetchRouteRef.current(lastViewerRef.current, localization.deviceToVenue);
+      }
+    };
+    update();
+    window.addEventListener("online", update);
+    window.addEventListener("offline", update);
+    return () => {
+      window.removeEventListener("online", update);
+      window.removeEventListener("offline", update);
+    };
+  }, []);
   useEffect(() => { listVenues().then(setVenues).catch((e) => setError(message(e))); }, []);
   useEffect(() => {
     if (!venueId) return;
@@ -234,6 +279,30 @@ export default function ArWorkspace() {
     progressRef.current = null;
   }, []);
 
+  /** Fetches the route once, from where the device is, through the same contract the viewer uses (lib/ar-navigation.ts
+   * arRouteRequest: step-free when asked; a same-floor destination on the localization's scan version). A failure is a
+   * routing error, not a localization one: the localization stays, and a network failure is retried when back online. */
+  const fetchRoute = useCallback(async (viewerPose: Pose, deviceToVenue: Pose) => {
+    const localization = stateRef.current.localization;
+    const destination = pois.find((p) => p.id === destinationId);
+    if (!localization || !destination || blockedRef.current) return;
+    try {
+      const route = await planRoute(arRouteRequest({
+        venueId, localization, start: devicePositionInVenue(viewerPose, deviceToVenue),
+        destination: { id: destination.id, floorId: destination.floorId ?? null }, stepFree: stepFreeRef.current,
+      }));
+      routeRef.current = { route };
+      setFailure(null);
+      updateLeg();
+      publish(true);
+    } catch (e) {
+      const f = classifyArFailure(e, navigator.onLine);
+      if (f.failure === "SESSION_EXPIRED") blockedRef.current = f;
+      setFailure(f);
+      setError(`Route: ${f.failure}: ${message(e)}`);
+    }
+  }, [venueId, destinationId, pois, publish, updateLeg]);
+
   /** Sends real observations to the server, in the floor's pinned scan version, and waits for the world anchor created
    * at the first one's pose. The answer is applied only if that request is still the pending one; otherwise the new
    * anchor is released. */
@@ -251,8 +320,14 @@ export default function ArWorkspace() {
         anchor.then((a) => (created = a)),
       ]);
       deviceToVenue = result.deviceToVenueTransform;
+      if (result.rejectedAnchorIds?.length) {
+        const names = observations.filter((o) => result.rejectedAnchorIds!.includes(o.anchorId)).map((o) => o.markerIdentifier);
+        setError(`Marker(s) ${names.join(", ")} set aside: inconsistent with the other markers in view (moved, misidentified or ` +
+          "mis-registered). Ask an operator to check them.");
+      }
       const localization = {
-        deviceToVenue, anchorIds: observations.map((o) => o.anchorId), residualMeters: result.residualMeters,
+        deviceToVenue, anchorIds: observations.map((o) => o.anchorId).filter((id) => !(result.rejectedAnchorIds ?? []).includes(id)),
+        residualMeters: result.residualMeters,
         coordinateFrameId: result.coordinateFrameId, scanVersionId: result.scanVersionId, floorId: sessionFloor,
         solvedAtMs: performance.now(),
       };
@@ -269,24 +344,27 @@ export default function ArWorkspace() {
     } catch (e) {
       (created as XRAnchor | null)?.delete();
       lastFailureAtRef.current = performance.now();
-      dispatch({ type: "RELOCALIZATION_FAILED", requestId, error: message(e) });
+      const f = classifyArFailure(e, navigator.onLine);
+      setFailure(f);
+      if (!f.retryable && f.failure === "SESSION_EXPIRED") blockedRef.current = f;
+      if (f.failure === "ANCHOR_UNAVAILABLE") {
+        // The server named the anchor, or there was only one in the request: drop it for this session.
+        const ids = f.anchorId ? [f.anchorId] : observations.length === 1 ? [observations[0].anchorId] : [];
+        ids.forEach((id) => unavailableRef.current.add(id));
+        markersRef.current = markersRef.current.filter((m) => !unavailableRef.current.has(m.anchorId));
+      }
+      dispatch({ type: "RELOCALIZATION_FAILED", requestId, error: `${f.failure}: ${message(e)}` });
       return;
     }
+    setFailure(null);
     if (routeRef.current || !destinationId) {
       if (legRef.current?.floorId !== sessionFloor) updateLeg(); // a new floor after a handoff
       return;
     }
     // The route is fetched once, from where the device was when it was first localized. A failure here is a routing
     // error, not a localization one: the localization and its world anchor stay.
-    try {
-      const route = await planRoute({ venueId, floorId: sessionFloor, start: devicePositionInVenue(viewerPose, deviceToVenue), destinationPoiId: destinationId });
-      routeRef.current = { route };
-      updateLeg();
-      publish(true);
-    } catch (e) {
-      setError(`Route: ${message(e)}`);
-    }
-  }, [venueId, floorId, destinationId, dispatch, publish, updateLeg]);
+    await fetchRoute(viewerPose, deviceToVenue);
+  }, [venueId, floorId, destinationId, dispatch, updateLeg, fetchRoute]);
 
   const onFrame = useCallback((time: number, frame: XRFrame) => {
     const renderer = rendererRef.current;
@@ -294,13 +372,43 @@ export default function ArWorkspace() {
     if (!renderer || !ref) return;
     const viewer = frame.getViewerPose(ref);
     const signal = frameTrackingSignal(viewer ? { emulatedPosition: viewer.emulatedPosition } : null, frame.session.visibilityState);
+    const frameMs = performance.now();
+    const anchorPoseNow = (): Pose | null => {
+      const wa = worldAnchorRef.current;
+      if (!wa || !frame.trackedAnchors?.has(wa.anchor)) return null;
+      const p = frame.getPose(wa.anchor.anchorSpace, ref);
+      return p ? poseFromXrTransform(p.transform) : null;
+    };
+    if (signal.kind === "LIMITED" && (stateRef.current.state === "LOCALIZED" || stateRef.current.state === "LIMITED")) {
+      // Hold the last valid overlay where it is (world-locked, not moved, not advanced) and ask the user to stand still.
+      if (stateRef.current.state === "LOCALIZED") limitedAnchorRef.current = anchorPoseNow();
+      dispatch({ type: "TRACKING_LIMITED", reason: signal.reason ?? "limited", atMs: frameMs });
+      dispatch({ type: "TICK", atMs: frameMs });
+      renderer.setRouteVisible(routeShown(stateRef.current) && legRef.current !== null);
+      publish(false);
+      return;
+    }
     if (!signal.ok || !viewer) {
       dispatch({ type: "TRACKING_LOST", reason: signal.reason ?? "tracking lost" });
       renderer.setRouteVisible(false);
       return;
     }
-    dispatch({ type: "TRACKING_RESTORED" });
+    if (stateRef.current.state === "LIMITED") {
+      // Validated recovery: the world anchor must be tracked again and barely moved while position was not tracked.
+      const before = limitedAnchorRef.current;
+      const after = anchorPoseNow();
+      const jump = before && after ? Math.hypot(after.x - before.x, after.y - before.y, after.z - before.z) : null;
+      dispatch({ type: "TRACKING_RESTORED", anchorJumpMeters: jump });
+      limitedAnchorRef.current = null;
+      if ((stateRef.current as ArSessionState).state !== "LOCALIZED") {
+        renderer.setRouteVisible(false);
+        return;
+      }
+    } else {
+      dispatch({ type: "TRACKING_RESTORED" });
+    }
     const viewerPose = poseFromXrTransform(viewer.transform);
+    lastViewerRef.current = viewerPose;
 
     const results = (frame as ImageTrackingFrame).getImageTrackingResults?.() ?? [];
     const observed = observeImages(results, markersRef.current, (space) => {
@@ -308,7 +416,8 @@ export default function ArWorkspace() {
       return pose ? poseFromXrTransform(pose.transform) : null;
     }, time);
     const sessionFloor = stateRef.current.floorId;
-    const eligible = observed.filter((o) => o.floorId === sessionFloor && relocalizationEligibility(o).eligible);
+    const eligible = observed.filter((o) => o.floorId === sessionFloor && !unavailableRef.current.has(o.anchorId)
+      && relocalizationEligibility(o).eligible);
 
     // The current transform (world-anchor corrected), if localized and the anchor is tracked.
     const s = stateRef.current;
@@ -330,7 +439,7 @@ export default function ArWorkspace() {
     }
 
     const state = stateRef.current.state;
-    const canObserve = performance.now() - lastFailureAtRef.current > RETRY_AFTER_FAILURE_MS;
+    const canObserve = performance.now() - lastFailureAtRef.current > RETRY_AFTER_FAILURE_MS && blockedRef.current === null;
     if (eligible.length > 0 && canObserve) {
       if (state === "LOCALIZED" && corrected) {
         // A registered marker seen again: is the transform still right?
@@ -388,6 +497,7 @@ export default function ArWorkspace() {
     publish(false);
   }, [dispatch, publish, relocalizeFrom]);
   useEffect(() => { onFrameRef.current = onFrame; }, [onFrame]);
+  useEffect(() => { fetchRouteRef.current = fetchRoute; }, [fetchRoute]);
 
   async function startSession() {
     setError(null);
@@ -453,6 +563,7 @@ export default function ArWorkspace() {
         <div className="border border-amber-500 rounded p-4 space-y-2" data-testid="ar-unavailable">
           <p className="font-medium">AR unavailable: {blocking}</p>
           <p className="text-sm">{env.detail}</p>
+          {appleMobile && <p className="text-sm font-medium" data-testid="ar-ios-native">{IOS_NATIVE_TEXT}</p>}
         </div>
       )}
       {sessionProblem && (
@@ -494,6 +605,10 @@ export default function ArWorkspace() {
             </div>
           )}
 
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={stepFree} onChange={(e) => setStepFree(e.target.checked)} disabled={inSession} />
+            Step-free route (elevators and ramps with measured, passing clearances only)
+          </label>
           <button
             className="border px-4 py-2 rounded disabled:opacity-50"
             disabled={!loaded || !destinationId || inSession}
@@ -519,9 +634,22 @@ export default function ArWorkspace() {
             {!ui.route && " Fetching route…"}
           </p>
         )}
+        {s.state === "LIMITED" && (
+          <p data-testid="ar-limited">
+            Stop and hold still: tracking is limited ({s.limitedReason}). The route is frozen where it was and is not advancing. It
+            resumes on its own only if tracking returns within 3 s without the map shifting; otherwise point at a marker.
+          </p>
+        )}
+        {!online && <p className="text-amber-300" data-testid="ar-offline">NETWORK_UNAVAILABLE: offline. A route already shown stays usable while tracking holds.</p>}
+        {failure && (
+          <p className="text-amber-300" data-testid="ar-failure">
+            {failure.failure}: {failure.action}
+          </p>
+        )}
+        {ui.route?.accessibilityProfile === "STEP_FREE" && <p>Step-free route: {ui.route.accessibilityConstraintsApplied.join("; ")}.</p>}
         {s.state === "TRACKING_LOST" && (
           <p>
-            Tracking lost ({s.lostReason}). Route position frozen
+            Stop. Tracking lost ({s.lostReason}). Route position frozen
             {ui.progress ? ` at ${ui.progress.remainingMeters.toFixed(1)} m to go` : ""}. Point the camera at a registered
             marker to relocalize.
           </p>

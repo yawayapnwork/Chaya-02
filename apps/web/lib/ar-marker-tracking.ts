@@ -54,7 +54,9 @@ export interface MarkerObservation {
 
 /** Turns one frame's image-tracking results into observations of registered markers. `poseOf` resolves an image space
  * to its pose in the AR world frame (XRFrame.getPose(imageSpace, localSpace)); a null pose is no observation. A result
- * whose index is not one of `markers` is ignored: it cannot be attributed to a registered anchor. */
+ * whose index is not one of `markers` is ignored: it cannot be attributed to a registered anchor. At most one observation
+ * per anchor is returned (the first tracked one, else the first): the server refuses a request naming an anchor twice, and
+ * two poses of one physical marker in one frame cannot both be right. */
 export function observeImages(
   results: readonly XrImageTrackingResultLike[],
   markers: readonly TrackedMarker[],
@@ -68,6 +70,11 @@ export function observeImages(
     if (!marker) continue;
     const pose = poseOf(r.imageSpace);
     if (!pose) continue;
+    const existing = out.findIndex((o) => o.anchorId === marker.anchorId);
+    if (existing >= 0) {
+      if (out[existing].trackingState === "tracked" || r.trackingState !== "tracked") continue;
+      out.splice(existing, 1);
+    }
     out.push({
       anchorId: marker.anchorId,
       ...(marker.floorId === undefined ? {} : { floorId: marker.floorId }),

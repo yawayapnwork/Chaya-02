@@ -48,3 +48,16 @@ test("poseFromXrTransform copies position and orientation", () => {
   assert.deepEqual(poseFromXrTransform({ position: { x: 1, y: 2, z: 3 }, orientation: { x: 0, y: 0, z: 0.6, w: 0.8 } }),
     { x: 1, y: 2, z: 3, qx: 0, qy: 0, qz: 0.6, qw: 0.8 });
 });
+
+test("observeImages: at most one observation per anchor, preferring a tracked one", () => {
+  const markers = [{ index: 0, anchorId: "a1", markerIdentifier: "m1", widthInMeters: 0.2 }];
+  const pose = { x: 0, y: 0, z: -1, qx: 0, qy: 0, qz: 0, qw: 1 };
+  const results = [
+    { index: 0, imageSpace: "s0", trackingState: "emulated" as const, measuredWidthInMeters: 0.2 },
+    { index: 0, imageSpace: "s1", trackingState: "tracked" as const, measuredWidthInMeters: 0.2 },
+    { index: 0, imageSpace: "s2", trackingState: "tracked" as const, measuredWidthInMeters: 0.2 },
+  ];
+  const out = observeImages(results, markers, () => pose, 5);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].trackingState, "tracked");
+});

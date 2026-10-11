@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { anchorSupport, classifySessionError, detectArEnvironment, trackableAnchors } from "./webxr-support.ts";
+import { anchorSupport, classifySessionError, detectArEnvironment, isAppleMobile, trackableAnchors } from "./webxr-support.ts";
 
 const IMAGE_TRACKING = { XRImageTrackingResult: function XRImageTrackingResult() {} };
 const FULL = { ...IMAGE_TRACKING, XRAnchor: function XRAnchor() {} };
@@ -71,4 +71,11 @@ test("an anchor whose pose was never entered against a scan version is not regis
   assert.equal(anchorSupport({ ...base, scanVersionId: "sv-1", poseId: null }), "UNVERSIONED");
   assert.equal(anchorSupport({ ...base }), "UNVERSIONED");
   assert.equal(anchorSupport({ ...base, scanVersionId: "sv-1", poseId: "pose-1" }), "TRACKABLE");
+});
+
+test("isAppleMobile: iPhone, iPad and iPadOS-as-Mac are sent to the native app; Android and desktop are not", () => {
+  assert.ok(isAppleMobile("Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15", 5));
+  assert.ok(isAppleMobile("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15", 5), "iPadOS desktop-class UA");
+  assert.ok(!isAppleMobile("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15", 0), "a real Mac");
+  assert.ok(!isAppleMobile("Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/126.0 Mobile Safari/537.36", 5));
 });

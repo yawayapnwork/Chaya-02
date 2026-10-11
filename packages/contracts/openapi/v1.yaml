@@ -7468,6 +7468,20 @@ components:
       - markerIdentifier
       - markerType
       - physicalPose
+    AnchorResidual:
+      type: object
+      properties:
+        anchorId:
+          type: string
+          format: uuid
+        rotationDegrees:
+          type: number
+          format: double
+        translationMeters:
+          type: number
+          format: double
+        used:
+          type: boolean
     ArtifactFormat:
       type: object
       properties:
@@ -10066,6 +10080,10 @@ components:
     RelocalizationResponse:
       type: object
       properties:
+        anchorResiduals:
+          type: array
+          items:
+            $ref: "#/components/schemas/AnchorResidual"
         anchorsUsed:
           type: integer
           format: int32
@@ -10077,6 +10095,14 @@ components:
         deviceToVenueTransform:
           $ref: "#/components/schemas/Pose"
         gravityTiltDegrees:
+          type: number
+          format: double
+        rejectedAnchorIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        residualDegrees:
           type: number
           format: double
         residualMeters:

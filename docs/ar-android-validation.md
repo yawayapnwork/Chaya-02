@@ -121,6 +121,29 @@ Run these after section 6, with two floors that each publish a scan version, eac
 | Version / frame check | (Desktop) recalibrate the second floor's reconstruction between starting AR and arriving there | The second floor's leg is not drawn: "Route not drawn: FRAME_MISMATCH" |
 | Hit test | Point at a floor or a blank wall at any point | Nothing is ever placed on it; no state changes |
 
+## 6c. Multi-marker consistency, limited tracking, failures, step-free (added 2026-10-11)
+
+Layout for this section: **three** calibrated `IMAGE_TARGET`s on the same floor, 4-8 m apart, on at least two walls,
+all at about 1.2-1.5 m, positioned so two or three can be in view at once from some spot. Record the layout (anchor ids,
+measured positions, which wall, height) in the record below.
+
+| Check | How | Expected |
+|---|---|---|
+| Two-marker residual | Localize with two markers in view at once | The overlay shows `residual N m`: the larger distance between a marker's observation mapped through the transform and its registered pose. Record N. A correct layout gives a few centimetres; record what you get. |
+| Moved marker, three in view | Move one print about 1 m along its wall; stand where all three are in view | `LOCALIZED` from the other two; the message names the moved marker as "set aside: inconsistent". The `relocalize` response has `rejectedAnchorIds` with its id and `anchorResiduals` with about 1 m for it. Put it back afterwards. |
+| Moved marker, two in view | Same moved print, with only it and one other in view | No localization: `ANCHORS_INCONSISTENT` ("the markers in view disagree"), `409 RELOCALIZATION_INCONSISTENT` in the network log. It retries no more than every 1.5 s. Pointing at one marker alone then localizes. |
+| Misidentified print | Swap two prints (marker A's print where B's was) and point at both | They are set aside or refused as above; never averaged into a route that is visibly off. |
+| Limited, short | While `LOCALIZED`, sweep the phone fast for about 1 s, or aim at a blank wall | `LIMITED`: "Stop and hold still… route frozen". The route stays drawn where it was (it does not follow you); "m to go" does not change. Back to `LOCALIZED` without a marker when tracking returns within 3 s. |
+| Limited, long | Keep it on a featureless surface for more than 3 s | `TRACKING_LOST` "tracking was limited for more than 3 s"; route hidden; needs a marker. |
+| Limited, map shifted | Hard to provoke. If a recovery ever snaps the route visibly, check the overlay | `TRACKING_LOST` "… moved the route's world anchor N m meanwhile (it re-anchored its map)" instead of resuming. Record N if seen. |
+| Network loss, route drawn | Localize and let the route draw, then airplane mode; keep walking | `NETWORK_UNAVAILABLE` shown; the route stays drawn and progress keeps advancing (tracking is on-device). |
+| Network loss, before the route | Airplane mode right after localizing (before the route arrives), then back online | `NETWORK_UNAVAILABLE`; the route is fetched by itself once back online, without restarting AR. |
+| Expired session | Use a viewer link whose token expires during the test (or revoke it from the desktop), then lose tracking and point at a marker | `SESSION_EXPIRED` with "sign in again / reopen the viewer link"; no more `relocalize` or route requests are sent (network log). |
+| Anchor unavailable | Delete one anchor from the desktop mid-session, lose tracking, point at its print | `ANCHOR_UNAVAILABLE`; that marker is not sent again this session (network log); the others still localize. |
+| Step-free route | Tick "Step-free route" before starting, to a destination on another floor reachable by stairs and by an elevator | The route uses the elevator; the overlay lists the step-free constraints applied. Without a step-free connection: a routing error, never a route through stairs. |
+| Same-floor version pin | Destination on the session's floor | The `routes` request body carries `scanVersionId` (the localization's); for another floor's destination it does not. |
+| Drift over distance | Localize at marker A; walk 10, 20 and 40 m along the route; at each point aim at a registered marker you have not used and read "… m from where the transform puts it" in the drift message, or the residual of the refresh | Record translation and rotation at each distance. This is the only measurement of VIO drift; unit tests cannot provide it. |
+
 ## 7. Negative capability checks (same phone, plus a desktop)
 
 | Setup | Expected page state |
@@ -134,9 +157,10 @@ Run these after section 6, with two floors that each publish a scan version, eac
 ## Validation record
 
 Fill in one row per device run. Attach screen recordings (Chrome → ⋮ → Share → record, or `adb shell screenrecord`)
-and the chrome://inspect network log for steps 4 and 6.
+and the chrome://inspect network log for steps 4 and 6 and section 6c.
 
-| Date | Tester | Device / Android | Chrome version | ARCore version | Sections passed | Placement error at 2 / 5 / 10 m | Notes / defects |
-|---|---|---|---|---|---|---|---|
-| — | — | — | — | — | **not run** | — | No device available when the client was written |
-| 2026-10-05 | — | — | — | — | **not run (pending)** | — | Version pinning, drift, refresh and floor handoff added (sections 6b). No Android device and no `adb` on the development machine; only the unit tests and the desktop Playwright spec ran. Hardware validation is pending. |
+| Date | Tester | Device model / Android | Chrome version | ARCore version | Anchor layout (ids, positions, walls, heights) | Test route (floors, length, step-free?) | Sections passed | Placement error at 2 / 5 / 10 m | Drift at 10 / 20 / 40 m | Relocalization results (count, residuals, refusals) | Known limitations / defects |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| — | — | — | — | — | — | — | **not run** | — | — | — | No device available when the client was written |
+| 2026-10-05 | — | — | — | — | — | — | **not run (pending)** | — | — | — | Version pinning, drift, refresh and floor handoff added (sections 6b). No Android device and no `adb` on the development machine; only the unit tests and the desktop Playwright spec ran. Hardware validation is pending. |
+| 2026-10-11 | — | — | — | — | — | — | **not run (pending)** | — | — | — | Multi-marker consistency, LIMITED hold with validated recovery, failure states, step-free and version-pinned route requests added (section 6c). Verified only by unit and integration tests with synthetic layouts and the desktop Playwright spec; no device was available. |

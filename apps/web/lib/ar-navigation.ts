@@ -22,7 +22,7 @@ import type { Localization } from "./ar-relocalization.ts";
 import type { XrTrackedImageInit } from "./ar-marker-tracking.ts";
 import { routeLegOnFloor } from "./ar-route.ts";
 import type { Vec3 } from "./coordinate-frame.ts";
-import type { RouteResponse, RouteWaypoint } from "./navigation-api.ts";
+import type { RouteRequest, RouteResponse, RouteWaypoint } from "./navigation-api.ts";
 
 export const AR_REQUIRED_FEATURES: readonly string[] = ["image-tracking", "anchors"];
 export const AR_OPTIONAL_FEATURES: readonly string[] = ["dom-overlay"];
@@ -71,6 +71,33 @@ export function routeLegFor(route: RouteResponse, localization: Localization): R
     };
   }
   return { ok: true, points: leg.points, waypoints: leg.waypoints };
+}
+
+// ---- route request ------------------------------------------------------------------------------------------------
+
+/**
+ * The route request for a localized session: the same authenticated, venue-scoped POST /navigation/routes the viewer and
+ * the iOS client use. A destination on the session's floor is routed on the scan version the session is localized in
+ * (its pinned navmesh and frame), as iOS does, so a floor republished meanwhile cannot hand back a route in another
+ * version. A destination on another floor is routed on what each floor publishes now (a version-pinned route stays on
+ * its floor, RouteService); its legs are then drawn only if routeLegFor finds each floor's version and frame match.
+ */
+export function arRouteRequest(args: {
+  venueId: string;
+  localization: Pick<Localization, "floorId" | "scanVersionId">;
+  start: Vec3;
+  destination: { id: string; floorId: string | null };
+  stepFree: boolean;
+}): RouteRequest {
+  const sameFloor = args.destination.floorId === args.localization.floorId;
+  return {
+    venueId: args.venueId,
+    floorId: args.localization.floorId,
+    start: args.start,
+    destinationPoiId: args.destination.id,
+    accessibility: args.stepFree ? "STEP_FREE" : "STANDARD",
+    ...(sameFloor ? { scanVersionId: args.localization.scanVersionId } : {}),
+  };
 }
 
 // ---- drift ----------------------------------------------------------------------------------------------------------

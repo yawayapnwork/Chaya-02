@@ -10,6 +10,7 @@ import {
   BLEND_MS,
   DRIFT_LIMIT_METERS,
   HANDOFF_RADIUS_METERS,
+  arRouteRequest,
   arSessionInit,
   blendedTransform,
   driftExceeded,
@@ -175,4 +176,12 @@ test("the floor is handed off only near the end of a leg that ends in a TRANSITI
   assert.equal(floorHandoff(ROUTE, "floor-2", 0), null, "the destination floor's leg ends at the DESTINATION");
   assert.equal(floorHandoff(ROUTE, "floor-1", null), null, "no progress (not localized): no handoff");
   assert.deepEqual(floorsOf(ROUTE), ["floor-1", "floor-2"]);
+});
+
+test("the route request: same contract as the viewer; a same-floor destination is routed on the localization's version", () => {
+  const same = arRouteRequest({ venueId: "v", localization: LOC, start: [1, 2, 1.4], destination: { id: "d", floorId: "floor-1" }, stepFree: true });
+  assert.deepEqual(same, { venueId: "v", floorId: "floor-1", start: [1, 2, 1.4], destinationPoiId: "d", accessibility: "STEP_FREE", scanVersionId: "sv-1" });
+  const other = arRouteRequest({ venueId: "v", localization: LOC, start: [1, 2, 1.4], destination: { id: "d", floorId: "floor-2" }, stepFree: false });
+  assert.equal(other.scanVersionId, undefined, "a version-pinned route stays on its floor, so a cross-floor route uses current versions");
+  assert.equal(other.accessibility, "STANDARD");
 });

@@ -5,7 +5,7 @@ Native iOS AR navigation client. iOS Safari has no WebXR, so iOS gets this app i
 
 > **Status: builds in CI; NOT DEVICE-VALIDATED.** No macOS, Xcode or iPhone has been available to the authors; every
 > compile of the ARKit layer and the app has happened in the `ios` CI workflow.
-> - `ChayaARCore` is built and tested on Linux Swift 5.10 (`swift test`, 43 tests).
+> - `ChayaARCore` is built and tested on Linux Swift 5.10 (`swift test`, 55 tests as of 2026-10-11).
 > - The app and the ARKit layer first compiled on 2026-09-30 (`ios` run 36734833669, commit `f99b8a6`, Xcode 15.4 on
 >   `macos-14`): `BUILD SUCCEEDED` for `generic/platform=iOS`, and the 9 app-level tests passed in the iOS Simulator.
 > - The scan-version changes after that run (version pinning, versioned routes, route-leg checks) are type-checked

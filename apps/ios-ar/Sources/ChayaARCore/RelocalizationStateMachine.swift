@@ -9,6 +9,7 @@ import Foundation
 ///   localized --limited(excessiveMotion | insufficientFeatures)--> limited --normal--> localized
 ///   limited --still limited after maxLimitedSeconds--> trackingLost
 ///   localized / limited --limited(relocalizing) | notAvailable | interrupted | world anchor lost--> trackingLost
+///   limited --normal, but the recovery check fails (recoveryRejected)--> trackingLost
 ///   trackingLost --normal--> recovered --markersObserved--> solving --...--> localized
 ///   anything --sessionEnded / sessionFailed--> ended
 ///
@@ -19,7 +20,8 @@ import Foundation
 ///   * `.limited(.initializing)` at session start is not a loss: before the first localization there is nothing to
 ///     lose. Observations are only accepted while ARKit reports `.normal` tracking.
 ///   * A short `limited` (fast motion, a blank wall) keeps the localization -- ARKit keeps its world frame -- but
-///     freezes progress. ARKit relocalizing, tracking not available, or a session interruption may move or reset the
+///     freezes progress. ARSessionManager validates the return to normal: the world anchor must still be tracked and have
+///     moved less than `recoveryMaxJumpMeters` during the spell (`recoveryRejected` otherwise). ARKit relocalizing, tracking not available, or a session interruption may move or reset the
 ///     world frame, so the localization is lost.
 ///   * Tracking loss is sticky. ARKit reporting `.normal` again only gets to `recovered`; the route returns only after a
 ///     registered marker is observed again and the server relocalizes from it.
@@ -141,6 +143,9 @@ public enum NavigationEvent: Equatable, Sendable {
     case relocalizationSucceeded(requestId: Int, Localization)
     case relocalizationFailed(requestId: Int, error: String)
     case worldAnchorLost
+    /// Tracking returned to normal after `limited`, but the recovery could not be validated (the world anchor is missing,
+    /// or ARKit moved it more than `recoveryMaxJumpMeters` meanwhile).
+    case recoveryRejected(String)
     case sessionFailed(String)
     case sessionEnded
 }
@@ -149,6 +154,9 @@ public enum RelocalizationStateMachine {
 
     /// How long a localized session may stay `limited` before the localization is considered lost.
     public static let maxLimitedSeconds: TimeInterval = 3
+    /// A return from `limited` in which the world anchor moved more than this is not trusted (ARKit re-anchored its map).
+    /// Same as the web client (RECOVERY_MAX_JUMP_METERS).
+    public static let recoveryMaxJumpMeters = 0.3
 
     /// Pure reducer. An event that does not apply in the current state returns the state unchanged: a stray platform
     /// event must not crash a live session or skip a state.
@@ -236,6 +244,10 @@ public enum RelocalizationStateMachine {
         case .worldAnchorLost:
             guard s.phase == .localized || s.phase == .limited else { return s }
             n = lose(n, reason: "ARKit no longer tracks the world anchor the route is attached to")
+
+        case .recoveryRejected(let reason):
+            guard s.phase == .localized || s.phase == .limited else { return s }
+            n = lose(n, reason: reason)
 
         case .sessionFailed(let error):
             n.phase = .ended

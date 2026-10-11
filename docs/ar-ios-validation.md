@@ -108,14 +108,31 @@ Expected on the setup screen, after opening the link and choosing the floor:
    and nothing is drawn. Never the old route drawn with the new transform.
 10. **End AR.** Expected: back to the setup screen.
 
+## 6b. Multi-marker consistency, recovery, failures, step-free (added 2026-10-11)
+
+Use three calibrated markers on the floor, 4-8 m apart, at least two in view from some spot; record the layout below.
+
+| Check | How | Expected |
+|---|---|---|
+| Two-marker residual | Localize with two markers in view | "Localized … from 2 marker(s)" with the measured residual (the larger mapped-observation error). Record it. |
+| Moved marker, three in view | Move one print about 1 m, with all three in view | Localized from the other two; "Set aside as inconsistent…" names the moved marker. Put it back afterwards. |
+| Moved marker, two in view | Only the moved one and one other in view | `ANCHORS_INCONSISTENT: The markers in view disagree…`; no localization; retried no faster than every 1.5 s. |
+| Limited, short | Shake for about 1 s while localized | `LIMITED`: "Stop and hold still… frozen". Returns to `LOCALIZED` only if ARKit's world anchor did not shift; otherwise `TRACKING_LOST` "… re-anchored its map". |
+| Network loss | Airplane Mode after localizing, before and after the route arrives | `NETWORK_UNAVAILABLE`; a drawn route stays usable; a missing route is fetched again (every 5 s while localized) once back online. |
+| Expired viewer link | Revoke the link from the desktop, lose tracking, point at a marker | `SESSION_EXPIRED`; no further `relocalize` or route requests. |
+| Anchor unavailable | Delete an anchor mid-session, lose tracking, point at its print | `ANCHOR_UNAVAILABLE`; that marker is not sent again; others still localize. |
+| Step-free | Turn on "Step-free route" before starting | The route request carries `"accessibility":"STEP_FREE"`; the constraints applied are listed. |
+| Drift over distance | As on Android (section 6c): aim at an unused marker after 10, 20 and 40 m | Record translation/rotation disagreement at each distance. |
+
 ## Validation record
 
 One row per device run. Attach a screen recording (Control Centre → Screen Recording) and the relocalize/route
 request log.
 
-| Date | Tester | Device / iOS | Xcode | Sections passed | Placement error at 2 / 5 / 10 m | Two-marker residual | Notes / defects |
-|---|---|---|---|---|---|---|---|
-| — | — | — | — | **not run** | — | — | No Mac or iPhone available when the app was written |
+| Date | Tester | Device model / iOS | Xcode | Anchor layout (ids, positions, walls, heights) | Test route (length, step-free?) | Sections passed | Placement error at 2 / 5 / 10 m | Two-marker residual | Drift at 10 / 20 / 40 m | Relocalization results (count, refusals, set-aside markers) | Known limitations / defects |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| — | — | — | — | — | — | **not run** | — | — | — | — | No Mac or iPhone available when the app was written |
+| 2026-10-11 | — | — | — | — | — | **not run (pending)** | — | — | — | — | Multi-marker consistency (set-aside/refused markers), validated recovery from limited, failure states and step-free added. `ChayaARCore` tests pass on Linux (55); the ARKit layer and app were only syntax-checked here and compile first in the `ios` CI workflow. No device. |
 
 When a run passes, set `DeviceValidation.status` to `.validated(date:device:iOS:)` in
 `App/ChayaAR/Sources/Capability.swift`, in the same change as the filled-in row.

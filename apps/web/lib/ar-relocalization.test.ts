@@ -4,10 +4,13 @@ import type { MarkerObservation } from "./ar-marker-tracking.ts";
 import {
   type ArSessionState,
   type Localization,
+  MAX_LIMITED_MS,
+  RECOVERY_MAX_JUMP_METERS,
   canAdvanceRoute,
   frameTrackingSignal,
   initialArSessionState,
   reduceArSession,
+  routeShown,
 } from "./ar-relocalization.ts";
 
 const OBS: MarkerObservation = {
@@ -218,9 +221,52 @@ test("an ended session accepts nothing", () => {
   assert.equal(reduceArSession(ended, { type: "MARKERS_OBSERVED", observations: [OBS] }), ended);
 });
 
-test("frame tracking signal: no pose, emulated position or a hidden session is lost tracking", () => {
-  assert.deepEqual(frameTrackingSignal({ emulatedPosition: false }), { ok: true, reason: null });
-  assert.equal(frameTrackingSignal(null).ok, false);
+test("frame tracking signal: no pose or a hidden session is lost; an emulated position is limited", () => {
+  assert.deepEqual(frameTrackingSignal({ emulatedPosition: false }), { ok: true, kind: "OK", reason: null });
+  assert.equal(frameTrackingSignal(null).kind, "LOST");
+  assert.equal(frameTrackingSignal({ emulatedPosition: true }).kind, "LIMITED");
+  assert.equal(frameTrackingSignal({ emulatedPosition: true }).ok, false);
   assert.match(frameTrackingSignal({ emulatedPosition: true }).reason!, /emulated/);
+  assert.equal(frameTrackingSignal({ emulatedPosition: false }, "hidden").kind, "LOST");
   assert.match(frameTrackingSignal({ emulatedPosition: false }, "hidden").reason!, /hidden/);
+});
+
+test("limited tracking while localized holds the route frozen, and returns only after a validated recovery", () => {
+  const limited = reduceArSession(localized(), { type: "TRACKING_LIMITED", reason: "position is emulated", atMs: 1000 });
+  assert.equal(limited.state, "LIMITED");
+  assert.ok(routeShown(limited), "the last valid overlay stays drawn");
+  assert.ok(!canAdvanceRoute(limited), "but progress is frozen");
+  assert.notEqual(limited.localization, null);
+  // Markers are not measurements while the device itself is not tracked.
+  assert.equal(reduceArSession(limited, { type: "MARKERS_OBSERVED", observations: [OBS] }), limited);
+  // Back within the limit, with the world anchor where it was: localized again on the same transform.
+  const back = reduceArSession(reduceArSession(limited, { type: "TICK", atMs: 2500 }), { type: "TRACKING_RESTORED", anchorJumpMeters: 0.05 });
+  assert.equal(back.state, "LOCALIZED");
+  assert.equal(back.localization, limited.localization);
+  assert.ok(canAdvanceRoute(back));
+});
+
+test("a limited spell becomes a loss: too long, a real loss, an anchor that jumped, or an anchor no longer tracked", () => {
+  const limited = reduceArSession(localized(), { type: "TRACKING_LIMITED", reason: "position is emulated", atMs: 1000 });
+  const timedOut = reduceArSession(limited, { type: "TICK", atMs: 1000 + MAX_LIMITED_MS + 1 });
+  assert.equal(timedOut.state, "TRACKING_LOST");
+  assert.match(timedOut.lostReason!, /limited for more than 3 s/);
+  assert.ok(!routeShown(timedOut));
+  assert.equal(reduceArSession(limited, { type: "TRACKING_LOST", reason: "no pose" }).state, "TRACKING_LOST");
+  const jumped = reduceArSession(limited, { type: "TRACKING_RESTORED", anchorJumpMeters: RECOVERY_MAX_JUMP_METERS + 0.2 });
+  assert.equal(jumped.state, "TRACKING_LOST");
+  assert.match(jumped.lostReason!, /re-anchored/);
+  const untracked = reduceArSession(limited, { type: "TRACKING_RESTORED", anchorJumpMeters: null });
+  assert.equal(untracked.state, "TRACKING_LOST");
+  // After such a loss only a marker and a server solve bring the route back, as for any loss.
+  assert.equal(reduceArSession(untracked, { type: "TRACKING_RESTORED" }).state, "TRACKING_LOST");
+  assert.equal(reduceArSession(limited, { type: "FLOOR_HANDOFF", toFloorId: "f2" }).state, "LIMITED", "no handoff while frozen");
+});
+
+test("limited tracking before the first localization is just 'not tracking yet', never a held route", () => {
+  const searching = reduceArSession(initialArSessionState(), { type: "SESSION_STARTED", floorId: "f1" });
+  const s = reduceArSession(searching, { type: "TRACKING_LIMITED", reason: "initializing", atMs: 0 });
+  assert.equal(s.state, "SEARCHING");
+  assert.equal(s.deviceTracking, false);
+  assert.ok(!routeShown(s));
 });

@@ -95,6 +95,7 @@ struct SetupScreen: View {
                 if let loading = model.loading { Section { ProgressView(loading) } }
                 if let error = model.error { Section { Text(error).foregroundColor(.red) } }
                 Section {
+                    Toggle("Step-free route", isOn: $model.stepFree)
                     Button("Start AR navigation") { Task { await model.start() } }
                         .disabled(!model.canStart)
                 }
@@ -146,7 +147,10 @@ struct StatusText: View {
                     Text("Localized in scan version \(String(loc.scanVersionId.apiString.prefix(8))) from \(loc.anchorIds.count) marker(s)" +
                          (loc.residualMeters.map { String(format: ", residual %.2f m", $0) } ?? " (residual unknown: one marker)"))
                 }
-                if s.phase == .limited { Text("Tracking limited: route position frozen.") }
+                if s.phase == .limited {
+                    Text("Stop and hold still: tracking is limited. The route is frozen where it was and is not advancing. It "
+                        + "resumes only if tracking returns within 3 s without ARKit shifting its map; otherwise point at a marker.")
+                }
                 if let p = snapshot.progress {
                     Text(String(format: "%.1f m to go, %.1f m off route", p.remainingMeters, p.offRouteMeters))
                 } else if snapshot.route == nil && snapshot.routeError == nil {
@@ -165,6 +169,16 @@ struct StatusText: View {
             if let rejected = snapshot.lastRejectedObservation { Text("Marker not usable: \(rejected)").foregroundColor(.yellow) }
             if let error = s.lastError, s.phase != .ended { Text("Last relocalization failed: \(error)").foregroundColor(.yellow) }
             if let error = snapshot.routeError { Text("Route: \(error)").foregroundColor(.yellow) }
+            if let failure = snapshot.failure {
+                Text("\(failure.kind.rawValue): \(failure.action)").foregroundColor(.yellow).accessibilityIdentifier("ar-failure")
+            }
+            if !snapshot.setAsideMarkers.isEmpty {
+                Text("Set aside as inconsistent with the other markers (moved, misidentified or mis-registered): "
+                    + snapshot.setAsideMarkers.joined(separator: ", ")).foregroundColor(.yellow)
+            }
+            if let route = snapshot.route, route.accessibilityProfile == "STEP_FREE" {
+                Text("Step-free route: \(route.accessibilityConstraintsApplied.joined(separator: "; ")).")
+            }
             if let route = snapshot.route, let transition = route.floorTransitions.first {
                 Text("The route continues on another floor via \(transition.connectorType).")
             }

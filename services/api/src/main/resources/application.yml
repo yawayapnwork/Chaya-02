@@ -118,6 +118,10 @@ chaya:
     max-floor-points-rms-m: 0.05
     max-gravity-disagreement-deg: 5.0
     max-device-gravity-tilt-deg: 10.0
+    # Multi-anchor relocalization: an anchor whose observation lands farther than this from its registered pose under the
+    # solved transform is inconsistent with the others (moved, misidentified, mis-registered). Same as the clients' drift limit.
+    max-anchor-residual-m: 0.3
+    max-anchor-residual-deg: 8.0
 
 management:
   endpoints:

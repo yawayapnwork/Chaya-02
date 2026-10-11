@@ -41,3 +41,15 @@ test("image tracking without WebXR anchors is ANCHORS_UNSUPPORTED", async ({ pag
   await expect(page.getByTestId("ar-unavailable")).toContainText("ANCHORS_UNSUPPORTED");
   await expectNoAr(page);
 });
+
+test.describe("iPhone Safari", () => {
+  test.use({ userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1" });
+  test("is told to use the native ARKit app, never offered a WebXR session", async ({ page }) => {
+    // Desktop Chromium with an iPhone user agent still has navigator.xr on its prototype, so it reports either state;
+    // real iOS Safari has none (WEBXR_UNAVAILABLE). What matters: the native app is named and no AR is offered.
+    await openAr(page);
+    await expect(page.getByTestId("ar-unavailable")).toContainText(/WEBXR_UNAVAILABLE|IMMERSIVE_AR_UNSUPPORTED/);
+    await expect(page.getByTestId("ar-ios-native")).toContainText("Chaya AR app");
+    await expectNoAr(page);
+  });
+});

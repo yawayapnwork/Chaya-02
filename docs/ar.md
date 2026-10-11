@@ -49,14 +49,36 @@ axis-convention mistake. The response reports the measured `gravityTiltDegrees`,
 the `coordinateFrameId` the transform lands in. Then:
 
 - **one anchor**: that transform is used directly; the residual is `null` -- unknown, since there is nothing to
-  compare it against (never reported as 0).
-- **several anchors**: candidates are blended (translation averaged, quaternions nlerp-averaged), and the
-  **residual** returned is the real, measured largest pairwise translation disagreement between the
-  candidates — never a fabricated or assumed accuracy number. **Never claim centimeter accuracy without
-  measurement**: the API reports this residual and nothing stronger.
+  compare it against (never reported as 0). A single misidentified or moved marker cannot be detected this way; only the
+  width check (client) and the gravity check (server) can catch it, and the drift check catches it later.
+- **several anchors** (`CoordinateTransform.solve`): the rotation is the hemisphere-aligned average of the candidates'
+  rotations; the translation is the least-squares one for that rotation, which maps the centroid of the observed marker
+  positions onto the centroid of their registered positions. Each anchor's **residual** is its observation mapped through
+  the solved transform, compared with its registered pose (metres and degrees); `residualMeters`/`residualDegrees` are
+  the largest among the anchors used, and `anchorResiduals` lists all of them. **Never claim centimeter accuracy without
+  measurement**: the API reports these measured residuals and nothing stronger.
+- **inconsistent anchors**: with three or more, while the worst exceeds `chaya.frames.max-anchor-residual-m` (0.3 m) or
+  `max-anchor-residual-deg` (8°) it is set aside (`rejectedAnchorIds`: moved, misidentified or mis-registered) and the
+  rest re-solved, as long as two remain. Two that disagree cannot be told apart and are refused
+  (`409 RELOCALIZATION_INCONSISTENT`), never averaged into a transform that is wrong for both.
+
+Before 2026-10-11 the several-anchor case averaged the candidates' translations and reported the largest pairwise
+distance between them as the residual. That distance grows with the distance from the device's tracking-session origin
+(each candidate's translation carries its rotation error times that distance), so it mostly measured how far the user
+had walked since starting AR; and a moved marker was averaged in. `CoordinateTransformTest` (and its TS and Swift
+mirrors) show both: the old spread grows by over half a metre between two sessions that differ only in where they
+started, while the per-anchor residual is identical.
 - **interpolation between anchors** while walking between fixes is `CoordinateTransform.interpolate`
   (linear translation + quaternion nlerp) — the same primitive both clients' own local math wraps for
   smoothing between relocalization fixes without waiting for a fresh server round trip every frame.
+
+**Measured vs estimated.** Measured by the platform: the viewer (camera) pose every frame (visual-inertial odometry), the
+pose of each tracked marker image, and the world anchor's pose. Estimated: the device -> venue transform (solved from
+marker observations, with the residuals above), the transform drawn for 600 ms after a refresh (`blendedTransform`,
+drawing only), and the overlay held frozen during a short LIMITED spell (below). Nothing predicts or extrapolates device
+motion: between fixes the position is the platform's VIO, mapped through the last solved transform, and the UI says how
+it was localized (marker count, residual). The only measurement of how much VIO drifts between fixes is the device
+procedure's "drift over distance" check.
 
 The identical algorithm exists in three places on purpose, each independently unit-tested against the same
 cases: `dev.chaya.api.ar.CoordinateTransform` (`CoordinateTransformTest`), `apps/web/lib/ar-anchor-math.ts`
@@ -70,7 +92,11 @@ Both clients implement the same rules, each in a pure, unit-tested reducer: `app
 (states in "Android: WebXR" below) and `ChayaARCore/RelocalizationStateMachine.swift` ("iOS: Swift/ARKit" below).
 
 1. **Freeze the route.** Progress along the route advances only while localized. On a loss, the last route and
-   progress are kept unchanged. Nothing is recomputed or guessed.
+   progress are kept unchanged. Nothing is recomputed or guessed. **Limited tracking** (ARKit `.limited(.excessiveMotion
+   / .insufficientFeatures)`, WebXR `emulatedPosition`) while localized is held for up to 3 s: the last valid overlay
+   stays where it was, frozen, progress stops, and the user is told to stand still. It resumes without a marker only
+   after a **validated recovery**: 6-DoF tracking is back, the world anchor is tracked, and it moved less than 0.3 m
+   during the spell (a larger move means the platform re-anchored its map). Otherwise it is a loss.
 2. **Show the tracking state** in the UI. The route is never silently kept rendering as if nothing happened.
 3. **Prompt for relocalization.** Ask the user to point at a registered marker.
 4. **Recover only from a new observation.** The platform reporting normal tracking again is *not* a localization:
@@ -195,8 +221,11 @@ IDLE -> SEARCHING -> RELOCALIZING -> LOCALIZED -> TRACKING_LOST -> RELOCALIZING 
   observed marker's pose. The answer is applied only if that request is still pending. A tracking loss cancels it,
   and a late answer is dropped along with its anchor.
 - `LOCALIZED`: the only state in which route progress advances (`canAdvanceRoute`) and the route is drawn.
-- `TRACKING_LOST`: entered from `LOCALIZED` on no viewer pose, emulated position, a hidden session, or the world
-  anchor no longer being tracked. The route is hidden and its progress frozen, and the UI says tracking is lost and
+- `LIMITED`: entered from `LOCALIZED` on an emulated position (orientation-only tracking). The route stays drawn where it
+  was, progress is frozen, and the overlay says to stop. Back to `LOCALIZED` only through a validated recovery (above);
+  after 3 s, on no viewer pose, a hidden session, or a failed recovery check, `TRACKING_LOST`.
+- `TRACKING_LOST`: entered from `LOCALIZED` on no viewer pose, a hidden session, the world anchor no longer being
+  tracked, or from `LIMITED` as above. The route is hidden and its progress frozen, and the UI says tracking is lost and
   asks the user to point at a marker. **The platform reporting tracking again does not leave this state.** The AR world
   frame may have been reset during the loss. Only a fresh eligible marker observation and a successful server
   relocalization return to `LOCALIZED`. The new transform then replaces the old one.
@@ -211,8 +240,12 @@ IDLE -> SEARCHING -> RELOCALIZING -> LOCALIZED -> TRACKING_LOST -> RELOCALIZING 
 (5 s) after the last solve is first checked for drift, then re-solved in the background (the route stays drawn on the
 current transform; a refused or failed re-solve keeps it). See "End-to-end chain" below.
 
-On the first localization the route is fetched (`POST /navigation/routes`), starting from the device's venue position
-and going to the chosen destination, on any floor. Only the leg of the floor the session is localized on is drawn, and
+On the first localization the route is fetched (`POST /navigation/routes`, built by `arRouteRequest`: the same
+authenticated, venue-scoped contract the viewer and iOS use), starting from the device's venue position and going to the
+chosen destination, on any floor. A destination on the session's floor is routed on the localization's `scanVersionId`
+(as iOS does); one on another floor is routed on what each floor publishes now, since a version-pinned route stays on
+its floor. "Step-free route" sends `accessibility: STEP_FREE`. A route that could not be fetched because the network was
+down is fetched again when the browser comes back online. Only the leg of the floor the session is localized on is drawn, and
 only if the server routed that floor in the session's scan version and frame.
 
 ### End-to-end chain (Android)
@@ -233,6 +266,22 @@ none of it is device validation.
 | 9. World-space waypoints | Canonical waypoints → AR world with `deviceToVenue⁻¹` (`venueToArWorld`); the renderer places the route group with that pose | `lib/ar-route.ts`, `lib/ar-route-renderer.ts` | `ar-route.test.ts`, `ar-navigation.test.ts` (marker → device → waypoint chain) |
 | 10. Floor handoff | Within 2 m of a leg-ending `TRANSITION`: `FLOOR_HANDOFF`, transform and world anchor dropped, the next floor localized from its own markers in its own version and frame, and its leg drawn after the same check | `floorHandoff`, `reduceArSession` | `ar-navigation.test.ts`, `ar-relocalization.test.ts` |
 
+### Failure states (both clients)
+
+`apps/web/lib/ar-errors.ts` and `ChayaARCore/ArFailure.swift` classify every failed request; each state is shown with
+what to do:
+
+| State | From | Behaviour |
+|---|---|---|
+| `SESSION_EXPIRED` | 401 (expired sign-in or viewer token) | No more relocalization or route requests are sent; sign in again / reopen the viewer link |
+| `NETWORK_UNAVAILABLE` | no HTTP answer (offline, DNS, TLS) | Retried; a route already drawn stays usable while tracking holds (tracking is on-device) |
+| `ANCHOR_UNAVAILABLE` | `ANCHOR_NOT_CALIBRATED`, `ANCHOR_FRAME_STALE`, `ANCHOR_UNVERSIONED`, `ANCHOR_VERSION_MISMATCH`, 404 anchor | That marker is dropped for the session; the others still localize |
+| `ANCHORS_INCONSISTENT` | `RELOCALIZATION_INCONSISTENT` | Retried; the user is asked for one marker at a time, or a third |
+| `VERSION_CHANGED` | `VERSION_MISMATCH` | Restart AR to load the new version |
+
+Device-level states (unsupported device, camera permission denied, no detectable anchors) are the capability states
+above (Android) and below (iOS).
+
 ### Unsupported Android/browser combinations
 
 | Combination | Result |
@@ -252,7 +301,10 @@ none of it is device validation.
   values, not measured on a device.
 - More than 32 registered images across a venue: the farthest floors' markers are not registered for the session.
 - A route is fetched once per session. A leg refused for a version or frame mismatch is not re-fetched: restart AR.
-- Dynamic obstacles still have no producer (review N-5); the client sends no `blockedRegions`.
+- Dynamic obstacles still have no producer (review N-5); the client sends no `blockedRegions`, so there is no
+  obstacle-triggered rerouting. Going off the route is shown (`m off route`) but does not re-plan.
+- Heading changes are not announced: the next waypoint is highlighted and remaining/off-route distances shown, but there is
+  no turn-by-turn cue.
 - `physicalPose` is still unused (review AR-3).
 
 ## iOS: Swift/ARKit
@@ -346,6 +398,10 @@ The same rules as the Android chain (steps 2, 5 and 8 above), for the one floor 
 
 Not on iOS (the Android client has them): drift detection and refresh while localized, blending between fixes, and
 floor handoff. An iOS session is one floor; a route that leaves it shows "continues on another floor" and stops there.
+iOS has the same failure states, multi-marker handling (set-aside markers are named), validated recovery from `limited`
+(`VenueFrames.recoveryProblem`, event `recoveryRejected`) and a "Step-free route" toggle as Android. iOS users are never
+sent to the WebXR page: iOS Safari has no `navigator.xr`, so `/ar` shows `WEBXR_UNAVAILABLE`, and the native app is the
+iOS client.
 
 ### Capability states (app)
 
@@ -362,6 +418,31 @@ The app opens a public viewer link (`/viewer?link=…` or the secret) and exchan
 does. The token allows floors, POIs, anchors, target images, routes and relocalization for that one venue
 (see "Security").
 
+## Chain audit (2026-10-11)
+
+The chain was traced end to end on all three implementations (server `CoordinateTransform`/`ArDeviceFrame`, web
+`ar-anchor-math`/`ar-frame-boundary`/`ar-route`/`ar-route-renderer`, iOS `AnchorMath`/`VenueFrames`/`ARKitConversions`):
+venue calibration → floor canonical frame (metres, +Z up; one per floor) → anchor `digitalPose` in that frame →
+`deviceToVenue = digital ∘ observed⁻¹` → camera pose (viewer pose / `ARFrame.camera.transform`) → device position and
+route progress → canonical waypoints placed in the AR world with `deviceToVenue⁻¹` (world-anchor corrected).
+
+- No handedness, axis, unit or orientation mismatch was found: every frame is right-handed and metric; the +Y-up → +Z-up
+  change happens only inside the solved transform (gravity-checked by the server); quaternions are composed as Hamilton
+  products with the same convention in all three; ARKit `simd_float4x4` → `Pose` takes the rotation from the upper 3×3
+  and translation from column 3; three.js receives the canonical → world pose for the route group only.
+- No timestamp mismatch was found: web observations, solves and world-anchor grace periods all use the
+  `performance.now()` timeline (the XR frame time is on it); iOS uses `ARFrame.timestamp` and `systemUptime`, the same
+  clock.
+- Defects fixed: the several-anchor residual measured distance from the session origin rather than disagreement, and
+  moved or misidentified markers were averaged in (above); the web client did not deduplicate two tracking results of one
+  marker (the server would refuse the whole request); the web route request ignored the localization's scan version and
+  had no step-free option (iOS sent the version but also had no step-free option); a failed request had no named state
+  (expired sessions were retried forever); WebXR treated any emulated-position frame as a loss with the route hidden,
+  while iOS held a short limited spell. No offset or correction constant was added anywhere.
+- The marker axis convention (+X right, +Y out of the face, +Z toward the bottom edge) is consistent between the
+  server, web and iOS code; whether WebXR and ARKit report exactly that on a device is still unconfirmed (device
+  procedures).
+
 ## Testing
 
 Test tiers, from pure functions to physical devices:
@@ -374,11 +455,13 @@ Test tiers, from pure functions to physical devices:
 | iOS frames and the canonical/ARKit axis boundary, world-anchor correction, route progress, route-leg version/frame check; marker registry (image → anchor id, unversioned anchors); version pinning; wire format (null residual, Java instants, `scanVersionId`, `routingSources`) | `VenueFramesTests.swift`, `MarkerRegistryTests.swift`, `RelocalizationStateMachineTests.swift`, `APIClientCodingTests.swift` | No — `swift test`, Linux CI (`ios` workflow, `core` job) |
 | iOS app level: capability/permission states, ARKit tracking-state mapping, transforms, reference images, renderer placement, the session manager's callbacks | `App/ChayaARTests/AppLevelTests.swift` | No — iOS Simulator (`ios` workflow, `app` job; first green 2026-09-30) |
 | Web camera → AR world → venue chain, world-anchor correction, route placement and progress | `ar-route.test.ts` | No — pure functions |
-| Web session request (no hit test), marker → device → waypoint chain, route/version/frame check, drift, blending between fixes, floor handoff | `ar-navigation.test.ts` | No — pure functions, mathematical fixtures |
+| Web session request (no hit test), marker → device → waypoint chain, route/version/frame check, drift, blending between fixes, floor handoff, the route request (version pin, step-free) | `ar-navigation.test.ts` | No — pure functions, mathematical fixtures |
+| Known two-floor anchor layout and step-free route walked through the whole session chain: multi-marker solve, limited spell, handoff, a moved marker refused then set aside, drift | `ar-integration.test.ts` | No — synthetic layout with a known ground truth; checks math and logic, not tracking accuracy |
+| Failure classification (expired session, network, unavailable anchor, inconsistent anchors, republished floor) | `ar-errors` via `ar-integration.test.ts`; `NavigationReliabilityTests.swift` | No |
 | Web state machine: version pinning, refusals for another version or floor, refresh while localized, drift, floor handoff | `ar-relocalization.test.ts` | No — pure state transitions |
 | Image-tracking result → marker observation (anchor identity, eligibility) | `ar-marker-tracking.test.ts` | No — pure functions over WebXR-shaped results |
 | Anchor CRUD / calibration / relocalization service, image-target size and image | `AnchorServiceTest.java` | No — Testcontainers Postgres only (skipped, not failed, without Docker) |
 | WebXR capability detection (every unsupported state) | `webxr-support.test.ts` | No — injected `navigator`/globals |
-| `/ar` on desktop Chromium: explicit unsupported state, no start button, no canvas | `e2e/ar.spec.ts` (Playwright) | No — real Chromium; two cases replace WebXR globals to reach the image-tracking/anchors states |
+| `/ar` on desktop Chromium: explicit unsupported state, no start button, no canvas; with an iPhone user agent, the native ARKit app is named and no AR is offered | `e2e/ar.spec.ts` (Playwright) | No — real Chromium; two cases replace WebXR globals to reach the image-tracking/anchors states |
 | WebXR device integration (image tracking, world anchor, rendering, tracking loss) | [ar-android-validation.md](ar-android-validation.md), manual | **Yes** — an ARCore Android device with Chrome; **not yet run** |
 | ARKit device integration (image detection, relocalization, route placement, tracking states) | [ar-ios-validation.md](ar-ios-validation.md), manual | **Yes** — a physical iPhone/iPad; the Simulator cannot run ARKit world tracking. **Not yet run.** |

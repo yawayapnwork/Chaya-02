@@ -15,11 +15,11 @@ import java.util.List;
  * sensor/vision output from the client). Composing {@code digitalPose} with the inverse of
  * {@code observedPose} gives the device-frame -> venue-frame transform.
  *
- * <p>With several anchors visible at once, each gives its own candidate transform; disagreement between
- * them (their translations do not exactly coincide, because tracking and marker detection both carry real
- * error) is reported as a measured residual, never hidden behind an averaged number presented as exact.
- * Never claim centimeter accuracy here -- report the measured residual and let the caller decide what to
- * trust.
+ * <p>With several anchors visible at once ({@link #solve}), each anchor's observation is mapped through the solved
+ * transform and compared with its registered pose; that per-anchor disagreement is reported as a measured residual,
+ * never hidden behind an averaged number presented as exact, and an anchor that disagrees beyond the limits is set
+ * aside or the solve refused. Never claim centimeter accuracy here -- report the measured residual and let the caller
+ * decide what to trust.
  */
 public final class CoordinateTransform {
 
@@ -32,46 +32,127 @@ public final class CoordinateTransform {
         return compose(digitalPose, observedInverse);
     }
 
-    /**
-     * Blends the per-anchor candidate transforms into one, and reports the residual: the largest distance
-     * between any two candidates' translation component, in meters. That number is real disagreement
-     * between the anchors that took part, computed from their actual poses -- it is not a fabricated or
-     * assumed accuracy bound.
-     */
-    public record Blended(Pose transform, double residualMeters) {}
+    /** One anchor's contribution: its registered canonical pose and its pose as the device observed it. */
+    public record AnchorPair(Pose digitalPose, Pose observedPose) {}
 
-    public static Blended blend(List<Pose> candidates) {
-        if (candidates.isEmpty()) {
+    /**
+     * How far one anchor lands from its registered pose when its observation is mapped through the solved transform.
+     * Measured, never assumed. {@code used} is false for an anchor rejected as inconsistent with the others.
+     */
+    public record AnchorResidual(int index, double translationMeters, double rotationDegrees, boolean used) {}
+
+    /**
+     * @param transform        the device-frame -> venue-frame transform solved from the anchors marked used
+     * @param residuals        one per input anchor, in input order
+     * @param maxResidualMeters largest translation residual among the used anchors (0 with a single anchor, where there
+     *                         is nothing to check it against)
+     * @param consistent       false when the used anchors still disagree beyond the limits (only possible with two
+     *                         anchors left: nothing tells which of them is wrong)
+     */
+    public record Solution(Pose transform, List<AnchorResidual> residuals, double maxResidualMeters, double maxResidualDegrees,
+                           boolean consistent) {
+
+        public List<Integer> rejected() {
+            return residuals.stream().filter(r -> !r.used()).map(AnchorResidual::index).toList();
+        }
+    }
+
+    /**
+     * Solves the device -> venue transform from one or more anchors seen at once.
+     *
+     * <p>Rotation: the per-anchor candidate rotations ({@code digital * observed^-1}), hemisphere-aligned and averaged.
+     * Translation: the least-squares one for that rotation, which maps the centroid of the observed marker positions onto
+     * the centroid of their registered positions, {@code t = mean(d) - R mean(o)}.
+     *
+     * <p>Residual of an anchor: its observation mapped through the solved transform, compared with its registered pose
+     * (translation in metres, rotation in degrees). Unlike the distance between candidate transforms' translations (the
+     * residual reported before), it does not depend on where the device's tracking session started: a candidate's
+     * translation carries its rotation error multiplied by the distance to the session origin. With three or more anchors, while the worst one exceeds the limits it
+     * is set aside (moved, misidentified or mis-registered) and the rest re-solved, as long as two remain. Two anchors that
+     * disagree beyond the limits cannot be told apart: the solution is returned as inconsistent and the caller refuses it.
+     */
+    public static Solution solve(List<AnchorPair> anchors, double maxResidualMeters, double maxResidualDegrees) {
+        if (anchors.isEmpty()) {
             throw new IllegalArgumentException("at least one anchor observation is required");
         }
-        if (candidates.size() == 1) {
-            return new Blended(normalize(candidates.get(0)), 0.0);
-        }
-        double residual = 0.0;
-        for (int i = 0; i < candidates.size(); i++) {
-            for (int j = i + 1; j < candidates.size(); j++) {
-                residual = Math.max(residual, translationDistance(candidates.get(i), candidates.get(j)));
+        boolean[] used = new boolean[anchors.size()];
+        java.util.Arrays.fill(used, true);
+        while (true) {
+            Pose t = fit(anchors, used);
+            double[][] err = residuals(anchors, t);
+            int worst = -1;
+            double worstScore = 0;
+            int usedCount = 0;
+            double maxM = 0, maxDeg = 0;
+            for (int i = 0; i < anchors.size(); i++) {
+                if (!used[i]) {
+                    continue;
+                }
+                usedCount++;
+                maxM = Math.max(maxM, err[i][0]);
+                maxDeg = Math.max(maxDeg, err[i][1]);
+                double score = Math.max(err[i][0] / maxResidualMeters, err[i][1] / maxResidualDegrees);
+                if (score > worstScore) {
+                    worstScore = score;
+                    worst = i;
+                }
             }
+            boolean withinLimits = worstScore <= 1.0;
+            if (withinLimits || usedCount <= 2) {
+                List<AnchorResidual> out = new java.util.ArrayList<>();
+                for (int i = 0; i < anchors.size(); i++) {
+                    out.add(new AnchorResidual(i, err[i][0], err[i][1], used[i]));
+                }
+                return new Solution(t, List.copyOf(out), maxM, maxDeg, withinLimits);
+            }
+            used[worst] = false;
         }
-        double sx = 0, sy = 0, sz = 0, sqx = 0, sqy = 0, sqz = 0, sqw = 0;
-        Pose reference = normalize(candidates.get(0));
-        for (Pose c : candidates) {
-            Pose n = normalize(c);
-            // Average unit quaternions in a small-angle-disagreement setting: flip to the same hemisphere as
-            // the reference first (q and -q represent the same rotation), then average and renormalize.
-            double dot = n.qx() * reference.qx() + n.qy() * reference.qy() + n.qz() * reference.qz() + n.qw() * reference.qw();
-            double sign = dot < 0 ? -1.0 : 1.0;
-            sx += n.x();
-            sy += n.y();
-            sz += n.z();
-            sqx += sign * n.qx();
-            sqy += sign * n.qy();
-            sqz += sign * n.qz();
-            sqw += sign * n.qw();
+    }
+
+    private static Pose fit(List<AnchorPair> anchors, boolean[] used) {
+        Pose reference = null;
+        double sqx = 0, sqy = 0, sqz = 0, sqw = 0, dx = 0, dy = 0, dz = 0, ox = 0, oy = 0, oz = 0;
+        int n = 0;
+        for (int i = 0; i < anchors.size(); i++) {
+            if (!used[i]) {
+                continue;
+            }
+            AnchorPair a = anchors.get(i);
+            Pose c = normalize(deviceToVenueFromAnchor(a.digitalPose(), a.observedPose()));
+            if (reference == null) {
+                reference = c;
+            }
+            // q and -q are the same rotation: bring every candidate into the reference's hemisphere before averaging.
+            double sign = c.qx() * reference.qx() + c.qy() * reference.qy() + c.qz() * reference.qz() + c.qw() * reference.qw() < 0 ? -1 : 1;
+            sqx += sign * c.qx();
+            sqy += sign * c.qy();
+            sqz += sign * c.qz();
+            sqw += sign * c.qw();
+            dx += a.digitalPose().x();
+            dy += a.digitalPose().y();
+            dz += a.digitalPose().z();
+            ox += a.observedPose().x();
+            oy += a.observedPose().y();
+            oz += a.observedPose().z();
+            n++;
         }
-        int count = candidates.size();
-        Pose averaged = new Pose(sx / count, sy / count, sz / count, sqx / count, sqy / count, sqz / count, sqw / count);
-        return new Blended(normalize(averaged), residual);
+        Pose rotation = normalize(new Pose(0, 0, 0, sqx / n, sqy / n, sqz / n, sqw / n));
+        double[] ro = rotate(rotation, ox / n, oy / n, oz / n);
+        return new Pose(dx / n - ro[0], dy / n - ro[1], dz / n - ro[2], rotation.qx(), rotation.qy(), rotation.qz(), rotation.qw());
+    }
+
+    /** Per anchor: {translation metres, rotation degrees} between its mapped observation and its registered pose. */
+    private static double[][] residuals(List<AnchorPair> anchors, Pose transform) {
+        double[][] out = new double[anchors.size()][2];
+        for (int i = 0; i < anchors.size(); i++) {
+            Pose predicted = normalize(compose(transform, anchors.get(i).observedPose()));
+            Pose digital = normalize(anchors.get(i).digitalPose());
+            out[i][0] = translationDistance(predicted, digital);
+            double dot = Math.abs(predicted.qx() * digital.qx() + predicted.qy() * digital.qy() + predicted.qz() * digital.qz()
+                + predicted.qw() * digital.qw());
+            out[i][1] = Math.toDegrees(2 * Math.acos(Math.min(1, dot)));
+        }
+        return out;
     }
 
     /** Interpolates between two anchor-derived transforms by a real-space proximity weight `t` in [0, 1]

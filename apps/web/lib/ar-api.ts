@@ -44,12 +44,17 @@ export interface AnchorObservation {
   observedPose: Pose;
 }
 
-/** Mirrors dev.chaya.api.ar.ArDtos.RelocalizationResponse. residualMeters is a real measured spread
- * across the anchors used, never a claimed accuracy figure -- see docs/ar.md -- and null (unknown) when only one
- * anchor was used. deviceToVenueTransform maps device tracking coordinates to canonical venue metres. */
+/** Mirrors dev.chaya.api.ar.ArDtos.RelocalizationResponse. residualMeters / residualDegrees: the largest distance
+ * (orientation difference) between a used anchor's observation mapped through the transform and its registered pose --
+ * measured, never a claimed accuracy figure (docs/ar.md) -- and null (unknown) when only one anchor was used.
+ * rejectedAnchorIds: anchors set aside as inconsistent with the others (moved, misidentified, mis-registered).
+ * deviceToVenueTransform maps device tracking coordinates to canonical venue metres. */
 export interface RelocalizationResponse {
   deviceToVenueTransform: Pose;
   residualMeters: number | null;
+  residualDegrees?: number | null;
+  anchorResiduals?: { anchorId: string; translationMeters: number; rotationDegrees: number; used: boolean }[];
+  rejectedAnchorIds?: string[];
   anchorsUsed: number;
   gravityTiltDegrees: number;
   deviceFrameConvention: string;

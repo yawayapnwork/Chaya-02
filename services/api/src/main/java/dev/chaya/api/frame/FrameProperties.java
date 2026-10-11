@@ -16,10 +16,14 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *                                   floor plane's, when both exist
  * @param maxDeviceGravityTiltDeg    largest allowed tilt between an AR device's gravity-aligned up and canonical +Z
  *                                   implied by a relocalization
+ * @param maxAnchorResidualM         a relocalization anchor whose observation, mapped through the solved transform, lands
+ *                                   farther than this from its registered position disagrees with the others
+ * @param maxAnchorResidualDeg       the same, for its orientation
  */
 @ConfigurationProperties("chaya.frames")
 public record FrameProperties(int minDistanceReferences, double maxScaleRelativeSpread, double maxControlPointRmsM,
-                              double maxFloorPointsRmsM, double maxGravityDisagreementDeg, double maxDeviceGravityTiltDeg) {
+                              double maxFloorPointsRmsM, double maxGravityDisagreementDeg, double maxDeviceGravityTiltDeg,
+                              double maxAnchorResidualM, double maxAnchorResidualDeg) {
 
     public FrameProperties {
         if (minDistanceReferences < 2) minDistanceReferences = 2;
@@ -28,5 +32,7 @@ public record FrameProperties(int minDistanceReferences, double maxScaleRelative
         if (maxFloorPointsRmsM <= 0) maxFloorPointsRmsM = 0.05;
         if (maxGravityDisagreementDeg <= 0) maxGravityDisagreementDeg = 5.0;
         if (maxDeviceGravityTiltDeg <= 0) maxDeviceGravityTiltDeg = 10.0;
+        if (maxAnchorResidualM <= 0) maxAnchorResidualM = 0.3;
+        if (maxAnchorResidualDeg <= 0) maxAnchorResidualDeg = 8.0;
     }
 }
