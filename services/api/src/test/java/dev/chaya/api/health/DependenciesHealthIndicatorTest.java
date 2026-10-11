@@ -10,7 +10,8 @@ import org.springframework.boot.actuate.health.Status;
 class DependenciesHealthIndicatorTest {
 
     private static HealthService.HealthReport report(String db, String storage, String idp, String scanner, String processing) {
-        return HealthService.assemble(db, storage, idp, scanner, new HealthService.Processing(processing, 0L, 0L, null), Instant.now());
+        return HealthService.assemble(db, storage, idp, scanner, "UP",
+            new HealthService.Processing(processing, 0L, 0L, null, 1L, 0L, java.util.List.of()), Instant.now());
     }
 
     @Test

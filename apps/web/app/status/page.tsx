@@ -8,6 +8,8 @@ const TONE: Record<string, string> = {
   ACTIVE: "text-green-800",
   DEGRADED: "font-semibold text-amber-800",
   STALLED: "font-semibold text-amber-800",
+  NO_WORKER: "font-semibold text-amber-800",
+  NOT_CONFIGURED: "text-zinc-600",
   DISABLED: "font-semibold text-amber-800",
   DOWN: "font-semibold text-red-800",
   UNKNOWN: "font-semibold text-red-800",
@@ -35,7 +37,7 @@ export default async function StatusPage() {
         <p role="alert" className={`mt-4 rounded border p-3 ${h.status === "DOWN" ? "border-red-300 bg-red-50 text-red-900" : "border-amber-400 bg-amber-50 text-amber-900"}`}>
           {h.status === "DOWN"
             ? "The platform is DOWN: a core dependency is unreachable (see below). Requests that need it fail with HTTP 503."
-            : "The platform is DEGRADED: it works, but uploads cannot be accepted or processing is not progressing (see below)."}
+            : "The platform is DEGRADED: the API answers, but something it relies on is impaired (see below): uploads, processing or semantic search."}
         </p>
       )}
       <dl className="mt-4 grid grid-cols-[12rem_1fr] gap-2">
@@ -48,6 +50,31 @@ export default async function StatusPage() {
           <Value v={h.malwareScanner} />
           {h.malwareScanner !== "UP" && <span className="text-sm text-zinc-600"> — uploads are quarantined, not accepted</span>}
         </dd>
+        <dt>Processing workers</dt>
+        <dd>
+          {h.worker === undefined ? (
+            <span className="text-zinc-600">not reported by this API version</span>
+          ) : (
+            <>
+              <Value v={h.worker} />
+              {h.processing.liveWorkers != null && (
+                <span className="text-sm text-zinc-600"> — {h.processing.liveWorkers} live</span>
+              )}
+              {h.worker === "DOWN" && <div className="text-sm text-amber-900">No worker has polled for work or sent a heartbeat recently. Nothing can be processed.</div>}
+            </>
+          )}
+        </dd>
+        <dt>Vision (semantic search)</dt>
+        <dd>
+          {h.vision === undefined ? (
+            <span className="text-zinc-600">not reported by this API version</span>
+          ) : (
+            <>
+              <Value v={h.vision} />
+              {h.vision === "DOWN" && <span className="text-sm text-zinc-600"> — search falls back; new POIs are not yet searchable by meaning</span>}
+            </>
+          )}
+        </dd>
         <dt>Processing queue</dt>
         <dd>
           <Value v={h.processing.status} />
@@ -58,6 +85,12 @@ export default async function StatusPage() {
             </span>
           )}
           {h.processing.status === "STALLED" && <div className="text-sm text-amber-900">No worker is claiming jobs. Check that a reconstruction worker is running.</div>}
+          {h.processing.unservedStages && h.processing.unservedStages.length > 0 && (
+            <div className="text-sm text-amber-900">Queued work waits for a stage no live worker runs: {h.processing.unservedStages.join(", ")}.</div>
+          )}
+          {h.processing.staleRunningJobs != null && h.processing.staleRunningJobs > 0 && (
+            <div className="text-sm text-amber-900">{h.processing.staleRunningJobs} running job(s) lost their worker and await recovery.</div>
+          )}
         </dd>
         <dt>Checked at</dt><dd>{h.checkedAt}</dd>
         {status.version && (

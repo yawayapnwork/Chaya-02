@@ -7,7 +7,19 @@ export interface HealthReport {
   storage: string;
   identityProvider: string;
   malwareScanner: string;
-  processing: { status: string; queuedJobs: number | null; runningJobs: number | null; oldestQueuedAgeSeconds: number | null };
+  /** UP (a live worker), DOWN (none), UNKNOWN (database down). Absent from APIs before worker presence (V34). */
+  worker?: string;
+  /** UP, DOWN or NOT_CONFIGURED: the CLIP service semantic search and POI embeddings use. */
+  vision?: string;
+  processing: {
+    status: string;
+    queuedJobs: number | null;
+    runningJobs: number | null;
+    oldestQueuedAgeSeconds: number | null;
+    liveWorkers?: number | null;
+    staleRunningJobs?: number | null;
+    unservedStages?: string[];
+  };
   checkedAt: string;
 }
 

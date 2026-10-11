@@ -27,6 +27,7 @@ import dev.chaya.api.ops.OpsDtos.MeasuredCoverage;
 import dev.chaya.api.ops.OpsDtos.MediaBucket;
 import dev.chaya.api.ops.OpsDtos.Overview;
 import dev.chaya.api.ops.OpsDtos.PoiStats;
+import dev.chaya.api.ops.OpsDtos.JobQueue;
 import dev.chaya.api.ops.OpsDtos.Rescan;
 import dev.chaya.api.ops.OpsDtos.Rescans;
 import dev.chaya.api.ops.OpsDtos.SearchAnalytics;
@@ -34,7 +35,10 @@ import dev.chaya.api.ops.OpsDtos.StageTime;
 import dev.chaya.api.ops.OpsDtos.Storage;
 import dev.chaya.api.ops.OpsDtos.TermCount;
 import dev.chaya.api.ops.OpsDtos.UncoveredZone;
+import dev.chaya.api.ops.OpsDtos.WorkerStatus;
+import dev.chaya.api.health.HealthProperties;
 import dev.chaya.api.processing.JobStatus;
+import dev.chaya.api.processing.WorkerPresenceRepository;
 import dev.chaya.api.rescan.PolygonGeometry;
 import dev.chaya.api.security.Actor;
 import dev.chaya.api.security.Role;
@@ -54,6 +58,7 @@ import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeSet;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -86,9 +91,14 @@ public class OpsDashboardService {
     private final CaptureHudService hud;
     private final StorageProperties storage;
     private final ObjectMapper mapper;
+    private final WorkerPresenceRepository workers;
+    private final HealthProperties health;
 
     public OpsDashboardService(JdbcClient jdbc, TenantGuard guard, VenueService venues, CaptureHudService hud,
-                               StorageProperties storage, ObjectMapper mapper) {
+                               StorageProperties storage, ObjectMapper mapper, WorkerPresenceRepository workers,
+                               HealthProperties health) {
+        this.workers = workers;
+        this.health = health;
         this.jdbc = jdbc;
         this.guard = guard;
         this.venues = venues;
@@ -352,7 +362,43 @@ public class OpsDashboardService {
                     rs.getString("error_message"), JobActions.retry(state), JobActions.cancel(state));
             })
             .list();
-        return new Jobs(jobCounts(venueId, org), list, l, asOf);
+        return new Jobs(jobCounts(venueId, org), queue(venueId, org, asOf), list, l, asOf);
+    }
+
+    /** Workers seen in this window are listed (live or not); older ones are not shown at all. */
+    static final Duration WORKER_LIST_WINDOW = Duration.ofHours(24);
+
+    /**
+     * The venue's queue and the workers that could serve it. Queue figures are this venue's own jobs; the worker list is
+     * shared infrastructure (worker_presence) and carries no tenant data.
+     */
+    private JobQueue queue(UUID venueId, UUID org, Instant asOf) {
+        record Q(long claimable, Long oldest, long running, long stale, long overdue, List<String> stages) {}
+        Q q = jdbc.sql("""
+                SELECT count(*) FILTER (WHERE j.status = 'QUEUED' AND (r.id IS NULL OR r.deadline_at >= now())) AS claimable,
+                       CAST(EXTRACT(EPOCH FROM now() - min(j.queued_at)
+                            FILTER (WHERE j.status = 'QUEUED' AND (r.id IS NULL OR r.deadline_at >= now()))) AS bigint) AS oldest,
+                       count(*) FILTER (WHERE j.status = 'RUNNING') AS running,
+                       count(*) FILTER (WHERE j.status = 'RUNNING' AND j.lease_expires_at <= now()) AS stale,
+                       count(*) FILTER (WHERE j.status = 'RUNNING' AND r.deadline_at < now()) AS overdue,
+                       array_agg(DISTINCT j.stage) FILTER (WHERE j.status = 'QUEUED' AND (r.id IS NULL OR r.deadline_at >= now()))
+                           AS stages
+                  FROM processing_job j
+                  LEFT JOIN pipeline_run r ON r.id = j.run_id
+                 WHERE j.venue_id = :v AND j.organization_id = :o AND j.status IN ('QUEUED', 'RUNNING')
+                """)
+            .param("v", venueId).param("o", org)
+            .query((rs, i) -> new Q(rs.getLong("claimable"), rs.getObject("oldest") == null ? null : rs.getLong("oldest"),
+                rs.getLong("running"), rs.getLong("stale"), rs.getLong("overdue"), strings(rs, "stages")))
+            .single();
+        long liveAfter = health.workerLiveAfter().toSeconds();
+        List<WorkerStatus> seen = workers.seenWithin(WORKER_LIST_WINDOW).stream().map(w -> {
+            long age = Duration.between(w.lastSeenAt(), asOf).getSeconds();
+            return new WorkerStatus(w.workerId(), w.stages(), w.lastSeenAt(), age, w.lastClaimedAt(), age <= liveAfter);
+        }).toList();
+        TreeSet<String> unserved = new TreeSet<>(q.stages());
+        seen.stream().filter(WorkerStatus::live).forEach(w -> unserved.removeAll(w.stages()));
+        return new JobQueue(q.claimable(), q.oldest(), q.running(), q.stale(), q.overdue(), List.copyOf(unserved), seen, liveAfter);
     }
 
     private static JobState jobState(ResultSet rs, String statusColumn, String captureColumn) throws SQLException {

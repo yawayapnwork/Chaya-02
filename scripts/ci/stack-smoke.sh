@@ -130,5 +130,20 @@ CHAYA_IT_S3_ENDPOINT=http://localhost:$MINIO_API_PORT \
 CHAYA_IT_S3_ACCESS_KEY=$S3_WORKER_ACCESS_KEY \
 CHAYA_IT_S3_SECRET_KEY=$S3_WORKER_SECRET_KEY \
   "$PY" -m pytest -m integration tests/integration/test_stack_e2e.py -v -rA
+cd "$ROOT"
+
+# The stack now holds real data: accepted (scanned) media, pipeline runs, sealed artifacts and purged PII staging. Back
+# it up with the production scripts and prove the backup restores into an isolated environment and that this build's
+# API boots on it (docs/backup-recovery.md, "Restore drill"). SKIP_BACKUP_DRILL=1 skips it.
+if [ -z "${SKIP_BACKUP_DRILL:-}" ]; then
+  echo "== backup, then restore drill into an isolated environment"
+  DRILL_DIR=$(mktemp -d)
+  native() { command -v cygpath > /dev/null && cygpath -m "$1" || echo "$1"; }
+  ENV_FILE=$(native "$ENV_FILE") BACKUP_DIR=$(native "$DRILL_DIR") CHAYA_COMPOSE_FILE="$ROOT/infra/docker/docker-compose.yml" \
+    COMPOSE_PROJECT_NAME=chaya-smoke COMPOSE_NETWORK=chaya-smoke_default bash scripts/backup/backup.sh
+  ENV_FILE=$(native "$ENV_FILE") BACKUP_DIR=$(native "$DRILL_DIR") CHAYA_COMPOSE_FILE="$ROOT/infra/docker/docker-compose.yml" \
+    COMPOSE_PROJECT_NAME=chaya-smoke COMPOSE_NETWORK=chaya-smoke_default bash scripts/backup/restore-drill.sh
+  rm -rf "$DRILL_DIR"
+fi
 
 echo "== stack smoke passed"

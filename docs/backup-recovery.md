@@ -43,19 +43,51 @@ erasures to it itself. On every run, it deletes each key and prefix listed in `e
 ```bash
 scripts/backup/backup.sh            # database, then objects
 scripts/backup/backup.sh postgres   # database only
-scripts/backup/verify.sh            # prove the newest backup restores (see below)
+scripts/backup/restore-drill.sh     # prove the newest backup restores, in isolation (see "Restore drill")
+scripts/backup/verify.sh            # lighter check on the live server (see "Verification")
 ```
 
-Schedule both, for example with cron on the Docker host, daily:
-`15 2 * * * cd /srv/chaya && scripts/backup/backup.sh && scripts/backup/verify.sh`. A backup whose `verify.sh` has
-never passed has not been shown to work.
+Schedule the backup and the drill, for example with cron on the Docker host, daily:
+`15 2 * * * cd /srv/chaya && scripts/backup/backup.sh && DRILL_API_IMAGE=<registry>/chaya-api:$(cat .deployed-version) scripts/backup/restore-drill.sh`.
+A backup command that exits 0 proves only that files were written. A backup whose restore drill has never passed has
+not been shown to work.
 
 The scripts need Docker, the running compose stack, and `.env`. Credentials reach the `mc` container through a
 mode-600 temp file, never through the command line.
 
+## Restore drill (`scripts/backup/restore-drill.sh`)
+
+The authoritative check. It restores into an **isolated environment** and touches nothing live except reading the
+backup files:
+
+1. compares the dump's SHA-256 with its `.sha256` file;
+2. creates a Docker network with `--internal` (no route out, no published ports) and starts a throwaway PostgreSQL
+   and MinIO on it, with random credentials and anonymous volumes. The images are the ones the live stack runs, when
+   it is running;
+3. recreates the roles that own objects in the dump (random passwords), restores the dump with its owners
+   (`--exit-on-error`), and mirrors the object backup into fresh buckets. Both are timed: this is recovery-time
+   evidence for the current data size;
+4. checks that no migration is recorded as failed, prints the schema version next to this checkout's newest migration,
+   and prints row counts. Jobs that were RUNNING in the dump are noted: after a real restore the lease enforcer fails
+   them as `WORKER_LOST`;
+5. checks **every** object the restored database references (accepted raw media, non-PII artifacts) in the restored
+   MinIO, by SHA-256 against the value recorded when the object was verified. `DRILL_SAMPLE=<n>` checks a random
+   sample instead, for very large stores;
+6. if an API image is known (`DRILL_API_IMAGE`, or the live stack's `api` container), boots it on the restored data.
+   Flyway validates the restored schema (and applies newer migrations, if the image is newer), and Hibernate validates
+   the mapping. Liveness must answer within `DRILL_API_BOOT_TIMEOUT` (300 s). The identity provider is deliberately
+   absent, so the API's own health is DOWN for that reason only;
+7. removes every container, the network and the volumes, also on failure.
+
+It exits non-zero on any failure and writes a report without secrets to `$BACKUP_DIR/drills/`. `DRILL_DB_ONLY=1`
+restores and checks the database only; `deploy.sh` uses that mode with the version being deployed as a migration
+rehearsal (DEPLOYMENT.md section 7).
+
 ## Verification (`scripts/backup/verify.sh`)
 
-The script touches no live data. It:
+The lighter, older check. It restores into a scratch database **on the live PostgreSQL server** (so it shares that
+server's resources and superuser) and checks a sample of objects as files in the mirror directory, not through a
+restored object store. It touches no live data. It:
 
 1. compares the dump's SHA-256 with its `.sha256` file;
 2. restores the dump into a scratch database, `chaya_restore_check`, with `--exit-on-error`;
@@ -69,8 +101,8 @@ It exits non-zero if any check fails.
 ## Recovery procedure
 
 1. **Stop writers:** stop the API and every worker, so that nothing writes during the restore.
-2. **Choose and verify:** pick the dump (normally the newest), then run `scripts/backup/verify.sh <dump>`. Do not
-   restore a backup that fails verification. Take the next older one instead.
+2. **Choose and verify:** pick the dump (normally the newest), then run `scripts/backup/restore-drill.sh <dump>`. Do
+   not restore a backup that fails the drill. Take the next older one instead.
 3. **Restore the database:**
    `scripts/backup/restore.sh postgres <dump> --yes-replace-live-data`
    This terminates connections, recreates the database owned by `POSTGRES_APP_USER`, and restores with the original
@@ -113,6 +145,21 @@ owner of each table and sequence in `public` instead (`ALTER TABLE ... OWNER TO 
 `flyway_schema_history`.
 
 ## What has been verified
+
+**2026-10-11, restore drill on real stack data.** `scripts/ci/stack-smoke.sh` brought up the real stack (API image
+built from the tree, Postgres, MinIO, ClamAV with signatures, Keycloak), uploaded a video that ClamAV scanned and
+accepted, and ran the real worker code through the CPU stages (PII staging purged). Then `backup.sh` took a dump
+(268 KB) and the object mirror, and `restore-drill.sh` restored both into an isolated environment: database in 3 s,
+objects in 4 s, schema V34 with no failed migration, **19 of 19** referenced objects matched their recorded SHA-256,
+and the API image booted on the restored data in 23 s. Nothing was left running. The same drill runs at the end of
+every stack smoke in CI.
+
+`scripts/backup/test-restore-drill.sh` (CI: `ops`) proves the drill fails when it should: on a synthetic backup it
+passes intact, and fails with the object named when one object is corrupted, when one is missing, and when the dump no
+longer matches its `.sha256` (7 checks pass).
+
+Not verified by the drill: production-sized data (the timings above are for a tiny store; measure on the real host),
+Keycloak's own database, and off-site copies.
 
 On 2026-09-24 the scripts were run end to end on Windows (Git Bash, Docker Desktop). The target was a throwaway copy
 of the development stack: its own compose project, with the schema created by the API's Flyway migrations (v16) and

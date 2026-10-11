@@ -19,6 +19,7 @@ import dev.chaya.api.processing.JobLease;
 import dev.chaya.api.processing.JobStage;
 import dev.chaya.api.processing.ProcessingJobRepository;
 import dev.chaya.api.processing.ProcessingJobRepository.ClaimedJob;
+import dev.chaya.api.processing.WorkerPresenceRepository;
 import dev.chaya.api.rescan.PolygonGeometry;
 import dev.chaya.api.rescan.RescanProperties;
 import dev.chaya.api.rescan.ScanVersionService;
@@ -40,6 +41,7 @@ import java.sql.Array;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -50,6 +52,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.IntSupplier;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -114,12 +117,14 @@ public class PipelineService {
     private final ScanVersionService versions;
 
     private final ArtifactSealer sealer;
+    private final WorkerPresenceRepository workers;
 
     public PipelineService(JdbcClient jdbc, ProcessingJobRepository jobs, AuditService audit,
                            @Qualifier("derived") ObjectStore derived, PipelineProperties props,
                            RescanProperties rescanProps,
                            TransactionTemplate tx, ObjectMapper mapper, StorageProperties storage, CoordinateFrameService frames,
-                           ScanVersionService versions) {
+                           ScanVersionService versions, WorkerPresenceRepository workers) {
+        this.workers = workers;
         this.derivedBucketName = storage.derivedBucket();
         this.frames = frames;
         this.versions = versions;
@@ -310,11 +315,16 @@ public class PipelineService {
      * call about the job must present. */
     public Optional<WorkOrder> claim(Actor worker, List<JobStage> stages, String workerId) {
         String leaseToken = JobLease.newToken();
-        return tx.execute(s -> jobs.claim(stages, workerId, props.leaseSeconds(), JobLease.hash(leaseToken)).map(j -> {
-            audit.successInOrganization(worker, j.organizationId(), j.venueId(), "job.claim", "processing_job", j.id(),
-                Map.of("stage", j.stage().name(), "worker", workerId));
-            return workOrder(j, leaseToken);
-        }));
+        return tx.execute(s -> {
+            Optional<ClaimedJob> claimed = jobs.claim(stages, workerId, props.leaseSeconds(), JobLease.hash(leaseToken));
+            // Every poll, empty or not, is the worker's proof of life (worker liveness in health and the dashboard).
+            workers.polled(workerId, worker.subject() == null ? "unknown" : worker.subject(), stages, claimed.isPresent());
+            return claimed.map(j -> {
+                audit.successInOrganization(worker, j.organizationId(), j.venueId(), "job.claim", "processing_job", j.id(),
+                    Map.of("stage", j.stage().name(), "worker", workerId));
+                return workOrder(j, leaseToken);
+            });
+        });
     }
 
     /** 409 LEASE_MISMATCH unless the job was last claimed under this lease token. */
@@ -464,8 +474,11 @@ public class PipelineService {
             .optional();
     }
 
-    public Heartbeat heartbeat(UUID jobId, String leaseToken) {
+    public Heartbeat heartbeat(UUID jobId, String leaseToken, String workerId) {
         boolean alive = jobs.heartbeat(jobId, JobLease.hash(leaseToken), props.leaseSeconds());
+        if (alive) {
+            workers.heartbeat(workerId); // a worker busy with a long stage does not poll; this keeps it shown as live
+        }
         Instant deadline = jdbc.sql("SELECT r.deadline_at FROM processing_job j JOIN pipeline_run r ON r.id = j.run_id WHERE j.id = :j")
             .param("j", jobId).query((rs, i) -> rs.getTimestamp(1).toInstant()).optional().orElse(null);
         return new Heartbeat(alive, deadline);
@@ -1737,24 +1750,35 @@ public class PipelineService {
     // Enforcement: lost workers and the time box
     // =========================================================================================
 
-    /** Fails jobs whose worker stopped heartbeating, and jobs that overran the run deadline by the grace period. */
+    /**
+     * Fails jobs whose worker stopped heartbeating, and jobs that overran the run deadline by the grace period; cancels
+     * queued jobs of runs whose budget is spent. Each job is settled on its own, so one that cannot be settled never keeps
+     * the others RUNNING behind it. When the full settlement (a stage record, then the run) fails, the job and its run are
+     * failed directly with the same reason ({@link #failDirectly}); only if that fails too is the job left for the next
+     * tick, where the ChayaJobsStranded alert sees it.
+     */
     public int enforceLeasesAndDeadlines() {
         int handled = 0;
-        List<UUID> expired = jdbc.sql("SELECT id FROM processing_job WHERE status = 'RUNNING' AND lease_expires_at < now()")
+        List<UUID> expired = jdbc.sql("SELECT id FROM processing_job WHERE status = 'RUNNING' AND lease_expires_at < now() "
+                + "ORDER BY lease_expires_at, id")
             .query(UUID.class).list();
         for (UUID id : expired) {
-            handled += failSystem(id, PipelineDefinition.WORKER_LOST, "The worker stopped sending heartbeats; the stage was abandoned. It can be retried.") ? 1 : 0;
+            String why = "The worker stopped sending heartbeats; the stage was abandoned. It can be retried.";
+            handled += settle(id, "lease", () -> failSystem(id, PipelineDefinition.WORKER_LOST, why) ? 1 : 0,
+                () -> failDirectly(id, PipelineDefinition.WORKER_LOST, why));
         }
         List<UUID> overrun = jdbc.sql("SELECT j.id FROM processing_job j JOIN pipeline_run r ON r.id = j.run_id WHERE j.status = 'RUNNING' "
                 + "AND r.deadline_at + make_interval(secs => :grace) < now()").param("grace", props.deadlineGraceSeconds())
             .query(UUID.class).list();
         for (UUID id : overrun) {
-            handled += failSystem(id, PipelineDefinition.TIME_LIMIT_EXCEEDED, "The stage was still running after the run's time budget and grace period.") ? 1 : 0;
+            String why = "The stage was still running after the run's time budget and grace period.";
+            handled += settle(id, "deadline", () -> failSystem(id, PipelineDefinition.TIME_LIMIT_EXCEEDED, why) ? 1 : 0,
+                () -> failDirectly(id, PipelineDefinition.TIME_LIMIT_EXCEEDED, why));
         }
         List<UUID> stale = jdbc.sql("SELECT j.id FROM processing_job j JOIN pipeline_run r ON r.id = j.run_id WHERE j.status = 'QUEUED' "
                 + "AND r.status = 'RUNNING' AND r.deadline_at < now()").query(UUID.class).list();
         for (UUID id : stale) {
-            handled += tx.execute(s -> {
+            handled += settle(id, "queued-past-deadline", () -> tx.execute(s -> {
                 JobRow job = lockJob(id);
                 if (!job.status().equals("QUEUED")) return 0;
                 RunRow run = lockRun(job.runId());
@@ -1762,9 +1786,56 @@ public class PipelineService {
                 jobs.cancel(id);
                 finalizeTimeBoxed(SYSTEM, run, job.stage());
                 return 1;
-            });
+            }), null);
+        }
+        int pruned = workers.prune(WORKER_PRESENCE_RETENTION);
+        if (pruned > 0) {
+            log.info("pruned {} worker presence row(s) not seen for {}", pruned, WORKER_PRESENCE_RETENTION);
         }
         return handled;
+    }
+
+    /** Worker ids that change with container hostnames would otherwise accumulate in worker_presence. */
+    static final Duration WORKER_PRESENCE_RETENTION = Duration.ofDays(7);
+
+    private int settle(UUID jobId, String rule, IntSupplier action, IntSupplier fallback) {
+        try {
+            return action.getAsInt();
+        } catch (RuntimeException e) {
+            if (fallback == null) {
+                log.error("pipeline enforcer could not settle job {} ({}); it is tried again on the next tick", jobId, rule, e);
+                return 0;
+            }
+            log.error("pipeline enforcer could not settle job {} ({}); failing it directly", jobId, rule, e);
+            try {
+                return fallback.getAsInt();
+            } catch (RuntimeException e2) {
+                log.error("pipeline enforcer could not fail job {} directly either; it stays RUNNING until the next tick", jobId, e2);
+                return 0;
+            }
+        }
+    }
+
+    /**
+     * The enforcer's last resort when the normal settlement throws: the job is FAILED with the reason, and its run (if
+     * still RUNNING) FAILED at that stage with the same code and message, so neither stays RUNNING and the reason is kept.
+     * No stage record is written (that is what failed); the audit entry says so. The run can be retried as usual.
+     */
+    private int failDirectly(UUID jobId, String code, String message) {
+        return tx.execute(s -> {
+            JobRow job = lockJob(jobId);
+            if (!job.status().equals("RUNNING")) return 0;
+            String why = message + " (The stage record could not be written, so this failure is recorded on the job and run only.)";
+            jobs.fail(jobId, code, why);
+            if (job.runId() != null) {
+                jdbc.sql("UPDATE pipeline_run SET status = 'FAILED', quality = NULL, finished_at = now(), failure_stage = :st, "
+                        + "failure_code = :c, failure_message = :m WHERE id = :r AND status = 'RUNNING'")
+                    .param("st", job.stage().name()).param("c", code).param("m", why).param("r", job.runId()).update();
+            }
+            audit.successInOrganization(SYSTEM, job.orgId(), job.venueId(), "pipeline.stage_failed", "processing_job", jobId,
+                Map.of("stage", job.stage().name(), "code", code, "stageRecord", "not written"));
+            return 1;
+        });
     }
 
     private boolean failSystem(UUID jobId, String code, String message) {
@@ -1777,7 +1848,15 @@ public class PipelineService {
                 return () -> { };
             }
             RunRow run = lockRun(job.runId());
-            if (!run.status().equals("RUNNING")) return null;
+            if (!run.status().equals("RUNNING")) {
+                // The run already ended (ending a run settles its jobs, so this is a leftover). The job must not stay
+                // RUNNING forever with an expired lease: fail it with the reason and leave the run exactly as it ended.
+                log.warn("job {} was RUNNING in run {} that is already {}; failing the job only", jobId, run.id(), run.status());
+                jobs.fail(jobId, code, message + " (its run had already ended " + run.status() + ")");
+                audit.successInOrganization(SYSTEM, job.orgId(), job.venueId(), "pipeline.stage_failed", "processing_job", jobId,
+                    Map.of("stage", job.stage().name(), "code", code, "runStatus", run.status()));
+                return () -> { };
+            }
             StageReport report = new StageReport("FAILED", started, Instant.now(), Map.of("synthetic", "enforced-by-control-plane", "reason", code),
                 List.of(), null, null, null, List.of(), code, message, Map.of());
             return applyReport(SYSTEM, job, run, report, Map.of());

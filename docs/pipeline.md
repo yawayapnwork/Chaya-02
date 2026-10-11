@@ -211,7 +211,17 @@ explicit `REPORT_REJECTED` failure. (Content checksums are recorded, not re-hash
 - **Lease and heartbeat.** `claim` leases the job (default 300 s); the worker heartbeats every 60 s and is told to
   stop if the run was cancelled. The enforcer (`PipelineEnforcer`, every 30 s) fails jobs whose lease expired
   (`WORKER_LOST`) and jobs that overrun the run deadline by the grace period (`TIME_LIMIT_EXCEEDED`), then the run
-  is `FAILED` and retryable.
+  is `FAILED` and retryable. Each job is settled on its own, so one that cannot be settled never keeps the others
+  RUNNING behind it. If the normal settlement throws (a constraint violation, a broken report), the job and its run are
+  failed directly with the same code and message, without a stage record (the audit entry says so). A job found
+  RUNNING in a run that already ended is failed with its reason and the run is left as it ended.
+- **What a retry keeps and refuses.** A retry re-queues the same job (attempt n+1, a new lease token, a new
+  `attempt-{n+1}/` prefix). The failed attempt's `pipeline_stage_run` record (code, message, details, worker) is
+  immutable and stays visible in the operations dashboard. A late report from the lost worker carries the old lease and
+  is refused (`LEASE_MISMATCH`); a repeated report for a finished job is refused (`JOB_NOT_RUNNING`) and records
+  nothing twice; a report for a cancelled run publishes nothing. All tested in `JobRecoveryTest`.
+- **Worker liveness.** Every claim poll and every heartbeat that holds a lease stamps `worker_presence` (V34). Health
+  (`worker`, `processing.unservedStages`), the operations dashboard and `chaya_workers_live` read it.
 - Worker-side, a stage crash, missing tool, timeout, corrupt input or storage failure becomes a structured
   `FAILED` report with logs uploaded; a bug in a stage cannot take the worker down.
 

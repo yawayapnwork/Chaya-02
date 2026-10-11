@@ -140,7 +140,7 @@ public class InternalJobController {
     @PostMapping("/{jobId}/heartbeat")
     public Heartbeat heartbeat(@PathVariable UUID jobId, @Valid @RequestBody HeartbeatRequest body,
                                @RequestHeader(name = JobLease.HEADER, required = false) String leaseToken) {
-        return pipeline.heartbeat(jobId, leaseToken); // keepGoing=false without the current lease: the worker stops
+        return pipeline.heartbeat(jobId, leaseToken, body.workerId()); // keepGoing=false without the current lease: the worker stops
     }
 
     @Operation(summary = "Worker: submit the stage record",

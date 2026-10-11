@@ -1,0 +1,37 @@
+# Deployment and backup scripts: static checks, and deploy.sh's control flow against stubs (scripts/deploy/test-deploy.sh):
+# configuration validation, the migration rehearsal gate, automatic rollback of an unhealthy version, and that no secret
+# from .env reaches the output; and the restore drill against good and bad synthetic backups (test-restore-drill.sh).
+# The real backup -> isolated restore drill on real stack data runs in reconstruction-smoke (stack-smoke.sh).
+name: ops
+
+on:
+  pull_request:
+    paths: ["infra/deploy/**", "scripts/backup/**", "scripts/deploy/**", "scripts/ci/**", ".github/workflows/ops.yml"]
+  push:
+    branches: [main]
+    paths: ["infra/deploy/**", "scripts/backup/**", "scripts/deploy/**", "scripts/ci/**", ".github/workflows/ops.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ops-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scripts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: shellcheck (warnings and errors)
+        run: shellcheck -S warning infra/deploy/*.sh scripts/backup/*.sh scripts/deploy/*.sh scripts/ci/*.sh
+      - name: deploy.sh control flow and rollback
+        run: bash scripts/deploy/test-deploy.sh
+      - name: restore drill fails on a bad backup (corrupted, missing, tampered) and passes on a good one
+        run: bash scripts/backup/test-restore-drill.sh
+      - name: deploy bundle contains the restore drill
+        run: |
+          bash scripts/deploy/bundle.sh "$RUNNER_TEMP/bundle"
+          test -x "$RUNNER_TEMP/bundle/scripts/backup/restore-drill.sh"

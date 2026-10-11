@@ -5,7 +5,9 @@
 #   worker-smoke  capture -> worker claim loop -> real CPU stages -> ARTIFACT_GENERATION (.ksplat, manifest, bundle)
 #   image-smoke   the same test, run inside the production worker image (proves its FFmpeg/OpenCV actually work)
 #   stack-smoke   capture upload -> ClamAV -> API -> processing -> real worker code, through the real API, MinIO and
-#                 Keycloak; the run must stop with a structured DEPENDENCY_UNAVAILABLE at the first GPU stage
+#                 Keycloak; the run must stop with a structured DEPENDENCY_UNAVAILABLE at the first GPU stage. Then the
+#                 stack's data is backed up and restored into an isolated environment, where this build's API must boot
+#                 (scripts/backup/restore-drill.sh)
 name: reconstruction-smoke
 
 on:
@@ -18,6 +20,7 @@ on:
       - "infra/ci/**"
       - "infra/keycloak/**"
       - "scripts/ci/**"
+      - "scripts/backup/**"
       - ".github/workflows/reconstruction-smoke.yml"
   push:
     branches: [main]

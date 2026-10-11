@@ -80,3 +80,77 @@ export function classifyFailure(status: number | null | undefined): LoadFailure 
   if (status === 404) return "not-found";
   return "error";
 }
+
+/** A count the server may not have been able to measure: null or undefined is "unavailable", never 0. */
+export function formatCount(value: number | null | undefined): string {
+  return value === null || value === undefined ? "unavailable" : String(value);
+}
+
+/**
+ * Whether a section keeps showing its last good data after a refresh fails. Only for transient failures (network,
+ * 5xx, a dependency outage): after a 401, 403 or 404 the caller may no longer see this data, so it is dropped.
+ */
+export function keepsStaleDataAfter(kind: LoadFailure): boolean {
+  return kind === "error";
+}
+
+export interface WorkerLike {
+  workerId: string;
+  stages: string[];
+  lastSeenAgeSeconds: number;
+  live: boolean;
+}
+
+export interface QueueLike {
+  claimableQueued: number;
+  oldestQueuedAgeSeconds: number | null;
+  running: number;
+  staleRunning: number;
+  overdueRunning: number;
+  unservedStages: string[];
+  workers: WorkerLike[];
+  workerLiveAfterSeconds: number;
+}
+
+export type QueueProblem = { level: "error" | "warning"; text: string };
+
+/**
+ * What is wrong with a venue's queue, worst first, from measured values only. An empty list means nothing measured is
+ * wrong; it does not claim processing is healthy beyond what was measured.
+ */
+export function queueProblems(q: QueueLike): QueueProblem[] {
+  const out: QueueProblem[] = [];
+  const live = q.workers.filter((w) => w.live).length;
+  if (live === 0) {
+    out.push({
+      level: "error",
+      text: q.workers.length === 0
+        ? "No worker has contacted the API in the last 24 hours. Nothing can be processed."
+        : `No worker is live: none has polled for work or sent a heartbeat in the last ${Math.round(q.workerLiveAfterSeconds / 60)} min.`,
+    });
+  }
+  if (q.unservedStages.length > 0) {
+    out.push({
+      level: "error",
+      text: `Queued work cannot start: no live worker runs ${q.unservedStages.join(", ")}.`,
+    });
+  }
+  if (q.staleRunning > 0) {
+    out.push({
+      level: "warning",
+      text: `${q.staleRunning} running job${q.staleRunning === 1 ? " has" : "s have"} an expired lease (the worker stopped). The lease enforcer fails ${q.staleRunning === 1 ? "it" : "them"} within about 30 s; if this persists, it is not running.`,
+    });
+  }
+  if (q.overdueRunning > 0) {
+    out.push({
+      level: "warning",
+      text: `${q.overdueRunning} running job${q.overdueRunning === 1 ? " is" : "s are"} past the run's time budget and will be stopped after the grace period.`,
+    });
+  }
+  return out;
+}
+
+/** A RUNNING job whose lease expired before the server's asOf: its worker is gone and recovery is pending. */
+export function leaseExpired(status: string, leaseExpiresAt: string | null, asOf: string): boolean {
+  return status === "RUNNING" && leaseExpiresAt !== null && Date.parse(leaseExpiresAt) <= Date.parse(asOf);
+}

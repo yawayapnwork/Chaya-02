@@ -257,6 +257,10 @@ table to `services/api/target/tenant-inventory.md` and fails if a table breaks t
   `public_viewer_token`, which reference a `capture_media`, `processing_artifact` or `public_viewer_link` row that has them
   and are only ever reached through it. Likewise `pii_staging_sweep` (a `pipeline_run`), and `erasure_item` and
 `erasure_object` (an `erasure_request`, which has both tenant columns).
+- `worker_presence` (V34) is deliberately not tenant-scoped: workers are shared infrastructure that serve every tenant.
+  It stores only what a worker said about itself (id, offered stages, service-account subject, last contact), never a
+  job, venue or capture id. The operations dashboard shows the same worker list to every venue's staff; the public
+  `/api/v1/health` shows counts and stage names only, never worker ids.
 
 ## Audit
 Written in the same transaction as the operation (so both commit or neither): `venue.create`, `venue.update`, `scan.create`, `job.enqueue`, `job.cancel`, `job.retry`, `job.claim`, `job.complete`, `job.fail`, `poi.create`, `poi.update`, `poi.delete`, `public_link.create`, `public_link.revoke`, `public_link.exchange`, `erasure.capture`, `erasure.scan_version`, `erasure.venue` (counts and ids only, docs/privacy-erasure.md; a refusal is `DENIED` in its own transaction). Refused venue access (`venue.access`, `DENIED`) is written in its own transaction so it survives the rejection. Secrets and tokens are never written to the log. The table is append-only at the database level.

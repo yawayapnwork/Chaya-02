@@ -73,8 +73,28 @@ public final class OpsDtos {
                       int retryCount, int maxRetries, Instant queuedAt, Instant startedAt, Instant finishedAt, String workerId,
                       Instant leaseExpiresAt, String errorCode, String errorMessage, Action retry, Action cancel) {}
 
+    /**
+     * A worker that polled for work or heartbeated in the last 24 hours (worker_presence). Workers are shared
+     * infrastructure serving every tenant; nothing here names a job or tenant. live: seen within workerLiveAfterSeconds.
+     */
+    public record WorkerStatus(String workerId, List<String> stages, Instant lastSeenAt, long lastSeenAgeSeconds,
+                               Instant lastClaimedAt, boolean live) {}
+
+    /**
+     * This venue's queue, measured now.
+     *
+     * @param claimableQueued    queued jobs a worker may claim (their run's time budget is not spent)
+     * @param oldestQueuedAgeSeconds age of the oldest claimable queued job; null when none is queued
+     * @param staleRunning       RUNNING jobs whose lease expired: the worker is gone and the lease enforcer (every 30 s)
+     *                           has not failed them yet. A value that persists means the enforcer is not running.
+     * @param overdueRunning     RUNNING jobs past their run's deadline (the enforcer fails them after the grace period)
+     * @param unservedStages     stages of this venue's claimable queued jobs that no live worker offers to run
+     */
+    public record JobQueue(long claimableQueued, Long oldestQueuedAgeSeconds, long running, long staleRunning, long overdueRunning,
+                        List<String> unservedStages, List<WorkerStatus> workers, long workerLiveAfterSeconds) {}
+
     /** counts: every job status (QUEUED, RUNNING, SUCCEEDED, FAILED, CANCELLED), zero included. */
-    public record Jobs(Map<String, Long> counts, List<Job> jobs, int limit, Instant asOf) {}
+    public record Jobs(Map<String, Long> counts, JobQueue queue, List<Job> jobs, int limit, Instant asOf) {}
 
     // ---- failures -------------------------------------------------------------------------------
 

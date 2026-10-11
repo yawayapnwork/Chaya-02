@@ -44,6 +44,18 @@ groups:
         annotations:
           summary: "Jobs have waited over 15 min and nothing is running: no reconstruction worker is claiming work"
 
+      - alert: ChayaNoLiveWorker
+        expr: chaya_workers_live == 0
+        for: 10m
+        annotations:
+          summary: "No reconstruction worker has polled for work or heartbeated within the liveness window (worker_presence); nothing can be processed"
+
+      - alert: ChayaJobsStranded
+        expr: chaya_jobs_running_lease_expired > 0
+        for: 5m
+        annotations:
+          summary: "RUNNING jobs with an expired lease are not being failed: the lease enforcer is not running or cannot settle them (see API logs, 'pipeline enforcer')"
+
       - alert: ChayaStageFailureRateHigh
         expr: |
           sum by (stage) (chaya_stage_runs_24h{outcome="FAILED"})

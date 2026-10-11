@@ -10,6 +10,7 @@ import {
   type Coverage,
   type Failures,
   type JobAction,
+  type JobQueue,
   type JobStatus,
   type Jobs,
   type OpsAccess,
@@ -34,11 +35,15 @@ import {
   type LoadFailure,
   classifyFailure,
   formatAge,
+  formatCount,
   formatDuration,
   formatMs,
   formatPercent,
   gapLabel,
   jobStatusLabel,
+  keepsStaleDataAfter,
+  leaseExpired,
+  queueProblems,
   reconstructionQualityLabel,
   zeroResultRate,
 } from "@/lib/ops-view";
@@ -48,10 +53,13 @@ import { formatDate } from "@/lib/viewer-format";
 
 // ---- loading model --------------------------------------------------------------------------------
 
+type RefreshError = { kind: LoadFailure; message: string };
+
 type Load<T> =
   | { state: "loading" }
   | { state: "forbidden" }
-  | { state: "ready"; data: T; refreshing: boolean }
+  // refreshError: the latest refresh failed transiently; data is the last good load (from loadedAt), possibly out of date.
+  | { state: "ready"; data: T; refreshing: boolean; loadedAt: number; refreshError: RefreshError | null }
   | { state: "failed"; kind: LoadFailure; message: string };
 
 function toFailure(e: unknown): { state: "failed"; kind: LoadFailure; message: string } {
@@ -63,7 +71,8 @@ function toFailure(e: unknown): { state: "failed"; kind: LoadFailure; message: s
 /**
  * Runs `fetcher` whenever it (or `refresh`) changes. A null fetcher means the caller's role may not read the
  * section, so nothing is requested. While a refresh is in flight the previous data stays visible (marked
- * refreshing) instead of blanking an operational view.
+ * refreshing) instead of blanking an operational view. When a refresh fails transiently (network, 5xx, a dependency
+ * outage), the last good data stays visible, marked out of date with the error; after 401/403/404 it is dropped.
  */
 function useSection<T>(fetcher: (() => Promise<T>) | null, refresh: number): Load<T> {
   const [result, setResult] = useState<{ fetcher: () => Promise<T>; refresh: number; load: Load<T> } | null>(null);
@@ -72,10 +81,20 @@ function useSection<T>(fetcher: (() => Promise<T>) | null, refresh: number): Loa
     let cancelled = false;
     fetcher().then(
       (data) => {
-        if (!cancelled) setResult({ fetcher, refresh, load: { state: "ready", data, refreshing: false } });
+        if (!cancelled) {
+          setResult({ fetcher, refresh, load: { state: "ready", data, refreshing: false, loadedAt: Date.now(), refreshError: null } });
+        }
       },
       (e) => {
-        if (!cancelled) setResult({ fetcher, refresh, load: toFailure(e) });
+        if (cancelled) return;
+        const failure = toFailure(e);
+        setResult((prev) => {
+          const last = prev && prev.fetcher === fetcher && prev.load.state === "ready" ? prev.load : null;
+          if (last && keepsStaleDataAfter(failure.kind)) {
+            return { fetcher, refresh, load: { ...last, refreshing: false, refreshError: { kind: failure.kind, message: failure.message } } };
+          }
+          return { fetcher, refresh, load: failure };
+        });
       },
     );
     return () => {
@@ -150,10 +169,19 @@ function Section<T>({
         <button className="underline" onClick={onRetry}>Try again</button>
       </div>
     );
-  } else if (isEmpty?.(load.data)) {
-    body = <p className="text-sm text-zinc-600">{emptyText}</p>;
   } else {
-    body = children(load.data);
+    body = (
+      <>
+        {load.refreshError && (
+          <div role="alert" className="mb-2 rounded border border-amber-400 bg-amber-50 p-2 text-sm text-amber-900" data-testid={`${id}-stale`}>
+            Refresh failed: {load.refreshError.message}. Showing data loaded at {new Date(load.loadedAt).toLocaleTimeString()}; it may
+            be out of date.{" "}
+            <button className="underline" onClick={onRetry}>Try again</button>
+          </div>
+        )}
+        {isEmpty?.(load.data) ? <p className="text-sm text-zinc-600">{emptyText}</p> : children(load.data)}
+      </>
+    );
   }
   return (
     <section id={id} aria-labelledby={`${id}-title`} className="rounded border p-4">
@@ -161,6 +189,11 @@ function Section<T>({
         <h2 id={`${id}-title`} className="text-lg font-semibold">
           {title}
           {load.state === "ready" && load.refreshing && <span className="ml-2 text-xs font-normal text-zinc-500">refreshing…</span>}
+          {load.state === "ready" && !load.refreshing && (
+            <span className={`ml-2 text-xs font-normal ${load.refreshError ? "text-amber-800" : "text-zinc-500"}`}>
+              {load.refreshError ? "out of date · " : ""}updated {new Date(load.loadedAt).toLocaleTimeString()}
+            </span>
+          )}
         </h2>
         {controls}
       </div>
@@ -220,6 +253,62 @@ function ActionButton({
     <button className="rounded border px-2 py-0.5 text-xs disabled:opacity-50" disabled={busy} onClick={onRun}>
       {label}
     </button>
+  );
+}
+
+/** Queue depth, stale jobs and worker liveness, as measured by the server. Absent data is "unavailable", never 0. */
+function QueuePanel({ queue }: { queue: JobQueue | undefined }) {
+  if (!queue) {
+    return (
+      <p className="rounded border p-2 text-sm text-zinc-600" data-testid="ops-queue-unavailable">
+        Queue depth and worker liveness are unavailable: this API version does not report them.
+      </p>
+    );
+  }
+  const problems = queueProblems(queue);
+  const live = queue.workers.filter((w) => w.live).length;
+  return (
+    <div className="space-y-2" data-testid="ops-queue">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+        <Stat label="Waiting to start" value={formatCount(queue.claimableQueued)}
+          hint={queue.oldestQueuedAgeSeconds == null ? "nothing waiting" : `oldest ${formatAge(queue.oldestQueuedAgeSeconds)}`} />
+        <Stat label="Running" value={formatCount(queue.running)} />
+        <Stat label="Lease expired" value={formatCount(queue.staleRunning)} hint="worker lost, awaiting recovery" />
+        <Stat label="Past time budget" value={formatCount(queue.overdueRunning)} />
+        <Stat label="Live workers" value={`${live} of ${queue.workers.length}`} hint="seen in the last 24 h" />
+      </div>
+      {problems.map((p) => (
+        <p key={p.text} role={p.level === "error" ? "alert" : "status"}
+          className={`rounded border p-2 text-sm ${p.level === "error" ? "border-red-300 bg-red-50 text-red-900" : "border-amber-400 bg-amber-50 text-amber-900"}`}>
+          {p.text}
+        </p>
+      ))}
+      {queue.workers.length > 0 && (
+        <details className="text-sm">
+          <summary className="cursor-pointer text-zinc-700">Workers ({queue.workers.length})</summary>
+          <p className="mt-1 text-xs text-zinc-500">
+            Workers are shared by every venue. A worker is live when it polled for work or sent a heartbeat within the last{" "}
+            {Math.round(queue.workerLiveAfterSeconds / 60)} min.
+          </p>
+          <table className="mt-1 w-full">
+            <thead><tr><th className={TH}>Worker</th><th className={TH}>Last seen</th><th className={TH}>Last job taken</th><th className={TH}>Stages</th></tr></thead>
+            <tbody>
+              {queue.workers.map((w) => (
+                <tr key={w.workerId}>
+                  <td className={`${TD} font-mono text-xs`}>
+                    {w.workerId}{" "}
+                    <span className={w.live ? "text-green-800" : "font-medium text-red-800"}>{w.live ? "live" : "not live"}</span>
+                  </td>
+                  <td className={TD}>{formatAge(w.lastSeenAgeSeconds)}</td>
+                  <td className={TD}><When iso={w.lastClaimedAt} /></td>
+                  <td className={`${TD} text-xs`}>{w.stages.map(stageLabel).join(", ")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </details>
+      )}
+    </div>
   );
 }
 
@@ -664,6 +753,7 @@ export default function OpsDashboard() {
           >
             {(j) => (
               <div className="space-y-3">
+                <QueuePanel queue={j.queue} />
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
                   {JOB_STATUSES.map((s) => (
                     <button
@@ -703,7 +793,12 @@ export default function OpsDashboard() {
                               {stageLabel(job.stage)}
                               <div className="font-mono text-xs text-zinc-500">{job.id.slice(0, 8)}</div>
                             </td>
-                            <td className={`${TD} ${job.status === "FAILED" ? "text-red-700" : ""}`}>{jobStatusLabel(job.status)}</td>
+                            <td className={`${TD} ${job.status === "FAILED" ? "text-red-700" : ""}`}>
+                              {jobStatusLabel(job.status)}
+                              {leaseExpired(job.status, job.leaseExpiresAt, j.asOf) && (
+                                <div className="text-xs font-medium text-amber-800">lease expired — worker lost, recovery pending</div>
+                              )}
+                            </td>
                             <td className={`${TD} tabular-nums`}>{job.retryCount + 1} of {job.maxRetries + 1}</td>
                             <td className={TD}><When iso={job.queuedAt} /></td>
                             <td className={TD}><When iso={job.startedAt} /></td>

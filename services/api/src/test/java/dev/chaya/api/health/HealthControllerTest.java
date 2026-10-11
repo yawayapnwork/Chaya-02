@@ -41,8 +41,8 @@ class HealthControllerTest {
     @MockitoBean PublicViewerAuthenticator viewerAuthenticator;
 
     private static HealthService.HealthReport report(String db, String storage, String idp, String scanner, String processing) {
-        return HealthService.assemble(db, storage, idp, scanner,
-            new HealthService.Processing(processing, 0L, 0L, null), java.time.Instant.now());
+        return HealthService.assemble(db, storage, idp, scanner, "UP",
+            new HealthService.Processing(processing, 0L, 0L, null, 1L, 0L, java.util.List.of()), java.time.Instant.now());
     }
 
     @Test
@@ -79,6 +79,20 @@ class HealthControllerTest {
         when(healthService.check()).thenReturn(report("UP", "UP", "UP", "DISABLED", "IDLE"));
         mvc.perform(get("/api/v1/health")).andExpect(status().isOk())
             .andExpect(jsonPath("$.status").value("DEGRADED")).andExpect(jsonPath("$.malwareScanner").value("DISABLED"));
+    }
+
+    @Test
+    void noLiveWorkerOrAVisionOutageIsDegradedAndNamed() throws Exception {
+        when(healthService.check()).thenReturn(HealthService.assemble("UP", "UP", "UP", "UP", "UP",
+            new HealthService.Processing("NO_WORKER", 2L, 0L, 30L, 0L, 0L, java.util.List.of("POSE_ESTIMATION")), java.time.Instant.now()));
+        mvc.perform(get("/api/v1/health")).andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("DEGRADED")).andExpect(jsonPath("$.worker").value("DOWN"))
+            .andExpect(jsonPath("$.processing.unservedStages[0]").value("POSE_ESTIMATION"));
+        when(healthService.check()).thenReturn(HealthService.assemble("UP", "UP", "UP", "UP", "DOWN",
+            new HealthService.Processing("IDLE", 0L, 0L, null, 1L, 0L, java.util.List.of()), java.time.Instant.now()));
+        mvc.perform(get("/api/v1/health")).andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("DEGRADED")).andExpect(jsonPath("$.vision").value("DOWN"))
+            .andExpect(jsonPath("$.worker").value("UP"));
     }
 
     @Test

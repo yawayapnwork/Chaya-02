@@ -8757,6 +8757,10 @@ components:
           type: string
         storage:
           type: string
+        vision:
+          type: string
+        worker:
+          type: string
     Heartbeat:
       type: object
       properties:
@@ -8989,6 +8993,35 @@ components:
           type: string
         workerId:
           type: string
+    JobQueue:
+      type: object
+      properties:
+        claimableQueued:
+          type: integer
+          format: int64
+        oldestQueuedAgeSeconds:
+          type: integer
+          format: int64
+        overdueRunning:
+          type: integer
+          format: int64
+        running:
+          type: integer
+          format: int64
+        staleRunning:
+          type: integer
+          format: int64
+        unservedStages:
+          type: array
+          items:
+            type: string
+        workerLiveAfterSeconds:
+          type: integer
+          format: int64
+        workers:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkerStatus"
     JobView:
       type: object
       properties:
@@ -9033,6 +9066,8 @@ components:
         limit:
           type: integer
           format: int32
+        queue:
+          $ref: "#/components/schemas/JobQueue"
     LatestReconstruction:
       type: object
       properties:
@@ -9847,6 +9882,9 @@ components:
     Processing:
       type: object
       properties:
+        liveWorkers:
+          type: integer
+          format: int64
         oldestQueuedAgeSeconds:
           type: integer
           format: int64
@@ -9856,8 +9894,15 @@ components:
         runningJobs:
           type: integer
           format: int64
+        staleRunningJobs:
+          type: integer
+          format: int64
         status:
           type: string
+        unservedStages:
+          type: array
+          items:
+            type: string
     ProcessingStatus:
       type: object
       properties:
@@ -11111,6 +11156,26 @@ components:
         venueId:
           type: string
           format: uuid
+    WorkerStatus:
+      type: object
+      properties:
+        lastClaimedAt:
+          type: string
+          format: date-time
+        lastSeenAgeSeconds:
+          type: integer
+          format: int64
+        lastSeenAt:
+          type: string
+          format: date-time
+        live:
+          type: boolean
+        stages:
+          type: array
+          items:
+            type: string
+        workerId:
+          type: string
   securitySchemes:
     bearerAuth:
       bearerFormat: JWT

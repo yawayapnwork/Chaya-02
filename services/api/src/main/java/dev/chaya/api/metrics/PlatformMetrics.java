@@ -1,6 +1,7 @@
 package dev.chaya.api.metrics;
 
 import dev.chaya.api.erasure.ErasureObjectPurger;
+import dev.chaya.api.health.HealthProperties;
 import dev.chaya.api.pipeline.PipelineProperties;
 import dev.chaya.api.pipeline.PipelineService;
 import io.micrometer.core.instrument.Gauge;
@@ -30,6 +31,7 @@ public class PlatformMetrics {
 
     private final JdbcClient jdbc;
     private final PipelineProperties pipelineProps;
+    private final HealthProperties healthProps;
     private final MultiGauge jobs;
     private final MultiGauge stageRuns;
     private final MultiGauge stageDuration;
@@ -39,12 +41,15 @@ public class PlatformMetrics {
     private final AtomicReference<Double> piiOverdue = new AtomicReference<>(Double.NaN);
     private final AtomicReference<Double> piiUnswept = new AtomicReference<>(Double.NaN);
     private final AtomicReference<Double> erasurePending = new AtomicReference<>(Double.NaN);
+    private final AtomicReference<Double> liveWorkers = new AtomicReference<>(Double.NaN);
+    private final AtomicReference<Double> staleRunning = new AtomicReference<>(Double.NaN);
     private final AtomicReference<Double> refreshOk = new AtomicReference<>(0.0);
     private final AtomicReference<Double> refreshedAt = new AtomicReference<>(Double.NaN);
 
-    public PlatformMetrics(JdbcClient jdbc, MeterRegistry registry, PipelineProperties pipelineProps) {
+    public PlatformMetrics(JdbcClient jdbc, MeterRegistry registry, PipelineProperties pipelineProps, HealthProperties healthProps) {
         this.jdbc = jdbc;
         this.pipelineProps = pipelineProps;
+        this.healthProps = healthProps;
         this.jobs = MultiGauge.builder("chaya.jobs").description("Processing jobs by current status").register(registry);
         this.stageRuns = MultiGauge.builder("chaya.stage.runs.24h")
             .description("Stage execution attempts finished in the last 24 h, by stage and outcome").register(registry);
@@ -66,6 +71,12 @@ public class PlatformMetrics {
         Gauge.builder("chaya.erasure.pending.overdue", erasurePending, AtomicReference::get)
             .description("Erasure requests whose rows are gone but whose objects are still not all deleted an hour after they "
                 + "could have been (docs/privacy-erasure.md)").register(registry);
+        Gauge.builder("chaya.workers.live", liveWorkers, AtomicReference::get)
+            .description("Workers that polled for work or heartbeated within chaya.health.worker-live-after (worker_presence)")
+            .register(registry);
+        Gauge.builder("chaya.jobs.running.lease.expired", staleRunning, AtomicReference::get)
+            .description("RUNNING jobs whose lease expired and that the lease enforcer has not failed yet; it runs every 30 s, so "
+                + "a lasting non-zero value means jobs are stranded").register(registry);
         Gauge.builder("chaya.metrics.refresh.ok", refreshOk, AtomicReference::get)
             .description("1 when the last refresh of the chaya_* gauges succeeded, 0 otherwise").register(registry);
         Gauge.builder("chaya.metrics.refreshed", refreshedAt, AtomicReference::get).baseUnit("seconds")
@@ -123,6 +134,10 @@ public class PlatformMetrics {
                 .query(Long.class).single());
             erasurePending.set((double) jdbc.sql("SELECT count(*) " + ErasureObjectPurger.PENDING_OVERDUE)
                 .param("overdue", 3600.0).query(Long.class).single());
+            liveWorkers.set((double) jdbc.sql("SELECT count(*) FROM worker_presence WHERE last_seen_at >= now() - make_interval(secs => :s)")
+                .param("s", healthProps.workerLiveAfter().toSeconds()).query(Long.class).single());
+            staleRunning.set((double) jdbc.sql("SELECT count(*) FROM processing_job WHERE status = 'RUNNING' AND lease_expires_at <= now()")
+                .query(Long.class).single());
             refreshOk.set(1.0);
             refreshedAt.set(System.currentTimeMillis() / 1000.0);
         } catch (RuntimeException e) {
@@ -134,6 +149,8 @@ public class PlatformMetrics {
             piiOverdue.set(Double.NaN);
             piiUnswept.set(Double.NaN);
             erasurePending.set(Double.NaN);
+            liveWorkers.set(Double.NaN);
+            staleRunning.set(Double.NaN);
             refreshOk.set(0.0);
         }
     }

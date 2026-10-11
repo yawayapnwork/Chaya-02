@@ -141,8 +141,32 @@ export interface OpsJob {
   cancel: JobAction;
 }
 
+/** A worker seen in the last 24 h (shared infrastructure, not tenant data). live: seen within workerLiveAfterSeconds. */
+export interface WorkerStatus {
+  workerId: string;
+  stages: string[];
+  lastSeenAt: string;
+  lastSeenAgeSeconds: number;
+  lastClaimedAt: string | null;
+  live: boolean;
+}
+
+/** This venue's queue, measured at asOf (OpsDtos.JobQueue). */
+export interface JobQueue {
+  claimableQueued: number;
+  oldestQueuedAgeSeconds: number | null;
+  running: number;
+  staleRunning: number;
+  overdueRunning: number;
+  unservedStages: string[];
+  workers: WorkerStatus[];
+  workerLiveAfterSeconds: number;
+}
+
 export interface Jobs {
   counts: Record<JobStatus, number>;
+  /** Absent from an API older than the worker-presence migration (V34): shown as unavailable, never as zero. */
+  queue?: JobQueue;
   jobs: OpsJob[];
   limit: number;
   asOf: string;

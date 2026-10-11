@@ -6,12 +6,16 @@
 #   ./deploy.sh sha-0123456          # roll back = deploy the previous version (see DEPLOYMENT.md "Rollback")
 #
 # Steps (any failure stops the deploy; a failure after the switch triggers an automatic rollback):
-#   1. pull every image of the target version (a missing or unreadable image fails here, before anything changes)
-#   2. back up the database (pg_dump) -- the restore point if a migration must be undone
-#   3. start/replace containers; Flyway migrations run as the API starts
-#   4. wait until api, web, worker and keycloak report HEALTHY (readiness, not "process started")
-#   5. apply the environment's Keycloak settings; check the public endpoints through the proxy
-#   6. record the version
+#   1. validate the configuration (.env against the compose file) -- names a missing variable, never prints values
+#   2. pull every image of the target version (a missing or unreadable image fails here, before anything changes)
+#   3. back up the database (pg_dump) -- the restore point if a migration must be undone
+#   4. migration rehearsal: restore that dump into an isolated throwaway database and boot the NEW api image on it
+#      (scripts/backup/restore-drill.sh, DRILL_DB_ONLY). Migrations that fail on production data fail here, before
+#      anything live changes. DEPLOY_SKIP_REHEARSAL=1 skips it (logged).
+#   5. start/replace containers; Flyway migrations run as the API starts
+#   6. wait until api, web, worker and keycloak report HEALTHY (readiness, not "process started")
+#   7. apply the environment's Keycloak settings; check the public endpoints through the proxy
+#   8. record the version
 set -euo pipefail
 cd "$(dirname "$0")"
 VERSION=${1:?usage: deploy.sh <image tag, e.g. sha-abc1234>}
@@ -52,9 +56,12 @@ wait_healthy() { # service...
 }
 
 public_checks() {
-  local api web
-  api=$(curl -sS -o /tmp/chaya-api-health.json -w '%{http_code}' "https://$CHAYA_API_DOMAIN/api/v1/health") || return 1
-  log "https://$CHAYA_API_DOMAIN/api/v1/health -> $api $(cat /tmp/chaya-api-health.json)"
+  local api web body
+  body=$(mktemp)
+  api=$(curl -sS -o "$body" -w '%{http_code}' "https://$CHAYA_API_DOMAIN/api/v1/health") || { rm -f "$body"; return 1; }
+  # The health report is public and holds only status words and counts.
+  log "https://$CHAYA_API_DOMAIN/api/v1/health -> $api $(cat "$body")"
+  rm -f "$body"
   [ "$api" = 200 ] || return 1        # 503 = DOWN; DEGRADED answers 200 and is logged above
   web=$(curl -sS -o /dev/null -w '%{http_code}' "https://$CHAYA_APP_DOMAIN/api/health") || return 1
   log "https://$CHAYA_APP_DOMAIN/api/health -> $web"
@@ -63,18 +70,27 @@ public_checks() {
 
 rollout() { # version
   export CHAYA_VERSION=$1
-  compose up -d --remove-orphans
-  wait_healthy postgres keycloak api web worker
-  ./keycloak-configure.sh
-  public_checks
+  # Chained with && on purpose: rollout runs as an `if` condition, where `set -e` is suspended, so without the chain an
+  # unhealthy service would not stop it and the deploy would count as successful whenever the public checks passed.
+  compose up -d --remove-orphans &&
+    wait_healthy postgres keycloak api web worker &&
+    ./keycloak-configure.sh &&
+    public_checks
 }
 
 log "deploying $VERSION (currently: ${PREVIOUS:-nothing})"
 
-log "1/5 pulling images"
+log "1/8 validating configuration"
+# --quiet prints errors only (a missing variable is named, its value never printed); the resolved file is not shown.
+if ! compose config --quiet; then
+  log "configuration invalid for $VERSION: fix $ENV_FILE against .env.production.example (the error above names the variable). Nothing was changed."
+  exit 1
+fi
+
+log "2/8 pulling images"
 compose pull --quiet
 
-log "2/5 pre-deploy database backup"
+log "3/8 pre-deploy database backup"
 DUMP=""
 if [ -n "$(compose ps -q --status running postgres 2>/dev/null)" ]; then
   CHAYA_COMPOSE_FILE="$PWD/docker-compose.yml" COMPOSE_NETWORK=chaya_internal ENV_FILE="$ENV_FILE" ./scripts/backup/backup.sh postgres
@@ -85,11 +101,27 @@ else
 fi
 MIGRATION_BEFORE=$(schema_version)
 
-log "3/5 rolling out $VERSION"
+log "4/8 migration rehearsal on a restored copy of the pre-deploy dump"
+if [ -z "$DUMP" ]; then
+  log "no dump (first deploy): nothing to rehearse"
+elif [ -n "${DEPLOY_SKIP_REHEARSAL:-}" ]; then
+  log "WARNING: rehearsal skipped (DEPLOY_SKIP_REHEARSAL); migrations meet production data for the first time on the live database"
+else
+  API_IMAGE=$(compose config --images 2>/dev/null | grep '/chaya-api:' | head -1 || true)
+  [ -n "$API_IMAGE" ] || { log "cannot resolve the api image of $VERSION"; exit 1; }
+  if ! DRILL_DB_ONLY=1 DRILL_API_IMAGE="$API_IMAGE" CHAYA_COMPOSE_FILE="$PWD/docker-compose.yml" COMPOSE_NETWORK=chaya_internal \
+       ENV_FILE="$ENV_FILE" ./scripts/backup/restore-drill.sh "$DUMP"; then
+    log "REHEARSAL FAILED: $VERSION cannot start on a copy of the current data (see the drill output above). Nothing live was changed."
+    echo "$(date -u +%FT%TZ) $VERSION rehearsal-failed" >> .deploy-history
+    exit 1
+  fi
+fi
+
+log "5/8 rolling out $VERSION"
 if rollout "$VERSION"; then
   echo "$VERSION" > .deployed-version
   echo "$(date -u +%FT%TZ) $VERSION ok" >> .deploy-history
-  log "5/5 deployed $VERSION"
+  log "8/8 deployed $VERSION"
   exit 0
 fi
 

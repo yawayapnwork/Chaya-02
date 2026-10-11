@@ -12,7 +12,7 @@
 set -euo pipefail
 SHA=${1:?usage: require-green.sh <commit sha>}
 : "${GITHUB_REPOSITORY:?}" "${GH_TOKEN:?}"
-GATED=${GATED_WORKFLOWS:-"frontend backend python security reconstruction-smoke docker"}
+GATED=${GATED_WORKFLOWS:-"frontend backend python security reconstruction-smoke docker ops"}
 deadline=$((SECONDS + ${GATE_TIMEOUT:-2700}))
 
 while :; do

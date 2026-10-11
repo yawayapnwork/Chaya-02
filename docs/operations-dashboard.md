@@ -16,7 +16,7 @@ Access rules: docs/security.md, "Operations dashboard".
 | 2 | Current reconstruction version | `ops/overview` | Per floor: newest FINALIZED `scan_version`; newest run whose ARTIFACT_GENERATION stage succeeded (the viewer's own definition, see `ReconstructionService`) with its `quality` and whether a `.ksplat` exists |
 | 3 | Scan freshness | `ops/overview` | Timestamps (below) and their ages against the database clock |
 | 4 | Coverage gaps | `ops/coverage` | Floors without a reconstruction or finalized version; measured coverage of the newest capture with a HUD room outline, recomputed by `CaptureHudService` (the capture planner) |
-| 5 | Processing jobs | `ops/jobs` | `processing_job`, counts for all five states, newest 50 (filterable) |
+| 5 | Processing jobs | `ops/jobs` | `processing_job`, counts for all five states, newest 50 (filterable); `queue`: this venue's queue depth, stale and overdue jobs, unserved stages, and the workers from `worker_presence` (below) |
 | 6 | Processing failures | `ops/failures` | FAILED `pipeline_run`s; FAILED `pipeline_stage_run` records (immutable, so they survive retries); FAILED legacy jobs without a run |
 | 7 | Storage, artifacts, cost | `ops/storage` | `capture_media` and `processing_artifact` sizes as recorded; `pipeline_stage_run` durations; cost (see below) |
 | 8 | POI and search analytics | `ops/search-analytics` | `search_query` (written by every search); latest `poi_version` per live POI |
@@ -35,6 +35,29 @@ No freshness score exists. Per floor the dashboard shows timestamps and their ag
 - **Last capture started**: any capture on the floor, processed or not.
 
 Floors are sorted oldest-first by last full-floor capture. Floors that were never captured sort first.
+
+## Queue and workers
+
+`ops/jobs` returns `queue`, measured at `asOf`:
+
+- **Waiting to start** (`claimableQueued`, `oldestQueuedAgeSeconds`): this venue's QUEUED jobs whose run still has
+  time budget. Jobs of a run past its deadline are not claimable; the enforcer ends that run.
+- **Running**, **Lease expired** (`staleRunning`: RUNNING, lease expired, the worker is gone and the lease enforcer has
+  not failed the job yet; it runs every 30 s, so a value that stays means it is not running), **Past time budget**
+  (`overdueRunning`).
+- **Unserved stages**: stages of this venue's claimable queued jobs that no live worker offers. On a deployment whose
+  worker does not run `POSE_ESTIMATION` this names it at once, instead of waiting for the 15-minute stall rule.
+- **Workers**: every worker seen in the last 24 h, with the stages it offers, when it last contacted the API and when it
+  last took a job. A worker is live when it polled for work or sent a heartbeat within
+  `chaya.health.worker-live-after` (3 min; a worker busy with one long stage only heartbeats, every 60 s by default).
+  Liveness is measured: every claim poll, empty or not, and every heartbeat that holds a lease stamps
+  `worker_presence` (`V34__worker_presence.sql`). Rows unseen for 7 days are pruned by the enforcer.
+
+Workers are shared infrastructure that serve every tenant, so the worker list is the same for every venue. It holds no
+tenant data: no job, venue or capture id is stored with a worker. A job row whose lease expired before `asOf` is marked
+"lease expired — worker lost, recovery pending".
+
+An API without V34 does not return `queue`; the UI then says queue depth and worker liveness are unavailable, never 0.
 
 ## Job states and retry availability
 
@@ -76,6 +99,11 @@ retry), unauthorized (the roles the section needs), or signed-out. A section the
 requested. The page also handles signed out, no venue role (403 on `/venues`), no venues assigned, and a venue that is
 not visible (404). Refresh is manual, with optional 30 s auto-refresh. During a refresh the previous data stays visible.
 
+Each section header says when its data was last loaded. When a **refresh** fails transiently (network, 5xx, a
+dependency outage such as `503 DATABASE_UNAVAILABLE`), the section keeps its last good data, marks it "out of date",
+and shows the error with a retry. After a 401, 403 or 404 the data is dropped instead: the caller may no longer see it.
+Before 2026-10-11 a failed refresh replaced the data with the error, so one failed poll blanked the view.
+
 ## Verification
 
 - `JobActionsTest`: retry/cancel rules, coverage gap derivation, cost never invented, ages. A pure unit test.
@@ -83,6 +111,14 @@ not visible (404). Refresh is manual, with optional 30 s auto-refresh. During a 
   service token: 403); job counts and retry availability from real rows; failures from stage records; search aggregates;
   artifact sums with cost unavailable; null freshness before any reconstruction; venue-scoped audit with admin-only
   denials. Runs on Testcontainers Postgres and MinIO, and is skipped without Docker.
+- `JobRecoveryTest`: worker liveness from real claim polls and heartbeats (a heartbeat without the lease refreshes
+  nothing), unserved stages and live/not-live workers in `ops/jobs`; lease expiry, retries and duplicate reports (see
+  docs/pipeline.md).
 - `apps/web/lib/ops-view.test.ts`: presentation rules. Missing values are never shown as 0, only FINAL is labelled
-  final, and HTTP statuses map to section states.
+  final, HTTP statuses map to section states, only transient failures keep stale data, queue problems come only from
+  measured values, and an expired lease is judged against the server clock.
+- `apps/web/e2e/ops.spec.ts` (Playwright, real browser, mocked API, sign-in through the real PKCE flow against a mocked
+  OIDC provider): the queue panel with a lost worker, an unserved stage and an expired lease; a queue an older API does
+  not report shown as unavailable; a failed refresh keeping the last data marked out of date, then recovering; a
+  forbidden section never requested; a failed first load recovering on retry.
 - Not verified: the dashboard UI in a real browser against a running stack.

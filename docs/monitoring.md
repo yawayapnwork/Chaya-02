@@ -37,6 +37,8 @@ Every port is bound to 127.0.0.1. Loki and Alloy have no published port.
 | Processing job duration | `chaya_stage_duration_24h_seconds{stage, quantile="0.5\|0.95\|max"}` | `pipeline_stage_run` durations from the last 24 h |
 | Processing failure rate | `chaya_stage_runs_24h{stage, outcome}`. Rate = FAILED / all | `pipeline_stage_run`, last 24 h |
 | Queue depth | `chaya_jobs{status}`, `chaya_jobs_queued_oldest_age_seconds` | `processing_job` now |
+| Worker liveness | `chaya_workers_live` | `worker_presence`: workers that polled for work or heartbeated within `chaya.health.worker-live-after` (3 min) |
+| Stranded jobs | `chaya_jobs_running_lease_expired` | RUNNING jobs whose lease expired and that the lease enforcer has not failed yet |
 | Storage usage (recorded) | `chaya_storage_recorded_bytes{store="raw_media\|derived_artifacts"}` | sizes the database recorded at verification. **Not** a bucket listing: it cannot see `pii/` staging, logs or abandoned multipart uploads. |
 | Storage usage (physical) | `minio_cluster_capacity_usable_free_bytes`, `minio_cluster_capacity_usable_total_bytes`, `minio_bucket_usage_total_bytes{bucket}` | MinIO's own cluster metrics (`/minio/v2/metrics/cluster`, bearer token). Alerts: `ChayaStorageLow` (< 15% free), `ChayaStorageMetricsMissing`. Checked on 2026-09-24 against `quay.io/minio/minio:latest`: the two capacity series are exported and the endpoint answers 403 without the token. `minio_bucket_usage_total_bytes` did not appear on that empty instance (it follows MinIO's usage scan) and is **unconfirmed**. The alert uses only the capacity series. |
 | Reconstruction success rate | `chaya_pipeline_runs_finished_24h{status}`. Rate = SUCCEEDED / all finished | `pipeline_run`, last 24 h. PARTIAL is not counted as a success. |
@@ -58,6 +60,8 @@ ids) and no user data.
 
 `ChayaApiDown`, `ChayaApiHighErrorRate` (more than 5% 5xx), `ChayaApiSlow` (p95 above 2 s), `ChayaRateLimiting`,
 `ChayaMetricsRefreshFailing`, `ChayaQueueStalled` (oldest job waiting over 15 min with nothing running),
+`ChayaNoLiveWorker` (no live worker for 10 min), `ChayaJobsStranded` (expired-lease jobs not failed for 5 min: the lease
+enforcer is not running or cannot settle them),
 `ChayaStageFailureRateHigh`, `ChayaReconstructionSuccessLow`, `ChayaStorageLow` (MinIO under 15% usable capacity),
 `ChayaStorageMetricsMissing` (MinIO not scraped, so storage usage is unknown rather than assumed fine). `ChayaPiiStagingNotPurged` (unanonymised staging frames past their retention still stored for 15 min). `ChayaPiiStagingUnswept` (finished runs not checked for unregistered `pii/` uploads). `ChayaErasureIncomplete` (an erasure's objects still not all deleted). The thresholds are starting points and have not been
 tuned against real traffic. No Alertmanager is configured: alerts show in Prometheus and Grafana only. Add
@@ -86,7 +90,8 @@ is set. Before enabling it:
 
 ## Not verified
 
-The whole stack has not been started. What has been checked (2026-09-24): `promtool check rules` (10 rules) and
+On 2026-10-11 `promtool check rules` (prom/prometheus v3.5.0) passed with the two new rules (15 rules); they have not
+fired against real data. The whole stack has not been started. What has been checked (2026-09-24): `promtool check rules` (10 rules) and
 `promtool check config` with `prom/prometheus:v3.5.0`; `docker compose config` for this file; the MinIO metric names
 and token authentication against a real MinIO (see the storage row above). The dashboard queries have not been run
 against a live Prometheus, and the alerts have not fired against real data.

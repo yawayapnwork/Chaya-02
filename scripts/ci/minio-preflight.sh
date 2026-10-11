@@ -15,6 +15,7 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 load() { # prints MIRROR@DIGEST for infra/mirror/$1
+  # shellcheck source=/dev/null  # infra/mirror/<image>/image.env: MIRROR and DIGEST only
   ( . "infra/mirror/$1/image.env"; echo "$MIRROR@$DIGEST" )
 }
 MINIO=$(load minio)

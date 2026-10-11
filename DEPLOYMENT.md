@@ -39,7 +39,8 @@ How Chaya 02 is built, shipped, started, checked, rolled back, backed up and rec
 | `python` | PRs and main touching `services/reconstruction`, `services/vision` | ruff (pyflakes, bugbear, isort, pyupgrade, bandit) and pytest. The CPU stages run for real; GPU and live-stack suites skip themselves. |
 | `security` | PRs, main, weekly | npm audit, pip-audit, OWASP Dependency-Check (CVSS ≥ 7 fails), and license reports (THIRD_PARTY_LICENSES.md) |
 | `docker` | PRs (build and scan only), main, and `v*.*.*` tags (build, scan, push) | builds all four images; checks they run as non-root and declare a HEALTHCHECK; Trivy fails on fixable HIGH/CRITICAL findings; pushes to GHCR with an SBOM and provenance attestation |
-| `reconstruction-smoke` | PRs touching the pipeline, main, nightly | see [Smoke tests](#smoke-tests) |
+| `reconstruction-smoke` | PRs touching the pipeline or the backup scripts, main, nightly | see [Smoke tests](#smoke-tests). The stack smoke ends with a backup of the stack's real data and an isolated restore drill on which this build's API must boot ([section 8](#8-backups)). |
+| `ops` | PRs and main touching `infra/deploy`, `scripts/backup`, `scripts/deploy`, `scripts/ci` | shellcheck; `deploy.sh`'s control flow against stubs (`scripts/deploy/test-deploy.sh`: config validation, the rehearsal gate, automatic rollback, a failed rollback, the restore hint after a schema change, no `.env` secret in the output); the restore drill against good and corrupted backups (`scripts/backup/test-restore-drill.sh`) |
 | `deploy` | after `docker` succeeds on main (staging), or manually (production, rollback) | CI passed for the images' commit ([deploy gate](#deploy-gate)); the images exist; the deploy with automatic rollback; public health checks from outside |
 
 **Actions are pinned by commit SHA** (`uses: owner/action@<40-char sha> # vX.Y.Z`), not by tag. A tag can be moved
@@ -52,7 +53,7 @@ action, pin it the same way: `git ls-remote --tags https://github.com/<owner>/<a
 `^{}` line for annotated tags).
 
 **Branch protection (GitHub settings, not in the repository).** Require `frontend`, `backend`, `python`,
-`docker`, `reconstruction-smoke` and `security` on `main`. Because these workflows are path-filtered, mark them as
+`docker`, `reconstruction-smoke`, `security` and `ops` on `main`. Because these workflows are path-filtered, mark them as
 required only together with a branch ruleset that treats skipped workflows as passing, or drop the path filters.
 
 ### Deploy gate
@@ -223,9 +224,19 @@ No service reports healthy just because its process started.
 | keycloak | — | `:9000/health/ready` | Keycloak's own readiness check (database connected) |
 | postgres, minio, clamav | — | `pg_isready`, `mc ready local`, `clamdcheck.sh` | The service's own readiness check |
 
-DEGRADED (HTTP 200 on `/api/v1/health`) means the API works, but either the malware scanner is down (uploads are
-quarantined) or the processing queue is stalled (no worker is claiming jobs). It is visible on `/status`, in Grafana,
-and in the `ChayaQueueStalled` alert.
+DEGRADED (HTTP 200 on `/api/v1/health`) means the API works, but something it relies on is impaired:
+
+| Component | Required to serve? | DEGRADED when |
+|---|---|---|
+| `malwareScanner` | no | DOWN or DISABLED: uploads are quarantined, never accepted unscanned |
+| `worker` | no | DOWN: no worker polled for work or heartbeated within `chaya.health.worker-live-after` (3 min). Measured from `worker_presence` (V34), not inferred from the queue. |
+| `processing.status` | no | `NO_WORKER`: claimable queued work has a stage no live worker offers (`processing.unservedStages` names it, for example `POSE_ESTIMATION` on a host without a COLMAP worker); `STALLED`: work waited 15 min while nothing ran |
+| `vision` | no | DOWN: semantic search falls back and new POI embeddings wait. `NOT_CONFIGURED` does not degrade. |
+| `processing.staleRunningJobs` | — | informational: RUNNING jobs whose lease expired and that the lease enforcer has not failed yet |
+
+DOWN (503) is decided by the database, object storage and identity provider only. The report is public, so it carries
+status words, counts and stage names, never worker ids. It is visible on `/status`, in Grafana, and in the
+`ChayaNoLiveWorker`, `ChayaJobsStranded` and `ChayaQueueStalled` alerts.
 
 ## 7. Deploying and rolling back
 
@@ -235,15 +246,28 @@ approves it through the GitHub Environment protection.
 
 What `infra/deploy/deploy.sh <version>` does on the host:
 
-1. Pulls every image of that version. A bad tag fails here, before anything changes.
-2. Takes a pre-deploy `pg_dump` (the restore point).
-3. Runs `compose up -d`.
-4. Waits up to 10 minutes for postgres, keycloak, api, web and worker to be **healthy**.
-5. Applies the Keycloak settings.
-6. Checks `https://<api>/api/v1/health` (200) and `https://<app>/api/health` (200).
+1. Validates the configuration (`compose config --quiet`). A missing variable is named, its value is never printed,
+   and nothing has changed yet.
+2. Pulls every image of that version. A bad tag fails here, before anything changes.
+3. Takes a pre-deploy `pg_dump` (the restore point).
+4. **Migration rehearsal:** restores that dump into an isolated throwaway database (an `--internal` Docker network,
+   no ports, random credentials) and boots the **new** API image on it (`scripts/backup/restore-drill.sh` with
+   `DRILL_DB_ONLY=1`). Flyway applies the new migrations to a copy of production data and Hibernate validates the
+   mapping. If that fails, the deploy stops with nothing live changed (`rehearsal-failed` in `.deploy-history`).
+   `DEPLOY_SKIP_REHEARSAL=1` skips it for an emergency; the log says so. It costs one restore of the dump.
+5. Runs `compose up -d`.
+6. Waits up to 10 minutes for postgres, keycloak, api, web and worker to be **healthy**.
+7. Applies the Keycloak settings.
+8. Checks `https://<api>/api/v1/health` (200) and `https://<app>/api/health` (200).
 
 If any step after the switch fails, it **automatically rolls back** to the previous version in
-`.deployed-version`, waits for health again, and exits non-zero. History is kept in `.deploy-history`.
+`.deployed-version`, waits for health again, and exits non-zero. History is kept in `.deploy-history`. If the schema
+version moved during the failed deploy, the log prints the exact `restore.sh` command for the pre-deploy dump.
+
+**Fixed 2026-10-11:** until then a service that never became healthy did **not** trigger the rollback. `rollout` runs
+as an `if` condition, where bash suspends `set -e`, so a failed health wait fell through to the public checks, and the
+deploy was recorded as successful whenever those passed. The steps are now chained with `&&`, and
+`scripts/deploy/test-deploy.sh` covers the case (it failed 8 of 26 checks before the fix).
 
 **Manual rollback:** run the `deploy` workflow with the earlier version, or on the host run
 `./deploy.sh <previous-tag>`. Images are immutable, so this redeploys exactly what ran before. The schema stays
@@ -276,8 +300,11 @@ Schedule it daily with cron or a systemd timer, and alert if it fails.
 - **MinIO:** an additive mirror through the read-only account. Deletions in the live buckets do **not** propagate,
   so an accidental or malicious delete cannot also destroy the backup. PII staging objects are never copied, and
   rejected uploads are pruned from the mirror using the database (docs/backup-recovery.md).
-- **Verification:** `verify.sh` restores into a scratch database and checks a sample of objects against the
-  checksums the database recorded.
+- **Verification:** `restore-drill.sh` is the check that counts: it restores the dump **and** the object mirror into
+  a throwaway Postgres and MinIO on an isolated network, checks every referenced object by SHA-256, and boots the API
+  image on the result (docs/backup-recovery.md, "Restore drill"). Schedule it after each backup:
+  `... backup.sh && DRILL_API_IMAGE=<registry>/chaya-api:<deployed version> .../restore-drill.sh`. `verify.sh` is the
+  lighter check (scratch database on the live server, sampled objects in the mirror directory).
 - **Not covered by these scripts:**
   - Keycloak's database (users, credentials, sessions). It is in the same Postgres server, so dump it too:
     `docker compose --env-file .env -f docker-compose.yml exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" -d keycloak -Fc' > /srv/chaya-backups/keycloak-$(date -u +%Y%m%dT%H%M%SZ).dump`.
@@ -294,10 +321,12 @@ Schedule it daily with cron or a systemd timer, and alert if it fails.
 | Database lost | Provision a host (section 3) with the **same** `.env`. Start only postgres, then restore the latest verified dump. Deploy the recorded version. |
 | Objects lost | `scripts/backup/restore.sh minio --yes-replace-live-data`. Then run `verify.sh` against the current dump. |
 | Keycloak unavailable | The API answers `503 AUTHENTICATION_UNAVAILABLE` and readiness goes DOWN. Recover Keycloak or restore its dump. User sessions resume when it is back. |
-| Worker unavailable | Health shows DEGRADED with processing STALLED, and the queue waits. Restart the worker, then check `docker compose logs worker` and its health status. Jobs a worker was running when it died are failed as `WORKER_LOST` within 5 minutes, and can be retried from the operations dashboard. |
+| Worker unavailable | Health shows DEGRADED with `worker` DOWN (or processing `NO_WORKER` naming the stage nobody serves), and the operations dashboard lists each worker with its last contact. Restart the worker, then check `docker compose logs worker` and its health status. Jobs a worker was running when it died are failed as `WORKER_LOST` within the lease (5 min) plus one enforcer tick (30 s), and can be retried from the operations dashboard. The failed attempt stays on record. |
 | Host lost | Rebuild it (section 3), restore Postgres (both databases) and MinIO from off-site backups, then deploy the recorded version. |
 
-Every restore should end with `verify.sh`, a green `/api/v1/health`, and a note of what was restored and why.
+Before restoring, run `restore-drill.sh <dump>` on the chosen backup: it proves the backup restores without touching
+live data. Every restore should end with a green `/api/v1/health` (or DEGRADED for a known reason), and a note of what
+was restored and why.
 
 ## 10. GPU workers
 
@@ -385,8 +414,19 @@ first control-plane call); `npm audit` and `pip-audit` for both services: no fin
 against the upgraded API image and the pinned MinIO: readiness UP with every dependency UP, the worker ran the CPU
 stages through the real API, and the run stopped with a structured failure at the first GPU stage (1 passed).
 
+**Third pass, 2026-10-11 (operational reliability audit, docs/OPS_RELIABILITY_AUDIT_2026-10-11.md):**
+
+| What | Result |
+|---|---|
+| `scripts/deploy/test-deploy.sh` | 26 checks pass. Before the `rollout` fix (section 7), 8 failed: an unhealthy version was recorded as deployed. |
+| Stack smoke with the restore drill | Passed on this host: real API image built from this tree, Postgres, MinIO, ClamAV, Keycloak, real worker code. Then `backup.sh` (dump and object mirror) and `restore-drill.sh`: database restored in 3 s, objects in 4 s, **19/19** referenced objects matched their recorded SHA-256, and the API image booted on the restored data (Flyway V34 validated). No container or network was left behind. |
+| `scripts/backup/test-restore-drill.sh` | 7 checks pass: an intact backup passes; a corrupted object, a missing object and a dump that does not match its `.sha256` each fail, and the bad object is named. |
+| shellcheck | clean (`-S warning`) on `infra/deploy/*.sh`, `scripts/backup/*.sh`, `scripts/deploy/*.sh`, `scripts/ci/*.sh` (the committed LF versions) |
+
 **Not verified:**
 
+- The migration rehearsal (`deploy.sh` step 4) against a real host's dump and registry images. Its logic is tested with
+  stubs, and the drill it runs is tested on real data in the stack smoke.
 - A real deploy: `deploy.yml` and `deploy.sh` have never run against a host with public DNS, ACME certificates
   and GHCR images, and nor has the automatic rollback path. Do it on staging first, including one deliberate failed
   deploy to watch the rollback.
