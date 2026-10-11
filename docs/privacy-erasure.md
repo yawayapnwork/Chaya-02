@@ -48,7 +48,8 @@ There are no thumbnails. Neither the API nor the worker generates any. The viewe
 | `capture_media`, `capture_media_part` | **original filename**, checksums, object key | deleted | deleted |
 | `capture_measurement`, `capture_measurement_observation` | calibration measurements, their creator, and the pixels they were marked at | deleted | deleted |
 | `capture_calibration_attempt`, `coordinate_frame_measurement` | calibration attempts and frame-to-measurement links | deleted (also when only the frame or run is erased) | deleted |
-| `capture_hud_scene`, `capture_hud_pose_sample`, `capture_hud_quality_sample` | operator's walked path and frame-quality numbers | deleted | deleted |
+| `capture_hud_scene`, `capture_hud_pose_sample`, `capture_hud_quality_sample`, `capture_hud_surface_sample`, `capture_hud_tracking_event` | operator's walked path, surface points the device observed, tracking events, and frame-quality numbers | deleted | deleted |
+| `capture_plan` | scan plans, the evidence counts they were made from, and their creator | deleted | deleted |
 | `scan`, `pipeline_run`, `processing_job`, `pipeline_stage_run`, `processing_artifact` | processing metadata: commands, errors, object keys | deleted | deleted |
 | `pii_staging_purge`, `pii_staging_sweep` | purge records | deleted | deleted |
 | `scan_version`, `scan_version_artifact` | version lineage, alignment/splice reports, pins | deleted | deleted |
@@ -93,7 +94,7 @@ has no artifact cache.
 
 ```
 capture_session ──► capture_media ──► capture_media_part          (raw objects, multipart uploads)
-      │      └────► capture_hud_{scene,pose_sample,quality_sample}
+      │      └────► capture_hud_{scene,pose_sample,quality_sample,surface_sample,tracking_event}, capture_plan
       ▼
      scan ──► pipeline_run ──► processing_job ──► pipeline_stage_run ──► processing_artifact ──► objects (worker key, sealed key)
       │            │  ▲                                                     │      ├► pii_staging_purge

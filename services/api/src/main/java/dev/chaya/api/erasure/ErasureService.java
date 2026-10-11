@@ -479,6 +479,9 @@ public class ErasureService {
         n.put("coordinate_frame", u("DELETE FROM coordinate_frame WHERE id IN " + F));
         n.put("pipeline_run", u("DELETE FROM pipeline_run WHERE id IN " + R));
 
+        n.put("capture_plan", u("DELETE FROM capture_plan WHERE capture_session_id IN " + C));
+        n.put("capture_hud_tracking_event", u("DELETE FROM capture_hud_tracking_event WHERE capture_session_id IN " + C));
+        n.put("capture_hud_surface_sample", u("DELETE FROM capture_hud_surface_sample WHERE capture_session_id IN " + C));
         n.put("capture_hud_pose_sample", u("DELETE FROM capture_hud_pose_sample WHERE capture_session_id IN " + C));
         n.put("capture_hud_quality_sample", u("DELETE FROM capture_hud_quality_sample WHERE capture_session_id IN " + C));
         n.put("capture_hud_scene", u("DELETE FROM capture_hud_scene WHERE capture_session_id IN " + C));

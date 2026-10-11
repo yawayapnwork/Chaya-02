@@ -5,82 +5,62 @@ import { accessToken } from "./auth";
 import { publicConfig } from "./env";
 import { sseFrameData, splitSseFrames } from "./sse";
 
-// ---- scene (the room outline the operator draws once) -------------------------------------------------------
+import type {
+  EstimateBoundsResponse,
+  HudStatus,
+  PlanView,
+  PoseSample,
+  QualitySample,
+  ReconAssessment,
+  Scene,
+  SurfaceSampleWire,
+  TrackingEventWire,
+} from "./hud-types";
 
-export interface ScenePoint { x: number; y: number }
-export interface SceneSegment { a: ScenePoint; b: ScenePoint }
-export interface SceneDoorway { x: number; y: number; width: number; passageDegrees?: number | null }
-export interface Scene {
-  areas: ScenePoint[][];
-  walls?: SceneSegment[];
-  obstacles?: ScenePoint[][];
-  noGoZones?: ScenePoint[][];
-  doorways?: SceneDoorway[];
-}
+export type * from "./hud-types";
 
-export const setHudScene = (venueId: string, captureId: string, scene: Scene, config?: Record<string, number>) =>
-  api<void>(`/venues/${venueId}/captures/${captureId}/hud/scene`, {
+// ---- scene: a measured outline the operator enters, or bounds estimated from the reconnaissance walk -------------
+
+const hud = (venueId: string, captureId: string) => `/venues/${venueId}/captures/${captureId}/hud`;
+
+export const setHudScene = (venueId: string, captureId: string, scene: Scene, config?: Record<string, number>, frameId?: string) =>
+  api<void>(`${hud(venueId, captureId)}/scene`, {
     method: "PUT",
-    body: JSON.stringify({ scene, config: config ?? {} }),
+    body: JSON.stringify({ scene, config: config ?? {}, frameId: frameId ?? null }),
   });
 
-// ---- pose and quality samples --------------------------------------------------------------------------------
+export const estimateBounds = (venueId: string, captureId: string, frameId?: string) =>
+  api<EstimateBoundsResponse>(`${hud(venueId, captureId)}/scene/estimate`, {
+    method: "POST",
+    body: JSON.stringify({ frameId: frameId ?? null }),
+  });
 
-export interface PoseSample { capturedAtMs: number; x: number; y: number; yawDegrees?: number | null; source?: string }
-export interface QualitySample {
-  capturedAtMs: number;
-  blurScore: number;
-  brightnessMean: number;
-  shadowClipFraction: number;
-  highlightClipFraction: number;
-  motionScore: number | null;
-  duplicateFrame: boolean;
-  featureCount: number;
-  spacingMeters: number | null;
-  warnings: string[];
-}
+// ---- evidence: positions, surface observations, tracking events, frame quality --------------------------------------
 
 export const postPoses = (venueId: string, captureId: string, samples: PoseSample[]) =>
-  api<void>(`/venues/${venueId}/captures/${captureId}/hud/pose`, { method: "POST", body: JSON.stringify({ samples }) });
+  api<void>(`${hud(venueId, captureId)}/pose`, { method: "POST", body: JSON.stringify({ samples }) });
+
+export const postSurfaces = (venueId: string, captureId: string, samples: SurfaceSampleWire[]) =>
+  api<void>(`${hud(venueId, captureId)}/surface`, { method: "POST", body: JSON.stringify({ samples }) });
+
+export const postTrackingEvents = (venueId: string, captureId: string, events: TrackingEventWire[]) =>
+  api<void>(`${hud(venueId, captureId)}/tracking-events`, { method: "POST", body: JSON.stringify({ events }) });
 
 export const postQuality = (venueId: string, captureId: string, samples: QualitySample[]) =>
-  api<void>(`/venues/${venueId}/captures/${captureId}/hud/quality`, { method: "POST", body: JSON.stringify({ samples }) });
+  api<void>(`${hud(venueId, captureId)}/quality`, { method: "POST", body: JSON.stringify({ samples }) });
+
+// ---- reconnaissance and plans -----------------------------------------------------------------------------------------
+
+export const getReconnaissance = (venueId: string, captureId: string) =>
+  api<ReconAssessment>(`${hud(venueId, captureId)}/reconnaissance`);
+
+export const createScanPlan = (venueId: string, captureId: string, config?: Record<string, number>) =>
+  api<PlanView>(`${hud(venueId, captureId)}/plan`, { method: "POST", body: JSON.stringify({ config: config ?? null }) });
 
 // ---- status: the durable, poll-friendly view (also what the SSE stream carries) -------------------------------
 
-export interface Position { x: number; y: number; headingDegrees: number | null; asOfMs: number }
-export interface PathPoint { x: number; y: number }
-export interface UncoveredZone { centroidX: number; centroidY: number; areaM2: number; reason: string }
-export interface PlannedWaypoint {
-  order: number; x: number; y: number; yawDegrees: number; type: string; reason: string; expectedCoverageGainM2: number;
-}
-export interface QualitySummary {
-  sampleCount: number; avgBlurScore: number; avgBrightnessMean: number; duplicateFrameRate: number;
-  avgFeatureCount: number; avgSpacingMeters: number | null; lastSampleAtMs: number;
-}
-export interface ReshootRecommendation { reason: string; x: number | null; y: number | null }
-
-export interface HudStatus {
-  trackingAvailable: boolean;
-  trackingUnavailableReason: string | null;
-  currentPosition: Position | null;
-  pathSoFar: PathPoint[];
-  sceneSet: boolean;
-  coverageAvailable: boolean;
-  coverageUnavailableReason: string | null;
-  coveragePercent: number | null;
-  weightedCoveragePercent: number | null;
-  uncoveredAreaM2: number | null;
-  uncoveredZones: UncoveredZone[];
-  plannedPath: PlannedWaypoint[];
-  quality: QualitySummary | null;
-  warnings: string[];
-  reshootRecommendations: ReshootRecommendation[];
-  computedAt: string;
-}
-
 export const getHudStatus = (venueId: string, captureId: string) =>
-  api<HudStatus>(`/venues/${venueId}/captures/${captureId}/hud/status`);
+  api<HudStatus>(`${hud(venueId, captureId)}/status`);
 
 // ---- live status: Server-Sent Events, read by hand ------------------------------------------------------------
 //

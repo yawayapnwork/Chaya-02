@@ -25,6 +25,7 @@ final class Grid {
     static final int CORNER = 1;
     static final int DOORWAY = 2;
     static final int BOUNDARY = 4;
+    static final int UNOBSERVED = 8;
 
     static final int[] DI = {1, -1, 0, 0, 1, 1, -1, -1};
     static final int[] DJ = {0, 0, 1, -1, 1, -1, 1, -1};
@@ -265,6 +266,42 @@ final class Grid {
                 }
             });
         }
+    }
+
+    /** Raises the importance of every target cell in the region to at least its weight and flags it UNOBSERVED. */
+    int applyPriority(PriorityRegion region) {
+        int marked = 0;
+        List<Segment> segs = new ArrayList<>();
+        if (region.polyline() != null) {
+            List<Point> pl = region.polyline();
+            for (int k = 0; k < pl.size(); k++) {
+                segs.add(new Segment(pl.get(k), pl.get(Math.min(k + 1, pl.size() - 1))));
+            }
+        }
+        for (int c = 0; c < n; c++) {
+            if (!target[c]) {
+                continue;
+            }
+            double x = centerX(c), y = centerY(c);
+            boolean in;
+            if (region.polygon() != null) {
+                in = region.polygon().contains(x, y);
+            } else {
+                in = false;
+                for (Segment sg : segs) {
+                    if (Geometry.distancePointSegment(x, y, sg) <= region.radius()) {
+                        in = true;
+                        break;
+                    }
+                }
+            }
+            if (in) {
+                importance[c] = Math.max(importance[c], (float) region.weight());
+                cls[c] |= UNOBSERVED;
+                marked++;
+            }
+        }
+        return marked;
     }
 
     private interface CellAction {

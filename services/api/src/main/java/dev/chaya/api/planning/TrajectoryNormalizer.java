@@ -16,13 +16,17 @@ import java.util.List;
  *   <li>resample by arc length at exactly poseSpacing with linear interpolation;</li>
  *   <li>headings: if every kept sample has one, interpolate along the shortest arc; otherwise use the direction of travel.</li>
  * </ol>
+ *
+ * <p>A change of {@link TrajectorySample#segment()} is a tracking break: the first sample after it is always kept (the
+ * speed and jitter rules compare only samples of the same segment), nothing is interpolated across it, and its length is
+ * not counted. Each segment is resampled on its own and the pieces are concatenated in time order.
  */
 public final class TrajectoryNormalizer {
 
     public record Pose(double x, double y, double yaw) {}
 
     public record Result(List<Pose> poses, int inputSamples, int droppedNonFinite, int droppedOutOfOrder, int droppedSpeedSpikes,
-                         int droppedStationary, double lengthMeters, String yawSource) {}
+                         int droppedStationary, double lengthMeters, String yawSource, int segments) {}
 
     private TrajectoryNormalizer() {}
 
@@ -43,10 +47,17 @@ public final class TrajectoryNormalizer {
         }
         finite.sort(Comparator.comparingDouble(TrajectorySample::t)); // stable: equal times keep input order
 
-        List<TrajectorySample> kept = new ArrayList<>();
+        List<List<TrajectorySample>> pieces = new ArrayList<>();
+        List<TrajectorySample> kept = null;
         for (TrajectorySample s : finite) {
-            if (kept.isEmpty()) {
+            if (kept == null || s.segment() != kept.get(kept.size() - 1).segment()) {
+                if (kept != null && s.t() <= kept.get(kept.size() - 1).t()) {
+                    outOfOrder++;
+                    continue;
+                }
+                kept = new ArrayList<>();
                 kept.add(s);
+                pieces.add(kept);
                 continue;
             }
             TrajectorySample prev = kept.get(kept.size() - 1);
@@ -63,8 +74,18 @@ public final class TrajectoryNormalizer {
             }
         }
 
-        boolean observedYaw = !kept.isEmpty() && kept.stream().allMatch(s -> s.yawRadians() != null);
+        boolean observedYaw = !pieces.isEmpty() && pieces.stream().flatMap(List::stream).allMatch(s -> s.yawRadians() != null);
         List<Pose> poses = new ArrayList<>();
+        double length = 0;
+        for (List<TrajectorySample> piece : pieces) {
+            length += resample(piece, observedYaw, cfg, poses);
+        }
+        return new Result(List.copyOf(poses), input.size(), nonFinite, outOfOrder, spikes, stationary, length,
+            observedYaw ? "observed" : "derived-from-motion", pieces.size());
+    }
+
+    /** Resamples one unbroken piece at the pose spacing, appending to poses. Returns the piece's length. */
+    private static double resample(List<TrajectorySample> kept, boolean observedYaw, PlannerConfig cfg, List<Pose> poses) {
         double length = 0;
         if (kept.size() == 1) {
             TrajectorySample s = kept.get(0);
@@ -94,12 +115,11 @@ public final class TrajectoryNormalizer {
             }
             TrajectorySample last = kept.get(kept.size() - 1);
             Pose tail = poses.get(poses.size() - 1);
-            if (Math.hypot(last.x() - tail.x(), last.y() - tail.y()) > 1e-6) { // always end exactly where the lap ended
+            if (Math.hypot(last.x() - tail.x(), last.y() - tail.y()) > 1e-6) { // always end exactly where the piece ended
                 poses.add(new Pose(last.x(), last.y(), observedYaw ? Geometry.wrapAngle(yaw[yaw.length - 1]) : tail.yaw()));
             }
         }
-        return new Result(List.copyOf(poses), input.size(), nonFinite, outOfOrder, spikes, stationary, length,
-            observedYaw ? "observed" : "derived-from-motion");
+        return length;
     }
 
     private static Pose pose(TrajectorySample a, TrajectorySample b, double f, boolean observedYaw, double[] yaw, int i) {

@@ -19,7 +19,7 @@ import org.junit.jupiter.api.Test;
  */
 class CapturePathPlannerTest {
 
-    private static final Set<String> TYPES = Set.of("CORNER", "DOORWAY", "OCCLUSION", "BOUNDARY", "COVERAGE");
+    private static final Set<String> TYPES = Set.of("CORNER", "DOORWAY", "OCCLUSION", "BOUNDARY", "COVERAGE", "UNOBSERVED");
     private final CapturePathPlanner planner = new CapturePathPlanner();
 
     /** Properties that must hold for every plan, whatever the geometry. */

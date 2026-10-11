@@ -244,3 +244,78 @@ The complete table (all fixtures) is what the script prints. What it does and do
   budget because the planner's waypoints are close together; compare distance.
 - Two comparators are simple by design; this is not a comparison against every possible planner, and synthetic
   geometry is not evidence about real rooms. Field trials against real reconstructions are still to do.
+
+## 12. Reconnaissance, room bounds and priorities
+Automatic capture planning (docs/capture-hud.md) adds three inputs in front of the same planner. Code:
+`Reconnaissance`, `RoomBoundsEstimator`, `EstimatedScene`, `PriorityRegion`.
+
+**Trajectory segments.** `TrajectorySample.segment` marks tracking breaks. The normaliser resamples each segment on its
+own and never joins two: the first sample after a break is always kept, the speed and jitter rules compare samples of
+one segment only, and the length across a break is not counted. `Reconnaissance.trajectory` assigns segments from stored
+positions: a new one at every reported loss, every gap over 1.5 s between tracked samples, every change of source class,
+and between manual marks more than 60 s apart.
+
+**Bounds estimation.** A plan-view occupancy grid (`r_b` = 0.2 m) with free and occupied votes per cell:
+- every walked position clears a disc of 0.3 m (the operator's footprint), and so does the straight line between two
+  consecutive samples of one segment;
+- a WALL hit at `h` seen from camera position `o` clears the cells of the discrete line `o -> h` and votes `h`'s cell
+  occupied; a FLOOR hit clears its own cell; hits farther than 8 m are discarded;
+- two consecutive wall hits from origins within 0.5 m clear the quadrilateral between their rays when the hits lie on one
+  surface (normals within 25 degrees, hits at most 0.75 m apart) or, without normals, at most 0.3 m apart; between
+  same-surface hits the surface is voted occupied.
+
+A cell is occupied when `occ >= 1` and `2 occ >= free`, free when it has free votes, else unknown. The bounds are the
+4-connected free component containing the walk, closed with a 5 x 5 square (gaps up to two cells, never onto occupied
+cells). Holes enclosed by it are split: occupied cells are observed obstacle faces (unknown cells enclosed by those faces
+alone are the obstacle's solid interior); the remaining unknown pockets are **unobserved interior** (inside the room,
+not standable, not blocking sight, prioritised). The outer boundary is traced on cell edges and simplified with
+Douglas-Peucker (tolerance 0.75 `r_b`). Each boundary edge whose outside cell is, or touches, an occupied cell is
+observed; the rest is **frontier**: where observation stopped, not a wall.
+
+```
+confidence = boundaryObserved x interiorObserved x density
+boundaryObserved = observed boundary length / boundary length
+interiorObserved = 1 - unobserved interior area / area
+density          = min(1, wall observations / 12)
+```
+
+ESTIMATED requires confidence >= 0.75, boundaryObserved >= 0.85, at least 12 wall observations, and no frontier stretch
+of 0.8 m or more (an opening the room may continue through, such as a doorway or the end of a partition); otherwise
+LOW_CONFIDENCE, a lower bound of the room. Fewer than 1 m2 of free region, no walk, or no wall observation at all is
+NOT_ESTIMABLE. A measured outline is not estimated, only checked: walked positions more than 0.3 m outside it, observed
+walls more than 0.3 m outside it, and edges with no observed wall within 0.3 m are reported.
+
+**Priority regions.** Every frontier stretch becomes a band (cells within 0.75 m of it, importance at least 2.5) and every
+unobserved pocket a polygon (importance at least 2.0); cells in them are flagged UNOBSERVED. A waypoint with at least 25%
+of its gain there (after the doorway rule) is typed `UNOBSERVED`. Because the bounds include only observed floor,
+waypoints stand only where floor was observed; a plan looks past the frontier, and the next estimate grows the bounds.
+
+**Live assessment and progress.** `CapturePathPlanner.assess` is the baseline replay alone (no candidate search), with
+gaps labelled NOT_OBSERVED or INSUFFICIENTLY_OBSERVED. `CapturePathPlanner.progress` judges a stored plan against raw
+samples recorded after it (visit radius 0.5 m; heading within half the field of view when every sample has one) and
+re-checks each waypoint's standability and reachability in the current bounds.
+
+**Benchmark** (`scripts/benchmark-planner.sh --bounds`, `BoundsPlanningBenchmark`; Java 21, 18 cores, 2026-10-11).
+Walls are observed with `SyntheticRangeSensor`: a noise-free plan-view ray caster that pans the camera at 40 deg/s with
+7 rays 6 degrees apart per 2 Hz sample. Every route is measured on the TRUE room; "oracle" is the planner given the true
+room. Nothing here is field accuracy.
+
+| fixture | bounds | conf | IoU | precision | recall | wp | not standable in truth | true coverage % | oracle % |
+|---|---|--:|--:|--:|--:|--:|--:|--:|--:|
+| rectangular 8x6 | ESTIMATED | 0.99 | 0.94 | 1.00 | 0.94 | 9 | 0 | 88.8 | 95.2 |
+| rectangular, north wall never faced | LOW_CONFIDENCE | 0.56 | 0.42 | 1.00 | 0.42 | 7 | 0 | 64.9 | 93.0 |
+| rectangular, 6 observations only | LOW_CONFIDENCE | 0.03 | 0.27 | 1.00 | 0.27 | 7 | 0 | 70.8 | 95.2 |
+| L-shaped 9x8 | ESTIMATED | 1.00 | 0.93 | 1.00 | 0.93 | 11 | 0 | 88.5 | 94.3 |
+| slanted walls | ESTIMATED | 0.98 | 0.94 | 1.00 | 0.94 | 11 | 0 | 92.8 | 89.2 |
+| 10x6 + pillar, one side walked | LOW_CONFIDENCE | 0.69 | 0.53 | 1.00 | 0.53 | 10 | 0 | 60.6 | 93.1 |
+| 10x6 + partition, one side walked | LOW_CONFIDENCE | 0.91 | 0.44 | 1.00 | 0.44 | 8 | 0 | 50.2 | 92.1 |
+| office 16x10 + annex (cap 20) | LOW_CONFIDENCE | 0.46 | n/a | n/a | n/a | 20 | 0 | 56.3 | 49.4 |
+
+- Precision is 1.00 everywhere: the estimate never claimed floor outside the true room by more than a cell, and no
+  waypoint was placed where the true room has no standable floor.
+- Every case rated ESTIMATED has IoU >= 0.93; every partial view is LOW_CONFIDENCE. One estimate is not the room when
+  the walk could not see all of it; iterating (walk the plan looking around, re-estimate, re-plan) closed the gap:
+  north wall never faced: IoU 0.42 -> 0.94 (ESTIMATED) after 1 round; partition: 0.44 -> 0.51 -> 0.93 (ESTIMATED) after 2.
+- Estimation takes 1-4 ms per call on these rooms. On a 640-sample walk, `assess` (the live tick) took 26 ms against
+  37 ms for a full `plan`: the baseline replay dominates both.
+- The existing planner benchmark (section 11) is unchanged by these additions.

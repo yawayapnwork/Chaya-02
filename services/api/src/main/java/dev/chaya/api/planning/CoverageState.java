@@ -22,7 +22,7 @@ final class CoverageState {
 
     /** Marginal effect of adding a set of observations, computed without changing the state. */
     record Gain(double weighted, double coveredAreaM2, double doorway, double corner, double boundary, double plain, double shadow,
-                double redundancy, double newlyObservedShare) {}
+                double unobserved, double redundancy, double newlyObservedShare) {}
 
     /** Coverage figures for the current state. */
     record Raw(double targetAreaM2, double coveredAreaM2, double weightedFraction, double redundantFraction) {}
@@ -93,7 +93,7 @@ final class CoverageState {
 
     /** What adding these observations would change. shadow marks cells hidden from the recon lap (occlusion zones). */
     Gain gain(Visibility.Obs o, BitSet shadow) {
-        double weighted = 0, covered = 0, doorway = 0, corner = 0, boundary = 0, plain = 0, shadowGain = 0;
+        double weighted = 0, covered = 0, doorway = 0, corner = 0, boundary = 0, plain = 0, shadowGain = 0, unobserved = 0;
         double saturatedMass = 0, totalMass = 0;
         int fresh = 0, positive = 0;
         for (int k = 0; k < o.n; k++) {
@@ -124,8 +124,11 @@ final class CoverageState {
             if (shadow != null && shadow.get(c)) {
                 shadowGain += dg;
             }
+            if ((cls & Grid.UNOBSERVED) != 0) {
+                unobserved += dg;
+            }
         }
-        return new Gain(weighted, covered, doorway, corner, boundary, plain, shadowGain,
+        return new Gain(weighted, covered, doorway, corner, boundary, plain, shadowGain, unobserved,
             totalMass == 0 ? 0 : saturatedMass / totalMass, positive == 0 ? 0 : (double) fresh / positive);
     }
 

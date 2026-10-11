@@ -250,7 +250,7 @@ public final class PlannerBenchmark {
 
     // ---- a larger synthetic scene, benchmark only -----------------------------------------------------------------
 
-    private static PlanRequest office() {
+    static PlanRequest office() {
         Scene scene = new Scene(
             List.of(PlannerFixtures.rect(0, 0, 16, 10), PlannerFixtures.rect(16, 3, 22, 7)),
             List.of(PlannerFixtures.wall(16, 0, 16, 4.5), PlannerFixtures.wall(16, 5.5, 16, 10)),

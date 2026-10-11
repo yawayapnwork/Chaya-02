@@ -41,6 +41,36 @@ public final class CapturePathPlanner {
     /** Result of evaluating an arbitrary route with the same coverage metric the planner uses. */
     public record Evaluation(CoverageMetrics metrics, double routeLengthMeters, int reachableWaypoints, int skippedWaypoints) {}
 
+    /**
+     * What the trajectory walked so far has covered, by the planner's own metric, without planning a route: the cheap
+     * computation a live view can afford on every update.
+     *
+     * @param uncoveredRegions   reason NOT_OBSERVED (no view has seen most of it yet) or INSUFFICIENTLY_OBSERVED (seen,
+     *                           but not well enough or not from far enough apart to triangulate)
+     * @param trajectorySegments unbroken pieces of the trajectory; more than one means tracking was lost in between
+     */
+    public record Assessment(CoverageMetrics observed, List<UncoveredRegion> uncoveredRegions, int trajectorySegments,
+                             int trajectoryPoses, double trajectoryLengthMeters, String yawSource, List<String> warnings) {}
+
+    /**
+     * @param status     VISITED, SKIPPED (not visited, but a later waypoint was), PENDING, or UNREACHABLE (no longer
+     *                   standable or reachable on foot in the current scene, for example after the bounds were re-estimated)
+     * @param visitedAtT trajectory time of the first qualifying visit, or null
+     */
+    public record WaypointStatus(int order, double x, double y, double yawDegrees, String type, String status, Double visitedAtT,
+                                 Double closestApproachMeters) {}
+
+    /**
+     * Progress along a persisted plan, judged only from trajectory samples recorded after the plan was made.
+     *
+     * @param completion      NOT_STARTED, IN_PROGRESS or ROUTE_COMPLETE (every waypoint visited or unreachable)
+     * @param nextWalkMeters  walking distance on the standable grid from the current position to the next waypoint
+     * @param nextLeg         the walking path to the next waypoint; empty when there is none or it cannot be walked to
+     * @param headingVerified false when the trajectory carries no headings, so visits were judged on position alone
+     */
+    public record Progress(List<WaypointStatus> waypoints, Integer nextOrder, Double nextWalkMeters, List<PathPoint> nextLeg,
+                           int visited, int unreachable, String completion, boolean headingVerified) {}
+
     private static final class Context {
         PlannerConfig cfg;
         Grid grid;
@@ -251,6 +281,106 @@ public final class CapturePathPlanner {
         return metrics(ctx.baseline.raw(), ctx.trajectory.poses().size(), ctx.trajectory.lengthMeters(), 0);
     }
 
+    /** Coverage of the trajectory alone and what is still uncovered. No route is planned. */
+    public Assessment assess(PlanRequest request) {
+        Context ctx = prepare(request);
+        Grid g = ctx.grid;
+        boolean[] seen = new boolean[g.n];
+        for (int c = 0; c < g.n; c++) {
+            seen[c] = ctx.baseline.observationMass(c) > 0;
+        }
+        List<UncoveredRegion> uncovered = new ArrayList<>();
+        for (UncoveredRegion r : uncoveredRegions(g, ctx.baseline, seen, ctx)) {
+            uncovered.add(new UncoveredRegion(r.areaM2(), r.centroidX(), r.centroidY(), r.minX(), r.minY(), r.maxX(), r.maxY(),
+                r.reason().equals("BELOW_COVERAGE_TARGET") ? "INSUFFICIENTLY_OBSERVED" : "NOT_OBSERVED"));
+        }
+        return new Assessment(metrics(ctx.baseline.raw(), ctx.trajectory.poses().size(), ctx.trajectory.lengthMeters(), 0),
+            List.copyOf(uncovered), ctx.trajectory.segments(), ctx.trajectory.poses().size(), round(ctx.trajectory.lengthMeters()),
+            ctx.trajectory.yawSource(), List.copyOf(ctx.warnings));
+    }
+
+    /**
+     * Judges a persisted plan against what was walked after it was made. A waypoint is visited when a trajectory sample
+     * came within visitRadius of it and, if every sample has a heading, faced within half the field of view of the
+     * waypoint's heading. {@code current} is the request for the current scene and the full trajectory (it decides
+     * reachability and the current position); {@code sincePlan} are the samples recorded after the plan was made.
+     */
+    public Progress progress(PlanRequest current, List<Waypoint> planned, List<TrajectorySample> sincePlan, double visitRadius) {
+        Context ctx = prepare(current);
+        Grid g = ctx.grid;
+        // Raw samples, not resampled poses: standing still at a waypoint is exactly what the normaliser thins out.
+        List<TrajectorySample> visits = new ArrayList<>();
+        for (TrajectorySample s : sincePlan) {
+            if (Double.isFinite(s.t()) && Double.isFinite(s.x()) && Double.isFinite(s.y())
+                && (s.yawRadians() == null || Double.isFinite(s.yawRadians()))) {
+                visits.add(s);
+            }
+        }
+        visits.sort(java.util.Comparator.comparingDouble(TrajectorySample::t));
+        boolean headings = !visits.isEmpty() && visits.stream().allMatch(v -> v.yawRadians() != null);
+        double halfFov = ctx.cfg.fovRadians() / 2;
+        int n = planned.size();
+        Double[] visitT = new Double[n];
+        double[] closest = new double[n];
+        boolean[] reachable = new boolean[n];
+        int lastVisitedOrder = 0;
+        for (int i = 0; i < n; i++) {
+            Waypoint w = planned.get(i);
+            int c = g.cellOf(w.x(), w.y());
+            reachable[i] = c >= 0 && g.standable[c] && ctx.reachable[c];
+            closest[i] = Double.POSITIVE_INFINITY;
+            double yaw = Math.toRadians(w.yawDegrees());
+            for (TrajectorySample v : visits) {
+                double d = Math.hypot(v.x() - w.x(), v.y() - w.y());
+                closest[i] = Math.min(closest[i], d);
+                if (d <= visitRadius && (!headings || Geometry.angleDiff(v.yawRadians(), yaw) <= halfFov)) {
+                    visitT[i] = v.t();
+                    break;
+                }
+            }
+            if (visitT[i] != null) {
+                lastVisitedOrder = Math.max(lastVisitedOrder, w.order());
+            }
+        }
+        int visited = 0, unreachable = 0;
+        Integer next = null;
+        Waypoint nextWaypoint = null;
+        List<WaypointStatus> out = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            Waypoint w = planned.get(i);
+            String status;
+            if (visitT[i] != null) {
+                status = "VISITED";
+                visited++;
+            } else if (!reachable[i]) {
+                status = "UNREACHABLE";
+                unreachable++;
+            } else {
+                status = w.order() < lastVisitedOrder ? "SKIPPED" : "PENDING";
+                if (next == null) {
+                    next = w.order();
+                    nextWaypoint = w;
+                }
+            }
+            out.add(new WaypointStatus(w.order(), w.x(), w.y(), w.yawDegrees(), w.type(), status, visitT[i],
+                Double.isInfinite(closest[i]) ? null : round(closest[i])));
+        }
+        Double walk = null;
+        List<PathPoint> leg = List.of();
+        if (nextWaypoint != null) {
+            int dst = g.cellOf(nextWaypoint.x(), nextWaypoint.y());
+            List<Point> path = PathFinder.path(g, PathFinder.from(g, ctx.startCell), ctx.startCell, dst, ctx.startPoint,
+                new Point(nextWaypoint.x(), nextWaypoint.y()));
+            if (!path.isEmpty()) {
+                walk = round(PathFinder.length(path));
+                leg = path.stream().map(p -> new PathPoint(round(p.x()), round(p.y()))).toList();
+            }
+        }
+        String completion = n == 0 || visited + unreachable == n ? "ROUTE_COMPLETE"
+            : visits.isEmpty() ? "NOT_STARTED" : "IN_PROGRESS";
+        return new Progress(List.copyOf(out), next, walk, leg, visited, unreachable, completion, headings);
+    }
+
     // ---------------------------------------------------------------------------------------------------------------
 
     private Context prepare(PlanRequest request) {
@@ -258,6 +388,15 @@ public final class CapturePathPlanner {
         ctx.cfg = request.config();
         ctx.grid = Grid.build(request.scene(), ctx.cfg);
         ctx.warnings.addAll(ctx.grid.warnings);
+        for (PriorityRegion pr : request.priorityRegions()) {
+            if (!pr.isValid()) {
+                throw new PlanningException("INVALID_PRIORITY_REGION",
+                    "priorityRegions need a valid polygon, or a finite polyline with a radius of (0, 5] m, and a weight between 1 and 10");
+            }
+            if (ctx.grid.applyPriority(pr) == 0) {
+                ctx.warnings.add("a " + pr.kind() + " priority region contains no target cell of the scene and was ignored");
+            }
+        }
         ctx.vis = new Visibility(ctx.grid, ctx.cfg);
         ctx.trajectory = TrajectoryNormalizer.normalize(request.trajectory(), ctx.cfg);
         if (ctx.trajectory.poses().isEmpty()) {
@@ -422,7 +561,7 @@ public final class CapturePathPlanner {
         Gain gn = ch.gain;
         double total = Math.max(gn.weighted(), 1e-12);
         double doorwayShare = gn.doorway() / total, cornerShare = gn.corner() / total, shadowShare = gn.shadow() / total,
-            boundaryShare = gn.boundary() / total;
+            boundaryShare = gn.boundary() / total, unobservedShare = gn.unobserved() / total;
         Doorway nearDoor = null;
         for (Doorway d : ctx.grid.doorways) {
             if (Math.hypot(d.x() - ch.cand.x(), d.y() - ch.cand.y()) <= d.width() / 2 + 1.0) {
@@ -437,6 +576,9 @@ public final class CapturePathPlanner {
             why = nearDoor != null
                 ? "Doorway (" + fmt(nearDoor.width()) + " m wide) at (" + fmt(nearDoor.x()) + ", " + fmt(nearDoor.y()) + "): opens the view through it"
                 : "Covers the area around a doorway";
+        } else if (unobservedShare >= 0.25) {
+            type = "UNOBSERVED";
+            why = "Looks at an area the reconnaissance walk did not observe (" + pct(unobservedShare) + " of the gain), such as an unseen stretch of the room bounds";
         } else if (cornerShare >= 0.25) {
             type = "CORNER";
             why = "Corner coverage: " + pct(cornerShare) + " of the gain is at corners";

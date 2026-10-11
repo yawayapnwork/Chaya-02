@@ -220,9 +220,12 @@ table to `services/api/target/tenant-inventory.md` and fails if a table breaks t
 | `capture_hud_pose_sample` | NOT NULL | NOT NULL | — |
 | `capture_hud_quality_sample` | NOT NULL | NOT NULL | — |
 | `capture_hud_scene` | NOT NULL | NOT NULL | — |
+| `capture_hud_surface_sample` | NOT NULL | NOT NULL | — |
+| `capture_hud_tracking_event` | NOT NULL | NOT NULL | — |
 | `capture_measurement` | NOT NULL | NOT NULL | — |
 | `capture_measurement_observation` | NOT NULL | NOT NULL | — |
 | `capture_media` | NOT NULL | NOT NULL | — |
+| `capture_plan` | NOT NULL | NOT NULL | — |
 | `capture_session` | NOT NULL | NOT NULL | — |
 | `coordinate_frame` | NOT NULL | NOT NULL | — |
 | `erasure_request` | NOT NULL | NOT NULL | — |

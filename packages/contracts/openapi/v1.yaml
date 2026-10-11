@@ -1590,6 +1590,237 @@ paths:
       - ADMIN
       - VENUE_MANAGER
       - OPERATOR
+  /api/v1/venues/{venueId}/captures/{captureId}/hud/evidence:
+    get:
+      description: Readable in any capture state.
+      operationId: capturePlanEvidence
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: captureId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvidenceReport"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Malformed request: an unparseable parameter or body, or a\
+            \ failed validation (code BAD_REQUEST or an operation-specific code)"
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "The caller's roles do not allow this operation (empty body),\
+            \ or an operation-specific refusal (problem with a code)"
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Not found, or not visible to the caller's organization or\
+            \ venue (code NOT_FOUND)"
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      summary: "Audit view: evidence, every plan, and PREDICTED vs OBSERVED coverage\
+        \ kept apart"
+      tags:
+      - capture-plan-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
+      - OPERATOR
+  /api/v1/venues/{venueId}/captures/{captureId}/hud/plan:
+    get:
+      operationId: capturePlanCurrentPlan
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: captureId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlanWithProgress"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Malformed request: an unparseable parameter or body, or a\
+            \ failed validation (code BAD_REQUEST or an operation-specific code)"
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "The caller's roles do not allow this operation (empty body),\
+            \ or an operation-specific refusal (problem with a code)"
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: NO_PLAN
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      summary: The current scan plan and the progress made along it
+      tags:
+      - capture-plan-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
+      - OPERATOR
+    post:
+      description: Deterministic; the same planner as route-plan. Supersedes the previous
+        plan. The plan's coverage is PREDICTED; the coverage of positions recorded
+        before it is OBSERVED.
+      operationId: capturePlanCreatePlan
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: captureId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePlanRequest"
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlanView"
+          description: Created
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Malformed request: an unparseable parameter or body, or a\
+            \ failed validation (code BAD_REQUEST or an operation-specific code)"
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "The caller's roles do not allow this operation (empty body),\
+            \ or an operation-specific refusal (problem with a code)"
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Not found, or not visible to the caller's organization or\
+            \ venue (code NOT_FOUND)"
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: CAPTURE_NOT_CAPTURING
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "SCENE_NOT_SET, RECONNAISSANCE_INCOMPLETE, RECONNAISSANCE_NOT_STARTED,\
+            \ or planner input errors"
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: PLANNER_BUSY
+      security:
+      - bearerAuth: []
+      summary: Make (and persist) a scan plan from the current bounds and reconnaissance
+        walk
+      tags:
+      - capture-plan-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
+      - OPERATOR
   /api/v1/venues/{venueId}/captures/{captureId}/hud/pose:
     post:
       operationId: captureHudAddPoses
@@ -1734,6 +1965,77 @@ paths:
       - ADMIN
       - VENUE_MANAGER
       - OPERATOR
+  /api/v1/venues/{venueId}/captures/{captureId}/hud/reconnaissance:
+    get:
+      operationId: capturePlanReconnaissance
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: captureId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Assessment"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Malformed request: an unparseable parameter or body, or a\
+            \ failed validation (code BAD_REQUEST or an operation-specific code)"
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "The caller's roles do not allow this operation (empty body),\
+            \ or an operation-specific refusal (problem with a code)"
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Not found, or not visible to the caller's organization or\
+            \ venue (code NOT_FOUND)"
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      summary: "Whether the reconnaissance walk recorded so far can be planned from,\
+        \ and what is missing"
+      tags:
+      - capture-plan-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
+      - OPERATOR
   /api/v1/venues/{venueId}/captures/{captureId}/hud/scene:
     put:
       description: Validated immediately against the planner. See docs/capture-hud.md.
@@ -1815,6 +2117,89 @@ paths:
       summary: Set (or replace) the room outline the live HUD measures coverage against
       tags:
       - capture-hud-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
+      - OPERATOR
+  /api/v1/venues/{venueId}/captures/{captureId}/hud/scene/estimate:
+    post:
+      description: "Uses tracked positions and surface observations in one tracking\
+        \ frame. When bounds can be estimated they replace the capture's room outline\
+        \ (scene source ESTIMATED); otherwise nothing is stored and the response says\
+        \ why. The report includes confidence, the unobserved boundary (frontier),\
+        \ assumptions and missing observations."
+      operationId: capturePlanEstimate
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: captureId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EstimateBoundsRequest"
+      responses:
+        "200":
+          content: {}
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Malformed request: an unparseable parameter or body, or a\
+            \ failed validation (code BAD_REQUEST or an operation-specific code)"
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "The caller's roles do not allow this operation (empty body),\
+            \ or an operation-specific refusal (problem with a code)"
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Not found, or not visible to the caller's organization or\
+            \ venue (code NOT_FOUND)"
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: CAPTURE_NOT_CAPTURING
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      summary: Estimate the room's observable bounds from the reconnaissance evidence
+      tags:
+      - capture-plan-controller
       x-chaya-roles:
       - ADMIN
       - VENUE_MANAGER
@@ -1915,7 +2300,7 @@ paths:
           content:
             text/event-stream:
               schema:
-                $ref: "#/components/schemas/HudStatus"
+                type: string
           description: text/event-stream of HudStatus
         "400":
           content:
@@ -1960,6 +2345,167 @@ paths:
       summary: "The HUD status, pushed over Server-Sent Events as it changes"
       tags:
       - capture-hud-stream-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
+      - OPERATOR
+  /api/v1/venues/{venueId}/captures/{captureId}/hud/surface:
+    post:
+      description: Each carries the camera position it was observed from and the tracking
+        frame. The only evidence walls are estimated from.
+      operationId: capturePlanAddSurfaces
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: captureId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SurfaceBatchRequest"
+        required: true
+      responses:
+        "202":
+          description: Accepted
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "TOO_MANY_SAMPLES, INVALID_SURFACE_KIND, UNSUPPORTED_SURFACE_SOURCE,\
+            \ FRAME_ID_REQUIRED"
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "The caller's roles do not allow this operation (empty body),\
+            \ or an operation-specific refusal (problem with a code)"
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Not found, or not visible to the caller's organization or\
+            \ venue (code NOT_FOUND)"
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: CAPTURE_NOT_CAPTURING
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      summary: Append surface points the device's tracker reported (hit tests against
+        detected planes)
+      tags:
+      - capture-plan-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
+      - OPERATOR
+  /api/v1/venues/{venueId}/captures/{captureId}/hud/tracking-events:
+    post:
+      description: "Lost tracking, limited tracking, interrupted or ended AR sessions,\
+        \ camera permission denied, unsupported device, orientation changes, re-alignment.\
+        \ Positions are never joined across a loss."
+      operationId: capturePlanAddTrackingEvents
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: captureId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TrackingEventBatchRequest"
+        required: true
+      responses:
+        "202":
+          description: Accepted
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "TOO_MANY_SAMPLES, INVALID_TRACKING_STATE, INVALID_EVENT_SOURCE"
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "The caller's roles do not allow this operation (empty body),\
+            \ or an operation-specific refusal (problem with a code)"
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Not found, or not visible to the caller's organization or\
+            \ venue (code NOT_FOUND)"
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: CAPTURE_NOT_CAPTURING
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      summary: Append tracking state changes and session problems the client observed
+      tags:
+      - capture-plan-controller
       x-chaya-roles:
       - ADMIN
       - VENUE_MANAGER
@@ -7014,6 +7560,7 @@ components:
         sizeBytes:
           type: integer
           format: int64
+    Assessment: {}
     AttemptView:
       type: object
       properties:
@@ -7097,6 +7644,59 @@ components:
           format: double
       required:
       - floorId
+    BoundsView:
+      type: object
+      properties:
+        area:
+          type: array
+          items:
+            $ref: "#/components/schemas/PointDto"
+        areaM2:
+          type: number
+          format: double
+        assumptions:
+          type: array
+          items:
+            type: string
+        basis:
+          type: string
+        confidence:
+          type: number
+          format: double
+        confidenceParts:
+          $ref: "#/components/schemas/ConfidenceParts"
+        evidence:
+          $ref: "#/components/schemas/Evidence"
+        frameId:
+          type: string
+        frontier:
+          type: array
+          items:
+            $ref: "#/components/schemas/FrontierView"
+        frontierMeters:
+          type: number
+          format: double
+        issues:
+          type: array
+          items:
+            $ref: "#/components/schemas/Issue"
+        observedBoundaryMeters:
+          type: number
+          format: double
+        obstacles:
+          type: array
+          items:
+            type: array
+            items:
+              $ref: "#/components/schemas/PointDto"
+        status:
+          type: string
+        unobservedInterior:
+          type: array
+          items:
+            type: array
+            items:
+              $ref: "#/components/schemas/PointDto"
     CalibrateCapture:
       type: object
       properties:
@@ -7315,6 +7915,18 @@ components:
         trajectoryEvidence:
           type: number
           format: double
+    ConfidenceParts:
+      type: object
+      properties:
+        boundaryObserved:
+          type: number
+          format: double
+        density:
+          type: number
+          format: double
+        interiorObserved:
+          type: number
+          format: double
     Connection:
       type: object
       properties:
@@ -7478,6 +8090,14 @@ components:
           type: string
       required:
       - ttl
+    CreatePlanRequest:
+      type: object
+      properties:
+        config:
+          type: object
+          additionalProperties:
+            type: number
+            format: double
     CreateScan:
       type: object
       properties:
@@ -7724,6 +8344,79 @@ components:
         venueId:
           type: string
           format: uuid
+    EstimateBoundsRequest:
+      type: object
+      properties:
+        frameId:
+          type: string
+    Evidence:
+      type: object
+      properties:
+        fanFills:
+          type: integer
+          format: int32
+        floorObservations:
+          type: integer
+          format: int32
+        rejectedObservations:
+          type: integer
+          format: int32
+        walkSamples:
+          type: integer
+          format: int32
+        walkSegments:
+          type: integer
+          format: int32
+        walkedMeters:
+          type: number
+          format: double
+        wallObservations:
+          type: integer
+          format: int32
+    EvidenceReport:
+      type: object
+      properties:
+        bounds:
+          $ref: "#/components/schemas/BoundsView"
+        currentPlanProgress:
+          $ref: "#/components/schemas/Progress"
+        definitions:
+          type: object
+          additionalProperties:
+            type: string
+        frames:
+          type: array
+          items:
+            type: string
+        observedNow:
+          $ref: "#/components/schemas/ObservedCoverage"
+        plans:
+          type: array
+          items:
+            $ref: "#/components/schemas/PlanSummary"
+        poseSamplesBySource:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int32
+        qualitySamples:
+          type: integer
+          format: int32
+        reconnaissance: {}
+        sceneFrameId:
+          type: string
+        sceneSource:
+          type: string
+        surfaceSamplesByKind:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int32
+        trackingEventsByState:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int32
     Exchange:
       type: object
       properties:
@@ -7992,6 +8685,25 @@ components:
         lastRegionRescanAt:
           type: string
           format: date-time
+    FrontierView:
+      type: object
+      properties:
+        lengthMeters:
+          type: number
+          format: double
+        midX:
+          type: number
+          format: double
+        midY:
+          type: number
+          format: double
+        outwardDegrees:
+          type: number
+          format: double
+        polyline:
+          type: array
+          items:
+            $ref: "#/components/schemas/PointDto"
     GravitySpec:
       type: object
       properties:
@@ -8049,10 +8761,20 @@ components:
     HudStatus:
       type: object
       properties:
+        bounds:
+          $ref: "#/components/schemas/BoundsView"
+        completion:
+          type: string
         computedAt:
           type: string
           format: date-time
         coverageAvailable:
+          type: boolean
+        coverageBasis:
+          type: string
+        coverageBasisDetail:
+          type: string
+        coverageLive:
           type: boolean
         coveragePercent:
           type: number
@@ -8061,24 +8783,51 @@ components:
           type: string
         currentPosition:
           $ref: "#/components/schemas/PositionView"
+        excludedOtherFramePositions:
+          type: integer
+          format: int32
+        lastTrackingEvent:
+          type: string
+        lastTrackingEventAtMs:
+          type: integer
+          format: int64
+        nextWaypoint:
+          $ref: "#/components/schemas/NextWaypointView"
         pathSoFar:
           type: array
           items:
             $ref: "#/components/schemas/PathPointView"
+        plan:
+          $ref: "#/components/schemas/PlanStatusView"
         plannedPath:
           type: array
           items:
             $ref: "#/components/schemas/PlannedWaypointView"
+        plannedPathKind:
+          type: string
         quality:
           $ref: "#/components/schemas/QualitySummaryView"
+        qualityFlags:
+          type: array
+          items:
+            type: string
+        reconnaissance: {}
         reshootRecommendations:
           type: array
           items:
             $ref: "#/components/schemas/ReshootRecommendationView"
+        scene:
+          $ref: "#/components/schemas/SceneDto"
+        sceneFrameId:
+          type: string
         sceneSet:
           type: boolean
+        sceneSource:
+          type: string
         trackingAvailable:
           type: boolean
+        trackingState:
+          type: string
         trackingUnavailableReason:
           type: string
         uncoveredAreaM2:
@@ -8168,6 +8917,13 @@ components:
           type: integer
           format: int64
         stage:
+          type: string
+    Issue:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
           type: string
     Job:
       type: object
@@ -8477,6 +9233,32 @@ components:
           items:
             type: integer
             format: int32
+    NextWaypointView:
+      type: object
+      properties:
+        leg:
+          type: array
+          items:
+            $ref: "#/components/schemas/PathPointView"
+        order:
+          type: integer
+          format: int32
+        reason:
+          type: string
+        type:
+          type: string
+        walkMeters:
+          type: number
+          format: double
+        x:
+          type: number
+          format: double
+        "y":
+          type: number
+          format: double
+        yawDegrees:
+          type: number
+          format: double
     ObservationInput:
       type: object
       properties:
@@ -8514,6 +9296,27 @@ components:
         v:
           type: number
           format: double
+    ObservedCoverage:
+      type: object
+      properties:
+        basis:
+          type: string
+        coverageKind:
+          type: string
+        importedMeters:
+          type: number
+          format: double
+        interpolatedMeters:
+          type: number
+          format: double
+        metrics:
+          $ref: "#/components/schemas/CoverageMetrics"
+        trackedMeters:
+          type: number
+          format: double
+        trajectorySegments:
+          type: integer
+          format: int32
     ObservedRegionDto:
       type: object
       properties:
@@ -8575,6 +9378,11 @@ components:
     PathPointView:
       type: object
       properties:
+        kind:
+          type: string
+        segment:
+          type: integer
+          format: int32
         x:
           type: number
           format: double
@@ -8592,6 +9400,46 @@ components:
         ownerVersionId:
           type: string
           format: uuid
+    PlanEvidence:
+      type: object
+      properties:
+        excludedOtherFramePositions:
+          type: integer
+          format: int32
+        firstCapturedAtMs:
+          type: integer
+          format: int64
+        frameId:
+          type: string
+        lastCapturedAtMs:
+          type: integer
+          format: int64
+        maxPoseSampleId:
+          type: integer
+          format: int64
+        maxQualitySampleId:
+          type: integer
+          format: int64
+        maxSurfaceSampleId:
+          type: integer
+          format: int64
+        maxTrackingEventId:
+          type: integer
+          format: int64
+        poseSamplesBySource:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int32
+        qualitySamples:
+          type: integer
+          format: int32
+        surfaceSamples:
+          type: integer
+          format: int32
+        trackingEvents:
+          type: integer
+          format: int32
     PlanResult:
       type: object
       properties:
@@ -8627,6 +9475,101 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/PlannedCaptureWaypoint"
+    PlanStatusView:
+      type: object
+      properties:
+        coverageKind:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        observedAtPlanCoveragePercent:
+          type: number
+          format: double
+        predictedCoveragePercent:
+          type: number
+          format: double
+        unreachable:
+          type: integer
+          format: int32
+        version:
+          type: integer
+          format: int32
+        visited:
+          type: integer
+          format: int32
+        waypoints:
+          type: integer
+          format: int32
+    PlanSummary:
+      type: object
+      properties:
+        coverageKind:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+        observedAtPlanCoveragePercent:
+          type: number
+          format: double
+        predictedCoveragePercent:
+          type: number
+          format: double
+        routeMeters:
+          type: number
+          format: double
+        sceneSource:
+          type: string
+        supersededAt:
+          type: string
+          format: date-time
+        version:
+          type: integer
+          format: int32
+        waypoints:
+          type: integer
+          format: int32
+    PlanView:
+      type: object
+      properties:
+        bounds:
+          $ref: "#/components/schemas/BoundsView"
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+        evidence:
+          $ref: "#/components/schemas/PlanEvidence"
+        frameId:
+          type: string
+        observedAtPlan:
+          $ref: "#/components/schemas/CoverageMetrics"
+        plannedAfterMs:
+          type: integer
+          format: int64
+        predicted:
+          $ref: "#/components/schemas/PlanResult"
+        reconnaissance: {}
+        scene:
+          $ref: "#/components/schemas/SceneDto"
+        sceneSource:
+          type: string
+        supersededAt:
+          type: string
+          format: date-time
+        version:
+          type: integer
+          format: int32
+    PlanWithProgress:
+      type: object
+      properties:
+        plan:
+          $ref: "#/components/schemas/PlanView"
+        progress:
+          $ref: "#/components/schemas/Progress"
     PlannedCaptureWaypoint:
       type: object
       properties:
@@ -8671,6 +9614,8 @@ components:
           type: integer
           format: int32
         reason:
+          type: string
+        status:
           type: string
         type:
           type: string
@@ -8825,6 +9770,10 @@ components:
         capturedAtMs:
           type: integer
           format: int64
+        frameAlignment:
+          type: string
+        frameId:
+          type: string
         source:
           type: string
         x:
@@ -8845,6 +9794,10 @@ components:
         headingDegrees:
           type: number
           format: double
+        kind:
+          type: string
+        source:
+          type: string
         x:
           type: number
           format: double
@@ -8916,6 +9869,33 @@ components:
         scanId:
           type: string
           format: uuid
+    Progress:
+      type: object
+      properties:
+        completion:
+          type: string
+        headingVerified:
+          type: boolean
+        nextLeg:
+          type: array
+          items:
+            $ref: "#/components/schemas/PathPoint"
+        nextOrder:
+          type: integer
+          format: int32
+        nextWalkMeters:
+          type: number
+          format: double
+        unreachable:
+          type: integer
+          format: int32
+        visited:
+          type: integer
+          format: int32
+        waypoints:
+          type: array
+          items:
+            $ref: "#/components/schemas/WaypointStatus"
     QualityBatchRequest:
       type: object
       properties:
@@ -9639,6 +10619,8 @@ components:
           additionalProperties:
             type: number
             format: double
+        frameId:
+          type: string
         scene:
           $ref: "#/components/schemas/SceneDto"
       required:
@@ -9803,6 +10785,43 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/StageTime"
+    SurfaceBatchRequest:
+      type: object
+      properties:
+        samples:
+          type: array
+          items:
+            $ref: "#/components/schemas/SurfaceSampleDto"
+          minItems: 1
+      required:
+      - samples
+    SurfaceSampleDto:
+      type: object
+      properties:
+        capturedAtMs:
+          type: integer
+          format: int64
+        frameId:
+          type: string
+        hitX:
+          type: number
+          format: double
+        hitY:
+          type: number
+          format: double
+        kind:
+          type: string
+        normalDegrees:
+          type: number
+          format: double
+        originX:
+          type: number
+          format: double
+        originY:
+          type: number
+          format: double
+        source:
+          type: string
     TermCount:
       type: object
       properties:
@@ -9816,6 +10835,30 @@ components:
           type: string
           format: date-time
         term:
+          type: string
+    TrackingEventBatchRequest:
+      type: object
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/TrackingEventDto"
+          minItems: 1
+      required:
+      - events
+    TrackingEventDto:
+      type: object
+      properties:
+        capturedAtMs:
+          type: integer
+          format: int64
+        detail:
+          type: string
+        frameId:
+          type: string
+        source:
+          type: string
+        state:
           type: string
     UncoveredRegion:
       type: object
@@ -9940,6 +10983,31 @@ components:
           type: number
           format: double
         z:
+          type: number
+          format: double
+    WaypointStatus:
+      type: object
+      properties:
+        closestApproachMeters:
+          type: number
+          format: double
+        order:
+          type: integer
+          format: int32
+        status:
+          type: string
+        type:
+          type: string
+        visitedAtT:
+          type: number
+          format: double
+        x:
+          type: number
+          format: double
+        "y":
+          type: number
+          format: double
+        yawDegrees:
           type: number
           format: double
     WithdrawRequest:
