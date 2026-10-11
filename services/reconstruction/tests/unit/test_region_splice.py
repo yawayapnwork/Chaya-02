@@ -132,10 +132,11 @@ def test_splice_replaces_the_overlapping_geometry_and_nothing_else():
     v_in = point_in_polygon(venue.positions[:, :2].astype(np.float64), ROOM_POLYGON)
     r_in = point_in_polygon(rescan.positions[:, :2].astype(np.float64), ROOM_POLYGON)
 
-    # removed: exactly the venue Gaussians inside the polygon and within the re-scan's height range (+ margin): the floor
-    # and the 0.8 m box, which is all the re-scan holds inside the polygon
+    # removed: exactly the venue Gaussians inside the polygon and within the replaced volume. The re-scan holds the floor and
+    # the 0.8 m box there, so the volume is the minimum height above the floor (2 m), not the box top + margin
     z_top = report["volume"]["z_max_m"]
-    assert z_top == pytest.approx(0.8 + SPLICE["z_margin_m"], abs=0.01)
+    assert report["volume"]["observed_z_m"][1] == pytest.approx(0.8, abs=0.01)
+    assert z_top == pytest.approx(2.0, abs=0.01) and report["volume"]["z_max_from"] == "min_height"
     expected_removed = np.flatnonzero(v_in & (venue.positions[:, 2] <= z_top))
     np.testing.assert_array_equal(result.removed_global_indices, expected_removed)
     # unrelated geometry: the ceiling inside the polygon survives
@@ -234,3 +235,62 @@ def test_splice_refuses_an_empty_region_or_one_entirely_outside_the_polygon():
 def test_distance_to_polygon_edge():
     d = distance_to_polygon_edge(np.array([[0.5, 0.5], [0.5, 0.1], [2.0, 0.5]]), SQUARE)
     np.testing.assert_allclose(d, [0.5, 0.1, 1.0])
+
+
+# ---- unintended deletion: nothing is removed that the re-scan did not observe ------------------------------------------
+
+
+def test_a_rescan_covering_half_the_region_is_refused_instead_of_deleting_the_other_half():
+    """The operator walked only the near half of the polygon. Before the coverage gate the splice succeeded, with a measured
+    (perfect) seam on the near side, and every venue Gaussian in the far half was deleted with nothing in its place."""
+    venue = _venue_and_ceiling()
+    points = room(2, density=300)
+    near_half = scene_cloud(points[(points[:, 1] < 2.0) & (points[:, 2] < 2.0)], seed=2)
+    with pytest.raises(SpliceRejected, match="observed nothing") as rejected:
+        splice_region(venue, near_half, ROOM_POLYGON, Similarity.identity(), **SPLICE)
+    assert "%" in str(rejected.value)
+
+
+def test_a_gap_along_the_region_edge_is_refused_as_an_unmeasured_seam():
+    """The re-scan stops 30 cm short of the polygon edge all round: a ring of venue floor is deleted. The ring is too thin for
+    the coverage gate (the cells next to it are observed) but the seam cannot be measured where the venue had geometry."""
+    venue = _venue_and_ceiling()
+    points = room(2, density=300)
+    inner = (points[:, 0] > 1.3) & (points[:, 0] < 2.7) & (points[:, 1] > 0.8) & (points[:, 1] < 3.2) & (points[:, 2] < 2.0)
+    with pytest.raises(SpliceRejected, match="not measured|observed nothing"):
+        splice_region(venue, scene_cloud(points[inner], seed=2), ROOM_POLYGON, Similarity.identity(), **SPLICE)
+
+
+def test_a_complete_rescan_reports_full_coverage_and_its_invariants():
+    venue = _venue_and_ceiling()
+    rescan = room(2, density=300)
+    result = splice_region(venue, scene_cloud(rescan[rescan[:, 2] < 2.0], seed=2), ROOM_POLYGON, Similarity.identity(), **SPLICE)
+    report = result.report
+    assert report["coverage"]["uncovered_fraction"] <= 0.01
+    assert report["seam"]["measured"] and report["seam"]["removed_in_band"] > 0
+    assert report["invariants"] == {"kept_outside_volume_unchanged": True, "added_inside_volume": True}
+    assert report["net_change"] == report["added_from_region"] - report["removed_from_global"]
+
+
+def test_removed_furniture_is_removed_from_the_venue():
+    """A box that was taken away: the re-scan sees only floor where it stood. Before the minimum volume height the replaced
+    volume ended 0.2 m above that floor, and 136 Gaussians of the old box were kept standing (and stayed an obstacle in the
+    re-baked navmesh). Now it is gone, and removing it is a change, not a hole: the floor under it was observed."""
+    venue = _venue_and_ceiling()
+    points = room(2, density=300)
+    box = (points[:, 0] >= 1.5) & (points[:, 0] <= 2.5) & (points[:, 1] >= 1.0) & (points[:, 1] <= 1.6) & (points[:, 2] > 0.01)
+    rescan = scene_cloud(points[~box & (points[:, 2] < 2.0)], seed=2)
+    result = splice_region(venue, rescan, ROOM_POLYGON, Similarity.identity(), **SPLICE)
+    assert result.report["coverage"]["uncovered_removed"] == 0
+    merged = result.merged.positions.astype(np.float64)
+    gone = (merged[:, 0] > 1.55) & (merged[:, 0] < 2.45) & (merged[:, 1] > 1.05) & (merged[:, 1] < 1.55) & (merged[:, 2] > 0.1) & (merged[:, 2] < 0.85)
+    assert not gone.any()
+
+
+def test_coverage_counts_only_removed_geometry_without_an_observation_nearby():
+    from chaya_worker.region_splice import coverage
+
+    removed = np.array([[0.1, 0.1, 0], [0.6, 0.1, 0], [2.0, 2.0, 0], [2.1, 2.1, 0]])
+    added = np.array([[0.3, 0.1, 0]])  # cell (1, 0): its neighbours are cells 0..2 in x and -1..1 in y
+    c = coverage(removed, added, 0.25)
+    assert c["uncovered_removed"] == 2 and c["uncovered_cells"] == 1 and c["uncovered_fraction"] == 0.5

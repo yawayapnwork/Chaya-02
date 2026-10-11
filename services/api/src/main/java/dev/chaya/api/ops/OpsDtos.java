@@ -134,7 +134,8 @@ public final class OpsDtos {
                          UUID runId, String runStatus, String runFailureStage, String runFailureCode, Instant runFinishedAt,
                          UUID resultVersionId, Integer resultVersionNumber, String resultVersionStatus,
                          Double alignmentConfidence, Double alignmentResidualM, List<String> changedArtifactKinds,
-                         Instant finalizedAt) {}
+                         Instant finalizedAt, boolean resultVersionCurrent, Instant rejectedAt, String rejectionReason,
+                         List<String> failedAlignmentGates, int stagesCompleted, int stagesTotal, String currentStage) {}
 
     public record Rescans(List<Rescan> rescans, Instant asOf) {}
 

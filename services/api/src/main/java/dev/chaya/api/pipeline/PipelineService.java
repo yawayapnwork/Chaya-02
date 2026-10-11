@@ -203,9 +203,15 @@ public class PipelineService {
         return runId;
     }
 
-    /** Re-queues the stage a FAILED run stopped at, with a fresh time budget. */
+    /**
+     * Re-queues the stage a FAILED run stopped at, with a fresh time budget. A run whose stages all succeeded but whose
+     * version could not be published (finishRun) is not re-run: only the publication is tried again, so a retry never
+     * produces a second navmesh and set of graphs for the same version (which the version's own consistency check would
+     * then refuse forever) and is idempotent. A re-scan whose parent is no longer what its floor publishes is refused: its
+     * version could never be published (PARENT_NOT_CURRENT).
+     */
     public RunView retry(Actor actor, UUID venueId, UUID scanId) {
-        tx.executeWithoutResult(s -> {
+        Runnable afterCommit = tx.execute(s -> {
             RunRow run = lockRunByScan(scanId, venueId);
             if (!run.status().equals("FAILED")) {
                 throw new ApiException(HttpStatus.CONFLICT, "RUN_NOT_RETRYABLE", "the pipeline run is " + run.status() + "; only a FAILED run can be retried");
@@ -215,7 +221,27 @@ public class PipelineService {
                 throw new ApiException(HttpStatus.CONFLICT, "RUN_NOT_RETRYABLE", "this re-scan's alignment was rejected and its "
                     + "version is final; start a new re-scan (and re-capture or re-calibrate the region) instead");
             }
+            if (ScanVersionService.VERSION_SUPERSEDED.equals(jdbc.sql("SELECT failure_code FROM pipeline_run WHERE id = :r")
+                    .param("r", run.id()).query(String.class).single())) {
+                throw new ApiException(HttpStatus.CONFLICT, "RUN_NOT_RETRYABLE", "this run's version was created before the one its "
+                    + "floor now publishes and can never be published; reconstruct or re-scan again instead");
+            }
+            if (run.incremental()) {
+                requireRescanParentCurrent(run);
+            }
             JobStage stage = JobStage.valueOf(run.failureStage());
+            if (publicationOnlyFailed(run, stage)) {
+                jdbc.sql("UPDATE pipeline_run SET status = 'RUNNING', finished_at = NULL, failure_stage = NULL, failure_code = NULL, "
+                        + "failure_message = NULL WHERE id = :r").param("r", run.id()).update();
+                audit.success(actor, venueId, "pipeline.retry", "pipeline_run", run.id(),
+                    Map.of("stage", stage.name(), "publicationOnly", true));
+                String ended = finishRun(actor, run, "SUCCEEDED", "FINAL", null, null, null);
+                if ("SUCCEEDED".equals(ended)) {
+                    completeCapture(run);
+                    return () -> purgePii(run, "run-succeeded", false);
+                }
+                return () -> { };
+            }
             if (needsPurgedPii(run, stage)) {
                 throw new ApiException(HttpStatus.CONFLICT, "PII_STAGING_PURGED", "the unanonymised frames " + stage
                     + " needs were deleted under the PII staging retention policy (chaya.pipeline.pii-staging-retention); "
@@ -231,8 +257,29 @@ public class PipelineService {
                     + "failure_message = NULL, deadline_at = now() + make_interval(secs => time_budget_seconds) WHERE id = :r")
                 .param("r", run.id()).update();
             audit.success(actor, venueId, "pipeline.retry", "pipeline_run", run.id(), Map.of("stage", stage.name()));
+            return () -> { };
         });
+        afterCommit.run();
         return runView(scanId).orElseThrow();
+    }
+
+    /** The run stopped at its last stage, and that stage succeeded: what failed was the publication of its version. */
+    private boolean publicationOnlyFailed(RunRow run, JobStage failedStage) {
+        JobStage last = run.stages().get(run.stages().size() - 1);
+        return run.scanVersionId() != null && failedStage == last
+            && latestJob(run.id(), last).map(j -> j.status().equals("SUCCEEDED")).orElse(false);
+    }
+
+    /** 409 PARENT_NOT_CURRENT when the re-scan's parent is no longer the version its floor publishes. */
+    private void requireRescanParentCurrent(RunRow run) {
+        record Lineage(UUID floorId, UUID parentId) {}
+        Lineage l = jdbc.sql("SELECT floor_id, parent_version_id FROM scan_version WHERE id = :v").param("v", run.scanVersionId())
+            .query((rs, i) -> new Lineage(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class))).single();
+        versions.currentOf(l.floorId()).filter(current -> !current.equals(l.parentId())).ifPresent(current -> {
+            throw new ApiException(HttpStatus.CONFLICT, ScanVersionService.PARENT_NOT_CURRENT, "this re-scan replaces a region of "
+                + "version " + l.parentId() + ", but its floor now publishes " + current + "; it could never be published. Start a "
+                + "re-scan of the current version instead");
+        });
     }
 
     /** Stops a RUNNING run: cancels its active job, removes PII staging objects and fails the capture. */
@@ -612,6 +659,9 @@ public class PipelineService {
     }
 
     static final String ALIGNMENT_REJECTED = "ALIGNMENT_REJECTED";
+    /** Failures a retry cannot fix: the version was rejected, or it can no longer be published over what its floor publishes. */
+    static final Set<String> PERMANENT_FAILURES = Set.of(ALIGNMENT_REJECTED, ScanVersionService.PARENT_NOT_CURRENT,
+        ScanVersionService.VERSION_SUPERSEDED);
     private static final Set<String> ALIGNMENT_METHODS = Set.of("FEATURE_RANSAC_ICP", "DIRECT_CANONICAL_ICP", "FEATURE_SIMILARITY_ICP");
 
     /**
@@ -935,6 +985,12 @@ public class PipelineService {
                 return p;
             }
         }
+        if (stage == JobStage.REGION_SPLICE && run.incremental() && kinds.contains("SPLICE_REPORT") && kinds.contains("SPLAT_MERGED")) {
+            OutputProblem p = spliceLineageProblem(run, first(stored, "SPLICE_REPORT"), first(stored, "SPLAT_MERGED"));
+            if (p != null) {
+                return p;
+            }
+        }
         List<String> missing = PipelineDefinition.missingOutputs(stage, kinds);
         if (!missing.isEmpty()) {
             return new OutputProblem("STAGE_OUTPUT_MISSING", stage + " reported success without " + String.join(", ", missing)
@@ -1019,6 +1075,47 @@ public class PipelineService {
 
     private static boolean finiteNumber(Object v) {
         return v instanceof Number n && Double.isFinite(n.doubleValue());
+    }
+
+    /**
+     * SPLICE_REPORT in the worker's shape (chaya_worker.stages.region_splice) is the merged cloud's provenance, and the
+     * version's lineage rests on it, so it is checked rather than copied: it must name this run's version, have spliced
+     * exactly the cloud the parent version pinned (artifact id and SHA-256, the GLOBAL_CLOUD this run was given), name the
+     * SPLAT_MERGED this report published as its output, and have added something. A SPLAT_MERGED that is the parent's
+     * cloud byte for byte means nothing was spliced (a real splice reorders and replaces Gaussians), and is refused too:
+     * a re-scan must never be published as processed while carrying the parent's geometry.
+     */
+    private OutputProblem spliceLineageProblem(RunRow run, ArtifactReport report, ArtifactReport merged) {
+        OutputProblem[] unreadable = new OutputProblem[1];
+        Object raw = readDocument(report, unreadable);
+        if (unreadable[0] != null) {
+            return unreadable[0];
+        }
+        InputRef parent = globalCloudInput(run.scanVersionId()).orElse(null);
+        Map<?, ?> doc = raw instanceof Map<?, ?> m ? m : Map.of();
+        Map<?, ?> inputs = doc.get("inputs") instanceof Map<?, ?> m ? m : Map.of();
+        Map<?, ?> global = inputs.get("global_cloud") instanceof Map<?, ?> m ? m : Map.of();
+        Map<?, ?> output = doc.get("output") instanceof Map<?, ?> m ? m : Map.of();
+        Map<?, ?> source = doc.get("source") instanceof Map<?, ?> m ? m : Map.of();
+        String problem = null;
+        if (parent == null) {
+            problem = "the parent version pins no cloud to splice into";
+        } else if (!run.scanVersionId().toString().equals(String.valueOf(source.get("scan_version_id")))) {
+            problem = "the report names scan version " + source.get("scan_version_id") + ", not " + run.scanVersionId();
+        } else if (!parent.artifactId().toString().equals(String.valueOf(global.get("artifact_id")))
+                || !parent.sha256().equals(global.get("sha256"))) {
+            problem = "the report spliced cloud " + global.get("artifact_id") + " (" + global.get("sha256") + "), not the parent "
+                + "version's pinned cloud " + parent.artifactId() + " (" + parent.sha256() + ")";
+        } else if (!merged.sha256().equals(output.get("sha256"))) {
+            problem = "the report's output " + output.get("sha256") + " is not the SPLAT_MERGED published (" + merged.sha256() + ")";
+        } else if (merged.sha256().equals(parent.sha256())) {
+            problem = "SPLAT_MERGED is the parent version's cloud, byte for byte: nothing was spliced";
+        } else if (!(doc.get("added_from_region") instanceof Number added) || added.longValue() <= 0
+                || !(doc.get("removed_from_global") instanceof Number)) {
+            problem = "the report does not record how many Gaussians were removed and added (added must be > 0)";
+        }
+        return problem == null ? null : new OutputProblem("SPLICE_LINEAGE_INVALID", "REGION_SPLICE's report does not prove what was "
+            + "spliced: " + problem, Map.of("splatMergedSha256", merged.sha256()));
     }
 
     /** NAVIGATION_GRAPH in the worker's shape (chaya_worker.stages.navigation_baking): a `graphs` map whose STANDARD profile
@@ -1724,7 +1821,7 @@ public class PipelineService {
         return Optional.of(new RunView(runId, status, (String) r.get("quality"), (Boolean) r.get("privacy_enabled"),
             ((Number) r.get("time_budget_seconds")).intValue(), instant(r.get("started_at")), instant(r.get("deadline_at")),
             instant(r.get("finished_at")), (String) r.get("failure_stage"), (String) r.get("failure_code"),
-            (String) r.get("failure_message"), status.equals("FAILED"), stages));
+            (String) r.get("failure_message"), status.equals("FAILED") && (r.get("failure_code") == null || !PERMANENT_FAILURES.contains(r.get("failure_code"))), stages));
     }
 
     private StageRunView stageRunView(Map<String, Object> sr) {

@@ -3,7 +3,8 @@ incremental re-scan (docs/rescan.md, "SPLICE"). Pure numpy + scipy.
 
 Everything is decided in canonical metres (chaya_worker.frames), through the parent reconstruction's calibrated frame.
 The clouds themselves stay in the parent reconstruction's frame. What is replaced is a **volume**: the region polygon
-(canonical x, y) times the height range of the newly captured region's own geometry, grown by `z_margin_m`.
+(canonical x, y) times the height range of the newly captured region's own geometry, grown by `z_margin_m`, and
+reaching at least `min_volume_height_m` above its floor (so furniture that was taken away goes with it).
 
   * Venue Gaussians inside that volume are removed. Venue Gaussians inside the polygon but above or below it (a ceiling
     the re-capture never saw, a mezzanine) are unrelated geometry and are kept. So is everything outside the polygon,
@@ -12,7 +13,10 @@ The clouds themselves stay in the parent reconstruction's frame. What is replace
     never gains a second, overlapping copy of geometry it already had.
   * The seam is measured, not assumed. For region Gaussians within `seam_band_m` inside the edge, the step to the kept
     venue surface just across the edge is the median point-to-plane distance to their nearest kept Gaussians. A step
-    above `max_seam_step_m` is a visible seam, and the splice is refused (SpliceRejected).
+    above `max_seam_step_m` is a visible seam, and the splice is refused (SpliceRejected). So is a seam that cannot be
+    measured because the venue had geometry at the edge and the re-scan has none there (a gap along the edge).
+  * Nothing is deleted that the re-scan did not observe (`coverage`): venue Gaussians removed from cells where the
+    re-scan adds nothing are counted, and above `max_uncovered_fraction` the splice is refused.
 
 The result records exactly what was replaced: the index sets (removed venue Gaussians, added region Gaussians, both as
 indices into their input clouds) and the volume.
@@ -137,11 +141,32 @@ def splice_labels(global_labels: np.ndarray, region_labels: np.ndarray, result: 
     return merged
 
 
+def coverage(removed_canonical: np.ndarray, added_canonical: np.ndarray, cell_m: float) -> dict:
+    """What the splice would delete without replacing it. On a horizontal grid of `cell_m`, a removed venue Gaussian is
+    covered when the re-scan adds a Gaussian in its cell or one of the 8 around it (sampling gaps of up to a cell are
+    tolerated). The others are geometry the re-scan never observed: deleting them leaves a hole, not a change."""
+    removed_cells = np.floor(removed_canonical[:, :2] / cell_m).astype(np.int64)
+    added_cells = np.unique(np.floor(added_canonical[:, :2] / cell_m).astype(np.int64), axis=0)
+
+    def key(cells: np.ndarray) -> np.ndarray:  # one int64 per cell; venue coordinates are far below 2**31 cells
+        return cells[:, 0] * (1 << 32) + cells[:, 1]
+
+    observed = np.unique(np.concatenate([key(added_cells + [dx, dy]) for dx in (-1, 0, 1) for dy in (-1, 0, 1)]))
+    covered = np.isin(key(removed_cells), observed)
+    uncovered = int((~covered).sum())
+    return {"cell_m": cell_m, "removed_cells": int(len(np.unique(removed_cells, axis=0))) if len(removed_cells) else 0,
+            "uncovered_cells": int(len(np.unique(removed_cells[~covered], axis=0))) if uncovered else 0,
+            "uncovered_removed": uncovered,
+            "uncovered_fraction": uncovered / len(removed_cells) if len(removed_cells) else 0.0}
+
+
 def splice_region(global_cloud: GaussianCloud, aligned_region_cloud: GaussianCloud, polygon_xy: np.ndarray,
-                  to_canonical: Similarity, *, z_margin_m: float, seam_band_m: float, max_seam_step_m: float) -> SpliceResult:
+                  to_canonical: Similarity, *, z_margin_m: float, seam_band_m: float, max_seam_step_m: float,
+                  coverage_cell_m: float = 0.25, max_uncovered_fraction: float = 0.05,
+                  min_volume_height_m: float = 2.0) -> SpliceResult:
     """Replaces the venue's geometry in the region volume with the aligned region's (see the module docstring).
-    `to_canonical` is the parent reconstruction's calibrated frame. Raises SpliceRejected when there is nothing to add or
-    the seam is visible."""
+    `to_canonical` is the parent reconstruction's calibrated frame. Raises SpliceRejected when there is nothing to add,
+    the seam is visible or cannot be measured, or the splice would delete venue geometry the re-scan never observed."""
     if len(aligned_region_cloud) == 0:
         raise SpliceRejected("the aligned region cloud is empty; refusing to splice nothing into the venue")
     polygon_xy = np.asarray(polygon_xy, dtype=np.float64)
@@ -150,8 +175,11 @@ def splice_region(global_cloud: GaussianCloud, aligned_region_cloud: GaussianClo
     r_in_polygon = point_in_polygon(r[:, :2], polygon_xy)
     if not r_in_polygon.any():
         raise SpliceRejected("no Gaussian of the aligned region falls inside the selected polygon; refusing to splice")
-    z_lo, z_hi = np.percentile(r[r_in_polygon, 2], [0.5, 99.5])
-    z_lo, z_hi = float(z_lo - z_margin_m), float(z_hi + z_margin_m)
+    z_floor, z_top = (float(v) for v in np.percentile(r[r_in_polygon, 2], [0.5, 99.5]))
+    # The volume reaches at least min_volume_height_m above the re-scan's floor: a re-capture observes the region up to
+    # about head height, so venue geometry below that which the re-scan does not have is gone (furniture taken away). Taking
+    # only the re-scan's own top left a removed box standing above a floor-only re-scan.
+    z_lo, z_hi = z_floor - z_margin_m, max(z_top + z_margin_m, z_floor + min_volume_height_m)
 
     g_in_polygon = point_in_polygon(g[:, :2], polygon_xy)
     replaced = g_in_polygon & (g[:, 2] >= z_lo) & (g[:, 2] <= z_hi)
@@ -159,15 +187,31 @@ def splice_region(global_cloud: GaussianCloud, aligned_region_cloud: GaussianClo
 
     seam = seam_step(r[added], g[~replaced], polygon_xy, seam_band_m)
     seam["max_step_m"] = max_seam_step_m
+    # Venue geometry removed right at the edge, where the new geometry should continue the kept surface.
+    seam["removed_in_band"] = int((distance_to_polygon_edge(g[replaced][:, :2], polygon_xy) < seam_band_m).sum()) if replaced.any() else 0
+    seam["measured"] = seam["step_m"] is not None
     if seam["step_m"] is not None and seam["step_m"] > max_seam_step_m:
         raise SpliceRejected(f"the new geometry meets the kept geometry with a median step of {seam['step_m']:.3f} m at the "
                              f"region edge (limit {max_seam_step_m} m); refusing to splice a visible seam")
+    if seam["step_m"] is None and seam["removed_in_band"] >= 3:
+        raise SpliceRejected(f"the venue had {seam['removed_in_band']} Gaussians within {seam_band_m} m of the region edge, but the "
+                             f"re-scan adds too few there to measure the seam ({seam['band_points']} added, "
+                             f"{seam['kept_points_across']} kept across); refusing a seam that was not measured")
+    cover = coverage(g[replaced], r[added], coverage_cell_m)
+    cover["max_uncovered_fraction"] = max_uncovered_fraction
+    if cover["uncovered_fraction"] > max_uncovered_fraction:
+        raise SpliceRejected(f"{cover['uncovered_removed']} of {int(replaced.sum())} venue Gaussians in the region "
+                             f"({cover['uncovered_fraction']:.1%}, limit {max_uncovered_fraction:.0%}) lie where the re-scan observed "
+                             f"nothing ({cover['uncovered_cells']} cells of {coverage_cell_m} m); refusing to delete geometry "
+                             "the re-scan did not replace. Re-capture the whole region, or select a smaller one")
 
     removed_idx = np.flatnonzero(replaced)
     added_idx = np.flatnonzero(added)
     merged = _concat(global_cloud.subset(~replaced), aligned_region_cloud.subset(added))
     report = {
-        "volume": {"polygon_xy": polygon_xy.tolist(), "z_min_m": z_lo, "z_max_m": z_hi, "z_margin_m": z_margin_m},
+        "volume": {"polygon_xy": polygon_xy.tolist(), "z_min_m": z_lo, "z_max_m": z_hi, "z_margin_m": z_margin_m,
+                   "observed_z_m": [z_floor, z_top], "min_height_m": min_volume_height_m,
+                   "z_max_from": "observed" if z_top + z_margin_m >= z_floor + min_volume_height_m else "min_height"},
         "removed_from_global": int(replaced.sum()),
         "kept_from_global": int((~replaced).sum()),
         "kept_inside_polygon_outside_volume": int((g_in_polygon & ~replaced).sum()),
@@ -176,5 +220,11 @@ def splice_region(global_cloud: GaussianCloud, aligned_region_cloud: GaussianClo
         "discarded_from_region_outside_volume": int((r_in_polygon & ~added).sum()),
         "total_after": len(merged),
         "seam": seam,
+        "coverage": cover,
+        # Duplication and deletion outside the volume are impossible by construction (the kept venue rows are copied, the
+        # added rows all lie inside the volume); these make that checkable from the report alone.
+        "invariants": {"kept_outside_volume_unchanged": int((~replaced).sum()) == len(merged) - int(added.sum()),
+                       "added_inside_volume": bool(added_idx.size == 0 or r_in_polygon[added_idx].all())},
+        "net_change": int(added.sum()) - int(replaced.sum()),
     }
     return SpliceResult(merged, removed_idx, added_idx, report)

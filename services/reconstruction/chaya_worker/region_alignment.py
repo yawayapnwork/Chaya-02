@@ -137,7 +137,7 @@ def align_region(source_m: np.ndarray, target_m: np.ndarray, *, mode: str, gates
         except RegistrationError as exc:
             error = f"ICP failed: {exc}"
 
-    metrics = measured(T) if tree is not None and len(src) else AlignmentMetrics(0, 0, 0.0, T.scale, 90.0, float("inf"), float("inf"), float("inf"), 0.0)
+    metrics = measured(T) if tree is not None and len(src) else AlignmentMetrics(0, 0, 0.0, T.scale, 90.0, float("inf"), float("inf"), float("inf"), 0.0, 0.0)
     for r in evaluate_gates(metrics, gates).results:
         report.results.append(r)
     details["correction_rotation_deg"] = rotation_angle_degrees(T.rotation)

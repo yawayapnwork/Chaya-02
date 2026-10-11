@@ -219,8 +219,11 @@ abstract class PipelineTestSupport extends CaptureTestSupport {
                 case "GEOMETRIC_CLEANUP" -> List.of(artifact(order, "splat-clean.ply", "SPLAT_CLEAN", false, false, "clean-cloud-bytes"),
                     artifact(order, "semantic-labels-clean.json", "SEMANTIC_LABELS_CLEAN", false, false, "{\"labels\":[]}"));
                 case "REGION_ALIGNMENT" -> List.of(artifact(order, "splat-aligned.ply", "SPLAT_ALIGNED", false, false, "aligned-cloud-bytes"));
-                case "REGION_SPLICE" -> List.of(artifact(order, "splat-merged.ply", "SPLAT_MERGED", false, false, "merged-cloud-bytes"),
-                    artifact(order, "splice-report.json", "SPLICE_REPORT", false, false, "{}"));
+                // Distinct per work order, as a real splice's output is: a SPLAT_MERGED equal to its parent's cloud is refused.
+                case "REGION_SPLICE" -> List.of(artifact(order, "splat-merged.ply", "SPLAT_MERGED", false, false,
+                        "merged-cloud-bytes:" + order.get("id").asText()),
+                    artifact(order, "splice-report.json", "SPLICE_REPORT", false, false,
+                        mapper.writeValueAsString(spliceReport(order, "merged-cloud-bytes:" + order.get("id").asText()))));
                 case "PLANE_FITTING" -> List.of(artifact(order, "planes.json", "PLANE_MODEL", false, false, "{\"planes\":[]}"),
                     artifact(order, "gravity-estimate.json", "GRAVITY_ESTIMATE", false, false,
                         "{\"status\":\"NOT_ESTIMATED\",\"reason\":\"fixture\"}"));
@@ -233,6 +236,29 @@ abstract class PipelineTestSupport extends CaptureTestSupport {
         } catch (IOException e) {
             throw new java.io.UncheckedIOException(e);
         }
+    }
+
+    /** SPLICE_REPORT in the worker's shape (chaya_worker.stages.region_splice): the order's GLOBAL_CLOUD as the spliced
+     * input, the SPLAT_MERGED with `mergedContent` as the output, and the counts. */
+    protected Map<String, Object> spliceReport(JsonNode order, String mergedContent) {
+        JsonNode global = null;
+        for (JsonNode in : order.get("inputs")) {
+            if (in.get("kind").asText().equals("GLOBAL_CLOUD")) {
+                global = in;
+            }
+        }
+        Map<String, Object> doc = new LinkedHashMap<>();
+        doc.put("volume", Map.of("polygon_xy", List.of(List.of(0, 0), List.of(0, 3), List.of(3, 3), List.of(3, 0)), "z_min_m", -0.2,
+            "z_max_m", 2.0));
+        doc.put("removed_from_global", 120);
+        doc.put("added_from_region", 140);
+        doc.put("source", sourceOf(order));
+        doc.put("inputs", Map.of("global_cloud", global == null ? Map.of()
+            : Map.of("artifact_id", global.get("artifactId").asText(), "sha256", global.get("sha256").asText(), "gaussians", 1000)));
+        doc.put("output", Map.of("artifact", "splat-merged.ply", "sha256", sha256(mergedContent.getBytes(StandardCharsets.UTF_8)),
+            "gaussians", 1020));
+        doc.put("index", Map.of("artifact", "splice-index.npz", "sha256", "a".repeat(64)));
+        return doc;
     }
 
     /** The canonical frame the work order carries, or null. */

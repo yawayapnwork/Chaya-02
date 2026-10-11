@@ -77,6 +77,7 @@ public class RescanService {
             throw new ApiException(HttpStatus.CONFLICT, "VERSION_WRONG_FLOOR",
                 "the selected version belongs to a different floor than " + floorId);
         }
+        requireParentCurrent(floorId, parent.id());
         FrameView parentFrame = requireCanonicalParentFrame(parent.id());
         double area = requireValidRegion(request.region());
         boolean navigationRebuildRequired = parentHasNavigation(parent.id());
@@ -110,6 +111,8 @@ public class RescanService {
                                            UUID parentVersionId, Map<String, Object> regionGeometry,
                                            Boolean privacyEnabled, Integer timeBudgetSeconds) {
         ParentVersion parent = requireFinalizedVersion(actor, venueId, parentVersionId);
+        // Checked again here: the floor may have published another version while the region was being captured.
+        requireParentCurrent(parent.floorId(), parent.id());
         boolean navigationRebuildRequired = parentHasNavigation(parent.id());
 
         LinkedHashMap<String, Object> processingConfig = new LinkedHashMap<>();
@@ -276,7 +279,25 @@ public class RescanService {
         return version;
     }
 
+    /**
+     * A re-scan replaces a region of the version its floor publishes. Its version can only ever be published over its parent
+     * (ScanVersionService#promote, PARENT_NOT_CURRENT), so a re-scan of any other version could never publish: it is refused
+     * before the operator captures or the pipeline spends anything on it. A floor that publishes nothing yet (versions
+     * finalized before V28) accepts any FINALIZED version of its own.
+     */
+    private void requireParentCurrent(UUID floorId, UUID parentVersionId) {
+        versions.currentOf(floorId).filter(current -> !current.equals(parentVersionId)).ifPresent(current -> {
+            throw new ApiException(HttpStatus.CONFLICT, ScanVersionService.PARENT_NOT_CURRENT, "the selected version "
+                + parentVersionId + " is not the one its floor publishes (" + current + "); a re-scan of it could never be "
+                + "published, because it would drop that version's changes. Re-scan the current version instead");
+        });
+    }
+
     private double requireValidRegion(RegionGeometry region) {
+        String problem = PolygonGeometry.simplicityProblem(region.points());
+        if (problem != null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "REGION_INVALID", problem);
+        }
         double area = PolygonGeometry.area(region.points());
         if (area < props.minRegionAreaSquareMeters()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "REGION_TOO_SMALL",

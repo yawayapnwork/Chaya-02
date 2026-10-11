@@ -307,7 +307,7 @@ public class CoordinateFrameService {
     }
 
     private Map<String, Object> makeCurrentForFloor(UUID floorId, FrameView next) {
-        UUID previousId = jdbc.sql("SELECT current_coordinate_frame_id FROM floor WHERE id = :f FOR UPDATE")
+        UUID previousId = jdbc.sql("SELECT current_coordinate_frame_id FROM floor WHERE id = :f FOR NO KEY UPDATE")
             .param("f", floorId).query((rs, i) -> rs.getObject(1, UUID.class)).optional().orElse(null);
         Map<String, Object> meta = new LinkedHashMap<>();
         meta.put("previousCurrentFrameId", previousId == null ? null : previousId.toString());

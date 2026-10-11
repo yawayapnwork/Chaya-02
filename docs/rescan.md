@@ -13,7 +13,7 @@ pipeline run, not a separate system.
 | Finding the changed region | **Not detected.** | The operator draws the polygon. Nothing compares the venue before and after to find what changed. |
 | Capture, SfM, training, segmentation, cleanup | Region only | The run sees only the region's own media. |
 | Alignment | Region against the parent's cloud, cropped to the polygon's box | Similarity (scale, rotation, translation) in canonical metres, gated ("ALIGNMENT"). |
-| Geometry and appearance (`SPLAT_MERGED`) | Region only | Venue Gaussians in the region's volume are replaced; every other Gaussian is kept bit for bit and in order ("SPLICE"). |
+| Geometry and appearance (`SPLAT_MERGED`) | Region only | Venue Gaussians in the region's volume are replaced; every other Gaussian is kept bit for bit and in order ("SPLICE"). Refused if it would delete geometry the re-scan never observed. |
 | Planes, viewer asset (`.ksplat`) | **Whole floor**, regenerated | Derived from the merged cloud. Outside the region the input is unchanged; the outputs are new files. |
 | Navigation | **Whole floor**, re-baked | Not a local re-bake (see "NAVIGATION"). Re-baked from the merged scene, then **verified** to match the parent scene outside the region. |
 | Semantic index / POIs | Region only | Only AUTO_DETECTED POIs inside the polygon are superseded. |
@@ -34,7 +34,11 @@ the cost. It does **not** save the downstream derivations, which are cheap and r
    venue metres (x, y horizontal; [coordinate-frames.md](coordinate-frames.md)). The operator chooses it; the system
    does not detect change. What the splice then replaces is that polygon times the height range the re-scan observed. The parent version's reconstruction
    must have a canonical coordinate frame, or initiation is refused with `409 NOT_CALIBRATED` -- a polygon in metres
-   has no location in an uncalibrated reconstruction.
+   has no location in an uncalibrated reconstruction. The polygon must be simple (no crossing or touching edges, no
+   repeated vertex, finite coordinates, at most 512 vertices): a bow-tie has no defined inside, and the worker's even-odd
+   test would replace a different area than the one validated (`400 REGION_INVALID`). The selected version must be the
+   one its floor publishes (`409 PARENT_NOT_CURRENT`): a re-scan can only ever be published over its parent, so a re-scan
+   of an older version would capture and process a region that could never go live. Checked again when processing starts.
 3. **Capture only that region** -- `POST /venues/{v}/floors/{f}/rescan` (`RescanController#initiate`)
    validates the version and region (`PolygonGeometry.area` must fall within
    `chaya.rescan.min/max-region-area-square-meters`) and creates a region-scoped `capture_session`
@@ -137,6 +141,7 @@ and must pass **every** gate. Thresholds are worker settings; the defaults are s
 | `translation_residual_m` | \|δ\| of the residual rigid motion between the surfaces | ≤ 0.03 m |
 | `icp_residual_m` | RMS point-to-point distance at the correspondences (noise, plus about half the sample spacing) | ≤ 0.05 m |
 | `confidence` | `inlier_ratio × (1 − translation_residual_m / 0.03)` | ≥ 0.6 |
+| `constraint_ratio` | how well the overlap constrains its weakest rigid direction (below) | ≥ 0.05 |
 | `direct_rotation_correction_deg` / `direct_translation_correction_m` | DIRECT only: how far ICP moved the surveyed pose | ≤ 5° / 0.5 m |
 | `ransac_inliers` | FEATURE only: consensus size behind the estimate | ≥ 20 |
 | `tilt_deg` | FEATURE, gravity-aligned re-scan only: tilt the correction introduces | ≤ 5° |
@@ -147,6 +152,17 @@ at the correspondences. This is deliberately not a median distance. Each surface
 normal, so a median over mixed surfaces misses a 6 cm vertical offset: the walls slide along themselves and outnumber
 the floor. The joint solve sees it. The confidence uses δ, not the point-to-point RMS, so it does not move with the
 sampling density. That was the flaw the earlier score had (docs/BENCHMARKS.md, B5).
+
+**Constraint ratio** (`constraint_ratio`): the residual solve reports a direction that no surface constrains as zero
+residual, not as unknown. An open floor cannot fix a horizontal slide; a corridor's floor and one wall cannot fix a slide
+along the wall. In such a direction the region can sit anywhere while every residual, the inlier ratio and the confidence
+look perfect. Before this gate a corridor re-scan whose surveyed pose was 35 cm off along the wall was ACCEPTED with
+confidence 0.98 (`test_a_corridor_overlap_is_rejected_although_every_residual_looks_perfect`). The ratio is
+sqrt(λmin / λmax) of the point-to-plane information matrix at the correspondences, with rotations scaled by the RMS
+lever arm so both are in metres (Gelfand et al. 2003). Measured on the synthetic scenes at perfect alignment: open floor
+0.02, corridor 0.02, floor plus one box 0.09, a room corner 0.44, a room 0.48. The 0.05 threshold sits between those
+groups. It has **not** been measured on real splats or on the B5 COLMAP cloud (a façade crop may read low); recalibrate it
+on the first real re-scans.
 
 A failed gate is **`ALIGNMENT_REJECTED`**, enforced twice:
 
@@ -185,16 +201,32 @@ times the height range of the aligned re-scan's own geometry inside it (0.5–99
   may delete.
 - **Added**: re-scan Gaussians inside the volume. Re-scan Gaussians outside it are discarded, so nothing the venue
   already had is duplicated (review V-2).
+- **Volume height**: at least `splice_min_volume_height_m` (2.0 m) above the re-scan's floor inside the polygon, even
+  when the re-scan's own geometry ends lower. Before this, a box that was taken away left the re-scan with only floor
+  there, the volume ended 0.2 m above it, and 136 Gaussians of the old box stayed standing in the merged venue (and an
+  obstacle in the re-baked navmesh). A ceiling or mezzanine above 2 m is still kept. The cost: geometry inside the polygon
+  below 2 m that the operator failed to re-capture is replaced too, so the polygon must only cover what was re-captured.
 - **Seam**: measured, not assumed. For added Gaussians within `splice_seam_band_m` (0.15 m) of the polygon edge, the
   step is the median point-to-plane distance to the kept venue surface just across the edge. A step above
-  `splice_max_seam_step_m` (0.03 m) is a visible seam, and the splice fails with `SPLICE_REJECTED`.
+  `splice_max_seam_step_m` (0.03 m) is a visible seam, and the splice fails with `SPLICE_REJECTED`. So does a seam that
+  cannot be measured although the venue had geometry at the edge (a gap along the edge the re-scan never reached).
+- **Coverage** (unintended deletion): on a horizontal grid of `splice_coverage_cell_m` (0.25 m), a removed venue
+  Gaussian counts as replaced when the re-scan adds something in its cell or a neighbouring one. When more than
+  `splice_max_uncovered_fraction` (5 %) of the removed Gaussians were not, the splice fails with `SPLICE_REJECTED`.
+  Before this, a re-scan that covered half the polygon spliced successfully (with a perfect seam on the covered side)
+  and deleted everything in the other half.
 
 What was replaced is recorded exactly:
 
 - `SPLICE_INDEX` (`splice-index.npz`) holds the indices of every removed venue Gaussian and every added re-scan
   Gaussian;
-- `SPLICE_REPORT` holds the volume, the counts, the seam measurement, and the input and output artifacts by id and
-  SHA-256;
+- `SPLICE_REPORT` holds the volume, the counts (and `net_change`), the seam measurement, the coverage, the construction
+  invariants (nothing outside the volume changed, everything added is inside it), and the input and output artifacts by
+  id and SHA-256;
+- the control plane does not take the report on trust (`PipelineService#spliceLineageProblem`): it must name this run's
+  version, have spliced exactly the parent version's pinned cloud (id and SHA-256), name the `SPLAT_MERGED` it published,
+  and have added Gaussians. A `SPLAT_MERGED` that is the parent's cloud byte for byte means nothing was spliced. Any of
+  these fails the stage with `SPLICE_LINEAGE_INVALID` (retryable), and nothing is recorded on the version;
 - the control plane copies the report onto the ScanVersion (`splice_report`).
 
 A no-op re-scan (the venue's own Gaussians, perfectly calibrated) returns the venue unchanged. The worker tests check
@@ -370,7 +402,20 @@ reconstruction alone).
 
 A re-scan is promoted only over its own parent (or onto a floor that publishes nothing): a re-scan of an older version
 would silently drop what was published since (`409 PARENT_NOT_CURRENT`). A full reconstruction replaces whatever is
-current. An ALIGNMENT_REJECTED version is never promoted.
+current, unless the current version was created after it (`VERSION_SUPERSEDED`): version numbers are creation order, and
+a full run that started first but finished last would otherwise undo the newer version. An ALIGNMENT_REJECTED version is
+never promoted, and a historical version is never promoted again.
+
+Two runs finishing at once are serialized on the floor row (`FOR NO KEY UPDATE`, which does not conflict with the key-share
+locks their own POI and graph inserts take on it; `FOR UPDATE` deadlocked there, and the loser failed with a database
+error instead of `PARENT_NOT_CURRENT`). Exactly one is published.
+
+**Retries.** A run that failed at a stage is retried from that stage. A run whose stages all succeeded but whose version
+could not be published is retried by publishing again, without re-running anything: re-running the last stage used to
+ingest a second navmesh and graph set for the same version, which the version's consistency check then refused forever
+(`VERSION_INCONSISTENT`). A retry is refused (`RUN_NOT_RETRYABLE` / `PARENT_NOT_CURRENT`) when it can never succeed: an
+ALIGNMENT_REJECTED version, a version superseded by a newer one, or a re-scan whose parent is no longer current. The run
+view's `retryable` says so.
 
 The database enforces the end state, checked at commit (`DEFERRABLE INITIALLY DEFERRED` constraint triggers;
 `promote` runs them early with `SET CONSTRAINTS ... IMMEDIATE` so a refusal stays inside the savepoint):
@@ -439,6 +484,11 @@ The parent's cloud (`GLOBAL_CLOUD`) is the cloud the parent version pinned, not 
 | `rescan.outcome` | the run's actor | `sourceVersionId`, `resultingVersionId`, `outcome`, `failureCode` when applicable |
 | `rescan.version_bootstrapped` | the operator | `floorId`, `runId` (only for `finalizeCurrent`) |
 
+The ops dashboard's re-scan history (`GET /venues/{v}/ops/rescans`, "Re-scan history") shows per re-scan: the parent and
+result version, the result's status (`DRAFT`, `FINALIZED`, `ALIGNMENT_REJECTED`) and whether it is current, the run's
+progress (stages completed of the plan, the stage running now), the failure stage and code, and for a rejection when and
+why, with the failed alignment gates by name.
+
 ## TESTS
 
 All geometry tests use **synthetic** point clouds (`tests/rescan_scene.py`: a small room). They are mathematical tests,
@@ -446,9 +496,9 @@ not venue data.
 
 | What | Where | Needs |
 |---|---|---|
-| Umeyama, RANSAC, ICP, residuals, confidence, gates: scale / rotation / translation / combined recovery, reflections, degenerate input, outliers, a scale outside the prior, no overlap, offsets only some surfaces observe, confidence independent of sampling | `tests/unit/test_similarity_registration.py` | nothing |
-| Both modes end to end: similarity recovery, too few correspondences, too little overlap, bad scale, high residual, tilt, surveyed calibrations that disagree | `tests/unit/test_region_alignment.py` (a stand-in supplies FEATURE mode's matches) | nothing |
-| Splice: overlapping-geometry replacement, moved furniture replaced, every Gaussian outside the region kept bit for bit (all attributes, in order), re-scan beyond the polygon, unrelated geometry kept, no-op, visible seam refused, canonical-frame volume, exact index sets | `tests/unit/test_region_splice.py` | nothing |
+| Umeyama, RANSAC, ICP, residuals, confidence, gates: scale / rotation / translation / combined recovery, reflections, degenerate input, outliers, a scale outside the prior, no overlap, offsets only some surfaces observe, confidence independent of sampling, constraint ratio of constrained vs degenerate overlaps | `tests/unit/test_similarity_registration.py` | nothing |
+| Both modes end to end: similarity recovery (known synthetic transforms), realistic noise (5 mm noise + 3 % clutter, recovered and accepted), too few correspondences, too little overlap, a placement almost outside the venue, bad scale, high residual, tilt, surveyed calibrations that disagree, a corridor and an open floor rejected as unconstrained | `tests/unit/test_region_alignment.py` (a stand-in supplies FEATURE mode's matches) | nothing |
+| Splice: overlapping-geometry replacement, moved and removed furniture, every Gaussian outside the region kept bit for bit (all attributes, in order), re-scan beyond the polygon, unrelated geometry kept, no-op, visible seam refused, unmeasurable seam (edge gap) refused, half-covered region refused (coverage), canonical-frame volume, exact index sets, report invariants | `tests/unit/test_region_splice.py` | nothing |
 | Downstream stages use the merged cloud with its own labels, never the region alone; the outside-region surface comparison (unchanged, change inside, sofa removed / relabelled / new obstacle outside, grown extent, margin); obstacle cells under a navmesh | `tests/unit/test_rescan_consistency.py` | nothing |
 | Scale mismatch through the orchestrator (re-scan reconstruction at 2 units/m, parent at 0.5): a calibration 4 % off is corrected, 20–25 % off is `ALIGNMENT_REJECTED` with the scale gate's value and threshold, nothing published | `tests/orchestration/test_rescan_stages.py` | nothing |
 | Re-bake with the real Recast tool as a re-scan work order runs it: a new crate inside the region blocks; the sofa, wall, column and step outside it survive; `rebuild` block; refused when an obstacle outside the region is lost, when given the region alone, labels or planes of another cloud, a parent cloud the splice did not use, or no parent scene | `tests/navmesh/test_venue_stage.py` | chaya-navmesh |
@@ -459,8 +509,31 @@ not venue data.
 | Publication (V28) through the worker protocol: a run is a DRAFT version from the start and nothing of it is current until it succeeds; a new scan that fails leaves the published version, its graphs, POIs, frame and routes untouched (the floor's frame does not move when the new reconstruction is calibrated); a refused promotion (no viewer asset) publishes nothing and fails the run; a successful one switches graphs, POIs, frame and pointer at once, and routes, POI lists, search and relocalization never mix versions; an anchor as of its version keeps its original pose after a recalibration; artifacts that name no or another version are refused; the database refuses a version-less or mixed publication; a re-scan of an older version is not published over a newer one | `ScanVersionPublicationTest`, `AnchorServiceTest`, `SemanticSearchRankingTest` | Testcontainers |
 | Versions end to end over HTTP: v1 (full run, real Recast navmesh fixture, bootstrap), v2 (re-scan over the graph), v3 (re-scan away from every graph node, which still re-bakes); lineage and numbering, the run of every pinned artifact, the viewer switched between the three (model bytes, frame, POIs, routing graph), refusals for a DRAFT version and another venue | `ScanVersionLineageTest` | Testcontainers |
 | The viewer never uses one scene's POIs, route or model for another | `apps/web/lib/version-scope.test.ts` | nothing |
+| Hardening (2026-10-11): two re-scans of one parent finishing concurrently (real threads) publish exactly one, the other fails `PARENT_NOT_CURRENT`, pins nothing and cannot be retried; a publication that fails transiently is retried by publishing again, with no stage re-run and no duplicate graphs, and is then not retryable; a splice report naming another cloud, or a SPLAT_MERGED equal to the parent's cloud, is refused; every own pin of a re-scan is its own run's (no parent splat, plane model or navmesh reused); the ops view shows a rejection's reason and failed gates; an older full run is not published over a newer version (`VERSION_SUPERSEDED`); bow-tie regions and re-scans of a non-current version are refused before anything is captured | `RescanControlPlaneTest`, `ScanVersionPublicationTest`, `RescanServiceTest`, `PolygonGeometryTest` | Testcontainers |
 
 B5 (docs/BENCHMARKS.md) measures the FEATURE_SIMILARITY path on a real COLMAP cloud with known similarity misalignments.
+
+### Synthetic validation vs a physical re-scan
+
+What the tests above establish is that the **mathematics and the control flow** are right on inputs whose truth is known
+exactly: the transforms, the overlap, which Gaussians belong where. A physical re-scan differs in ways none of them model:
+
+- **Geometry**: synthetic clouds are uniform samples of a few exact planes. Real splats have floaters, view-dependent
+  "fog", thickened surfaces, holes where nothing was textured, glass and mirrors. The seam step (3 cm), coverage cell
+  (0.25 m) and constraint ratio (0.05) were chosen on synthetic data; real surfaces are noisier and may need different
+  values.
+- **Change**: in a synthetic re-scan the only differences are the ones the test put there. In a real one, lighting, people,
+  moved chairs outside the polygon and a different camera path change the appearance and the reconstructed geometry
+  everywhere. The outside-region navmesh check is exact because the splice copies the Gaussians; whether its 0.3 m margin
+  survives real label noise at the polygon edge is unknown.
+- **Registration**: B5 uses a real COLMAP cloud, but its "re-scan" is a crop of the same cloud, re-sampled and moved: the
+  same points seen twice. A real re-scan is a second, independent reconstruction with its own drift, scale error and
+  partial overlap. Real FPFH matching on two independent splats has not been measured, and the constraint gate has not been
+  run on B5 at all (its input cloud is not on the development machine).
+- **Appearance**: nothing tests that the merged model *looks* continuous (exposure, white balance and SH colour across the
+  seam). The seam gate is purely geometric.
+- **Cost**: timings, changed-area fraction and downstream re-index scope need a GPU run of both a full and a regional
+  reconstruction (B5 section 3, UNAVAILABLE).
 
 **Not validated:** no real venue has been re-scanned and merged. Every number above is from synthetic clouds, or from a
 real SfM cloud with simulated misalignment. The outside-region check has only met synthetic scenes; on a real venue its

@@ -158,3 +158,23 @@ def test_residuals_see_misalignments_only_some_surfaces_observe(offset, rotation
         # Huber weighting down-weights the far walls, so the estimate is conservative (lower), not exact
         assert rotation_about_z * 0.6 < m.rotation_residual_deg < rotation_about_z * 1.2
         assert "rotation_residual_deg" in failed
+
+
+def test_constraint_ratio_tells_a_constrained_overlap_from_a_degenerate_one():
+    """A perfect alignment of every scene: the residuals are zero for all of them. Only the constraint ratio says whether
+    every rigid direction was observed."""
+    from chaya_worker.similarity_registration import constraint_ratio  # noqa: F401 - the metric under test
+    from tests.rescan_scene import corridor
+
+    def ratio(src, dst):
+        m = alignment_metrics(voxel_downsample(src, 0.03), voxel_downsample(dst, 0.03), Similarity.identity(),
+                              correspondence_distance_m=0.1, max_translation_residual_m=0.03)
+        assert m.translation_residual_m < 0.005, "the alignment itself is perfect"
+        return m.constraint_ratio
+
+    venue, rescan = room(1, density=300), room(2, density=300)
+    open_floor = rescan[(rescan[:, 2] < 0.01) & (rescan[:, 0] > 0.5) & (rescan[:, 1] > 0.5)]
+    hall = corridor(2, density=300)
+    assert ratio(rescan, venue) > 0.4
+    assert ratio(open_floor, venue) < AlignmentGates().min_constraint_ratio
+    assert ratio(hall[(hall[:, 0] > 2) & (hall[:, 0] < 6)], corridor(1, density=300)) < AlignmentGates().min_constraint_ratio

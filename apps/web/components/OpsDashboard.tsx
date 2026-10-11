@@ -1055,6 +1055,12 @@ export default function OpsDashboard() {
                         <td className={TD}>{x.captureStatus}</td>
                         <td className={TD}>
                           {x.runStatus ?? <span className="text-zinc-500">not started</span>}
+                          {x.runStatus && (
+                            <div className="text-xs text-zinc-500 tabular-nums">
+                              {x.stagesCompleted}/{x.stagesTotal} stages
+                              {x.currentStage ? ` · ${stageLabel(x.currentStage)}` : ""}
+                            </div>
+                          )}
                           {x.runFailureCode && (
                             <div className="text-xs text-red-800">
                               {x.runFailureStage ? stageLabel(x.runFailureStage) : ""} · <span className="font-mono">{x.runFailureCode}</span>
@@ -1065,8 +1071,20 @@ export default function OpsDashboard() {
                           {x.resultVersionNumber != null ? (
                             <>
                               v{x.resultVersionNumber}{" "}
-                              <span className={x.resultVersionStatus === "FINALIZED" ? "text-green-800" : "text-amber-800"}>{x.resultVersionStatus}</span>
+                              <span
+                                className={
+                                  x.resultVersionStatus === "FINALIZED"
+                                    ? "text-green-800"
+                                    : x.resultVersionStatus === "ALIGNMENT_REJECTED"
+                                      ? "text-red-800"
+                                      : "text-amber-800"
+                                }
+                              >
+                                {x.resultVersionStatus}
+                              </span>
+                              {x.resultVersionCurrent && <span className="ml-1 text-xs text-green-800">current</span>}
                               {x.finalizedAt && <div className="text-xs text-zinc-500"><When iso={x.finalizedAt} /></div>}
+                              {x.rejectedAt && <div className="text-xs text-zinc-500">rejected <When iso={x.rejectedAt} /></div>}
                             </>
                           ) : (
                             "—"
@@ -1081,6 +1099,12 @@ export default function OpsDashboard() {
                           ) : (
                             "—"
                           )}
+                          {x.failedAlignmentGates.length > 0 && (
+                            <div className="text-red-800">
+                              failed gates: <span className="font-mono">{x.failedAlignmentGates.join(", ")}</span>
+                            </div>
+                          )}
+                          {x.rejectionReason && <div className="text-red-800">{x.rejectionReason}</div>}
                         </td>
                       </tr>
                     ))}

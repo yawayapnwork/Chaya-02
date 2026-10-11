@@ -201,6 +201,8 @@ class Settings:
     alignment_max_direct_translation_correction_m: float = 0.5
     alignment_min_ransac_inliers: int = 20
     alignment_max_tilt_deg: float = 5.0
+    # Every rigid direction must be observed by an overlapping surface (similarity_registration.constraint_ratio).
+    alignment_min_constraint_ratio: float = 0.05
     # The control plane independently re-checks this against chaya.rescan.min-alignment-confidence
     # (RescanProperties) before ever finalizing a ScanVersion -- this is the worker's own gate so a bad
     # splice is refused even before the report reaches the server. Never merge below this line.
@@ -211,6 +213,14 @@ class Settings:
     splice_z_margin_m: float = 0.2
     splice_seam_band_m: float = 0.15
     splice_max_seam_step_m: float = 0.03
+    # Unintended deletion: a venue Gaussian is removed only where the re-scan observed something. On a grid of
+    # splice_coverage_cell_m (horizontal), removed Gaussians with no added re-scan Gaussian in their cell or a neighbouring
+    # one were deleted without a replacement; above splice_max_uncovered_fraction of the removed ones, the splice is refused.
+    splice_coverage_cell_m: float = 0.25
+    splice_max_uncovered_fraction: float = 0.05
+    # The replaced volume reaches at least this far above the re-scan's floor inside the polygon, so furniture that was
+    # removed is removed from the venue too. Geometry above it (a ceiling, a mezzanine) is kept. 0 disables it.
+    splice_min_volume_height_m: float = 2.0
 
     def localization_params(self):
         from .object_localization import LocalizationParams  # noqa: PLC0415
@@ -230,7 +240,8 @@ class Settings:
             max_icp_residual_m=self.alignment_max_icp_residual_m, min_confidence=self.min_alignment_confidence,
             max_direct_rotation_correction_deg=self.alignment_max_direct_rotation_correction_deg,
             max_direct_translation_correction_m=self.alignment_max_direct_translation_correction_m,
-            min_ransac_inliers=self.alignment_min_ransac_inliers, max_tilt_deg=self.alignment_max_tilt_deg)
+            min_ransac_inliers=self.alignment_min_ransac_inliers, max_tilt_deg=self.alignment_max_tilt_deg,
+            min_constraint_ratio=self.alignment_min_constraint_ratio)
 
     def alignment_schedule(self) -> list[float]:
         schedule = [float(v) for v in self.alignment_icp_schedule_m.split(",") if v.strip()]
@@ -371,9 +382,13 @@ class Settings:
                                                                  d.alignment_max_direct_translation_correction_m),
             alignment_min_ransac_inliers=_int(e, "ALIGNMENT_MIN_RANSAC_INLIERS", d.alignment_min_ransac_inliers),
             alignment_max_tilt_deg=_float(e, "ALIGNMENT_MAX_TILT_DEG", d.alignment_max_tilt_deg),
+            alignment_min_constraint_ratio=_float(e, "ALIGNMENT_MIN_CONSTRAINT_RATIO", d.alignment_min_constraint_ratio),
             splice_z_margin_m=_float(e, "SPLICE_Z_MARGIN_M", d.splice_z_margin_m),
             splice_seam_band_m=_float(e, "SPLICE_SEAM_BAND_M", d.splice_seam_band_m),
             splice_max_seam_step_m=_float(e, "SPLICE_MAX_SEAM_STEP_M", d.splice_max_seam_step_m),
+            splice_coverage_cell_m=_float(e, "SPLICE_COVERAGE_CELL_M", d.splice_coverage_cell_m),
+            splice_max_uncovered_fraction=_float(e, "SPLICE_MAX_UNCOVERED_FRACTION", d.splice_max_uncovered_fraction),
+            splice_min_volume_height_m=_float(e, "SPLICE_MIN_VOLUME_HEIGHT_M", d.splice_min_volume_height_m),
         )
 
     def require_service_config(self) -> None:
@@ -455,4 +470,6 @@ class Settings:
             "alignment_gates": self.alignment_gates().__dict__,
             "splice_z_margin_m": self.splice_z_margin_m, "splice_seam_band_m": self.splice_seam_band_m,
             "splice_max_seam_step_m": self.splice_max_seam_step_m,
+            "splice_coverage_cell_m": self.splice_coverage_cell_m, "splice_max_uncovered_fraction": self.splice_max_uncovered_fraction,
+            "splice_min_volume_height_m": self.splice_min_volume_height_m,
         }

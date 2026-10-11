@@ -113,13 +113,15 @@ public class ScanVersionService {
 
     public static final String NO_CURRENT_SCAN_VERSION = "NO_CURRENT_SCAN_VERSION";
     public static final String VERSION_MISMATCH = "VERSION_MISMATCH";
+    public static final String VERSION_SUPERSEDED = "VERSION_SUPERSEDED";
+    public static final String PARENT_NOT_CURRENT = "PARENT_NOT_CURRENT";
 
     // ---- numbering --------------------------------------------------------------------------------------------------
 
     /** The floor's next version number. Locks the floor row, so two versions created concurrently cannot share a number
      * (scan_version_floor_number_idx would refuse the second anyway). Call inside the inserting transaction. */
     public int nextVersionNumber(UUID floorId) {
-        jdbc.sql("SELECT id FROM floor WHERE id = :f FOR UPDATE").param("f", floorId).query(UUID.class).optional();
+        jdbc.sql("SELECT id FROM floor WHERE id = :f FOR NO KEY UPDATE").param("f", floorId).query(UUID.class).optional();
         return jdbc.sql("SELECT coalesce(max(version_number), 0) + 1 FROM scan_version WHERE floor_id = :f")
             .param("f", floorId).query(Integer.class).single();
     }
@@ -161,17 +163,23 @@ public class ScanVersionService {
      *
      * <p>A re-scan is only promoted over its own parent (or onto a floor that publishes nothing): a re-scan of an older
      * version would silently drop whatever was published since (PARENT_NOT_CURRENT). A full reconstruction replaces
-     * whatever is current. An ALIGNMENT_REJECTED version is never promoted. Promoting the current version again is a no-op.
+     * whatever is current, unless that was created after it (VERSION_SUPERSEDED: version numbers are creation order, and
+     * publishing an older version over a newer one would undo it). An ALIGNMENT_REJECTED version is never promoted.
+     * Promoting the current version again is a no-op.
      */
     public Promotion promote(UUID versionId, Map<String, Object> provenance) {
-        record Version(UUID floorId, UUID parent, UUID runId, String status, UUID frameId) {}
-        Version v = jdbc.sql("SELECT floor_id, parent_version_id, pipeline_run_id, status, coordinate_frame_id FROM scan_version "
-                + "WHERE id = :v FOR UPDATE")
+        record Version(UUID floorId, UUID parent, UUID runId, String status, UUID frameId, int number) {}
+        Version v = jdbc.sql("SELECT floor_id, parent_version_id, pipeline_run_id, status, coordinate_frame_id, version_number "
+                + "FROM scan_version WHERE id = :v FOR UPDATE")
             .param("v", versionId)
             .query((rs, i) -> new Version(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class), rs.getObject(3, UUID.class),
-                rs.getString(4), rs.getObject(5, UUID.class)))
+                rs.getString(4), rs.getObject(5, UUID.class), rs.getInt(6)))
             .optional().orElseThrow(() -> new NotFoundException("scan version not found"));
-        UUID previous = jdbc.sql("SELECT current_scan_version_id FROM floor WHERE id = :f FOR UPDATE").param("f", v.floorId())
+        // NO KEY UPDATE, not UPDATE: it serializes two promotions of one floor, but does not conflict with the FOR KEY SHARE
+        // locks every POI and graph insert of the same report takes on the floor row (their foreign keys). With FOR UPDATE,
+        // two re-scans finishing at once each held a key share and waited for the other's: a deadlock instead of
+        // PARENT_NOT_CURRENT (RescanControlPlaneTest).
+        UUID previous = jdbc.sql("SELECT current_scan_version_id FROM floor WHERE id = :f FOR NO KEY UPDATE").param("f", v.floorId())
             .query((rs, i) -> Optional.ofNullable(rs.getObject(1, UUID.class))).single().orElse(null);
         if (versionId.equals(previous)) {
             return new Promotion(versionId, v.floorId(), previous, v.frameId(), 0, 0, 0, 0, Map.of());
@@ -181,9 +189,18 @@ public class ScanVersionService {
                 + " failed its alignment gate and can never be published");
         }
         if (v.parent() != null && previous != null && !previous.equals(v.parent())) {
-            throw new ApiException(HttpStatus.CONFLICT, "PARENT_NOT_CURRENT", "scan version " + versionId + " is a re-scan of "
+            throw new ApiException(HttpStatus.CONFLICT, PARENT_NOT_CURRENT, "scan version " + versionId + " is a re-scan of "
                 + v.parent() + ", but its floor now publishes " + previous + "; publishing it would drop that version's changes. "
                 + "Re-scan the current version instead");
+        }
+        // Out of order: a version created before the published one (a full run that started earlier but finished later)
+        // would silently undo whatever was published since. Numbers are creation order (nextVersionNumber).
+        Integer previousNumber = previous == null ? null : jdbc.sql("SELECT version_number FROM scan_version WHERE id = :p")
+            .param("p", previous).query(Integer.class).single();
+        if (previousNumber != null && previousNumber > v.number()) {
+            throw new ApiException(HttpStatus.CONFLICT, VERSION_SUPERSEDED, "scan version " + versionId + " (v" + v.number()
+                + ") was created before the version its floor now publishes (v" + previousNumber + "); publishing it would undo "
+                + "that version. Reconstruct or re-scan again to publish newer data");
         }
         UUID frameId = "DRAFT".equals(v.status()) ? finalizeVersion(versionId, provenance) : v.frameId();
         if (frameId == null) {

@@ -14,7 +14,7 @@ import pytest
 from chaya_worker.frames import Similarity
 from chaya_worker.region_alignment import MODE_DIRECT, MODE_FEATURE, align_region
 from chaya_worker.similarity_registration import AlignmentGates
-from tests.rescan_scene import room, rotation, rotation_error_deg
+from tests.rescan_scene import corridor, room, rotation, rotation_error_deg
 
 GATES = AlignmentGates()
 SCHEDULE = [1.0, 0.5, 0.25, 0.1]
@@ -147,5 +147,72 @@ def test_every_gate_is_reported_with_its_value_and_threshold():
     result = align(RESCAN, mode=MODE_DIRECT)
     names = [g["name"] for g in result.gates.as_list()]
     assert names == ["correspondence_count", "inlier_ratio", "scale_correction", "rotation_residual_deg", "translation_residual_m",
-                     "icp_residual_m", "confidence", "direct_rotation_correction_deg", "direct_translation_correction_m"]
+                     "icp_residual_m", "confidence", "constraint_ratio", "direct_rotation_correction_deg",
+                     "direct_translation_correction_m"]
     assert all({"value", "threshold", "comparison", "passed"} <= set(g) for g in result.gates.as_list())
+
+
+# ---- degenerate overlap: a direction no surface observes ---------------------------------------------------------------
+
+
+def test_a_corridor_overlap_is_rejected_although_every_residual_looks_perfect():
+    """A corridor re-scan (floor and one wall) whose surveyed placement is 35 cm off along the wall. ICP cannot see a
+    slide along the wall, so the residuals, the inlier ratio and the confidence all look perfect while the region lands
+    35 cm from where it belongs. Before the constraint gate this was ACCEPTED (confidence 0.98). Only the constraint ratio
+    exposes it."""
+    venue, rescan = corridor(1), corridor(2)
+    rescan = rescan[(rescan[:, 0] > 2) & (rescan[:, 0] < 6)]
+    truth = Similarity(1.0, np.eye(3), np.array([0.35, 0.0, 0.0]))
+    result = align_region(truth.inverse().apply(rescan), venue, mode=MODE_DIRECT, gates=GATES, icp_schedule_m=SCHEDULE,
+                          icp_voxel_m=0.03, feature_voxel_m=0.05)
+    landed = result.correction.apply(truth.inverse().apply(rescan).mean(axis=0))
+    assert np.linalg.norm(landed - rescan.mean(axis=0)) > 0.3, "the slide really is unobservable"
+    assert result.metrics.confidence > 0.9 and result.metrics.translation_residual_m < 0.005
+    assert not result.accepted and result.gates.failed == ["constraint_ratio"]
+    assert result.metrics.constraint_ratio < GATES.min_constraint_ratio
+
+
+def test_an_open_floor_overlap_is_rejected():
+    """Only floor in the overlap: x, y and the yaw are all free."""
+    floor = RESCAN[(RESCAN[:, 2] < 0.01) & (RESCAN[:, 0] > 0.5) & (RESCAN[:, 1] > 0.5)]
+    result = align(floor, mode=MODE_DIRECT)
+    assert not result.accepted and "constraint_ratio" in result.gates.failed
+
+
+def test_a_floor_with_one_piece_of_furniture_is_constrained():
+    """The box's faces fix x, y and the yaw: weakly, but they are observed, so the constraint gate passes (whether the
+    rest of the alignment is good enough is the other gates' call)."""
+    inner = RESCAN[(RESCAN[:, 0] > 1) & (RESCAN[:, 0] < 3) & (RESCAN[:, 1] > 0.5) & (RESCAN[:, 1] < 3.5)]
+    result = align(inner, mode=MODE_DIRECT)
+    assert "constraint_ratio" not in result.gates.failed
+    assert GATES.min_constraint_ratio < result.metrics.constraint_ratio < 0.2
+
+
+# ---- realistic noise: accepted when it is sensor noise, rejected when it is not ---------------------------------------
+
+
+@pytest.mark.parametrize("truth", [
+    Similarity(1.03, rotation([0, 0, 1], 35), np.array([1.2, -0.7, 0.05])),
+    Similarity(0.97, rotation([0.1, -0.1, 1.0], -80), np.array([-2.0, 3.0, 0.2])),
+], ids=["yaw35-scale1.03", "yaw-80-tilted-scale0.97"])
+def test_a_realistically_noisy_rescan_is_recovered_and_accepted(truth):
+    """5 mm sensor noise on every point, 3 % clutter (people, reflections) floating in the room, a different sampling
+    and a known similarity: recovered to within a centimetre and accepted."""
+    rng = np.random.default_rng(21)
+    noisy = RESCAN + rng.normal(0, 0.005, RESCAN.shape)
+    clutter = rng.random((int(0.03 * len(RESCAN)), 3)) * [4, 4, 2.5]
+    source = truth.inverse().apply(np.vstack([noisy, clutter]))
+    result = align(source, mode=MODE_FEATURE, truth=truth)
+    assert_recovered(result, truth)
+    assert result.metrics.icp_residual_m < GATES.max_icp_residual_m
+    assert result.metrics.constraint_ratio > 0.3
+
+
+def test_a_region_that_barely_overlaps_the_venue_is_rejected():
+    """A surveyed placement that puts the re-scan 3.8 m along x, almost entirely beyond the venue: ICP has 20 cm of overlap
+    to work with and drags the region into a wrong fit. Rejected, with the gates that saw it named."""
+    outside = RESCAN.copy()
+    outside[:, 0] += 3.8
+    result = align(outside, mode=MODE_DIRECT)
+    assert not result.accepted
+    assert "direct_translation_correction_m" in result.gates.failed and len(result.gates.failed) >= 2

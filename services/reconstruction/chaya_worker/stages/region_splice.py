@@ -57,7 +57,9 @@ class RegionSplice:
         global_cloud = read_ply(global_inputs[0].path)
         try:
             result = splice_region(global_cloud, aligned_cloud, polygon, parent_frame.to_canonical(), z_margin_m=s.splice_z_margin_m,
-                                   seam_band_m=s.splice_seam_band_m, max_seam_step_m=s.splice_max_seam_step_m)
+                                   seam_band_m=s.splice_seam_band_m, max_seam_step_m=s.splice_max_seam_step_m,
+                                   coverage_cell_m=s.splice_coverage_cell_m, max_uncovered_fraction=s.splice_max_uncovered_fraction,
+                                   min_volume_height_m=s.splice_min_volume_height_m)
         except SpliceRejected as exc:
             raise StageError(str(exc), code="SPLICE_REJECTED") from exc
 

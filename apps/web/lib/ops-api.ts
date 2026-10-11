@@ -245,11 +245,22 @@ export interface Rescan {
   runFinishedAt: string | null;
   resultVersionId: string | null;
   resultVersionNumber: number | null;
-  resultVersionStatus: "DRAFT" | "FINALIZED" | null;
+  resultVersionStatus: "DRAFT" | "FINALIZED" | "ALIGNMENT_REJECTED" | null;
   alignmentConfidence: number | null;
   alignmentResidualM: number | null;
   changedArtifactKinds: string[];
   finalizedAt: string | null;
+  /** Whether the result version is the one its floor publishes now. */
+  resultVersionCurrent: boolean;
+  rejectedAt: string | null;
+  /** Why the alignment was rejected (the version's provenance reason). */
+  rejectionReason: string | null;
+  /** The alignment quality gates that failed, by name (e.g. constraint_ratio, inlier_ratio). */
+  failedAlignmentGates: string[];
+  stagesCompleted: number;
+  stagesTotal: number;
+  /** The stage queued or running now, if any. */
+  currentStage: string | null;
 }
 
 export interface Rescans {

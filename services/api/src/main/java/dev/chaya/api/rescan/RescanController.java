@@ -36,9 +36,9 @@ public class RescanController {
     }
 
     @Operation(summary = "Start a region re-scan of the floor from a FINALIZED source version",
-            description = "See docs/incremental-rescan.md.")
-    @ProblemResponse(status = 400, description = "REGION_TOO_SMALL, REGION_TOO_LARGE, INVALID_JSON")
-    @ProblemResponse(status = 409, description = "VERSION_NOT_FINALIZED, VERSION_WRONG_FLOOR, NOT_CALIBRATED")
+            description = "See docs/rescan.md.")
+    @ProblemResponse(status = 400, description = "REGION_INVALID, REGION_TOO_SMALL, REGION_TOO_LARGE, INVALID_JSON")
+    @ProblemResponse(status = 409, description = "VERSION_NOT_FINALIZED, VERSION_WRONG_FLOOR, PARENT_NOT_CURRENT, NOT_CALIBRATED")
     @PostMapping("/rescan")
     @ResponseStatus(HttpStatus.CREATED)
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR')")

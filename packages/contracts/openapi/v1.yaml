@@ -4955,7 +4955,7 @@ paths:
       - PUBLIC_VIEWER
   /api/v1/venues/{venueId}/floors/{floorId}/rescan:
     post:
-      description: See docs/incremental-rescan.md.
+      description: See docs/rescan.md.
       operationId: rescanInitiate
       parameters:
       - in: path
@@ -4988,7 +4988,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
-          description: "REGION_TOO_SMALL, REGION_TOO_LARGE, INVALID_JSON"
+          description: "REGION_INVALID, REGION_TOO_SMALL, REGION_TOO_LARGE, INVALID_JSON"
         "401":
           description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
             \ header)"
@@ -5011,7 +5011,8 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
-          description: "VERSION_NOT_FINALIZED, VERSION_WRONG_FLOOR, NOT_CALIBRATED"
+          description: "VERSION_NOT_FINALIZED, VERSION_WRONG_FLOOR, PARENT_NOT_CURRENT,\
+            \ NOT_CALIBRATED"
         "429":
           content:
             application/problem+json:
@@ -10132,6 +10133,12 @@ components:
         createdAt:
           type: string
           format: date-time
+        currentStage:
+          type: string
+        failedAlignmentGates:
+          type: array
+          items:
+            type: string
         finalizedAt:
           type: string
           format: date-time
@@ -10151,6 +10158,13 @@ components:
         regionAreaM2:
           type: number
           format: double
+        rejectedAt:
+          type: string
+          format: date-time
+        rejectionReason:
+          type: string
+        resultVersionCurrent:
+          type: boolean
         resultVersionId:
           type: string
           format: uuid
@@ -10171,6 +10185,12 @@ components:
           format: uuid
         runStatus:
           type: string
+        stagesCompleted:
+          type: integer
+          format: int32
+        stagesTotal:
+          type: integer
+          format: int32
     RescanInitiated:
       type: object
       properties:

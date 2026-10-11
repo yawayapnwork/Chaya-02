@@ -46,4 +46,32 @@ class PolygonGeometryTest {
         assertThat(PolygonGeometry.pointInPolygon(1.5, 1.5, lShape)).isFalse();
         assertThat(PolygonGeometry.pointInPolygon(1.5, 0.5, lShape)).isTrue();
     }
+
+    @Test
+    void aSimplePolygonHasNoSimplicityProblem() {
+        assertThat(PolygonGeometry.simplicityProblem(SQUARE)).isNull();
+        List<List<Double>> concaveL = List.of(List.of(0.0, 0.0), List.of(0.0, 2.0), List.of(1.0, 2.0), List.of(1.0, 1.0),
+            List.of(2.0, 1.0), List.of(2.0, 0.0));
+        assertThat(PolygonGeometry.simplicityProblem(concaveL)).isNull();
+    }
+
+    @Test
+    void aSelfIntersectingRegionIsNotSimple() {
+        // A bow-tie: its shoelace area is 0 (the halves cancel); with an offset it is positive but still has no inside.
+        List<List<Double>> bowTie = List.of(List.of(0.0, 0.0), List.of(3.0, 3.0), List.of(3.0, 0.0), List.of(0.0, 3.5));
+        assertThat(PolygonGeometry.area(bowTie)).isGreaterThan(0.0);
+        assertThat(PolygonGeometry.simplicityProblem(bowTie)).contains("cross");
+        // an edge that only touches another one at a vertex
+        List<List<Double>> pinched = List.of(List.of(0.0, 0.0), List.of(2.0, 0.0), List.of(1.0, 1.0), List.of(2.0, 2.0),
+            List.of(0.0, 2.0), List.of(1.0, 1.0));
+        assertThat(PolygonGeometry.simplicityProblem(pinched)).isNotNull();
+    }
+
+    @Test
+    void repeatedOrNonFiniteVerticesAreRefused() {
+        List<List<Double>> repeated = List.of(List.of(0.0, 0.0), List.of(0.0, 0.0), List.of(1.0, 1.0), List.of(1.0, 0.0));
+        assertThat(PolygonGeometry.simplicityProblem(repeated)).contains("same point");
+        List<List<Double>> infinite = List.of(List.of(0.0, 0.0), List.of(0.0, Double.POSITIVE_INFINITY), List.of(1.0, 0.0));
+        assertThat(PolygonGeometry.simplicityProblem(infinite)).contains("not finite");
+    }
 }

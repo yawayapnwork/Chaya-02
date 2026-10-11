@@ -82,6 +82,31 @@ class RescanServiceTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void aSelfIntersectingRegionIsRefused() {
+        var t = fx.tree();
+        UUID parent = fx.finalizedScanVersion(t.org(), t.venue(), t.scan(), t.floor(), 2);
+        RegionGeometry bowTie = new RegionGeometry(List.of(
+            List.of(0.0, 0.0), List.of(3.0, 3.0), List.of(3.0, 0.0), List.of(0.0, 3.5)));
+        assertThatThrownBy(() -> rescan.initiate(actorFor(t.org(), t.venue()), t.venue(), t.floor(), new RescanRequest(parent, bowTie, null)))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.code()).isEqualTo("REGION_INVALID"));
+        assertThat(jdbc.sql("SELECT count(*) FROM capture_session WHERE parent_scan_version_id = :v").param("v", parent)
+            .query(Integer.class).single()).as("no capture is created for an invalid region").isZero();
+    }
+
+    @Test
+    void aRescanOfAVersionTheFloorNoLongerPublishesIsRefusedBeforeAnythingIsCaptured() {
+        var t = fx.tree();
+        fx.calibratedFloor(t.org(), t.venue(), t.floor(), "FLOOR_LOCAL");
+        UUID v1 = fx.publishCurrentReconstruction(t.org(), t.venue(), t.floor());
+        UUID v2 = fx.publishNewReconstruction(t.org(), t.venue(), t.floor());
+        assertThatThrownBy(() -> rescan.initiate(actorFor(t.org(), t.venue()), t.venue(), t.floor(), new RescanRequest(v1, SQUARE, null)))
+            .as("its version could never be published over " + v2)
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.code()).isEqualTo("PARENT_NOT_CURRENT"));
+        assertThat(jdbc.sql("SELECT count(*) FROM capture_session WHERE parent_scan_version_id = :v").param("v", v1)
+            .query(Integer.class).single()).isZero();
+    }
+
+    @Test
     void cannotRescanAVersionWhoseReconstructionHasNoCalibratedFrame() {
         var t = fx.tree();
         UUID parent = fx.finalizedScanVersion(t.org(), t.venue(), t.scan(), t.floor(), 2);
@@ -146,12 +171,14 @@ class RescanServiceTest extends AbstractIntegrationTest {
 
         // A version with a navmesh: re-baked, even for a region far from every graph node. A region inside one large
         // navmesh polygon holds none of its nodes, and one where furniture was removed has no polygon yet; the old
-        // node-in-region test skipped both and the new version inherited a navmesh for geometry it no longer had.
+        // node-in-region test skipped both and the new version inherited a navmesh for geometry it no longer had. (On its own
+        // floor: a version that is not what its floor publishes cannot be re-scanned at all, PARENT_NOT_CURRENT.)
+        UUID otherFloor = fx.floor(t.org(), t.venue(), 1);
         UUID scan = fx.scan(t.org(), t.venue(), fx.captureSession(t.org(), t.venue()));
-        UUID withNavmesh = fx.finalizedScanVersion(t.org(), t.venue(), scan, t.floor(), 3, true);
+        UUID withNavmesh = fx.finalizedScanVersion(t.org(), t.venue(), scan, otherFloor, 3, true);
         RescanRequest farAway = new RescanRequest(withNavmesh, new RegionGeometry(List.of(List.of(50.0, 50.0), List.of(50.0, 53.0),
             List.of(53.0, 53.0), List.of(53.0, 50.0))), null);
-        assertThat(rescan.initiate(actor, t.venue(), t.floor(), farAway).navigationRebuildRequired()).isTrue();
+        assertThat(rescan.initiate(actor, t.venue(), otherFloor, farAway).navigationRebuildRequired()).isTrue();
     }
 
     /** A SUCCEEDED full-venue run on `floor` (its own capture session and scan). */

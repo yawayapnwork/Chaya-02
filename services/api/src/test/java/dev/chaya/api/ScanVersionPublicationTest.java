@@ -432,5 +432,38 @@ class ScanVersionPublicationTest extends PipelineTestSupport {
             .query(UUID.class).single();
         assertCode(() -> versions.promote(rescanOfV1, Map.of()), "PARENT_NOT_CURRENT");
         assertThat(versions.currentOf(t.floor())).contains(v2);
+        // Historical versions stay what they were: v1 is never published again over the newer v2.
+        assertCode(() -> versions.promote(v1, Map.of()), ScanVersionService.VERSION_SUPERSEDED);
+        assertThat(versions.currentOf(t.floor())).contains(v2);
+    }
+
+    // ---- out-of-order publication ----------------------------------------------------------------------------------------
+
+    @Test
+    void aFullRunThatStartedEarlierButFinishesLaterIsNotPublishedOverTheNewerVersion() throws Exception {
+        Ctx c = ctx();
+        // Run A starts first (the lower number) and stalls at NAVIGATION_BAKING, its last stage.
+        var a = startRunOn(c);
+        String frameA = drive(a, "SEMANTIC_INDEXING", "reception desk", true);
+        JsonNode aLast = claimExpecting("NAVIGATION_BAKING");
+        // Run B starts later and is published while A is still running.
+        var b = startRunOn(c);
+        drive(b, null, "vending machine", true);
+        UUID vA = versionOfRun(a.run());
+        UUID vB = versionOfRun(b.run());
+        assertThat(currentVersion(c.floor())).isEqualTo(vB);
+
+        // A finishes: every stage succeeded, but publishing it would undo B.
+        send(aLast, report("SUCCEEDED", navigationOutputs(aLast, frameA), null, null), svc).andExpect(status().isOk());
+        JsonNode run = processing(a).get("run");
+        assertThat(run.get("status").asText()).isEqualTo("FAILED");
+        assertThat(run.get("failureCode").asText()).isEqualTo(ScanVersionService.VERSION_SUPERSEDED);
+        assertThat(run.get("retryable").asBoolean()).as("no retry can make an older version newer").isFalse();
+        post(capUrl(c, a.capture()) + "/processing/retry", c.operator(), null).andExpect(status().isConflict())
+            .andExpect(jsonPath("$.code").value("RUN_NOT_RETRYABLE"));
+        assertThat(currentVersion(c.floor())).isEqualTo(vB);
+        assertThat(activeGraphVersions(c.floor())).containsOnly(vB.toString());
+        assertThat(jdbc.sql("SELECT status FROM scan_version WHERE id = :v").param("v", vA).query(String.class).single()).isEqualTo("DRAFT");
+        assertThat(pois.list(viewer(c), c.venue())).extracting(PoiService.Poi::label).containsExactly("vending machine");
     }
 }

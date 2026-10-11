@@ -202,6 +202,7 @@ class AlignmentMetrics:
     surface_rms_m: float  # RMS point-to-plane distance at correspondences (noise plus misalignment)
     icp_residual_m: float  # RMS point-to-point distance at correspondences (includes ~half the sampling spacing)
     confidence: float  # inlier_ratio * max(0, 1 - translation_residual_m / max_translation_residual_m), in [0, 1]
+    constraint_ratio: float = 0.0  # how well the overlap constrains its weakest rigid direction (see constraint_ratio)
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -240,10 +241,31 @@ def alignment_metrics(src: np.ndarray, dst: np.ndarray, transform: Similarity, *
         n_dst = surface_normals(dst, normal_k, tree)[j[corr]]
         omega, delta, surface_rms = residual_rigid_motion(moved[corr], dst[j[corr]], n_dst)
         rot_res, trans_res = float(np.degrees(np.linalg.norm(omega))), float(np.linalg.norm(delta))
+        constraint = constraint_ratio(moved[corr], n_dst)
     else:
-        icp_rmse, rot_res, trans_res, surface_rms = float("inf"), 90.0, float("inf"), float("inf")
+        icp_rmse, rot_res, trans_res, surface_rms, constraint = float("inf"), 90.0, float("inf"), float("inf"), 0.0
     return AlignmentMetrics(n_overlap, n_corr, float(ratio), float(transform.scale), rot_res, trans_res, surface_rms, icp_rmse,
-                            alignment_confidence(ratio, trans_res, max_translation_residual_m))
+                            alignment_confidence(ratio, trans_res, max_translation_residual_m), constraint)
+
+
+def constraint_ratio(p: np.ndarray, normals: np.ndarray) -> float:
+    """How well the overlapping surfaces pin down the rigid motion, in [0, 1]: sqrt(lambda_min / lambda_max) of the
+    point-to-plane information matrix sum a a^T, a = [(p - c) x n / L, n], with L the RMS lever arm, so rotation and
+    translation are compared in metres (Gelfand et al. 2003, "Geometrically stable sampling for the ICP algorithm").
+
+    residual_rigid_motion reports a direction that no surface constrains as zero residual. A floor alone cannot
+    fix a horizontal slide. A corridor's floor and one wall cannot fix a slide along the wall. In such a direction the
+    region may sit anywhere, and the residuals, the inlier ratio and the confidence all still look perfect. This ratio is
+    the evidence that every direction was observed. It is about 0 for those cases, and about 0.5 for a room corner."""
+    if len(p) < 6:
+        return 0.0
+    pc = p - p.mean(axis=0)
+    lever = float(np.sqrt(np.mean(np.sum(pc**2, axis=1))))
+    if lever <= 0:
+        return 0.0
+    a = np.hstack([np.cross(pc, normals) / lever, normals])
+    eig = np.linalg.eigvalsh(a.T @ a / len(a))
+    return float(np.sqrt(max(eig[0], 0.0) / eig[-1])) if eig[-1] > 0 else 0.0
 
 
 def residual_rigid_motion(p: np.ndarray, q: np.ndarray, normals: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
@@ -282,6 +304,10 @@ class AlignmentGates:
     max_translation_residual_m: float = 0.03
     max_icp_residual_m: float = 0.05
     min_confidence: float = 0.6
+    # every rigid direction must be observed by some overlapping surface (constraint_ratio): 0.05 separates the measured
+    # degenerate overlaps (open floor 0.02, corridor floor + one wall 0.02) from constrained ones (floor + one box 0.09,
+    # a room corner 0.44, a room 0.48), docs/rescan.md "QUALITY GATES"
+    min_constraint_ratio: float = 0.05
     # DIRECT_CANONICAL only: two surveyed calibrations must agree, so ICP may move the region only this far
     max_direct_rotation_correction_deg: float = 5.0
     max_direct_translation_correction_m: float = 0.5
@@ -333,6 +359,7 @@ def evaluate_gates(metrics: AlignmentMetrics, gates: AlignmentGates) -> GateRepo
     report.add("translation_residual_m", metrics.translation_residual_m, gates.max_translation_residual_m, "<=", "m")
     report.add("icp_residual_m", metrics.icp_residual_m, gates.max_icp_residual_m, "<=", "m")
     report.add("confidence", metrics.confidence, gates.min_confidence, ">=")
+    report.add("constraint_ratio", metrics.constraint_ratio, gates.min_constraint_ratio, ">=")
     return report
 
 

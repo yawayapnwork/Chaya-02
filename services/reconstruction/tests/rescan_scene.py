@@ -41,6 +41,13 @@ def room(seed: int, density: int = 600) -> np.ndarray:
     return np.vstack(parts)
 
 
+def corridor(seed: int, density: int = 400) -> np.ndarray:
+    """An 8 m corridor: a 2 m wide floor and one 2.5 m wall along +X. Nothing constrains a slide along X."""
+    rng = np.random.default_rng(seed)
+    return np.vstack([_rect(rng, [0, 0, 0], [8, 0, 0], [0, 2, 0], 16 * density),
+                      _rect(rng, [0, 0, 0], [8, 0, 0], [0, 0, 2.5], 20 * density)])
+
+
 def rotation_error_deg(a: Similarity, b: Similarity) -> float:
     """Angle of the relative rotation, as atan2(sin, cos). Not arccos((tr - 1) / 2): near zero arccos turns a single
     float64 rounding of the trace (~2e-16) into ~1.2e-6 degrees, so it cannot resolve the errors the exact-recovery

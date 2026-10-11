@@ -599,7 +599,15 @@ public class OpsDashboardService {
                        CAST(c.region_geometry AS text) AS region_geometry,
                        r.id AS run_id, r.status AS run_status, r.failure_stage, r.failure_code, r.finished_at AS run_finished_at,
                        sv.id AS sv_id, sv.version_number AS sv_number, sv.status AS sv_status, sv.alignment_confidence,
-                       sv.alignment_residual_m, sv.changed_artifact_kinds, sv.finalized_at
+                       sv.alignment_residual_m, sv.changed_artifact_kinds, sv.finalized_at,
+                       sv.id IS NOT NULL AND sv.id = f.current_scan_version_id AS sv_current, sv.rejected_at,
+                       sv.provenance ->> 'reason' AS rejection_reason,
+                       CAST(sv.alignment_report -> 'failed_gates' AS text) AS failed_gates,
+                       (SELECT count(DISTINCT sr.stage) FROM pipeline_stage_run sr WHERE sr.run_id = r.id AND sr.status = 'SUCCEEDED')
+                           AS stages_completed,
+                       coalesce(cardinality(r.stages), 0) AS stages_total,
+                       (SELECT j.stage FROM processing_job j WHERE j.run_id = r.id AND j.status IN ('QUEUED', 'RUNNING')
+                         ORDER BY j.created_at DESC LIMIT 1) AS current_stage
                   FROM capture_session c
                   JOIN scan_version pv ON pv.id = c.parent_scan_version_id
                   LEFT JOIN floor f ON f.id = c.floor_id
@@ -619,9 +627,23 @@ public class OpsDashboardService {
                 rs.getObject("sv_id", UUID.class), rs.getObject("sv_number") == null ? null : rs.getInt("sv_number"),
                 rs.getString("sv_status"), dbl(rs, "alignment_confidence"), dbl(rs, "alignment_residual_m"),
                 strings(rs, "changed_artifact_kinds"),
-                ts(rs, "finalized_at")))
+                ts(rs, "finalized_at"), rs.getBoolean("sv_current"), ts(rs, "rejected_at"), rs.getString("rejection_reason"),
+                failedGates(rs.getString("failed_gates")), rs.getInt("stages_completed"), rs.getInt("stages_total"),
+                rs.getString("current_stage")))
             .list();
         return new Rescans(list, asOf);
+    }
+
+    /** The alignment report's failed_gates (a JSON array of gate names), or none. */
+    private List<String> failedGates(String jsonArray) {
+        if (jsonArray == null) {
+            return List.of();
+        }
+        try {
+            return mapper.readValue(jsonArray, new com.fasterxml.jackson.core.type.TypeReference<List<String>>() {});
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            return List.of();
+        }
     }
 
     /** Area of the stored region polygon (same computation RescanService validated it with), or null if unreadable. */
