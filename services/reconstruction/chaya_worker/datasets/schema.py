@@ -1,8 +1,10 @@
-"""The project-specific object-detection dataset format: what a future Grounding DINO fine-tuning run
-would train on. This is deliberately separate from the runtime SEMANTIC_INDEXING pipeline -- it exists so
-humans (or a review workflow) can accumulate labelled, provenance-tracked examples from real venues over
-time, independent of and prior to any actual fine-tuning work (which has not happened yet; see
-chaya_worker.grounding_dino).
+"""The project's training/evaluation dataset format (schema ``chaya-dataset/2``): indoor images, object boxes, optional
+per-image semantic masks (floor, wall, furniture, clutter, stairs, ramp), provenance, licences, privacy evidence and
+train/val/test splits. Separate from the runtime pipeline: SEMANTIC_INDEXING and SEMANTIC_SEGMENTATION never read it;
+chaya_worker.training and benchmarks/b6_semantic_models do, and only after chaya_worker.datasets.validate passes.
+
+Version 1 datasets (boxes only, no splits) still load: every field added in version 2 has a default. The validator tells
+what a version 1 dataset lacks before it can be used.
 """
 
 from __future__ import annotations
@@ -38,6 +40,10 @@ class BoundingBox:
 
 REVIEW_STATUSES = ("unreviewed", "approved", "rejected")
 SOURCES = ("human", "model_assisted", "imported")
+SCHEMA_VERSION = "chaya-dataset/2"
+SPLITS = ("train", "val", "test")
+ORIGINS = ("capture", "public_dataset")
+IGNORE_INDEX = 255  # semantic mask value for pixels that are unlabelled, uncertain, or privacy-masked
 
 
 @dataclass(frozen=True)
@@ -70,12 +76,24 @@ class ImageRecord:
     relative_path: str  # under the dataset root's images/ directory
     width: int
     height: int
-    venue_id: str
+    venue_id: str | None  # None for a public-dataset image
     floor_id: str | None = None
     scan_id: str | None = None
     scan_version_id: str | None = None
     source_frame: str | None = None  # the original capture frame filename, if this was extracted from one
     captured_at: str | None = None
+    # ---- chaya-dataset/2 ----
+    split: str | None = None  # one of SPLITS
+    # Images that must never be split apart (frames of one capture, one public-dataset scene): leakage is checked per group.
+    group_id: str | None = None
+    content_sha256: str | None = None  # of the file under images/, as stored
+    origin: str = "capture"  # one of ORIGINS
+    license: str | None = None  # required for a public-dataset image (its own licence, e.g. a COCO image's Flickr licence)
+    source_url: str | None = None
+    # Required for origin "capture": evidence that the stored bytes are the anonymised frame (chaya_worker.datasets.capture_import).
+    privacy: dict[str, Any] | None = None
+    semantic_mask: str | None = None  # PNG under masks/, values index manifest.semantic_classes, IGNORE_INDEX = unlabelled
+    negative: bool = False  # deliberately has no objects (so "no annotations" is not a missing annotation)
 
     def __post_init__(self) -> None:
         if self.width <= 0 or self.height <= 0:
@@ -105,6 +123,15 @@ class DatasetManifest:
     created_at: str
     object_classes: tuple[str, ...]
     description: str = ""
+    # ---- chaya-dataset/2 ----
+    schema_version: str = "chaya-dataset/1"
+    source: str = ""  # where the images come from (a venue capture programme, "COCO 2017 val", ...)
+    license: str = ""  # the dataset's terms: annotations' licence, and how image licences are recorded
+    annotation_method: str = ""  # who/what drew the labels and how they were reviewed
+    semantic_classes: tuple[str, ...] = ()  # index = mask value; empty when the dataset has no masks
+    preprocessing: dict[str, Any] = field(default_factory=dict)  # selection rule, resizing, label mapping, tool versions
+    # Class imbalance warning threshold: most / least frequent class (instances, per split).
+    imbalance_ratio_warn: float = 20.0
 
 
 def to_dict(record: Any) -> dict[str, Any]:
@@ -113,6 +140,14 @@ def to_dict(record: Any) -> dict[str, Any]:
 
 def image_from_dict(d: dict[str, Any]) -> ImageRecord:
     return ImageRecord(**d)
+
+
+def manifest_from_dict(d: dict[str, Any]) -> DatasetManifest:
+    d = dict(d)
+    for key in ("object_classes", "semantic_classes"):
+        if key in d:
+            d[key] = tuple(d[key])
+    return DatasetManifest(**d)
 
 
 def annotation_from_dict(d: dict[str, Any]) -> Annotation:

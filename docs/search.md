@@ -120,7 +120,7 @@ embedding, and search cannot see it until it has one. `dev.chaya.api.search.PoiE
 | Normalisation | both | Every vector is divided by its L2 norm before it leaves the encoder; a merged detection's mean vector is re-normalised. |
 | Similarity | `SemanticSearchService` | pgvector cosine distance `<=>`; similarity = `1 - distance`, which for unit vectors is the dot product. |
 | Dimension | `poi_version.embedding`, `image_embedding` | `vector(512)`, checked in the encoders, the backfill and ingestion; a wrong width is refused, never padded or truncated. |
-| Model check | `SemanticSearchService` | Only rows whose `embedding_model` (and, for the image side, `image_embedding_model`) equals the model the query was embedded with are compared. Rows from any other model are left out, not scored in a foreign space. Nothing re-embeds them: the backfill only fills missing embeddings. |
+| Model check | `SemanticSearchService` | Only rows whose `embedding_model` (and, for the image side, `image_embedding_model`) equals the model the query was embedded with are compared. Rows from any other model are left out, not scored in a foreign space. Their text is re-embedded in the current model by the backfill ("Embedding model changes" below). |
 
 **Known deviation, measured and not changed here.** open_clip 3.3 warns that `ViT-B-32` + `openai` is a QuickGELU
 mismatch: the OpenAI checkpoint was trained with QuickGELU, `ViT-B-32` builds standard GELU. Worker and vision agree
@@ -230,9 +230,26 @@ not exist yet.
 6. Every query is logged to `search_query` with the number of **results** (not closest matches), so queries the
    venue has nothing for appear in the dashboard's zero-result view.
 
-## Fine-tuning dataset
+## Embedding model changes
 
-`chaya_worker.datasets` defines the on-disk format for project-specific annotations that a future
-Grounding DINO fine-tuning run would train on: `manifest.json`, `images/`, `images.jsonl`,
-`annotations.jsonl` (see `chaya_worker/datasets/scaffold.py`'s module docstring). It is independent of, and
-does not require, the runtime SEMANTIC_INDEXING pipeline above. No fine-tuning has happened yet.
+A POI's text embedding records the model that produced it (`embedding_model`). When the vision service is switched to
+another CLIP model, search immediately stops comparing the old vectors (they belong to another space). The backfill
+(`PoiEmbeddingBackfill`) then re-embeds them: when nothing is pending, at most once a minute (and continuously while a full
+batch was found) it asks the vision service which model it serves and re-embeds the POI text of every live POI whose
+embedding came from another model (`PoiEmbeddingService#reembedStale`). The database allows exactly that replacement:
+a new vector of a different model. Renaming the model of an existing vector, or overwriting a vector within one model,
+is refused by the `poi_version_guard` trigger (V35__poi_reembedding.sql).
+
+Detection crops (`image_embedding`) cannot be re-embedded by the API: it does not keep the crops. Until SEMANTIC_INDEXING
+runs again for the venue, search ignores image vectors of another model and ranks those detected objects by their label's
+text embedding. To restore image-based ranking after a model change, re-run processing for the venue's current capture.
+
+The worker (`Settings.clip_model_name` / `clip_pretrained`), the vision service (`CLIP_MODEL_NAME` / `CLIP_PRETRAINED`)
+and the API (vector(512)) must agree; `tests/unit/test_semantic_models.py` checks the defaults.
+
+## Datasets, training and evaluation
+
+`chaya_worker.datasets` (schema `chaya-dataset/2`) holds training and evaluation data: images with licences and privacy
+evidence, boxes, semantic masks, splits. `chaya_worker.training` fine-tunes the detector and the segmentation model on
+such a dataset, and benchmarks/b6_semantic_models measures a model on its held-out test split. No checkpoint trained by
+this project exists; every model in use is a stock checkpoint (docs/ML_EVALUATION.md).

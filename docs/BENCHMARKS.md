@@ -42,6 +42,8 @@ rescan timings. What *was* measured used:
 | 2 | Geometry cleanup | Statistical outlier removal targets weak points **6.6×** better than chance on real SfM evidence. The radius filter barely beats chance (1.3×) and removes over half the cloud. | Real data, proxy metric. Rendering quality, and semantic-aware cleanup: **unavailable**. |
 | 3 | Semantic search (CLIP + embedding job + relevance filter) | Yes for synonyms: top-1 **58.8% vs 5.9%** lexical without the filter. With the relevance filter (calibrated on a separate venue), **86.7%** of nonsense queries now correctly return nothing (was 0%), at a cost: answerable top-1 **79.5% → 70.5%**. With vision down, fallback p95 is now **5 ms** (was 3.8 s). Detected objects: **0/22 → 22/22** queries whose answer includes one now return it in the top 5, after ranking both kinds in CLIP text space. | Real system, small author-built datasets. Real crops stand in for Grounding DINO detections. |
 | 4 | Accessible routing | The router's rules hold on a self-test graph (stairs, a narrow passage and a floor change avoided). | Synthetic self-test. Real venue: **unavailable**. |
+| 6 | Semantic models (all **stock** checkpoints; none fine-tuned) | Baseline only: nothing has been trained, so there is nothing to compare against it yet. On 102 held-out COCO indoor images: segmentation mIoU **0.548**; detection mAP@0.5 **0.500** over 4 classes, with "table" at 0.07; CLIP text→crop recall@5 **0.744**. The reviewed class mapping beats the keyword rule by **+0.005 mIoU** (paired 95% CI +0.001 to +0.010): a mapping change, not a model change. | Real images and human labels, but COCO is not a venue, the sample is small, and the detector's pre-training overlaps COCO. Details: docs/ML_EVALUATION.md. |
+| 2c | Geometry cleanup, controlled | On synthetic scenes with ground truth, the outlier filters remove 86% of the noise at 99.95% precision and keep the stairs, ramp and mezzanine. Semantic-aware cleanup adds about nothing with perfect labels. With the stock model's measured label errors (drawn per point), precision falls to 0.37 and it removes 4% of the stairs and 9% of the thin furniture. | Synthetic scene; the noise and opacities are assumptions. |
 | 5 | Incremental rescan | Similarity alignment recovers known misalignments, **including a ×1.08 scale error**, to ~0.005° when noise-free, up to 30°. The quality gates rejected every failed alignment (**138/138**, 0 false accepts) and 18/118 correct ones. Noisy trials need a larger FPFH voxel. | Real geometry, controlled misalignment. Real rescan timings: **unavailable**. |
 
 ---
@@ -583,6 +585,22 @@ needs `SPLAT_RECONSTRUCTION` (CUDA):
 | Alignment error on a real re-capture | `scan_version.alignment_report` (gates, residuals); absolute error additionally needs surveyed control points |
 | Navigation rebuild scope | `navigation_node` counts of the ACTIVE graph before and after |
 | Semantic re-index scope | `audit_log` `rescan.downstream_applied` of the regional run: `poisSuperseded`, `poisCreated` |
+
+### 2c. Controlled synthetic scenes (measured on assumed geometry)
+
+`benchmarks/b2_geometry_cleanup/synthetic.py`: every method on the same 5 synthetic scenes with per-point ground truth,
+including two levels, stairs, a ramp, thin furniture and three noise types. It covers semantic-aware cleanup under oracle
+labels and under labels drawn from the stock segmentation model's measured confusion (B6). The results and their limits
+are in docs/ML_EVALUATION.md section 4. There is no PSNR/SSIM: a synthetic point set has no ground-truth renderings.
+
+## 5c. Benchmark 6: semantic models
+
+**Question.** How good are the stock segmentation, detection and retrieval models on held-out indoor images, as a fair
+baseline any trained checkpoint must beat on the same dataset lock?
+
+**Run:** `benchmarks/b6_semantic_models/run.py` in `chaya-ml-eval`. The dataset, the commands and every number are in
+docs/ML_EVALUATION.md. Detection, retrieval and 3D localization are reported separately. Localization is unavailable
+there, because COCO has no 3D truth.
 
 ## 6. Datasets that would turn "unavailable" into "measured"
 

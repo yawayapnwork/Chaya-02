@@ -85,9 +85,19 @@ Model weights are downloaded at runtime and have their own licenses, separate fr
 
 | Model | Used by | Note |
 |---|---|---|
-| `IDEA-Research/grounding-dino-tiny` | SEMANTIC_INDEXING | Check the model card license at the pinned revision (`GROUNDING_DINO_REVISION`). |
-| `nvidia/segformer-b0-finetuned-ade-512-512` | SEMANTIC_SEGMENTATION | NVIDIA's SegFormer weights have historically used a **non-commercial** license. Confirm it before any commercial use. |
-| CLIP ViT-B/32 "openai" (`open_clip`) | search embeddings | Check the terms of the specific pretrained checkpoint. |
+| `IDEA-Research/grounding-dino-tiny` | SEMANTIC_INDEXING | **Apache-2.0** (model card, checked 2026-10-11 at revision `a2bb814d…`). |
+| `nvidia/segformer-b0-finetuned-ade-512-512` | SEMANTIC_SEGMENTATION | **Research/evaluation only.** The model card points to the NVIDIA Source Code License for SegFormer (https://github.com/NVlabs/SegFormer/blob/master/LICENSE): the work and derivative works may be used "non-commercially", defined as "for research or evaluation purposes only". Checked 2026-10-11 at revision `489d5cd8…`. A model fine-tuned from these weights is a derivative work under the same terms. **This is the production default: replace it with a permissively licensed segmentation model before commercial use** (docs/ML_EVALUATION.md). |
+| CLIP ViT-B/32 "openai" (`open_clip`) | search embeddings | MIT (OpenAI CLIP). OpenAI's model card lists deployed use as out of scope without domain-specific testing. |
+
+The machine-readable record is `chaya_worker.model_provenance.STOCK_MODELS`; every SEMANTIC_LABELS and DETECTED_OBJECTS
+artifact carries the licence of the weights that produced it (`model_provenance`).
+
+### Evaluation data (not redistributed)
+
+| Data | Used by | Terms |
+|---|---|---|
+| COCO 2017 val panoptic annotations | `chaya_worker.datasets.coco_import`, benchmarks/b6_semantic_models | CC BY 4.0 (COCO Consortium) |
+| COCO 2017 val images (102 selected) | the same | Each image's own Flickr licence, recorded per image; only CC BY 2.0, CC BY-SA 2.0, "no known copyright restrictions" and U.S. Government work were selected. Downloaded to the evaluation machine, never committed. |
 | OpenCV Haar cascades | privacy stage | Shipped inside `opencv-python-headless` (Intel License Agreement, BSD-style). |
 
 ## Native code built from source (not scanned)

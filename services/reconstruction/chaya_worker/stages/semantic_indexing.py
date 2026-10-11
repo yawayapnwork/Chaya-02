@@ -90,6 +90,14 @@ def normalized_label(label: str) -> str:
     return " ".join(str(label).lower().split())
 
 
+def has_phrase(label: str) -> bool:
+    """Pure: whether a detection names anything. Grounding DINO returns an EMPTY phrase for a box whose text tokens all
+    score below text_threshold (benchmarks/b6_semantic_models: thousands at a low box threshold). Such a box has no label to
+    merge on or to become a POI's name -- poi_version.label must not be blank -- so it is dropped and counted, never
+    published under an invented name."""
+    return bool(normalized_label(label).strip("#"))
+
+
 def cluster_by_distance(objects: list[dict[str, Any]], distance: float) -> list[dict[str, Any]]:
     """Pure: greedy clustering of raw detections into physical objects. A detection joins a cluster only if it has the
     same detector label (normalized_label) AND lies within `distance` canonical metres of that cluster's running
@@ -218,6 +226,7 @@ class SemanticIndexing:
         crops: list[np.ndarray] = []
         frames_processed = 0
         dropped_privacy = 0
+        dropped_no_phrase = 0
         rejected = dict.fromkeys(REJECTIONS, 0)
         params = s.localization_params()
         metres_per_unit = to_canonical.scale  # the cloud's frame -> canonical: camera depths in metres
@@ -250,6 +259,9 @@ class SemanticIndexing:
             visible = visible_through_valid(px, visible, valid)
             depth_m = camera_depth(cloud.positions, cam["viewmat"]) * metres_per_unit
             for det in detections:
+                if not has_phrase(det.label):
+                    dropped_no_phrase += 1
+                    continue
                 x0, y0, x1, y1 = (int(max(0, v)) for v in det.box_xyxy)
                 x1, y1 = min(w, x1), min(h, y1)
                 if x1 <= x0 or y1 <= y0:
@@ -288,12 +300,15 @@ class SemanticIndexing:
             "coordinate_frame": frame_provenance(frame), "source": run_provenance(ctx, frame.id),
             "detector_model": detector.model_id, "detector_fine_tuned": detector.fine_tuned,
             "embedding_model": embedder.model_id, "embedding_dim": len(embeddings[0]) if len(embeddings) else 0,
+            "model_provenance": {"detector": detector.provenance.as_dict(), "embedding": embedder.provenance.as_dict()},
             "frames_processed": frames_processed, "raw_detection_count": len(raw_objects),
             "localization": {"method": LOCALIZATION_METHOD, "rejected": rejected}, "objects": objects})
         report_path = write_json(ctx.workdir / "semantic-indexing-report.json", {
             "detector_model": detector.model_id, "detector_fine_tuned": detector.fine_tuned, "embedding_model": embedder.model_id,
+            "model_provenance": {"detector": detector.provenance.as_dict(), "embedding": embedder.provenance.as_dict()},
             "frames_processed": frames_processed, "raw_detection_count": len(raw_objects), "object_count": len(objects),
-            "dropped_as_privacy_masked": dropped_privacy, "privacy_masks_applied": masks is not None,
+            "dropped_as_privacy_masked": dropped_privacy, "dropped_without_phrase": dropped_no_phrase,
+            "privacy_masks_applied": masks is not None,
             "localization": {"method": LOCALIZATION_METHOD, "params": params.__dict__, "rejected": rejected,
                              "multi_view_objects": sum(1 for o in objects if o["localization"]["status"] == "MULTI_VIEW")}})
 

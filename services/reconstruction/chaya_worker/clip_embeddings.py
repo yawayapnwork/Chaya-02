@@ -37,6 +37,14 @@ class ClipEmbedder:
     def model_id(self) -> str:
         return f"open_clip:{self.model_name}:{self.pretrained}"
 
+    @property
+    def provenance(self):
+        """Stock open_clip weights are identified by their pretrained tag; a local fine-tuned checkpoint is not supported
+        here (training CLIP is outside this project's training harness), so this is never fine-tuned."""
+        from .model_provenance import provenance
+
+        return provenance(self.model_id, requested_revision=self.pretrained, resolved_revision=None)
+
     def embed_images(self, images_rgb: list[np.ndarray]) -> np.ndarray:
         """(N, 512) float32, L2-normalised (so pgvector cosine distance == 1 - cosine similarity)."""
         if not images_rgb:

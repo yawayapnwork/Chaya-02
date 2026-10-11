@@ -91,6 +91,9 @@ class Settings:
     gsplat_allow_jit_backend: bool = False
     # SEMANTIC_SEGMENTATION
     semantic_confidence_min: float = 0.5
+    # A Gaussian whose winning class holds less than this share of its confidence-weighted votes is labelled "unknown"
+    # (uncertain) instead of taking the narrow winner. 0 keeps every winner (the behaviour before this setting existed).
+    semantic_min_vote_share: float = 0.0
     semantic_sample_every: int = 1  # segment every Nth registered frame (cost control)
     semantic_segmentation_model: str = "nvidia/segformer-b0-finetuned-ade-512-512"
     semantic_segmentation_revision: str = ""  # commit SHA; empty = unpinned (logged)
@@ -308,6 +311,7 @@ class Settings:
             gsplat_min_training_frames=_int(e, "GSPLAT_MIN_TRAINING_FRAMES", d.gsplat_min_training_frames),
             gsplat_allow_jit_backend=e.get("GSPLAT_ALLOW_JIT_BACKEND", "false").strip().lower() == "true",
             semantic_confidence_min=_float(e, "SEMANTIC_CONFIDENCE_MIN", d.semantic_confidence_min),
+            semantic_min_vote_share=_float(e, "SEMANTIC_MIN_VOTE_SHARE", d.semantic_min_vote_share),
             semantic_sample_every=_int(e, "SEMANTIC_SAMPLE_EVERY", d.semantic_sample_every),
             semantic_segmentation_model=e.get("SEMANTIC_SEGMENTATION_MODEL", d.semantic_segmentation_model),
             semantic_segmentation_revision=e.get("SEMANTIC_SEGMENTATION_REVISION", d.semantic_segmentation_revision),
@@ -427,7 +431,7 @@ class Settings:
             "gsplat_min_compute_capability": self.gsplat_min_compute_capability,
             "gsplat_min_training_frames": self.gsplat_min_training_frames,
             "gsplat_allow_jit_backend": self.gsplat_allow_jit_backend,
-            "semantic_confidence_min": self.semantic_confidence_min, "semantic_sample_every": self.semantic_sample_every,
+            "semantic_confidence_min": self.semantic_confidence_min, "semantic_min_vote_share": self.semantic_min_vote_share, "semantic_sample_every": self.semantic_sample_every,
             "semantic_segmentation_model": self.semantic_segmentation_model,
             "semantic_segmentation_revision": self.semantic_segmentation_revision or None,
             "cleanup_stat_nb_neighbors": self.cleanup_stat_nb_neighbors, "cleanup_stat_std_ratio": self.cleanup_stat_std_ratio,

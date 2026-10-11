@@ -1,0 +1,670 @@
+{
+ "source": "COCO 2017 panoptic_val2017.json categories (CC BY 4.0)",
+ "categories": [
+  {
+   "id": 1,
+   "name": "person",
+   "isthing": 1
+  },
+  {
+   "id": 2,
+   "name": "bicycle",
+   "isthing": 1
+  },
+  {
+   "id": 3,
+   "name": "car",
+   "isthing": 1
+  },
+  {
+   "id": 4,
+   "name": "motorcycle",
+   "isthing": 1
+  },
+  {
+   "id": 5,
+   "name": "airplane",
+   "isthing": 1
+  },
+  {
+   "id": 6,
+   "name": "bus",
+   "isthing": 1
+  },
+  {
+   "id": 7,
+   "name": "train",
+   "isthing": 1
+  },
+  {
+   "id": 8,
+   "name": "truck",
+   "isthing": 1
+  },
+  {
+   "id": 9,
+   "name": "boat",
+   "isthing": 1
+  },
+  {
+   "id": 10,
+   "name": "traffic light",
+   "isthing": 1
+  },
+  {
+   "id": 11,
+   "name": "fire hydrant",
+   "isthing": 1
+  },
+  {
+   "id": 13,
+   "name": "stop sign",
+   "isthing": 1
+  },
+  {
+   "id": 14,
+   "name": "parking meter",
+   "isthing": 1
+  },
+  {
+   "id": 15,
+   "name": "bench",
+   "isthing": 1
+  },
+  {
+   "id": 16,
+   "name": "bird",
+   "isthing": 1
+  },
+  {
+   "id": 17,
+   "name": "cat",
+   "isthing": 1
+  },
+  {
+   "id": 18,
+   "name": "dog",
+   "isthing": 1
+  },
+  {
+   "id": 19,
+   "name": "horse",
+   "isthing": 1
+  },
+  {
+   "id": 20,
+   "name": "sheep",
+   "isthing": 1
+  },
+  {
+   "id": 21,
+   "name": "cow",
+   "isthing": 1
+  },
+  {
+   "id": 22,
+   "name": "elephant",
+   "isthing": 1
+  },
+  {
+   "id": 23,
+   "name": "bear",
+   "isthing": 1
+  },
+  {
+   "id": 24,
+   "name": "zebra",
+   "isthing": 1
+  },
+  {
+   "id": 25,
+   "name": "giraffe",
+   "isthing": 1
+  },
+  {
+   "id": 27,
+   "name": "backpack",
+   "isthing": 1
+  },
+  {
+   "id": 28,
+   "name": "umbrella",
+   "isthing": 1
+  },
+  {
+   "id": 31,
+   "name": "handbag",
+   "isthing": 1
+  },
+  {
+   "id": 32,
+   "name": "tie",
+   "isthing": 1
+  },
+  {
+   "id": 33,
+   "name": "suitcase",
+   "isthing": 1
+  },
+  {
+   "id": 34,
+   "name": "frisbee",
+   "isthing": 1
+  },
+  {
+   "id": 35,
+   "name": "skis",
+   "isthing": 1
+  },
+  {
+   "id": 36,
+   "name": "snowboard",
+   "isthing": 1
+  },
+  {
+   "id": 37,
+   "name": "sports ball",
+   "isthing": 1
+  },
+  {
+   "id": 38,
+   "name": "kite",
+   "isthing": 1
+  },
+  {
+   "id": 39,
+   "name": "baseball bat",
+   "isthing": 1
+  },
+  {
+   "id": 40,
+   "name": "baseball glove",
+   "isthing": 1
+  },
+  {
+   "id": 41,
+   "name": "skateboard",
+   "isthing": 1
+  },
+  {
+   "id": 42,
+   "name": "surfboard",
+   "isthing": 1
+  },
+  {
+   "id": 43,
+   "name": "tennis racket",
+   "isthing": 1
+  },
+  {
+   "id": 44,
+   "name": "bottle",
+   "isthing": 1
+  },
+  {
+   "id": 46,
+   "name": "wine glass",
+   "isthing": 1
+  },
+  {
+   "id": 47,
+   "name": "cup",
+   "isthing": 1
+  },
+  {
+   "id": 48,
+   "name": "fork",
+   "isthing": 1
+  },
+  {
+   "id": 49,
+   "name": "knife",
+   "isthing": 1
+  },
+  {
+   "id": 50,
+   "name": "spoon",
+   "isthing": 1
+  },
+  {
+   "id": 51,
+   "name": "bowl",
+   "isthing": 1
+  },
+  {
+   "id": 52,
+   "name": "banana",
+   "isthing": 1
+  },
+  {
+   "id": 53,
+   "name": "apple",
+   "isthing": 1
+  },
+  {
+   "id": 54,
+   "name": "sandwich",
+   "isthing": 1
+  },
+  {
+   "id": 55,
+   "name": "orange",
+   "isthing": 1
+  },
+  {
+   "id": 56,
+   "name": "broccoli",
+   "isthing": 1
+  },
+  {
+   "id": 57,
+   "name": "carrot",
+   "isthing": 1
+  },
+  {
+   "id": 58,
+   "name": "hot dog",
+   "isthing": 1
+  },
+  {
+   "id": 59,
+   "name": "pizza",
+   "isthing": 1
+  },
+  {
+   "id": 60,
+   "name": "donut",
+   "isthing": 1
+  },
+  {
+   "id": 61,
+   "name": "cake",
+   "isthing": 1
+  },
+  {
+   "id": 62,
+   "name": "chair",
+   "isthing": 1
+  },
+  {
+   "id": 63,
+   "name": "couch",
+   "isthing": 1
+  },
+  {
+   "id": 64,
+   "name": "potted plant",
+   "isthing": 1
+  },
+  {
+   "id": 65,
+   "name": "bed",
+   "isthing": 1
+  },
+  {
+   "id": 67,
+   "name": "dining table",
+   "isthing": 1
+  },
+  {
+   "id": 70,
+   "name": "toilet",
+   "isthing": 1
+  },
+  {
+   "id": 72,
+   "name": "tv",
+   "isthing": 1
+  },
+  {
+   "id": 73,
+   "name": "laptop",
+   "isthing": 1
+  },
+  {
+   "id": 74,
+   "name": "mouse",
+   "isthing": 1
+  },
+  {
+   "id": 75,
+   "name": "remote",
+   "isthing": 1
+  },
+  {
+   "id": 76,
+   "name": "keyboard",
+   "isthing": 1
+  },
+  {
+   "id": 77,
+   "name": "cell phone",
+   "isthing": 1
+  },
+  {
+   "id": 78,
+   "name": "microwave",
+   "isthing": 1
+  },
+  {
+   "id": 79,
+   "name": "oven",
+   "isthing": 1
+  },
+  {
+   "id": 80,
+   "name": "toaster",
+   "isthing": 1
+  },
+  {
+   "id": 81,
+   "name": "sink",
+   "isthing": 1
+  },
+  {
+   "id": 82,
+   "name": "refrigerator",
+   "isthing": 1
+  },
+  {
+   "id": 84,
+   "name": "book",
+   "isthing": 1
+  },
+  {
+   "id": 85,
+   "name": "clock",
+   "isthing": 1
+  },
+  {
+   "id": 86,
+   "name": "vase",
+   "isthing": 1
+  },
+  {
+   "id": 87,
+   "name": "scissors",
+   "isthing": 1
+  },
+  {
+   "id": 88,
+   "name": "teddy bear",
+   "isthing": 1
+  },
+  {
+   "id": 89,
+   "name": "hair drier",
+   "isthing": 1
+  },
+  {
+   "id": 90,
+   "name": "toothbrush",
+   "isthing": 1
+  },
+  {
+   "id": 92,
+   "name": "banner",
+   "isthing": 0
+  },
+  {
+   "id": 93,
+   "name": "blanket",
+   "isthing": 0
+  },
+  {
+   "id": 95,
+   "name": "bridge",
+   "isthing": 0
+  },
+  {
+   "id": 100,
+   "name": "cardboard",
+   "isthing": 0
+  },
+  {
+   "id": 107,
+   "name": "counter",
+   "isthing": 0
+  },
+  {
+   "id": 109,
+   "name": "curtain",
+   "isthing": 0
+  },
+  {
+   "id": 112,
+   "name": "door-stuff",
+   "isthing": 0
+  },
+  {
+   "id": 118,
+   "name": "floor-wood",
+   "isthing": 0
+  },
+  {
+   "id": 119,
+   "name": "flower",
+   "isthing": 0
+  },
+  {
+   "id": 122,
+   "name": "fruit",
+   "isthing": 0
+  },
+  {
+   "id": 125,
+   "name": "gravel",
+   "isthing": 0
+  },
+  {
+   "id": 128,
+   "name": "house",
+   "isthing": 0
+  },
+  {
+   "id": 130,
+   "name": "light",
+   "isthing": 0
+  },
+  {
+   "id": 133,
+   "name": "mirror-stuff",
+   "isthing": 0
+  },
+  {
+   "id": 138,
+   "name": "net",
+   "isthing": 0
+  },
+  {
+   "id": 141,
+   "name": "pillow",
+   "isthing": 0
+  },
+  {
+   "id": 144,
+   "name": "platform",
+   "isthing": 0
+  },
+  {
+   "id": 145,
+   "name": "playingfield",
+   "isthing": 0
+  },
+  {
+   "id": 147,
+   "name": "railroad",
+   "isthing": 0
+  },
+  {
+   "id": 148,
+   "name": "river",
+   "isthing": 0
+  },
+  {
+   "id": 149,
+   "name": "road",
+   "isthing": 0
+  },
+  {
+   "id": 151,
+   "name": "roof",
+   "isthing": 0
+  },
+  {
+   "id": 154,
+   "name": "sand",
+   "isthing": 0
+  },
+  {
+   "id": 155,
+   "name": "sea",
+   "isthing": 0
+  },
+  {
+   "id": 156,
+   "name": "shelf",
+   "isthing": 0
+  },
+  {
+   "id": 159,
+   "name": "snow",
+   "isthing": 0
+  },
+  {
+   "id": 161,
+   "name": "stairs",
+   "isthing": 0
+  },
+  {
+   "id": 166,
+   "name": "tent",
+   "isthing": 0
+  },
+  {
+   "id": 168,
+   "name": "towel",
+   "isthing": 0
+  },
+  {
+   "id": 171,
+   "name": "wall-brick",
+   "isthing": 0
+  },
+  {
+   "id": 175,
+   "name": "wall-stone",
+   "isthing": 0
+  },
+  {
+   "id": 176,
+   "name": "wall-tile",
+   "isthing": 0
+  },
+  {
+   "id": 177,
+   "name": "wall-wood",
+   "isthing": 0
+  },
+  {
+   "id": 178,
+   "name": "water-other",
+   "isthing": 0
+  },
+  {
+   "id": 180,
+   "name": "window-blind",
+   "isthing": 0
+  },
+  {
+   "id": 181,
+   "name": "window-other",
+   "isthing": 0
+  },
+  {
+   "id": 184,
+   "name": "tree-merged",
+   "isthing": 0
+  },
+  {
+   "id": 185,
+   "name": "fence-merged",
+   "isthing": 0
+  },
+  {
+   "id": 186,
+   "name": "ceiling-merged",
+   "isthing": 0
+  },
+  {
+   "id": 187,
+   "name": "sky-other-merged",
+   "isthing": 0
+  },
+  {
+   "id": 188,
+   "name": "cabinet-merged",
+   "isthing": 0
+  },
+  {
+   "id": 189,
+   "name": "table-merged",
+   "isthing": 0
+  },
+  {
+   "id": 190,
+   "name": "floor-other-merged",
+   "isthing": 0
+  },
+  {
+   "id": 191,
+   "name": "pavement-merged",
+   "isthing": 0
+  },
+  {
+   "id": 192,
+   "name": "mountain-merged",
+   "isthing": 0
+  },
+  {
+   "id": 193,
+   "name": "grass-merged",
+   "isthing": 0
+  },
+  {
+   "id": 194,
+   "name": "dirt-merged",
+   "isthing": 0
+  },
+  {
+   "id": 195,
+   "name": "paper-merged",
+   "isthing": 0
+  },
+  {
+   "id": 196,
+   "name": "food-other-merged",
+   "isthing": 0
+  },
+  {
+   "id": 197,
+   "name": "building-other-merged",
+   "isthing": 0
+  },
+  {
+   "id": 198,
+   "name": "rock-merged",
+   "isthing": 0
+  },
+  {
+   "id": 199,
+   "name": "wall-other-merged",
+   "isthing": 0
+  },
+  {
+   "id": 200,
+   "name": "rug-merged",
+   "isthing": 0
+  }
+ ]
+}

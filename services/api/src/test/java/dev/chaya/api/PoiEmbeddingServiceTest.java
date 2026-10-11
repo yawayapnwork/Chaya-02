@@ -1,6 +1,7 @@
 package dev.chaya.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.chaya.api.poi.PoiService;
 import dev.chaya.api.poi.PoiService.PoiData;
@@ -15,6 +16,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataAccessException;
 
 /**
  * The POI embedding backfill against real PostgreSQL/pgvector and the real poi_version immutability trigger, with the
@@ -173,6 +175,53 @@ class PoiEmbeddingServiceTest extends AbstractIntegrationTest {
         Boolean imageKept = jdbc.sql("SELECT image_embedding = CAST(:e AS vector) FROM poi_version WHERE poi_id = :p")
             .param("e", TestEmbeddingConfig.vectorLiteral(crop)).param("p", poi).query(Boolean.class).single();
         assertThat(imageKept).as("image space: the crop, untouched").isTrue();
+    }
+
+    @Test
+    void aModelChangeReEmbedsPoisOfTheOldModelAndNeverMixesTheSpaces() {
+        var t = fx.tree();
+        Actor a = manager(t.org(), t.venue());
+        // A POI embedded by the model the vision service served before.
+        UUID old = jdbc.sql("INSERT INTO poi (organization_id, venue_id, floor_id) VALUES (:o, :v, :f) RETURNING id")
+            .param("o", t.org()).param("v", t.venue()).param("f", t.floor()).query(UUID.class).single();
+        jdbc.sql("INSERT INTO poi_version (organization_id, venue_id, poi_id, version_number, label, tags, x, y, z, "
+                + "embedding, embedding_model, source, created_by) VALUES (:o, :v, :p, 1, 'Reception desk', '{front desk}', 0, 0, 0, "
+                + "CAST(:e AS vector), 'open_clip:OLD-MODEL:retired', 'MANUAL', 'test')")
+            .param("o", t.org()).param("v", t.venue()).param("p", old)
+            .param("e", TestEmbeddingConfig.vectorLiteral(TestEmbeddingConfig.embedFor("old space"))).update();
+        var current = pois.create(a, t.venue(), new PoiData(t.floor(), null, "Cafe", "food", null, List.of("coffee"), 12, 0, -4));
+        embeddings.embedPending(10_000);
+        Row currentBefore = version(current.id(), 1);
+        String query = PoiEmbeddingService.embeddingText("Reception desk", null, List.of("front desk"));
+        assertThat(search.search(a, t.venue(), query, null, null, null).results())
+            .as("an old-model vector is never compared with a query of the new model").extracting(r -> r.label()).doesNotContain("Reception desk");
+
+        // Vision down: nothing is written.
+        TestEmbeddingConfig.UNAVAILABLE.set(true);
+        assertThat(embeddings.reembedStale(10_000).stoppedBecause()).isNotNull();
+        assertThat(version(old, 1).model()).isEqualTo("open_clip:OLD-MODEL:retired");
+        TestEmbeddingConfig.UNAVAILABLE.set(false);
+
+        PoiEmbeddingService.Result r = embeddings.reembedStale(10_000);
+        assertThat(r.stoppedBecause()).isNull();
+        assertThat(r.embedded()).isGreaterThanOrEqualTo(1);
+        assertThat(version(old, 1).model()).isEqualTo(TestEmbeddingConfig.MODEL);
+        assertThat(embeddingIs(old, 1, TestEmbeddingConfig.embedFor(query))).as("the POI's own text, in the new model").isTrue();
+        assertThat(version(current.id(), 1)).as("a vector of the current model is not touched").isEqualTo(currentBefore);
+        assertThat(search.search(a, t.venue(), query, null, null, null).results().get(0).label()).isEqualTo("Reception desk");
+
+        // Within one model an embedding is still set once: the trigger refuses a same-model overwrite.
+        assertThatThrownBy(() -> jdbc.sql("UPDATE poi_version SET embedding = CAST(:e AS vector) WHERE poi_id = :p")
+                .param("e", TestEmbeddingConfig.vectorLiteral(TestEmbeddingConfig.embedFor("tampered"))).param("p", old).update())
+            .isInstanceOf(DataAccessException.class);
+        // Renaming the model of an existing vector would mix spaces: refused.
+        assertThatThrownBy(() -> jdbc.sql("UPDATE poi_version SET embedding_model = 'open_clip:NEXT:model' WHERE poi_id = :p")
+                .param("p", old).update())
+            .isInstanceOf(DataAccessException.class);
+        // ... and nothing but the embedding pair may change on the way.
+        assertThatThrownBy(() -> jdbc.sql("UPDATE poi_version SET label = 'x', embedding_model = 'another' WHERE poi_id = :p")
+                .param("p", old).update())
+            .isInstanceOf(DataAccessException.class);
     }
 
     @Test

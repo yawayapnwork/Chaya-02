@@ -24,6 +24,10 @@ import org.springframework.stereotype.Service;
  *
  * <p>The vision call happens outside any transaction. The write is {@code UPDATE ... WHERE embedding IS NULL}: the one
  * update the immutability trigger allows, and a no-op if another API instance got there first.
+ *
+ * <p>When the vision service's model changes, {@link #reembedStale} re-embeds the text of every live POI whose embedding
+ * came from another model (V35__poi_reembedding.sql). Until then search simply does not see those POIs by meaning: it never
+ * compares vectors of different models.
  */
 @Service
 public class PoiEmbeddingService {
@@ -42,6 +46,20 @@ public class PoiEmbeddingService {
              ORDER BY v.created_at
              LIMIT :n
             """;
+
+    private static final String STALE = """
+            SELECT v.id, v.label, v.category, v.tags
+              FROM poi_version v
+              JOIN poi p ON p.id = v.poi_id
+             WHERE v.embedding IS NOT NULL AND v.embedding_model IS DISTINCT FROM :model
+               AND p.deleted_at IS NULL
+               AND v.version_number = (SELECT max(version_number) FROM poi_version WHERE poi_id = v.poi_id)
+             ORDER BY v.created_at
+             LIMIT :n
+            """;
+
+    /** Text used only to ask the vision service which model it serves; its vector is discarded. */
+    static final String MODEL_PROBE_TEXT = "chaya embedding model probe";
 
     record Pending(UUID id, String label, String category, List<String> tags) {}
 
@@ -111,6 +129,52 @@ public class PoiEmbeddingService {
                 embedded++;
             } else {
                 skipped++; // embedded concurrently by another instance
+            }
+        }
+        return new Result(embedded, skipped, null);
+    }
+
+    /**
+     * Re-embeds, in the model the vision service serves now, up to {@code batchSize} live POI versions whose text
+     * embedding came from another model. The current model is learned from one probe call per pass. Stops without writing
+     * when the service is unavailable, has the wrong dimension, or changes model during the pass (the next pass continues).
+     */
+    public Result reembedStale(int batchSize) {
+        String model;
+        try {
+            model = embeddings.embedWithModel(MODEL_PROBE_TEXT).model();
+        } catch (EmbeddingUnavailableException ex) {
+            return new Result(0, 0, ex.getMessage());
+        }
+        List<Pending> stale = jdbc.sql(STALE).param("model", model).param("n", batchSize)
+            .query((rs, i) -> new Pending(rs.getObject("id", UUID.class), rs.getString("label"), rs.getString("category"),
+                List.of((String[]) rs.getArray("tags").getArray())))
+            .list();
+        int embedded = 0;
+        int skipped = 0;
+        for (Pending p : stale) {
+            TextEmbeddingClient.Embedding e;
+            try {
+                e = embeddings.embedWithModel(embeddingText(p.label(), p.category(), p.tags()));
+            } catch (EmbeddingUnavailableException ex) {
+                return new Result(embedded, skipped, ex.getMessage());
+            }
+            if (!model.equals(e.model())) {
+                return new Result(embedded, skipped, "the embedding model changed from " + model + " to " + e.model() + " during the pass");
+            }
+            if (e.vector().length != EMBEDDING_DIM) {
+                log.error("embedding model {} produced {}-d vectors, the schema stores {}-d; POI version {} keeps its {} embedding",
+                    e.model(), e.vector().length, EMBEDDING_DIM, p.id(), "earlier");
+                return new Result(embedded, skipped, "embedding model " + e.model() + " has the wrong dimension");
+            }
+            int rows = jdbc.sql("UPDATE poi_version SET embedding = CAST(:e AS vector), embedding_model = :m "
+                    + "WHERE id = :id AND embedding IS NOT NULL AND embedding_model IS DISTINCT FROM :m")
+                .param("e", SemanticSearchService.vectorLiteral(e.vector())).param("m", e.model()).param("id", p.id())
+                .update();
+            if (rows == 1) {
+                embedded++;
+            } else {
+                skipped++;
             }
         }
         return new Result(embedded, skipped, null);
