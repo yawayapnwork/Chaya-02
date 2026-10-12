@@ -10,6 +10,8 @@ Native iOS AR navigation client. iOS Safari has no WebXR, so iOS gets this app i
 >   `macos-14`): `BUILD SUCCEEDED` for `generic/platform=iOS`, and the 9 app-level tests passed in the iOS Simulator.
 > - The scan-version changes after that run (version pinning, versioned routes, route-leg checks) are type-checked
 >   only by the next `ios` run; on Windows/Linux they were syntax-checked (`swiftc -parse`) and the core tests run.
+>   Every `ios` run since `fb7e65f` (2026-10-05) builds the app and fails one app-level test (`ReferenceImageTests`: a
+>   stale fixture anchor without a scan version; docs/TEST_REPRODUCIBILITY.md, "CI status").
 > - Nothing has run with a camera. The Simulator has no ARKit world tracking, so CI proves the code compiles and the
 >   non-camera logic works, not that markers are detected or the route is placed correctly.
 > - The app shows a "NOT DEVICE-VALIDATED" banner on every screen (`DeviceValidation.status`) until

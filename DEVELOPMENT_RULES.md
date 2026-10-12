@@ -25,7 +25,23 @@
 ## What "no fake functionality" means in practice
 - No random, hardcoded, or placeholder outputs standing in for scan results, detections, paths, AR coordinates, or AI responses.
 - Test fixtures live under `test` directories only and are never seeded into non-test environments.
-- If a pipeline stage is missing, expose a real contract and return `PIPELINE_UNAVAILABLE` (HTTP 501/503 problem+json). UI shows that state explicitly.
+- If a capability cannot run, fail with a stable, actionable code instead of producing output, and show that state in
+  the UI. In the pipeline: a missing tool, library or GPU is `DEPENDENCY_UNAVAILABLE` (structured, retryable, with the
+  missing items listed); a stage that is planned but not written is `STAGE_NOT_IMPLEMENTED` (none exists today); a
+  metric consumer without a calibrated frame is `NOT_CALIBRATED`. In the API: `NAVMESH_NOT_READY`,
+  `VERSION_NOT_FINALIZED`, `DATABASE_UNAVAILABLE` and the other problem+json codes in `packages/contracts/openapi/v1.yaml`.
+  (Earlier versions of this file named a `PIPELINE_UNAVAILABLE` code; it was never implemented.)
+
+## Claiming status
+- A capability's status names the highest level actually reached: implemented, unit-tested, integration-tested,
+  fixture-validated, real-venue executed, physical-device validated (PROJECT_PLAN.md). Code existing is "implemented",
+  never "done" or "validated".
+- Never describe a stage as unimplemented when it is implemented but blocked by a missing dependency, and never
+  describe it as working when it has only been tested with stubs or fixtures. Name the missing prerequisite.
+- Validation records (docs/E2E_VALIDATION.md, the dated audits, benchmark results) are history: add a dated note when
+  something changes; do not rewrite or delete a recorded failure.
+- A command in the documentation has either been run (say when) or is labelled with the prerequisite that kept it from
+  being run.
 
 ## Workflow
 - Small commits, one milestone slice each; tests in the same commit.

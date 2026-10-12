@@ -5,7 +5,9 @@ tracking does not run in the iOS Simulator (`ARWorldTrackingConfiguration.isSupp
 the app and run its simulator tests, but it cannot detect a printed image, localize or draw the route in a room.
 
 **Status: NOT RUN.** The app was written without a Mac, Xcode or iPhone. It compiles and its Simulator tests pass in
-the `ios` CI workflow (first green: run 36734833669, 2026-09-30, Xcode 15.4); it has never run on a device. Until this
+the `ios` CI workflow (first green: run 36734833669, 2026-09-30, Xcode 15.4); it has never run on a device. Since
+`fb7e65f` (2026-10-05) the `ios` app job fails one stale Simulator test (`ReferenceImageTests`; the app still builds;
+docs/TEST_REPRODUCIBILITY.md, "CI status"). Until this
 procedure has passed on at least one device and the record at the bottom has been filled in, iOS AR is not validated.
 Keep `DeviceValidation.status` at `.notValidated`; the app then shows the "NOT DEVICE-VALIDATED" banner.
 

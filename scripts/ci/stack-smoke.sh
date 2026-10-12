@@ -7,9 +7,10 @@
 #
 # What it proves: an uploaded video is scanned and accepted, processing starts, the worker runs the CPU stages
 # (validation, frame extraction, quality filter, privacy) for real, PII staging objects are purged, and the run stops
-# with a structured, retryable DEPENDENCY_UNAVAILABLE at the first GPU stage (POSE_ESTIMATION) -- the GPU stages are
-# EXCLUDED here by construction (no GPU, no COLMAP), never faked. Artifact generation is covered by the worker smoke
-# test (services/reconstruction/tests/smoke), which runs without the stack.
+# with a structured, retryable DEPENDENCY_UNAVAILABLE at POSE_ESTIMATION, the first stage that needs a tool this host
+# lacks (COLMAP; the stages after it need CUDA/gsplat, Open3D and the models). Those stages are implemented, but they
+# are EXCLUDED here by construction, never faked. Artifact generation is covered by the worker smoke test
+# (services/reconstruction/tests/smoke), which runs without the stack.
 #
 # Everything is throwaway: random credentials in a temp env file, containers and volumes removed at the end.
 set -euo pipefail

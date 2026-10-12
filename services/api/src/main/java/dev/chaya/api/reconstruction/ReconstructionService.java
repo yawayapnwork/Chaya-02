@@ -24,11 +24,12 @@ import org.springframework.transaction.annotation.Transactional;
  * is the honest signal that a real, loadable .ksplat exists, not pipeline_run.status.
  *
  * <p>pipeline_run.status is deliberately NOT used to decide whether a reconstruction is viewable: the
- * plan also includes NAVIGATION_BAKING and SEMANTIC_INDEXING (chaya_worker.stages.unimplemented), which
- * are not implemented yet and always fail the run overall (see docs/pipeline.md). A run can therefore end
- * FAILED at NAVIGATION_BAKING while still holding a perfectly real, complete reconstruction from the
- * stage before it. Keying off the ARTIFACT_GENERATION stage_run directly is what lets the viewer show
- * that reconstruction instead of "No reconstruction available" for every run that exists today.
+ * plan runs SEMANTIC_INDEXING and NAVIGATION_BAKING after ARTIFACT_GENERATION, and either can fail the run
+ * overall on its own prerequisites -- NOT_CALIBRATED until the reconstruction has a calibrated coordinate
+ * frame, DEPENDENCY_UNAVAILABLE or NAVMESH_TOOL_UNAVAILABLE on a worker without the detection models or
+ * chaya-navmesh (see docs/pipeline.md). A run can therefore end FAILED after ARTIFACT_GENERATION while still
+ * holding a real, complete .ksplat. Keying off the ARTIFACT_GENERATION stage_run directly is what lets a
+ * signed-in member view that reconstruction; listing and public links still require a FINALIZED version.
  *
  * <p>Privacy (review S-6): a run an administrator started with privacy preprocessing disabled was trained on frames whose
  * faces, screens and documents were never anonymised, so its splat can show them. It is never served to a PUBLIC_VIEWER

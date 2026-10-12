@@ -11,7 +11,7 @@ COLMAP/GLOMAP output has an arbitrary similarity gauge: arbitrary scale, rotatio
 metres with a fixed up axis is wrong.
 
 **Status:** the model, the math, the storage and every consumer are implemented and tested with synthetic
-mathematical fixtures. **No calibration has been performed on a real capture.** See [Validation status](#validation-status).
+mathematical fixtures. **No calibration has been performed on a real capture.** See [Validation status](#7-validation-status).
 
 ## 1. The canonical venue frame
 

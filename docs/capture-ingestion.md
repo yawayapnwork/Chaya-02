@@ -88,8 +88,10 @@ scan strategy exists; video is not decoded or checked for playability at ingesti
 Requires status `UPLOADING`, every file settled (no pending/validating/quarantined), and at least one accepted
 video or `min-images-without-video` (default 20) accepted images. Then `UPLOADED -> VALIDATING`, a real
 integrity check that every accepted object still exists in storage with the recorded size, and
-`READY_FOR_PROCESSING` (or `FAILED` with `STORAGE_INTEGRITY`). `endedAt`/`durationSeconds` are recorded; the
-capture quality assessment stays `NOT_ASSESSED` until that pipeline exists.
+`READY_FOR_PROCESSING` (or `FAILED` with `STORAGE_INTEGRITY`). `endedAt`/`durationSeconds` are recorded. The
+capture's `qualityState` stays `NOT_ASSESSED`: nothing writes it. Frame quality is assessed by the pipeline's
+FRAME_QUALITY_FILTER stage and reported in its stage record and `FRAME_QUALITY_REPORT`, not on the capture
+(2026-10-12; the earlier text said the pipeline did not exist yet).
 
 ## Data model (migration V9)
 `capture_session` gained device metadata, duration, quality state, failure code/message and the lifecycle

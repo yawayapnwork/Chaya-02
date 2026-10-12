@@ -1,5 +1,20 @@
 # Chaya 02: end-to-end validation
 
+> **Status note, 2026-10-12.** The sections below are dated records and are kept as they were written, including every
+> FAIL. No end-to-end run has happened since §R (2026-10-08); a real-venue run still has never happened. Changes since
+> then that a reader of these records should know, none of them validated end to end:
+>
+> - **GPU worker image:** `services/reconstruction/Dockerfile.gpu` (CUDA 12.6, gsplat 1.5.3 with compiled kernels, COLMAP
+>   3.9, Open3D, pinned models) was added on 2026-10-10. It has **never been built or run**; §R's "a CUDA worker" is
+>   still missing.
+> - **CPU worker:** the shipped CPU worker now claims NAVIGATION_BAKING (chaya-navmesh is in the image).
+> - **Calibration:** measured references are recorded with the capture, and the web app has a calibration panel
+>   (docs/capture-calibration.md). §R.4 step 3 can now be done in `/capture` as well as with `POST …/coordinate-frames`.
+> - **Real-venue procedure:** `scripts/acceptance/real_venue.py` and docs/REAL_VENUE_ACCEPTANCE.md describe the run §R.4
+>   asks for. The script has only been checked statically.
+> - **§7 F1** (manual POIs never embedded) was fixed the same day (see its update note); this run was not repeated.
+> - Current per-capability status: PROJECT_PLAN.md, "Validation matrix".
+
 ## R. Reconstruction-to-digital-twin integration validation, 2026-10-08 (HEAD `20ef642`)
 
 **Goal:** run the full chain on a real indoor venue capture: capture → ingestion → FFmpeg → camera metadata → SfM →

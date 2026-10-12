@@ -1,5 +1,7 @@
-"""No stage in the pipeline plan is unimplemented anymore -- all twelve stages (INPUT_VALIDATION through
-SEMANTIC_INDEXING) have real implementations, registered directly in chaya_worker/stages/__init__.py.
+"""No stage in any pipeline plan is unimplemented anymore -- all fourteen stages (the twelve of the full plan,
+INPUT_VALIDATION through NAVIGATION_BAKING, plus the re-scan stages REGION_ALIGNMENT and REGION_SPLICE) have real
+implementations, registered directly in chaya_worker/stages/__init__.py. Several still need tools a given worker may
+not have (COLMAP, CUDA + gsplat, Open3D, the models, chaya-navmesh); they then fail with DEPENDENCY_UNAVAILABLE.
 
 This module (and PlannedStage) stays as the pattern a future stage should follow: report missing
 dependencies first (structured, actionable), and never fabricate output. There is deliberately no code

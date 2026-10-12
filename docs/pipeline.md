@@ -29,8 +29,10 @@ bounded retry). When a stage succeeds the control plane queues the next; one job
 Database constraints enforce that `quality` is `FINAL` only with `SUCCEEDED` and `PARTIAL` only with `PARTIAL`,
 that runs and jobs only take valid transitions, and that stage records and artifacts are write-once. The
 capture becomes `COMPLETED` for `SUCCEEDED` and `PARTIAL` runs (the run's `quality` tells them apart) and stays
-`PROCESSING` while a run is `FAILED` so it can be retried. Nothing finalizes a `scan_version` yet: that
-belongs to the artifact-generation milestone, and a `PARTIAL` result must be finalized explicitly, never implicitly.
+`PROCESSING` while a run is `FAILED` so it can be retried. Every run since V28 is a DRAFT `scan_version` from the start.
+A run that succeeds with a calibrated reconstruction is finalized and published as the floor's current version by its
+last stage report (`PipelineService#tryPromote`); a refusal leaves the version DRAFT and the run's result intact
+([rescan.md](rescan.md), "VERSIONING"). A `PARTIAL` result is never finalized implicitly.
 
 ## The stages
 
@@ -46,8 +48,8 @@ belongs to the artifact-generation milestone, and a `PARTIAL` result must be fin
 | 8 | `GEOMETRIC_CLEANUP` | Open3D statistical + radius outlier removal (radius a multiple of the cloud's own median nearest-neighbour spacing: scale-invariant, not metres), then semantic class-aware filtering (never opacity alone) | implemented; **needs Open3D**; fails with `DEPENDENCY_UNAVAILABLE` here |
 | 9 | `PLANE_FITTING` | iterative Open3D RANSAC plane extraction (spacing-relative inlier distance); floor/ceiling/wall classification against the calibrated frame's up or this reconstruction's `GRAVITY_ESTIMATE` (floor plane oriented by the cameras; [coordinate-frames.md](coordinate-frames.md)) | implemented; **needs Open3D**; fails with `DEPENDENCY_UNAVAILABLE` here |
 | 10 | `ARTIFACT_GENERATION` | `.ksplat` conversion (the level-0 KSplat layout of the pinned viewer, @mkkellogg/gaussian-splats-3d 0.4.7; see "Viewer asset format" below), the artifact manifest, the compressed viewer bundle | implemented; only needs the cleaned splat as input |
-| 11 | `SEMANTIC_INDEXING` | Grounding DINO open-vocabulary detection (stock checkpoint, not fine-tuned) + 3D localisation against the splat + real CLIP embeddings, positions in canonical metres; see [docs/search.md](docs/search.md) | implemented; **needs a calibrated coordinate frame** (else `NOT_CALIBRATED`) **and torch + transformers + open_clip + Pillow + the Grounding DINO checkpoint cached locally + COLMAP** |
-| 12 | `NAVIGATION_BAKING` | a multi-level surface model of the cleaned, labelled splat (ground at each level, steps as their own Recast area, wall/furniture/clutter obstacle boxes, measured clear widths) in canonical metres, requiring labels for the baked splat (else `NAVMESH_LABELS_UNAVAILABLE`), a Detour navmesh baked by the real Recast/Detour library (chaya-navmesh, recastnavigation 1.6.0) through the single Recast axis boundary, NAVMESH + NAVMESH_MANIFEST provenance, STANDARD/STEP_FREE routing graphs from the Detour polygon links; see [docs/navigation.md](docs/navigation.md) | implemented; **needs a calibrated coordinate frame** (else `NOT_CALIBRATED`) **and chaya-navmesh** (else `NAVMESH_TOOL_UNAVAILABLE`; the CPU worker image includes it) |
+| 11 | `SEMANTIC_INDEXING` | Grounding DINO open-vocabulary detection (stock checkpoint, not fine-tuned) + 3D localisation against the splat + real CLIP embeddings, positions in canonical metres; see [docs/search.md](search.md) | implemented; **needs a calibrated coordinate frame** (else `NOT_CALIBRATED`) **and torch + transformers + open_clip + Pillow + the Grounding DINO checkpoint cached locally + COLMAP** |
+| 12 | `NAVIGATION_BAKING` | a multi-level surface model of the cleaned, labelled splat (ground at each level, steps as their own Recast area, wall/furniture/clutter obstacle boxes, measured clear widths) in canonical metres, requiring labels for the baked splat (else `NAVMESH_LABELS_UNAVAILABLE`), a Detour navmesh baked by the real Recast/Detour library (chaya-navmesh, recastnavigation 1.6.0) through the single Recast axis boundary, NAVMESH + NAVMESH_MANIFEST provenance, STANDARD/STEP_FREE routing graphs from the Detour polygon links; see [docs/navigation.md](navigation.md) | implemented; **needs a calibrated coordinate frame** (else `NOT_CALIBRATED`) **and chaya-navmesh** (else `NAVMESH_TOOL_UNAVAILABLE`; the CPU worker image includes it) |
 
 Stage order runs SEMANTIC_INDEXING before NAVIGATION_BAKING (not their original numbering): neither
 depends on the other's output, and chaya-navmesh is a separately built binary a worker may not have
@@ -201,7 +203,8 @@ The control plane verifies a report before accepting it: every artifact key must
 server-issued prefix (`org/{org}/venue/{venue}/scan/{scan}/run/{run}/{STAGE}/attempt-{n}/`, no `..`), the
 object must exist in the derived bucket with the reported size, PII flags must match the key layout, only
 reconstruction artifacts may be `partial`. A rejected report changes nothing; the worker then reports an
-explicit `REPORT_REJECTED` failure. (Content checksums are recorded, not re-hashed server-side.)
+explicit `REPORT_REJECTED` failure. Since artifact sealing (2026-10-05), the API copies each reported object to
+`sealed/…` and re-hashes the copy before registering it ([security.md](security.md), "Sealed, verified artifacts").
 
 ## Failure handling and retry
 - A failed stage never advances the run. Earlier artifacts are untouched (artifacts are write-once; a retry
@@ -233,7 +236,7 @@ feature-matching + ICP against the selected parent version's reconstruction) and
 just the changed region), before the usual `PLANE_FITTING`/`ARTIFACT_GENERATION`/`SEMANTIC_INDEXING`/
 `NAVIGATION_BAKING` re-run on the spliced result. Those four are **not** regional: they re-derive the whole floor
 from the merged cloud (navigation is re-baked whenever the parent version has a navmesh, and checked against the
-parent scene outside the region). See [docs/rescan.md](docs/rescan.md) for the full design, including the alignment
+parent scene outside the region). See [docs/rescan.md](rescan.md) for the full design, including the alignment
 quality gates and exactly what is regional.
 
 ## Time-boxed reconstruction
@@ -302,10 +305,12 @@ cd services/reconstruction
 py -3.12 -m venv .venv && .venv/Scripts/pip install -e ".[dev]"      # bash: .venv/bin/pip
 CHAYA_API_URL=... CHAYA_TOKEN_URL=... CHAYA_CLIENT_SECRET=... S3_ENDPOINT=... S3_ACCESS_KEY=... S3_SECRET_KEY=... python -m chaya_worker
 ```
-or `docker compose --env-file .env -f infra/docker/docker-compose.yml --profile pipeline up`. The image contains FFmpeg
-and OpenCV only. The GPU worker image for SPLAT_RECONSTRUCTION (and COLMAP's POSE_ESTIMATION) is
-`services/reconstruction/Dockerfile.gpu` ("GPU worker image" below); set `COLMAP_BIN` / `GLOMAP_BIN` if they are not on
-PATH.
+or `docker compose --env-file .env -f infra/docker/docker-compose.yml --profile pipeline up`. Outside Docker, set
+`S3_ACCESS_KEY` / `S3_SECRET_KEY` to the **worker** account (`S3_WORKER_*` in `.env`), not the API's delete-capable
+one; the compose service does this mapping itself. The CPU image contains FFmpeg, OpenCV and chaya-navmesh, and no
+COLMAP, GLOMAP, CUDA, gsplat or Open3D. The GPU worker image for POSE_ESTIMATION (CPU COLMAP), SPLAT_RECONSTRUCTION and
+the model/Open3D stages is `services/reconstruction/Dockerfile.gpu` ("GPU worker image" below); it has never been built
+or run (no GPU host). Set `COLMAP_BIN` / `GLOMAP_BIN` if they are not on PATH.
 
 ## Splat training
 
@@ -552,13 +557,24 @@ on real data.
 | orchestration | `tests/orchestration` | tiny real files (FFmpeg-encoded video, a real face photo from scikit-image, JSON); test doubles only for the HTTP client and object storage | `pytest -m orchestration` |
 | integration | `tests/integration` | real MinIO; the real stack (API, Postgres, MinIO, ClamAV, Keycloak) | `pytest -m integration -rs` with `CHAYA_IT_*` set |
 | GPU / toolchain | `tests/gpu` | COLMAP, GLOMAP, gsplat+CUDA, a real photo folder (`CHAYA_TEST_IMAGE_SEQUENCE`) | `pytest -m gpu -rs` |
+| navmesh | `tests/navmesh` | a built chaya-navmesh (`CHAYA_NAVMESH_BIN`, or the CMake build); CI builds it and fails on a skip | `pytest -m navmesh -rs` |
+| worker smoke | `tests/smoke` | FFmpeg; the viewer check also needs `npm ci` in `apps/web` | `pytest -m smoke -rs` |
+| model training smoke | `tests/ml` | `transformers` (not in the `dev` extra; run it in the ML evaluation image, docs/ML_EVALUATION.md) | `pytest tests/ml -rs` |
 
 GPU tests are skipped with a printed reason when their dependency is absent; they cannot pass without running
 the tool. The Java side (`mvn verify`) tests the control plane against real PostgreSQL and MinIO.
 
 ## Not verified here
-COLMAP/GLOMAP command lines are unit-tested for construction only; they were not executed (not installed). COLMAP flag
-names follow the 3.9/3.10 CLI. Every stage after pose estimation is implemented, but none has run on a real capture; gsplat training has not run
-at all (see "Splat training"). The worker Docker image
-was built but not run against the stack. MinIO credentials are shared between the API and the worker (per-service
-service accounts are a later hardening step).
+*Updated 2026-10-12. The earlier text said COLMAP had never executed, the worker image had never run against the stack,
+and MinIO credentials were shared; all three were overtaken by the work below.*
+
+- **COLMAP** has executed: CPU COLMAP 3.8 in the test-only image `infra/ci/worker-colmap.Dockerfile`, on 11 public
+  **outdoor** photographs (docs/E2E_VALIDATION.md §0 and §R: 11/11 registered, 0.398 px). It has not run on an indoor
+  venue capture, and not inside `Dockerfile.gpu` (COLMAP 3.9.x), which has never been built. **GLOMAP** has never run:
+  no image contains it, so POSE_ESTIMATION uses the COLMAP mapper fallback.
+- **gsplat training has never run** (no CUDA host; see "Splat training"). No stage after POSE_ESTIMATION has run on a
+  real capture.
+- The CPU worker image has run against the real stack in the E2E harness (docs/E2E_VALIDATION.md §2), and alone in
+  the `reconstruction-smoke` image smoke.
+- MinIO credentials are per service: the API, the CPU worker (`S3_WORKER_*`), GPU workers (`S3_RECON_*`) and backups
+  each have their own account (DEPLOYMENT.md §2).

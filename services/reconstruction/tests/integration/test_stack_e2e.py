@@ -100,7 +100,8 @@ def test_real_worker_runs_the_first_stages_and_stops_honestly_at_the_first_missi
     orchestrator = Orchestrator(HttpControlPlane(settings), S3Storage(settings), settings)
     run = drain(orchestrator, api, capture)
 
-    # Never a success: stages 6-12 are not implemented, so a run cannot complete.
+    # Never a success here: every stage is implemented, but this runner has no COLMAP (POSE_ESTIMATION) and no
+    # CUDA/gsplat (SPLAT_RECONSTRUCTION), so the run must stop with a structured failure at the first of them.
     assert run["status"] == "FAILED" and run["quality"] is None and run["retryable"] is True
     assert run["failureStage"] in ("POSE_ESTIMATION", "SPLAT_RECONSTRUCTION"), run["failureStage"]
     assert run["failureCode"] in ("DEPENDENCY_UNAVAILABLE", "POSE_ESTIMATION_INSUFFICIENT", "MAPPING_FAILED", "STAGE_NOT_IMPLEMENTED", "FEATURE_MATCHING_FAILED")

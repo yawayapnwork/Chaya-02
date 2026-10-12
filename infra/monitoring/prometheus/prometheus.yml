@@ -7,7 +7,7 @@ rule_files:
   - /etc/prometheus/alerts.yml
 
 scrape_configs:
-  # The API runs on the host (./mvnw spring-boot:run) or in its own container; /actuator/prometheus is closed unless
+  # The API runs on the host (mvn spring-boot:run) or in its own container; /actuator/prometheus is closed unless
   # METRICS_SCRAPE_PASSWORD is set, and then requires HTTP Basic with user "prometheus".
   - job_name: chaya-api
     metrics_path: /actuator/prometheus

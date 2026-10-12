@@ -8,7 +8,7 @@ How Chaya 02 is built, shipped, started, checked, rolled back, backed up and rec
   stream, media-validation resume and the periodic sweeps are in-process, and PostgreSQL is the only shared store.
   There is no Redis. Workers may be scaled freely; job claims are row-locked in the database. ARCHITECTURE.md §3.1
   lists what would have to change first.
-- **GPU workers** run on separate GPU hosts ([GPU workers](#gpu-workers)).
+- **GPU workers** run on separate GPU hosts ([GPU workers](#10-gpu-workers)).
 - **Deployment files:** `infra/deploy/`.
 - **Pipeline files:** `.github/workflows/`.
 
@@ -104,7 +104,11 @@ Normal CI does **not** run GPU reconstruction.
   - It seeds a tenant and an operator, uploads a capture through the ingestion API, lets ClamAV scan it, starts
     processing, and runs the real worker code against the control plane.
   - It asserts that the CPU stages succeed, that PII staging objects are purged, and that the run stops with a
-    structured, retryable failure at the first GPU stage. It then retries once.
+    structured, retryable failure at POSE_ESTIMATION, the first stage that needs a tool the runner lacks (COLMAP). It
+    then retries once.
+  - It ends with a backup of the stack's data and an isolated restore drill. **In GitHub Actions the job has failed
+    since `bd6c69c` (2026-10-11) after both had passed**: the cleanup cannot delete the restored object files that the
+    drill's containers wrote (`rm: … Permission denied`), so the script exits 1. Locally (Docker Desktop) it passes.
   - Run it locally with `PYTHON=python bash scripts/ci/stack-smoke.sh`.
 
 The full reconstruction is tested only on a GPU host: `pytest -m gpu` in `services/reconstruction`.
@@ -134,6 +138,16 @@ missing.
 | `CHAYA_WORKER_CLIENT_SECRET` | keycloak (realm import), worker | ✔ | The worker service account |
 | `METRICS_SCRAPE_PASSWORD` | api, Prometheus | ✔ | Empty means `/actuator/prometheus` is closed |
 | `BACKUP_DIR`, `BACKUP_KEEP_DAYS` | backups | | Keep `BACKUP_DIR` outside the deploy directory, on encrypted storage |
+
+Optional, with defaults (not in the template):
+
+| Variable | Used by | Default | Notes |
+|---|---|---|---|
+| `MINIO_IMAGE`, `MC_IMAGE` | compose (host `.env`) | the pinned GHCR mirror digests | Only to stage a MinIO upgrade ([section 7](#7-deploying-and-rolling-back)) |
+| `DEPLOY_SKIP_REHEARSAL` | `deploy.sh` (shell environment) | unset | `1` skips the migration rehearsal (logged; emergencies only) |
+| `PII_STAGING_RETENTION` | api | `PT24H` | How long a FAILED run keeps unanonymised frames for a retry. **Not passed through by `infra/deploy/docker-compose.yml`**: the default applies unless the `api` service's `environment` is edited. |
+| `CHAYA_RATE_LIMIT_ENABLED` | api | `true` | Same: not passed through; docs/security.md, "Rate limits" |
+| `GSPLAT_*`, `ALIGNMENT_*`, `CLEANUP_*`, … | workers | see `chaya_worker/settings.py` | Worker tunables (docs/pipeline.md). Set them in the GPU worker's own environment; the CPU `worker` service passes none through. |
 
 Set in `infra/deploy/docker-compose.yml`, so they are not needed in `.env`:
 
@@ -171,7 +185,8 @@ a secret scan on every image.
    - Log in to the admin console from an allowed address.
    - Create a named administrator and delete the bootstrap admin.
    - Create users, with their `org_id` and `venue_id` attributes (docs/security.md).
-   - Organizations are created in SQL; there is no API for that yet.
+   - Organizations (and their venues, if not created through the API by an admin) are created in SQL; there is no
+     organization API. `scripts/ci/stack-smoke.sh` ("seed") shows the statements and the Keycloak user setup.
 6. **Backups:** schedule them ([section 8](#8-backups)).
 
 ## 4. Startup order
@@ -322,6 +337,7 @@ Schedule it daily with cron or a systemd timer, and alert if it fails.
 | Objects lost | `scripts/backup/restore.sh minio --yes-replace-live-data`. Then run `verify.sh` against the current dump. |
 | Keycloak unavailable | The API answers `503 AUTHENTICATION_UNAVAILABLE` and readiness goes DOWN. Recover Keycloak or restore its dump. User sessions resume when it is back. |
 | Worker unavailable | Health shows DEGRADED with `worker` DOWN (or processing `NO_WORKER` naming the stage nobody serves), and the operations dashboard lists each worker with its last contact. Restart the worker, then check `docker compose logs worker` and its health status. Jobs a worker was running when it died are failed as `WORKER_LOST` within the lease (5 min) plus one enforcer tick (30 s), and can be retried from the operations dashboard. The failed attempt stays on record. |
+| A run fails or waits at a stage | Follow [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md): find the first failed or unserved stage, read its error code, fix the prerequisite, then retry the run. |
 | Host lost | Rebuild it (section 3), restore Postgres (both databases) and MinIO from off-site backups, then deploy the recorded version. |
 
 Before restoring, run `restore-drill.sh <dump>` on the chosen backup: it proves the backup restores without touching
@@ -330,13 +346,15 @@ was restored and why.
 
 ## 10. GPU workers
 
-The CPU `worker` in this compose file claims only the stages its image can run (`WORKER_STAGES`). Since 2026-10-10
-these include NAVIGATION_BAKING (`chaya-navmesh` is in the CPU image); before that no shipped worker claimed the last
-stage. Pose estimation,
-splat reconstruction, segmentation, cleanup, plane fitting, semantic indexing and navigation baking need a GPU host
-with COLMAP/GLOMAP, CUDA, PyTorch, gsplat and Open3D (docs/pipeline.md). Navigation baking also needs chaya-navmesh
-(Recast/Detour; the CPU worker image builds it, and a GPU host builds it from `services/reconstruction/native/chaya-navmesh`
-or sets `CHAYA_NAVMESH_BIN`). No GPU image is built by CI.
+The CPU `worker` in this compose file claims only the stages its image can run (`WORKER_STAGES`): the four stages
+before and including privacy preprocessing, REGION_SPLICE, ARTIFACT_GENERATION and, since 2026-10-10, NAVIGATION_BAKING
+(`chaya-navmesh` is in the CPU image; before that no shipped worker claimed the last stage). Every other stage --
+POSE_ESTIMATION, SPLAT_RECONSTRUCTION, SEMANTIC_SEGMENTATION, GEOMETRIC_CLEANUP, REGION_ALIGNMENT, PLANE_FITTING and
+SEMANTIC_INDEXING -- needs a GPU worker with COLMAP, CUDA, PyTorch, gsplat, Open3D and the models (docs/pipeline.md).
+**Without one, a run waits at POSE_ESTIMATION** until its deadline, and health reports `processing.status: NO_WORKER`
+with `unservedStages: ["POSE_ESTIMATION"]` ([docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)). No GPU image is built
+by CI, and **`Dockerfile.gpu` has never been built or run**: there was no GPU host and not enough disk on the audit
+workstation.
 
 **GPU worker.** Build `services/reconstruction/Dockerfile.gpu` (docs/pipeline.md, "GPU worker image"). It pins:
 
@@ -436,5 +454,22 @@ stages through the real API, and the run stopped with a structured failure at th
   code change. The fix is a dependency or base-image bump, as in the second pass above.
 - The `security` workflow's OWASP Dependency-Check. It needs the NVD database (`NVD_API_KEY`).
 - `require-green.sh` against the live GitHub API. Only its decision logic was tested.
-- GPU workers: no GPU image exists, and the full reconstruction (`pytest -m gpu`) needs a GPU host.
+- GPU workers: `services/reconstruction/Dockerfile.gpu` exists since 2026-10-10 but has never been built (only
+  `docker build --check`), and the full reconstruction (`pytest -m gpu`, `tests/gpu/test_splat_acceptance.py`) needs a
+  GPU host.
 - The Playwright e2e job.
+
+**Status on 2026-10-12 (documentation audit).** The passes above are records of what was verified on those dates; they
+are not the current CI state. On `main` at `40beef5`:
+
+- `backend`, `frontend` and `ops` pass.
+- `python` fails: the CPU suite may not skip, and two tests now skip on the runner (`tests/ml` needs `transformers`;
+  the viewer check in `tests/smoke/test_splat_artifact_smoke.py` needs `npm ci` in `apps/web`). Red since `7d7b177`.
+- `reconstruction-smoke` fails at the cleanup step after the stack smoke and the restore drill have passed (section 1).
+- `docker` fails the Trivy gate: `next` 16.3.6 has CVE-2026-94483 (HIGH, fixed in 16.3.8). `security` fails on the same
+  web audit; its Dependency-Check job hits NVD request failures without `NVD_API_KEY`.
+- `ios` fails one stale XCTest (BASELINE_AUDIT_2026-10-09 F5).
+- `deploy` has been skipped on every run since 2026-10-04 (it needs a green `docker`); every earlier run failed or was
+  cancelled. **It has never succeeded.**
+
+Details and the local results: [docs/TEST_REPRODUCIBILITY.md](docs/TEST_REPRODUCIBILITY.md).

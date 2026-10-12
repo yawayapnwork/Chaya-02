@@ -318,7 +318,8 @@ authors.
 - `ChayaARCore` is built and its tests pass on Linux Swift 5.10.
 - The app and the ARKit layer compile with Xcode 15.4 for `generic/platform=iOS`, and the app-level tests pass in the
   Simulator: first on 2026-09-30 (`ios` run 36734833669, commit `f99b8a6`). Changes since are type-checked by the next
-  `ios` run, nowhere else.
+  `ios` run, nowhere else. Since `fb7e65f` (2026-10-05) one app-level test fails (`ReferenceImageTests`: its fixture
+  anchor has no scan version, so the marker registry drops it); the app builds.
 - Nothing has run with a camera: the Simulator has no world tracking. Marker detection, the image-anchor axis
   convention, placement accuracy and the tracking-state behaviour are unverified.
 - The app shows a "NOT DEVICE-VALIDATED" banner (`DeviceValidation.status`) until
