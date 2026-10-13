@@ -58,3 +58,36 @@ export function initialView(centers: readonly Vec3[], canonical: boolean): Initi
   const back = 1.2 * extent;
   return { position: [target[0], target[1], target[2] - back], target, up: [0, -1, 0], extent };
 }
+
+/**
+ * A view of `point` (a POI, canonical metres) that keeps the current viewing direction, so focusing does not spin the
+ * scene around: the camera keeps its bearing and elevation relative to its target, and moves to a distance that shows
+ * the point with its surroundings (`distance` clamped to 2-8 m). A camera looking straight down or up is tilted back to
+ * a 35 degree elevation so the point stays readable.
+ */
+export function focusView(position: Vec3, target: Vec3, point: Vec3, distance = 4): { position: Vec3; target: Vec3 } {
+  let d: Vec3 = [position[0] - target[0], position[1] - target[1], position[2] - target[2]];
+  const len = Math.hypot(...d);
+  const horizontal = Math.hypot(d[0], d[1]);
+  if (!(len > 1e-6) || horizontal < 0.05 * len) {
+    const bearing: [number, number] = horizontal > 1e-6 ? [d[0] / horizontal, d[1] / horizontal] : [0, -1];
+    const el = (35 * Math.PI) / 180;
+    d = [bearing[0] * Math.cos(el), bearing[1] * Math.cos(el), Math.sin(el)];
+  } else {
+    d = [d[0] / len, d[1] / len, d[2] / len];
+  }
+  const r = Math.min(8, Math.max(2, distance));
+  return { position: [point[0] + d[0] * r, point[1] + d[1] * r, point[2] + d[2] * r], target: [...point] };
+}
+
+/** Smoothstep-eased interpolation between two views, t in [0, 1]. */
+export function blendView(
+  from: { position: Vec3; target: Vec3 },
+  to: { position: Vec3; target: Vec3 },
+  t: number,
+): { position: Vec3; target: Vec3 } {
+  const u = Math.min(1, Math.max(0, t));
+  const e = u * u * (3 - 2 * u);
+  const mix = (a: Vec3, b: Vec3): Vec3 => [a[0] + (b[0] - a[0]) * e, a[1] + (b[1] - a[1]) * e, a[2] + (b[2] - a[2]) * e];
+  return { position: mix(from.position, to.position), target: mix(from.target, to.target) };
+}

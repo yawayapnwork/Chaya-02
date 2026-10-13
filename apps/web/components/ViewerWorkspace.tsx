@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { NotSignedInError, signIn, userManager } from "@/lib/auth";
 import { clearPublicViewerSession, publicViewerVenueId, setPublicViewerSession } from "@/lib/session";
-import { ApiError, type Floor, type Venue, listFloors, listVenues } from "@/lib/capture-api";
+import { ApiError, type Capture, type Floor, type ProcessingStatus, type Venue, getProcessing, listCaptures, listFloors, listVenues } from "@/lib/capture-api";
 import { type Poi, listPois } from "@/lib/poi-api";
 import { isCanonical, toCanonical } from "@/lib/coordinate-frame";
 import {
@@ -21,7 +21,20 @@ import { checkSceneScope } from "@/lib/artifact-integrity";
 import { type Scoped, forScene, initialVersion, sceneKey, versionLabel } from "@/lib/version-scope";
 import { type SearchResult } from "@/lib/search-api";
 import { type RouteResponse, planRoute } from "@/lib/navigation-api";
-import SplatViewerCanvas from "@/components/SplatViewerCanvas";
+import {
+  type RouteFailure,
+  type RouteProfile,
+  describeRouteFailure,
+  formatDistance,
+  formatDuration,
+  routeOverlay,
+  routeSummary,
+} from "@/lib/viewer-route";
+import { type ViewerFailure, classifyViewerError } from "@/lib/viewer-errors";
+import { ArtifactCache } from "@/lib/artifact-cache";
+import { viewerResources } from "@/lib/viewer-resources";
+import { type ProcessingProgress, pendingCapture, processingProgress } from "@/lib/viewer-progress";
+import SplatViewerCanvas, { type SplatViewerHandle } from "@/components/SplatViewerCanvas";
 import SemanticSearchPanel from "@/components/SemanticSearchPanel";
 
 type Phase = "checking" | "signed-out" | "ready";
@@ -30,7 +43,20 @@ type SceneLoad =
   | { phase: "downloading"; percent: number }
   | { phase: "preparing"; percent: number }
   | { phase: "ready"; splatCount: number }
-  | { phase: "error"; message: string };
+  | { phase: "error"; failure: ViewerFailure };
+
+/** Verified .ksplat bytes, shared by every viewer on the page (lib/artifact-cache): switching back to a version, or
+ * retrying after a graphics failure, does not download the model again. Access is still checked on every scene: the
+ * reconstruction (and its artifact reference) is fetched with the caller's credentials before a cached entry is used. */
+const artifactCache = new ArtifactCache();
+
+/** How often the progress of a floor's in-progress reconstruction is refreshed. */
+const PROGRESS_POLL_MS = 15_000;
+
+/** One accessibility profile's answer from the routing API: a route, or the reason there is none. */
+type RouteOutcome = { ok: true; route: RouteResponse } | { ok: false; failure: RouteFailure; detail: string };
+const PROFILES: RouteProfile[] = ["STANDARD", "STEP_FREE"];
+const PROFILE_LABEL: Record<RouteProfile, string> = { STANDARD: "Standard route", STEP_FREE: "Step-free route" };
 
 function message(e: unknown): string {
   if (e instanceof ApiError) return e.message;
@@ -64,7 +90,12 @@ export default function ViewerWorkspace() {
   const versionsRef = useRef<ReconstructionVersion[]>([]); // read when a reconstruction arrives, not a reason to refetch it
   const [runId, setRunId] = useState("");
   const [reconstruction, setReconstruction] = useState<Reconstruction | null>(null);
-  const [reconstructionError, setReconstructionError] = useState<string | null>(null);
+  const [reconstructionError, setReconstructionError] = useState<ViewerFailure | null>(null);
+  const [venueError, setVenueError] = useState<ViewerFailure | null>(null);
+  // The newest capture of this floor that is still becoming a model, and its run's progress (venue team only).
+  const [pending, setPending] = useState<{ floorId: string; capture: Capture; progress: ProcessingProgress } | null>(null);
+  const pendingRef = useRef<typeof pending>(null);
+  const [quality, setQuality] = useState<{ pixelRatio: number; maxPixelRatio: number; medianMs: number | null } | null>(null);
 
   // POIs, the route and the downloaded model are each stored with the scene they were loaded for (lib/version-scope),
   // and only used while that scene is the one on screen: switching versions never mixes one version's model with
@@ -73,14 +104,19 @@ export default function ViewerWorkspace() {
   const [selectedPoiId, setSelectedPoiId] = useState<string | null>(null);
   const [routeFromId, setRouteFromId] = useState<string>("");
   const [routeToId, setRouteToId] = useState<string>("");
-  const [accessibleRoute, setAccessibleRoute] = useState(false);
-  const [loadedRoute, setLoadedRoute] = useState<Scoped<RouteResponse> | null>(null);
-  const [routeError, setRouteError] = useState<string | null>(null);
+  const [routeProfile, setRouteProfile] = useState<RouteProfile>("STANDARD");
+  // Both profiles are requested for the same start and destination, so the step-free alternative (or the reason there
+  // is none) is shown next to the standard route.
+  const [loadedRoutes, setLoadedRoutes] = useState<Scoped<Record<RouteProfile, RouteOutcome>> | null>(null);
   const [routeBusy, setRouteBusy] = useState(false);
 
-  const [sceneLoad, setSceneLoad] = useState<SceneLoad>({ phase: "idle" });
-  const blobUrlRef = useRef<string | null>(null);
+  // Like the POIs and the route, the load state belongs to one scene: right after a switch, the previous scene's "ready"
+  // (or error) is never shown for the next one.
+  const [loadState, setLoadState] = useState<Scoped<SceneLoad> | null>(null);
   const floorPrefillConsumedRef = useRef(false);
+  const canvasRef = useRef<SplatViewerHandle>(null);
+  // The scene and POI the camera last moved to, so a selection is focused once, not again on every re-render.
+  const focusedRef = useRef<string | null>(null);
   const [blob, setBlob] = useState<Scoped<string> | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
 
@@ -142,6 +178,7 @@ export default function ViewerWorkspace() {
     listFloors(venueId).then(
       (fs) => {
         if (cancelled) return;
+        setVenueError(null);
         setFloors(fs);
         const usePrefill = !floorPrefillConsumedRef.current && prefillFloorId && fs.some((f) => f.id === prefillFloorId);
         floorPrefillConsumedRef.current = true;
@@ -152,7 +189,7 @@ export default function ViewerWorkspace() {
         });
       },
       (e) => {
-        if (!cancelled) setLinkError(message(e));
+        if (!cancelled) setVenueError(classifyViewerError(e));
       },
     );
     return () => {
@@ -176,11 +213,15 @@ export default function ViewerWorkspace() {
         if (vs.length === 0) {
           setReconstruction(null);
           setReconstructionError(null);
-          setSceneLoad({ phase: "idle" });
         }
       },
       (e) => {
-        if (!cancelled) setReconstructionError(message(e));
+        if (!cancelled) {
+          setVersions([]);
+          versionsRef.current = [];
+          setReconstruction(null);
+          setReconstructionError(classifyViewerError(e));
+        }
       },
     );
     return () => {
@@ -202,8 +243,7 @@ export default function ViewerWorkspace() {
           checkSceneScope(r, { venueId, runId, scanVersionId: listed?.scanVersionId ?? null });
         } catch (e) {
           setReconstruction(null);
-          setReconstructionError(message(e));
-          setSceneLoad({ phase: "idle" });
+          setReconstructionError(classifyViewerError(e));
           return;
         }
         setReconstruction(r);
@@ -212,8 +252,7 @@ export default function ViewerWorkspace() {
       (e) => {
         if (cancelled) return;
         setReconstruction(null);
-        setReconstructionError(message(e));
-        setSceneLoad({ phase: "idle" });
+        setReconstructionError(classifyViewerError(e));
       },
     );
     return () => {
@@ -250,91 +289,141 @@ export default function ViewerWorkspace() {
     if (!ksplat) return; // reconstruction is null: the effects above already reset sceneLoad to idle
     const key = sceneKey(reconstruction)!;
     let cancelled = false;
+    let url: string | null = null;
+    const progress = (loaded: number, total: number) => {
+      if (!cancelled) setLoadState({ key, value: { phase: "downloading", percent: Math.round((loaded / total) * 100) } });
+    };
     const run = async () => {
-      setSceneLoad({ phase: "downloading", percent: 0 });
-      setSelectedPoiId(null);
+      setLoadState({ key, value: { phase: "downloading", percent: 0 } });
       try {
-        // Verified before it is returned: registered size, SHA-256, the .ksplat contract and the published format.
-        const blob = await fetchArtifact(ksplat, (loaded, total) => {
-          if (cancelled) return;
-          setSceneLoad({ phase: "downloading", percent: Math.round((loaded / total) * 100) });
-        });
+        // Verified before it is returned (and before it is cached): registered size, SHA-256, the .ksplat contract and
+        // the published format. A cached entry is those same verified bytes.
+        const blob = await artifactCache.get(ksplat, (onProgress) => fetchArtifact(ksplat, onProgress), progress);
         if (cancelled) return;
-        if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
-        const url = URL.createObjectURL(blob);
-        blobUrlRef.current = url;
+        url = URL.createObjectURL(blob);
+        viewerResources.objectUrls++;
         setBlob({ key, value: url });
-        setSceneLoad({ phase: "preparing", percent: 0 });
+        setLoadState({ key, value: { phase: "preparing", percent: 0 } });
       } catch (e) {
-        if (!cancelled) setSceneLoad({ phase: "error", message: message(e) });
+        if (!cancelled) setLoadState({ key, value: { phase: "error", failure: classifyViewerError(e) } });
       }
     };
     run();
     return () => {
+      artifactCache.unsubscribe(ksplat, progress);
+      // The scene this download was for is no longer the one on screen (another version, floor or venue, a retry, or
+      // the page closing): its canvas unmounts with it, so the bytes are released here rather than kept until the next
+      // download finishes.
       cancelled = true;
+      if (url) {
+        URL.revokeObjectURL(url);
+        viewerResources.objectUrls--;
+      }
+      setBlob((b) => (b && b.value === url ? null : b));
     };
   }, [reconstruction, reloadToken]);
 
-  useEffect(
-    () => () => {
-      if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
-    },
-    [],
-  );
+  // ---- a newer model on its way: the floor's newest capture still processing (or failed), polled while it runs -------
+  // Raw captures are for the venue team (capture API: ADMIN, VENUE_MANAGER, OPERATOR). A public link never asks; a
+  // signed-in VIEWER is refused (403) and simply sees nothing here.
+  useEffect(() => {
+    if (!venueId || !floorId || isPublicLink) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      let next: { floorId: string; capture: Capture; progress: ProcessingProgress } | null = null;
+      try {
+        const capture = pendingCapture(await listCaptures(venueId), floorId);
+        if (capture) {
+          let status: ProcessingStatus | null = null;
+          try {
+            status = await getProcessing(venueId, capture.id);
+          } catch {
+            status = null; // not started: no run yet
+          }
+          next = { floorId, capture, progress: processingProgress(capture.status, status?.run ?? null) };
+        }
+      } catch {
+        next = null;
+      }
+      if (cancelled) return;
+      // A run that just finished may have published a new version: list the floor's versions again.
+      const prev = pendingRef.current;
+      if (prev?.progress.state === "processing" && prev.capture.id === next?.capture.id && next.progress.state === "finished") {
+        setReloadToken((t) => t + 1);
+      }
+      pendingRef.current = next;
+      setPending(next);
+      if (next && (next.progress.state === "processing" || next.progress.state === "waiting")) timer = setTimeout(poll, PROGRESS_POLL_MS);
+    };
+    poll();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [venueId, floorId, isPublicLink]);
+  const pendingHere = pending && pending.floorId === floorId && pending.progress.state !== "finished" ? pending.progress : null;
 
   const pois = useMemo(() => forScene(loadedPois, currentKey) ?? [], [loadedPois, currentKey]);
   const blobUrl = forScene(blob, currentKey);
-  const routeResponse = forScene(loadedRoute, currentKey);
+  const sceneLoad: SceneLoad = forScene(loadState, currentKey) ?? { phase: "idle" };
+  const canvasKey = currentKey ?? "";
+  const routeOutcomes = forScene(loadedRoutes, currentKey);
   const routeFrom = pois.find((p) => p.id === routeFromId) ?? null;
   const routeTo = pois.find((p) => p.id === routeToId) ?? null;
   const selectedPoi = pois.find((p) => p.id === selectedPoiId) ?? null;
 
   function onSelectSearchResult(result: SearchResult) {
     if (result.floorId !== floorId) setFloorId(result.floorId);
-    setSelectedPoiId(result.poiId);
+    selectPoi(result.poiId);
   }
 
   // Real routing (POST /api/v1/navigation/routes): "from" POI stands in for the traveller's current
   // position (a live AR client would send its own tracked position instead). No client-side fallback is
   // drawn when the call fails or no route exists -- see SplatViewerCanvas's route-overlay effect.
   // On a finalized version the route is planned on that version (its pinned navmesh graph and frame), never on the
-  // floor's current graph, which may belong to a newer version.
+  // floor's current graph, which may belong to a newer version. Both accessibility profiles are planned, so the
+  // step-free alternative is offered whenever the API finds one, and its absence is stated when it does not.
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
       if (!routeFrom || !routeTo || !venueId || !currentKey) {
-        setLoadedRoute(null);
-        setRouteError(null);
+        setLoadedRoutes(null);
+        setRouteBusy(false);
         return;
       }
       setRouteBusy(true);
-      setRouteError(null);
-      try {
-        const response = await planRoute({
-          venueId,
-          floorId: routeFrom.floorId ?? floorId,
-          start: [routeFrom.x, routeFrom.y, routeFrom.z],
-          destinationPoiId: routeTo.id,
-          accessibility: accessibleRoute ? "STEP_FREE" : "STANDARD",
-          scanVersionId: scanVersionId ?? undefined,
-        });
-        if (!cancelled) setLoadedRoute({ key: currentKey, value: response });
-      } catch (e) {
-        if (!cancelled) {
-          setLoadedRoute(null);
-          setRouteError(message(e));
+      const plan = async (profile: RouteProfile): Promise<RouteOutcome> => {
+        try {
+          const route = await planRoute({
+            venueId,
+            floorId: routeFrom.floorId ?? floorId,
+            start: [routeFrom.x, routeFrom.y, routeFrom.z],
+            destinationPoiId: routeTo.id,
+            accessibility: profile,
+            scanVersionId: scanVersionId ?? undefined,
+          });
+          return { ok: true, route };
+        } catch (e) {
+          const code = e instanceof ApiError ? e.code : "";
+          return { ok: false, failure: describeRouteFailure(code, message(e), profile), detail: message(e) };
         }
-      } finally {
-        if (!cancelled) setRouteBusy(false);
-      }
+      };
+      const [standard, stepFree] = await Promise.all(PROFILES.map(plan));
+      if (cancelled) return;
+      setLoadedRoutes({ key: currentKey, value: { STANDARD: standard, STEP_FREE: stepFree } });
+      setRouteBusy(false);
     };
     run();
     return () => {
       cancelled = true;
     };
-  }, [routeFrom, routeTo, venueId, floorId, accessibleRoute, currentKey, scanVersionId]);
+  }, [routeFrom, routeTo, venueId, floorId, currentKey, scanVersionId]);
 
-  const routeWaypointsOnCurrentFloor = routeResponse ? routeResponse.waypoints.filter((w) => w.floorId === floorId) : null;
+  const routeResponse = useMemo(() => {
+    const outcome = routeOutcomes?.[routeProfile];
+    return outcome?.ok ? outcome.route : null;
+  }, [routeOutcomes, routeProfile]);
 
   // POIs and routes are canonical venue metres; they are drawn on the splat only through its calibrated frame, and only
   // POIs placed in that same frame (docs/coordinate-frames.md).
@@ -344,6 +433,36 @@ export default function ViewerWorkspace() {
     () => (canonicalTransform && frame ? pois.filter((p) => p.frameStatus === "CURRENT" && p.coordinateFrameId === frame.id) : []),
     [pois, canonicalTransform, frame],
   );
+  const placedPoiIds = useMemo(() => new Set(placedPois.map((p) => p.id)), [placedPois]);
+  // The route is drawn only where it is in the frame and version this splat is shown in (lib/viewer-route).
+  const overlay = useMemo(
+    () => (routeResponse && reconstruction
+      ? routeOverlay(routeResponse, {
+          floorId: reconstruction.floorId,
+          frameId: canonicalTransform && frame ? frame.id : null,
+          scanVersionId: reconstruction.scanVersionId,
+        })
+      : null),
+    [routeResponse, reconstruction, canonicalTransform, frame],
+  );
+  const floorName = (id: string) => {
+    const f = floors.find((x) => x.id === id);
+    return f ? `${f.name} (level ${f.level})` : id;
+  };
+
+  // Selecting a POI -- in the list, on the canvas or from search, including one on another floor whose scene is still
+  // loading -- moves the camera to it once its scene is ready. A POI not placed on this reconstruction is not focused.
+  const sceneReady = sceneLoad.phase === "ready";
+  useEffect(() => {
+    if (!sceneReady || !selectedPoiId || !currentKey || !placedPoiIds.has(selectedPoiId)) return;
+    const key = `${currentKey}:${selectedPoiId}`;
+    if (focusedRef.current === key) return;
+    if (canvasRef.current?.focusPoi(selectedPoiId)) focusedRef.current = key;
+  }, [sceneReady, selectedPoiId, currentKey, placedPoiIds]);
+  function selectPoi(id: string | null) {
+    focusedRef.current = null; // re-selecting the same POI after moving away focuses it again
+    setSelectedPoiId(id);
+  }
 
   if (phase === "checking") return <p className="p-8">Loading…</p>;
 
@@ -364,8 +483,8 @@ export default function ViewerWorkspace() {
   }
 
   return (
-    <main className="flex h-screen flex-col">
-      <header className="flex flex-wrap items-center gap-3 border-b bg-white p-3">
+    <main className="flex h-dvh flex-col">
+      <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b bg-white p-3">
         <h1 className="text-lg font-semibold">Digital twin viewer</h1>
         {isPublicLink && (
           <span className="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900">Public viewing link</span>
@@ -374,7 +493,7 @@ export default function ViewerWorkspace() {
         {!isPublicLink && (
           <label className="text-sm">
             Venue{" "}
-            <select className="rounded border p-1" value={venueId} onChange={(e) => setVenueId(e.target.value)}>
+            <select className="min-h-9 max-w-[60vw] rounded border p-1" value={venueId} onChange={(e) => setVenueId(e.target.value)}>
               <option value="">Select…</option>
               {venues.map((v) => (
                 <option key={v.id} value={v.id}>{v.name}</option>
@@ -386,7 +505,7 @@ export default function ViewerWorkspace() {
 
         <label className="text-sm">
           Floor{" "}
-          <select className="rounded border p-1" value={floorId} onChange={(e) => setFloorId(e.target.value)} disabled={!venueId}>
+          <select className="min-h-9 max-w-[60vw] rounded border p-1" value={floorId} onChange={(e) => setFloorId(e.target.value)} disabled={!venueId}>
             <option value="">Select…</option>
             {floors.map((f) => (
               <option key={f.id} value={f.id}>{f.name} (level {f.level})</option>
@@ -396,7 +515,7 @@ export default function ViewerWorkspace() {
 
         <label className="text-sm">
           Reconstruction{" "}
-          <select className="rounded border p-1" value={runId} onChange={(e) => setRunId(e.target.value)} disabled={versions.length === 0}>
+          <select className="min-h-9 max-w-[60vw] rounded border p-1" value={runId} onChange={(e) => setRunId(e.target.value)} disabled={versions.length === 0}>
             {versions.length === 0 && <option value="">No reconstructions</option>}
             {versions.map((v) => (
               <option key={v.runId} value={v.runId}>
@@ -407,48 +526,96 @@ export default function ViewerWorkspace() {
         </label>
       </header>
 
-      <div className="relative flex flex-1 overflow-hidden">
-        <div className="relative flex-1">
-          {!floorId && (
-            <div className="flex h-full items-center justify-center text-zinc-500">Select a venue and floor to view its reconstruction.</div>
+      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden md:flex-row">
+        {/* The scene keeps most of a phone's screen; the panel scrolls below it rather than covering it. */}
+        <div className="relative min-h-[55dvh] flex-1 md:min-h-0" aria-busy={sceneLoad.phase === "downloading" || sceneLoad.phase === "preparing"}>
+          {venueError && (
+            <div role="alert" className="flex h-full flex-col items-center justify-center gap-2 p-4 text-center text-zinc-600"
+              data-testid="viewer-state" data-state={venueError.kind}>
+              <p className="text-lg font-medium text-red-700">{venueError.title}</p>
+              <p className="max-w-md text-sm">{venueError.message}</p>
+            </div>
+          )}
+
+          {!venueError && !floorId && (
+            <div className="flex h-full items-center justify-center p-4 text-center text-zinc-500">Select a venue and floor to view its reconstruction.</div>
           )}
 
           {floorId && versions.length === 0 && !reconstructionError && (
-            <div className="flex h-full flex-col items-center justify-center gap-2 text-zinc-600" data-testid="no-reconstruction">
+            <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-center text-zinc-600" data-testid="no-reconstruction"
+              data-state={pendingHere ? (pendingHere.state === "failed" ? "failed" : "processing") : "unavailable"}>
               <p className="text-lg font-medium">No reconstruction available.</p>
-              <p className="text-sm">This floor has not produced a viewable reconstruction yet.</p>
+              {!pendingHere && <p className="text-sm">This floor has not produced a viewable reconstruction yet.</p>}
+              {pendingHere && <ProcessingNotice progress={pendingHere} />}
             </div>
           )}
 
           {reconstructionError && (
-            <div className="flex h-full flex-col items-center justify-center gap-3 text-zinc-600">
-              <p className="text-lg font-medium text-red-700">No reconstruction available.</p>
-              <p className="max-w-md text-center text-sm">{reconstructionError}</p>
-              <button className="rounded border px-3 py-1.5 text-sm" onClick={() => setReloadToken((t) => t + 1)}>
-                Try again
-              </button>
+            <div role="alert" className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center text-zinc-600"
+              data-testid="viewer-state" data-state={reconstructionError.kind}>
+              <p className="text-lg font-medium text-red-700">{reconstructionError.title}</p>
+              <p className="max-w-md text-sm">{reconstructionError.message}</p>
+              {reconstructionError.retryable && (
+                <button className="min-h-10 rounded border px-3 py-1.5 text-sm" onClick={() => setReloadToken((t) => t + 1)}>
+                  Try again
+                </button>
+              )}
             </div>
           )}
 
           {reconstruction && blobUrl && sceneLoad.phase !== "error" && (
             <SplatViewerCanvas
+              ref={canvasRef}
               key={blobUrl}
               blobUrl={blobUrl}
               toCanonical={canonicalTransform}
               deviceProfile={deviceProfile}
               pois={placedPois}
               selectedPoiId={selectedPoiId}
-              onSelectPoi={setSelectedPoiId}
-              routeWaypoints={routeWaypointsOnCurrentFloor}
-              onProgress={(percent) => setSceneLoad({ phase: "preparing", percent })}
-              onLoaded={(splatCount) => setSceneLoad({ phase: "ready", splatCount })}
-              onError={(msg) => setSceneLoad({ phase: "error", message: msg })}
+              onSelectPoi={selectPoi}
+              routeWaypoints={overlay?.waypoints ?? null}
+              onProgress={(percent) => setLoadState({ key: canvasKey, value: { phase: "preparing", percent } })}
+              onLoaded={(splatCount) => setLoadState({ key: canvasKey, value: { phase: "ready", splatCount } })}
+              onError={(e) => setLoadState({ key: canvasKey, value: { phase: "error", failure: classifyViewerError(e) } })}
+              onQuality={setQuality}
             />
+          )}
+
+          {blobUrl && sceneReady && (
+            // A compact cluster in a corner: on a phone it stays out of the middle of the scene, with touch-sized targets.
+            <div className="pointer-events-none absolute right-2 top-2 z-10 flex flex-col items-end gap-2" data-testid="camera-controls">
+              <div role="toolbar" aria-label="Camera"
+                className="pointer-events-auto flex overflow-hidden rounded border border-white/30 bg-zinc-900/80 text-sm text-white">
+                <button className="min-h-10 min-w-10 px-2.5 hover:bg-white/10 focus-visible:bg-white/20" aria-label="Zoom in"
+                  onClick={() => canvasRef.current?.zoom(0.7)}>+</button>
+                <button className="min-h-10 min-w-10 border-l border-white/30 px-2.5 hover:bg-white/10 focus-visible:bg-white/20" aria-label="Zoom out"
+                  onClick={() => canvasRef.current?.zoom(1 / 0.7)}>−</button>
+                <button
+                  className="min-h-10 border-l border-white/30 px-2.5 hover:bg-white/10 focus-visible:bg-white/20"
+                  onClick={() => {
+                    focusedRef.current = null;
+                    canvasRef.current?.resetView();
+                  }}
+                >
+                  Reset view
+                </button>
+              </div>
+              <p className="hidden rounded bg-zinc-900/70 px-2 py-1 text-[11px] text-white/80 sm:block pointer-coarse:hidden">
+                Drag to orbit · right-drag to pan · scroll to zoom
+              </p>
+              <p className="hidden rounded bg-zinc-900/70 px-2 py-1 text-[11px] text-white/80 pointer-coarse:block">
+                One finger orbits · two fingers pan and pinch to zoom
+              </p>
+            </div>
           )}
 
           {(sceneLoad.phase === "downloading" || sceneLoad.phase === "preparing") && (
             <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 bg-zinc-950/70 text-white">
-              <p className="text-sm">{sceneLoad.phase === "downloading" ? "Downloading reconstruction…" : "Preparing scene…"}</p>
+              <p className="text-sm" role="status">
+                {sceneLoad.phase === "downloading"
+                  ? "Downloading reconstruction…"
+                  : sceneLoad.percent >= 100 ? "Rendering…" : "Preparing scene…"}
+              </p>
               <div className="h-2 w-64 overflow-hidden rounded bg-white/20">
                 <div className="h-full bg-white transition-[width]" style={{ width: `${sceneLoad.percent}%` }} />
               </div>
@@ -457,19 +624,30 @@ export default function ViewerWorkspace() {
           )}
 
           {sceneLoad.phase === "error" && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-zinc-950/90 text-white">
-              <p className="text-lg font-medium">Could not load the reconstruction</p>
-              <p className="max-w-md text-center text-sm text-white/80">{sceneLoad.message}</p>
-              <button className="rounded border border-white/40 px-3 py-1.5 text-sm" onClick={() => setReloadToken((t) => t + 1)}>
-                Retry
-              </button>
+            <div role="alert" className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-zinc-950/90 p-4 text-white"
+              data-testid="viewer-state" data-state={sceneLoad.failure.kind}>
+              <p className="text-lg font-medium">{sceneLoad.failure.title}</p>
+              <p className="max-w-md text-center text-sm text-white/80">{sceneLoad.failure.message}</p>
+              {sceneLoad.failure.retryable && (
+                // A verified model is not downloaded again (lib/artifact-cache): a graphics failure only rebuilds the viewer.
+                <button className="min-h-10 rounded border border-white/40 px-3 py-1.5 text-sm" onClick={() => setReloadToken((t) => t + 1)}>
+                  Retry
+                </button>
+              )}
             </div>
           )}
         </div>
 
         {venueId && (
-          <aside className="w-80 shrink-0 space-y-4 overflow-y-auto border-l bg-white p-4 text-sm">
+          <aside className="max-h-[45dvh] w-full shrink-0 space-y-4 overflow-y-auto border-t bg-white p-4 text-sm md:max-h-none md:w-80 md:border-l md:border-t-0">
             <SemanticSearchPanel venueId={venueId} floorId={floorId} scanVersionId={scanVersionId} onSelectResult={onSelectSearchResult} />
+
+            {reconstruction && pendingHere && (
+              <section className="rounded border border-sky-200 bg-sky-50 p-2 text-xs text-sky-900" data-testid="newer-processing">
+                <p className="font-medium">A newer capture of this floor is being processed.</p>
+                <ProcessingNotice progress={pendingHere} />
+              </section>
+            )}
 
             {reconstruction && (
               <section>
@@ -502,6 +680,12 @@ export default function ViewerWorkspace() {
                     </>
                   )}
                   <dt>Device tier</dt><dd className="capitalize">{deviceProfile.tier}</dd>
+                  {sceneReady && quality?.medianMs != null && <>
+                    <dt>Render scale</dt>
+                    <dd data-testid="render-scale">
+                      {Math.round((quality.pixelRatio / quality.maxPixelRatio) * 100)}% · {Math.round(1000 / quality.medianMs)} fps measured
+                    </dd>
+                  </>}
                 </dl>
               </section>
             )}
@@ -513,9 +697,12 @@ export default function ViewerWorkspace() {
                   <li key={p.id}>
                     <button
                       className={`w-full rounded px-2 py-1 text-left ${p.id === selectedPoiId ? "bg-amber-100" : "hover:bg-zinc-100"}`}
-                      onClick={() => setSelectedPoiId(p.id === selectedPoiId ? null : p.id)}
+                      onClick={() => selectPoi(p.id === selectedPoiId ? null : p.id)}
                     >
                       {p.label}
+                      {reconstruction && !placedPoiIds.has(p.id) && (
+                        <span className="ml-1 text-[11px] text-zinc-500">(not shown on this model)</span>
+                      )}
                     </button>
                   </li>
                 ))}
@@ -532,6 +719,26 @@ export default function ViewerWorkspace() {
                 <p className="mt-1 font-mono text-xs text-zinc-500">
                   {selectedPoi.x.toFixed(2)}, {selectedPoi.y.toFixed(2)}, {selectedPoi.z.toFixed(2)}
                 </p>
+                {selectedPoi.floorId && <p className="mt-1 text-xs text-zinc-600">Floor: {floorName(selectedPoi.floorId)}</p>}
+                {!placedPoiIds.has(selectedPoi.id) && (
+                  <p className="mt-1 text-xs text-zinc-600" data-testid="poi-not-placed">
+                    {!canonicalTransform
+                      ? "This model is not calibrated, so POIs are not shown on it."
+                      : selectedPoi.frameStatus === "UNBOUND"
+                        ? "Not placed in a calibrated frame, so it is not shown on the model."
+                        : "Placed in a different coordinate frame than this model, so it is not shown on it."}
+                  </p>
+                )}
+                <div className="mt-2 flex gap-2">
+                  {placedPoiIds.has(selectedPoi.id) && sceneReady && (
+                    <button className="rounded border bg-white px-2 py-0.5 text-xs" onClick={() => canvasRef.current?.focusPoi(selectedPoi.id)}>
+                      Focus
+                    </button>
+                  )}
+                  <button className="rounded border bg-white px-2 py-0.5 text-xs" onClick={() => setRouteToId(selectedPoi.id)}>
+                    Route here
+                  </button>
+                </div>
               </section>
             )}
 
@@ -552,27 +759,73 @@ export default function ViewerWorkspace() {
                     {pois.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
                   </select>
                 </label>
-                <label className="flex items-center gap-1 text-xs">
-                  <input type="checkbox" checked={accessibleRoute} onChange={(e) => setAccessibleRoute(e.target.checked)} />
-                  Accessible route (step-free)
-                </label>
                 {routeBusy && <p className="text-xs text-zinc-500">Finding a route…</p>}
-                {routeError && (
-                  <p role="alert" className="text-xs text-red-700">No route available: {routeError}</p>
-                )}
-                {routeResponse && (
-                  <div className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-zinc-700">
-                    <p>{routeResponse.distanceMeters.toFixed(1)} m · ~{Math.round(routeResponse.estimatedDurationSeconds / 60)} min</p>
-                    {routeResponse.floorTransitions.length > 0 && (
-                      <p className="mt-1">
-                        Via {routeResponse.floorTransitions.map((t) => t.connectorType.toLowerCase()).join(", ")}
-                        {" "}({routeResponse.floorTransitions.length} floor transition{routeResponse.floorTransitions.length > 1 ? "s" : ""})
+                {routeOutcomes && !routeBusy && (
+                  <div className="space-y-2" role="radiogroup" aria-label="Route options">
+                    {PROFILES.map((profile) => {
+                      const outcome = routeOutcomes[profile];
+                      if (!outcome.ok) {
+                        return (
+                          <div
+                            key={profile}
+                            role="alert"
+                            data-testid={`route-${profile}`}
+                            data-failure={outcome.failure.kind}
+                            className="rounded border border-red-200 bg-red-50 p-2 text-xs text-red-800"
+                          >
+                            <p className="font-medium">{PROFILE_LABEL[profile]}</p>
+                            <p>No route available: {outcome.failure.message}</p>
+                            {outcome.failure.message !== outcome.detail && <p className="mt-0.5 text-red-700/80">{outcome.detail}</p>}
+                          </div>
+                        );
+                      }
+                      const active = profile === routeProfile;
+                      const summary = routeSummary(outcome.route);
+                      return (
+                        <button
+                          key={profile}
+                          role="radio"
+                          aria-checked={active}
+                          data-testid={`route-${profile}`}
+                          onClick={() => setRouteProfile(profile)}
+                          className={`block w-full rounded border p-2 text-left text-xs text-zinc-700 ${active ? "border-amber-400 bg-amber-50" : "hover:bg-zinc-50"}`}
+                        >
+                          <p className="font-medium">{PROFILE_LABEL[profile]}{active ? " · shown" : " · select to show"}</p>
+                          {summary.distanceMeters !== null && (
+                            <p>
+                              {formatDistance(summary.distanceMeters)}
+                              {summary.durationSeconds !== null && <> · ~{formatDuration(summary.durationSeconds)} (estimate)</>}
+                            </p>
+                          )}
+                          {outcome.route.floorTransitions.length > 0 && (
+                            <p className="mt-1">
+                              Via{" "}
+                              {outcome.route.floorTransitions
+                                .map((t) => `${t.connectorType.toLowerCase()} to ${floorName(t.toFloorId)}`)
+                                .join(", ")}
+                            </p>
+                          )}
+                          {outcome.route.accessibilityConstraintsApplied.length > 0 && (
+                            <ul className="mt-1 list-disc pl-4">
+                              {outcome.route.accessibilityConstraintsApplied.map((c) => <li key={c}>{c}</li>)}
+                            </ul>
+                          )}
+                        </button>
+                      );
+                    })}
+                    {overlay?.mismatch && (
+                      <p role="alert" className="text-xs text-red-700" data-testid="route-mismatch">
+                        This route was planned on a different {overlay.mismatch === "VERSION_MISMATCH" ? "scan version" : "coordinate frame"}{" "}
+                        than the model shown, so it is not drawn on it.
                       </p>
                     )}
-                    {routeResponse.accessibilityConstraintsApplied.length > 0 && (
-                      <ul className="mt-1 list-disc pl-4">
-                        {routeResponse.accessibilityConstraintsApplied.map((c) => <li key={c}>{c}</li>)}
-                      </ul>
+                    {routeResponse && !canonicalTransform && (
+                      <p className="text-xs text-zinc-600">This model is not calibrated, so the route is not drawn on it.</p>
+                    )}
+                    {overlay && overlay.otherFloorIds.length > 0 && (
+                      <p className="text-xs text-zinc-600" data-testid="route-other-floors">
+                        The route continues on {overlay.otherFloorIds.map(floorName).join(", ")}; switch floors to see that part.
+                      </p>
                     )}
                   </div>
                 )}
@@ -582,5 +835,31 @@ export default function ViewerWorkspace() {
         )}
       </div>
     </main>
+  );
+}
+
+/** How far a floor's in-progress reconstruction has got (lib/viewer-progress), or why it failed. */
+function ProcessingNotice({ progress }: { progress: ProcessingProgress }) {
+  if (progress.state === "failed") {
+    return (
+      <p className="text-sm text-red-700" data-testid="processing-failed">
+        Processing failed{progress.currentStage ? ` at ${progress.currentStage}` : ""}{progress.detail ? `: ${progress.detail}` : "."}
+      </p>
+    );
+  }
+  if (progress.state === "waiting" || progress.total === 0) {
+    return <p className="text-sm" data-testid="processing-progress">A capture of this floor is waiting to be processed.</p>;
+  }
+  const percent = Math.round((progress.done / progress.total) * 100);
+  return (
+    <div className="w-full max-w-xs text-sm" data-testid="processing-progress">
+      <p>
+        Reconstruction in progress{progress.currentStage ? `: ${progress.currentStage}` : ""} ({progress.done} of {progress.total} stages)
+      </p>
+      <div className="mt-1 h-2 overflow-hidden rounded bg-zinc-200" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}
+        aria-label="Reconstruction progress">
+        <div className="h-full bg-sky-600" style={{ width: `${percent}%` }} />
+      </div>
+    </div>
   );
 }

@@ -45,7 +45,20 @@ declare module "@mkkellogg/gaussian-splats-3d" {
     /** 0.4.7 has no Viewer.getSplatCount(); the loaded splat count is on the SplatMesh. */
     getSplatMesh(): SplatMesh;
     /** The built-in OrbitControls (useBuiltInControls); their target starts at initialCameraLookAt, default (0, 0, 0). */
-    controls?: { target: THREE.Vector3; update(): void };
+    controls?: {
+      target: THREE.Vector3;
+      minDistance: number;
+      maxDistance: number;
+      /** Key codes for panning (Shift/Ctrl/Meta + key orbits). Default WASD. */
+      keys: { LEFT: string; UP: string; RIGHT: string; BOTTOM: string };
+      listenToKeyEvents(element: HTMLElement | Window): void;
+      stopListenToKeyEvents(): void;
+      update(): void;
+    } | null;
+    /** True once the first splat sort has finished; render() draws nothing before that. */
+    splatRenderReady: boolean;
+    /** The window keydown listener (debug shortcuts) the viewer binds when it uses built-in controls. */
+    keyDownListener?: (e: KeyboardEvent) => void;
   }
 
   export class SplatMesh {

@@ -1,5 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 import { mockJson } from "./viewer-fixture";
+import { mockOidc } from "./oidc-fixture";
 
 // The operations dashboard's states in a real browser, against a mocked API and a mocked OIDC provider. Sign-in is the
 // real authorization-code + PKCE flow of lib/auth.ts (oidc-client-ts): the mock provider only answers its endpoints.
@@ -9,32 +10,6 @@ import { mockJson } from "./viewer-fixture";
 const VENUE = "11111111-1111-1111-1111-111111111111";
 const OPS = `**/mock-api/api/v1/venues/${VENUE}/ops`;
 const now = () => new Date().toISOString();
-
-function b64url(o: unknown): string {
-  return Buffer.from(JSON.stringify(o)).toString("base64url");
-}
-
-/** A minimal OIDC provider for oidc-client-ts: discovery, an authorize endpoint that approves at once, and a token endpoint. */
-async function mockOidc(page: Page) {
-  const issuer = "http://localhost:3100/mock-oidc";
-  await mockJson(page, "**/mock-oidc/.well-known/openid-configuration", {
-    issuer,
-    authorization_endpoint: `${issuer}/auth`,
-    token_endpoint: `${issuer}/token`,
-    end_session_endpoint: `${issuer}/logout`,
-    jwks_uri: `${issuer}/certs`,
-  });
-  await page.route("**/mock-oidc/auth?**", (route) => {
-    const u = new URL(route.request().url());
-    const back = `${u.searchParams.get("redirect_uri")}?code=test-code&state=${u.searchParams.get("state")}`;
-    return route.fulfill({ status: 302, headers: { location: back } });
-  });
-  const t = Math.floor(Date.now() / 1000);
-  const idToken = `${b64url({ alg: "none", typ: "JWT" })}.${b64url({ iss: issuer, aud: "chaya-web-e2e", sub: "ops-user", iat: t, exp: t + 3600 })}.`;
-  await mockJson(page, "**/mock-oidc/token", {
-    access_token: "test-access-token", token_type: "Bearer", expires_in: 3600, id_token: idToken, scope: "openid",
-  });
-}
 
 function access(sections: Partial<Record<string, boolean>>) {
   const all = ["OVERVIEW", "COVERAGE", "JOBS", "FAILURES", "STORAGE", "SEARCH_ANALYTICS", "RESCANS", "AUDIT"];

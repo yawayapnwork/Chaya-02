@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { initialView, sampleIndices, type Vec3 } from "./viewer-camera.ts";
+import { blendView, focusView, initialView, sampleIndices, type Vec3 } from "./viewer-camera.ts";
 
 // Synthetic point sets: they exercise the framing rule, they are not a venue.
 function room(cx: number, cy: number, w: number, d: number): Vec3[] {
@@ -40,4 +40,29 @@ test("no finite centres, no view; sampling spans the scene", () => {
   assert.equal(idx[0], 0);
   assert.ok(idx[999] > 990_000);
   assert.deepEqual(sampleIndices(3), [0, 1, 2]);
+});
+
+test("focusing a POI keeps the viewing direction and frames the point at a usable distance", () => {
+  const f = focusView([0, -10, 5], [0, 0, 0], [20, 30, 1]);
+  assert.deepEqual(f.target, [20, 30, 1]);
+  const d = [f.position[0] - 20, f.position[1] - 30, f.position[2] - 1];
+  const len = Math.hypot(d[0], d[1], d[2]);
+  assert.ok(Math.abs(len - 4) < 1e-9, `distance ${len}`);
+  const was = [0, -10, 5].map((v) => v / Math.hypot(10, 5));
+  assert.ok(d.every((v, k) => Math.abs(v / len - was[k]) < 1e-9), "same bearing and elevation");
+});
+
+test("focusing from straight above tilts back so the point stays readable", () => {
+  const f = focusView([0, 0, 10], [0, 0, 0], [1, 1, 0]);
+  const elevation = Math.asin((f.position[2] - 0) / 4);
+  assert.ok(Math.abs(elevation - (35 * Math.PI) / 180) < 1e-9);
+});
+
+test("a camera transition starts and ends exactly at its two views", () => {
+  const a = { position: [0, 0, 0] as Vec3, target: [1, 1, 1] as Vec3 };
+  const b = { position: [10, 0, 0] as Vec3, target: [2, 2, 2] as Vec3 };
+  assert.deepEqual(blendView(a, b, 0), a);
+  assert.deepEqual(blendView(a, b, 1), b);
+  assert.deepEqual(blendView(a, b, 5), b);
+  assert.equal(blendView(a, b, 0.5).position[0], 5);
 });
