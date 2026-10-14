@@ -94,7 +94,8 @@ test("nearest search from the From point shows walking distances, focuses the re
 
   // Navigate plans the route to it from the From point, both accessibility profiles.
   await first.getByRole("button", { name: `Navigate to ${blue.label}` }).click();
-  await expect(page.getByRole("combobox", { name: "To" })).toHaveValue("poi-3");
+  await expect(page.getByTestId("route-stop")).toHaveCount(1);
+  await expect(page.getByTestId("route-stops")).toContainText(blue.label);
   await expect.poll(() => routes.filter((r) => r.destinationPoiId === "poi-3").map((r) => r.accessibility).sort())
     .toEqual(["STANDARD", "STEP_FREE"]);
   expect(routes.find((r) => r.destinationPoiId === "poi-3")?.start).toEqual(red.canonical);

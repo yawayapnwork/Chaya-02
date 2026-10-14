@@ -7,6 +7,9 @@ import static org.assertj.core.api.Assertions.within;
 import dev.chaya.api.navigation.FloorConnectionService;
 import dev.chaya.api.navigation.FloorConnectionService.ConnectionData;
 import dev.chaya.api.navigation.NavigationDtos.BlockedRegion;
+import dev.chaya.api.navigation.NavigationDtos.MultiStopRequest;
+import dev.chaya.api.navigation.NavigationDtos.MultiStopResponse;
+import dev.chaya.api.navigation.NavigationDtos.StopResult;
 import dev.chaya.api.navigation.NavigationDtos.RouteRequest;
 import dev.chaya.api.navigation.NavigationDtos.RouteResponse;
 import dev.chaya.api.navigation.NavigationDtos.Waypoint;
@@ -15,9 +18,16 @@ import dev.chaya.api.security.Actor;
 import dev.chaya.api.security.Role;
 import dev.chaya.api.web.ApiException;
 import dev.chaya.api.web.NotFoundException;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import org.assertj.core.groups.Tuple;
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -133,6 +143,9 @@ class RouteServiceTest extends AbstractIntegrationTest {
 
     private static final double[] ORIGIN = {0, 0, 0};
 
+    /** When the obstacles of a test were observed: just now, so none is stale. */
+    private static final java.time.Instant NOW = java.time.Instant.now().plusSeconds(1);
+
     // ---- a route, with metric distance and duration ------------------------------------------------------
 
     @Test
@@ -237,7 +250,7 @@ class RouteServiceTest extends AbstractIntegrationTest {
         Actor actor = actorFor(t.org(), t.venue());
         assertThat(routeService.route(actor, request(t.venue(), t.floor(), ORIGIN, destination, null, null)).waypoints()).isNotEmpty();
 
-        BlockedRegion obstacle = new BlockedRegion(t.floor(), 2.0, -1.0, 3.0, 1.0); // covers the middle node
+        BlockedRegion obstacle = new BlockedRegion(t.floor(), 2.0, -1.0, 3.0, 1.0, NOW); // covers the middle node
         assertCode(() -> routeService.route(actor, request(t.venue(), t.floor(), ORIGIN, destination, null, List.of(obstacle))), "NO_ROUTE");
     }
 
@@ -262,7 +275,7 @@ class RouteServiceTest extends AbstractIntegrationTest {
         assertThat(routeService.route(actor, request(t.venue(), t.floor(), ORIGIN, destination, null, null)).distanceMeters())
             .isCloseTo(10.0, within(1e-9));
         RouteResponse around = routeService.route(actor, request(t.venue(), t.floor(), ORIGIN, destination, null,
-            List.of(new BlockedRegion(t.floor(), 4.5, -0.5, 5.5, 0.5))));
+            List.of(new BlockedRegion(t.floor(), 4.5, -0.5, 5.5, 0.5, NOW))));
         assertThat(around.distanceMeters()).isCloseTo(18.0, within(1e-9));
         assertThat(around.waypoints()).noneSatisfy(w -> assertThat(w.x()).isBetween(4.5, 5.5));
         assertThat(around.accessibilityConstraintsApplied()).anySatisfy(c -> assertThat(c).contains("obstacle"));
@@ -281,7 +294,7 @@ class RouteServiceTest extends AbstractIntegrationTest {
         UUID destination = insertPoi(t.org(), t.venue(), t.floor(), "B", null, 4, 0, 0);
         Actor actor = actorFor(t.org(), t.venue());
         // a small box on the a-b segment; no node is inside it
-        BlockedRegion box = new BlockedRegion(t.floor(), 1.8, -0.2, 2.2, 0.2);
+        BlockedRegion box = new BlockedRegion(t.floor(), 1.8, -0.2, 2.2, 0.2, NOW);
 
         RouteResponse r = routeService.route(actor, request(t.venue(), t.floor(), ORIGIN, destination, null, List.of(box)));
         assertThat(r.distanceMeters()).isCloseTo(2 * Math.hypot(2, 3), within(1e-9));
@@ -295,7 +308,7 @@ class RouteServiceTest extends AbstractIntegrationTest {
         corridor(t, t.floor(), "STANDARD", new double[]{0, 0, 0}, new double[]{5, 0, 0});
         UUID destination = insertPoi(t.org(), t.venue(), t.floor(), "B", null, 5, 0, 0);
         RouteResponse r = routeService.route(actorFor(t.org(), t.venue()), request(t.venue(), t.floor(), ORIGIN, destination, null,
-            List.of(new BlockedRegion(other, -1, -1, 6, 1))));
+            List.of(new BlockedRegion(other, -1, -1, 6, 1, NOW))));
         assertThat(r.distanceMeters()).isCloseTo(5.0, within(1e-9));
     }
 
@@ -305,7 +318,7 @@ class RouteServiceTest extends AbstractIntegrationTest {
         corridor(t, t.floor(), "STANDARD", new double[]{0, 0, 0}, new double[]{5, 0, 0});
         UUID destination = insertPoi(t.org(), t.venue(), t.floor(), "B", null, 5, 0, 0);
         assertCode(() -> routeService.route(actorFor(t.org(), t.venue()), request(t.venue(), t.floor(), ORIGIN, destination, null,
-            List.of(new BlockedRegion(t.floor(), 3, 0, 1, 1)))), "INVALID_BLOCKED_REGION");
+            List.of(new BlockedRegion(t.floor(), 3, 0, 1, 1, NOW)))), "INVALID_BLOCKED_REGION");
     }
 
     // ---- accessibility: measured constraints only ----------------------------------------------------------
@@ -515,6 +528,13 @@ class RouteServiceTest extends AbstractIntegrationTest {
             "FLOOR_CONNECTION_UNAVAILABLE");
 
         UUID wide = register(actor, f, "ELEVATOR", null, null, 1.1);
+        assertThatThrownBy(() -> routeService.route(actor, request(f.t().venue(), f.t().floor(), ORIGIN, f.office(), "STEP_FREE", null)))
+            .as("a registered width is a claim: unverified, the elevator is not used step-free")
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.code()).isEqualTo("FLOOR_CONNECTION_UNAVAILABLE");
+                assertThat(e.getMessage()).contains("has not been verified on site");
+            });
+        connections.setAccessibilityVerified(actor, f.t().venue(), wide, true);
         RouteResponse r = routeService.route(actor, request(f.t().venue(), f.t().floor(), ORIGIN, f.office(), "STEP_FREE", null));
         assertThat(r.floorTransitions()).singleElement().satisfies(tr -> assertThat(tr.connectionId()).isEqualTo(wide));
         assertThat(r.estimatedDurationSeconds()).isCloseTo(15.0 / WALK_ACCESSIBLE + ELEVATOR_SECONDS, within(1e-9));
@@ -533,7 +553,10 @@ class RouteServiceTest extends AbstractIntegrationTest {
             "FLOOR_CONNECTION_UNAVAILABLE");
         connections.delete(actor, f.t().venue(), unknownSlope);
 
-        register(actor, f, "RAMP", 12.0, 4.0, 1.5);
+        UUID gentle = register(actor, f, "RAMP", 12.0, 4.0, 1.5);
+        assertCode(() -> routeService.route(actor, request(f.t().venue(), f.t().floor(), ORIGIN, f.office(), "STEP_FREE", null)),
+            "FLOOR_CONNECTION_UNAVAILABLE");
+        connections.setAccessibilityVerified(actor, f.t().venue(), gentle, true);
         RouteResponse r = routeService.route(actor, request(f.t().venue(), f.t().floor(), ORIGIN, f.office(), "STEP_FREE", null));
         assertThat(r.floorTransitions()).singleElement().satisfies(tr -> assertThat(tr.connectorType()).isEqualTo("RAMP"));
         assertThat(r.distanceMeters()).isCloseTo(10.0 + 12.0 + 5.0, within(1e-9));
@@ -617,5 +640,264 @@ class RouteServiceTest extends AbstractIntegrationTest {
         Actor outsider = new Actor(Actor.Kind.USER, "outsider", fx.organization(), Set.of(), Set.of(Role.OPERATOR));
         assertThatThrownBy(() -> routeService.route(outsider, request(t.venue(), t.floor(), ORIGIN, destination, null, null)))
             .isInstanceOf(NotFoundException.class);
+    }
+
+    // ---- reported obstacles: freshness and frame ---------------------------------------------------------
+
+    @Test
+    void aStaleOrFutureObstacleObservationIsRejectedAndReportedNotRoutedAround() {
+        var t = calibratedTree();
+        corridor(t, t.floor(), "STANDARD", new double[]{0, 0, 0}, new double[]{2.5, 0, 0}, new double[]{5, 0, 0});
+        UUID destination = insertPoi(t.org(), t.venue(), t.floor(), "Reception", null, 5, 0, 0);
+        Actor actor = actorFor(t.org(), t.venue());
+
+        BlockedRegion stale = new BlockedRegion(t.floor(), 2.0, -1.0, 3.0, 1.0, Instant.now().minusSeconds(3600));
+        BlockedRegion future = new BlockedRegion(t.floor(), 2.0, -1.0, 3.0, 1.0, Instant.now().plusSeconds(3600));
+        RouteResponse r = routeService.route(actor, request(t.venue(), t.floor(), ORIGIN, destination, null, List.of(stale, future)));
+        assertThat(r.distanceMeters()).as("neither observation blocks the corridor").isCloseTo(5.0, within(1e-9));
+        assertThat(r.rejectedObstacles()).extracting(o -> o.index() + ":" + o.reason())
+            .containsExactly("0:STALE_OBSERVATION", "1:FUTURE_OBSERVATION");
+        assertThat(r.accessibilityConstraintsApplied()).anySatisfy(c -> assertThat(c).contains("2 reported obstacle region(s) rejected"));
+
+        // A fresh observation of the same region is used, alongside the rejected one.
+        BlockedRegion fresh = new BlockedRegion(t.floor(), 2.0, -1.0, 3.0, 1.0, NOW);
+        assertCode(() -> routeService.route(actor, request(t.venue(), t.floor(), ORIGIN, destination, null, List.of(stale, fresh))),
+            "NO_ROUTE");
+        // Without a time an observation cannot be judged current at all.
+        assertCode(() -> routeService.route(actor, request(t.venue(), t.floor(), ORIGIN, destination, null,
+            List.of(new BlockedRegion(t.floor(), 2.0, -1.0, 3.0, 1.0, null)))), "INVALID_BLOCKED_REGION");
+    }
+
+    @Test
+    void anObstacleObservedInAnotherCoordinateFrameIsRejected() {
+        var t = calibratedTree();
+        corridor(t, t.floor(), "STANDARD", new double[]{0, 0, 0}, new double[]{2.5, 0, 0}, new double[]{5, 0, 0});
+        UUID destination = insertPoi(t.org(), t.venue(), t.floor(), "Reception", null, 5, 0, 0);
+        Actor actor = actorFor(t.org(), t.venue());
+        UUID frame = jdbc.sql("SELECT current_coordinate_frame_id FROM floor WHERE id = :f").param("f", t.floor()).query(UUID.class).single();
+
+        BlockedRegion elsewhere = new BlockedRegion(t.floor(), 2.0, -1.0, 3.0, 1.0, NOW, UUID.randomUUID());
+        RouteResponse r = routeService.route(actor, request(t.venue(), t.floor(), ORIGIN, destination, null, List.of(elsewhere)));
+        assertThat(r.rejectedObstacles()).singleElement().satisfies(o -> assertThat(o.reason()).isEqualTo("FRAME_MISMATCH"));
+        BlockedRegion here = new BlockedRegion(t.floor(), 2.0, -1.0, 3.0, 1.0, NOW, frame);
+        assertCode(() -> routeService.route(actor, request(t.venue(), t.floor(), ORIGIN, destination, null, List.of(here))), "NO_ROUTE");
+    }
+
+    // ---- endpoints outside the navmesh -------------------------------------------------------------------
+
+    @Test
+    void anEndpointOutsideTheNavigableAreaOrFarFromEveryPolygonIsRefused() {
+        var t = calibratedTree();
+        // An L: (0,0) -> (30,0) -> (30,30). (5, 25) is inside its footprint but 25 m from every polygon.
+        corridor(t, t.floor(), "STANDARD", new double[]{0, 0, 0}, new double[]{30, 0, 0}, new double[]{30, 30, 0});
+        UUID corner = insertPoi(t.org(), t.venue(), t.floor(), "Corner", null, 30, 30, 0);
+        UUID outside = insertPoi(t.org(), t.venue(), t.floor(), "Car park", null, 60, 0, 0);
+        Actor actor = actorFor(t.org(), t.venue());
+
+        assertCode(() -> routeService.route(actor, request(t.venue(), t.floor(), new double[]{-5, 0, 0}, corner, null, null)),
+            "START_OUT_OF_BOUNDS");
+        assertCode(() -> routeService.route(actor, request(t.venue(), t.floor(), new double[]{10, 0, 6}, corner, null, null)),
+            "START_OUT_OF_BOUNDS"); // 6 m above every walkable surface of the floor
+        assertCode(() -> routeService.route(actor, request(t.venue(), t.floor(), new double[]{5, 25, 0}, corner, null, null)),
+            "START_OFF_NAVMESH");
+        assertCode(() -> routeService.route(actor, request(t.venue(), t.floor(), ORIGIN, outside, null, null)),
+            "DESTINATION_OUT_OF_BOUNDS");
+        // Within the margin, at camera height above the floor: a valid start.
+        assertThat(routeService.route(actor, request(t.venue(), t.floor(), new double[]{-0.5, 0.3, 1.5}, corner, null, null))
+            .waypoints()).isNotEmpty();
+    }
+
+    // ---- multi-stop routes -----------------------------------------------------------------------------
+
+    private static MultiStopRequest multiStop(UUID venue, UUID floor, double[] start, List<UUID> stops, boolean optimize,
+                                              String accessibility, List<BlockedRegion> blocked) {
+        return new MultiStopRequest(venue, floor, List.of(start[0], start[1], start[2]), stops, optimize, accessibility, blocked, null);
+    }
+
+    @Test
+    void aMultiStopRouteKeepsTheRequestedOrderUnlessOptimisationIsRequested() {
+        var t = calibratedTree();
+        corridor(t, t.floor(), "STANDARD", new double[]{0, 0, 0}, new double[]{2.5, 0, 0}, new double[]{5, 0, 0},
+            new double[]{7.5, 0, 0}, new double[]{10, 0, 0});
+        UUID far = insertPoi(t.org(), t.venue(), t.floor(), "Far", null, 10, 0, 0);
+        UUID near = insertPoi(t.org(), t.venue(), t.floor(), "Near", null, 2.5, 0, 0);
+        UUID middle = insertPoi(t.org(), t.venue(), t.floor(), "Middle", null, 5, 0, 0);
+        Actor actor = actorFor(t.org(), t.venue());
+
+        MultiStopResponse asGiven = routeService.routeMultiStop(actor, multiStop(t.venue(), t.floor(), ORIGIN, List.of(far, near, middle), false, null, null));
+        assertThat(asGiven.visitOrder()).containsExactly(far, near, middle);
+        assertThat(asGiven.orderOptimized()).isFalse();
+        assertThat(asGiven.complete()).isTrue();
+        assertThat(asGiven.distanceMeters()).isCloseTo(10 + 7.5 + 2.5, within(1e-9));
+        assertThat(asGiven.segments()).extracting(seg -> seg.fromPoiId() + ">" + seg.toPoiId())
+            .containsExactly("null>" + far, far + ">" + near, near + ">" + middle);
+        // One continuous polyline: START, then a STOP at each intermediate destination, then the DESTINATION.
+        assertThat(asGiven.waypoints().get(0).kind()).isEqualTo("START");
+        assertThat(asGiven.waypoints().get(asGiven.waypoints().size() - 1).kind()).isEqualTo("DESTINATION");
+        assertThat(asGiven.waypoints()).filteredOn(w -> w.kind().equals("STOP")).extracting(Waypoint::x).containsExactly(10.0, 2.5);
+        assertThat(RouteServiceTestSupport.polyline(asGiven.waypoints())).isCloseTo(asGiven.distanceMeters(), within(1e-9));
+
+        MultiStopResponse optimised = routeService.routeMultiStop(actor, multiStop(t.venue(), t.floor(), ORIGIN, List.of(far, near, middle), true, null, null));
+        assertThat(optimised.visitOrder()).containsExactly(near, middle, far);
+        assertThat(optimised.orderOptimized()).isTrue();
+        assertThat(optimised.distanceMeters()).isCloseTo(10.0, within(1e-9));
+        assertThat(optimised.estimatedDurationSeconds()).isCloseTo(10.0 / WALK, within(1e-9));
+        assertThat(optimised.stops()).extracting(StopResult::requestedIndex, StopResult::visitIndex)
+            .containsExactly(Tuple.tuple(0, 2), Tuple.tuple(1, 0), Tuple.tuple(2, 1));
+    }
+
+    @Test
+    void anUnreachableIntermediateStopIsReportedAndTheRouteContinuesFromTheLastStopReached() {
+        var t = calibratedTree();
+        UUID g = corridor(t, t.floor(), "STANDARD", new double[]{0, 0, 0}, new double[]{5, 0, 0}, new double[]{10, 0, 0});
+        insertNode(t.org(), t.venue(), g, t.floor(), 5, 8, 0); // an island: no edge reaches it
+        UUID first = insertPoi(t.org(), t.venue(), t.floor(), "First", null, 5, 0, 0);
+        UUID island = insertPoi(t.org(), t.venue(), t.floor(), "Island", null, 5, 8, 0);
+        UUID last = insertPoi(t.org(), t.venue(), t.floor(), "Last", null, 10, 0, 0);
+        var other = calibratedTree();
+        UUID otherVenuesPoi = insertPoi(other.org(), other.venue(), other.floor(), "Elsewhere", null, 1, 0, 0);
+        Actor actor = actorFor(t.org(), t.venue());
+
+        MultiStopResponse r = routeService.routeMultiStop(actor,
+            multiStop(t.venue(), t.floor(), ORIGIN, List.of(first, island, otherVenuesPoi, last), false, null, null));
+        assertThat(r.complete()).isFalse();
+        assertThat(r.visitOrder()).containsExactly(first, last);
+        assertThat(r.stops()).extracting(StopResult::status, StopResult::failureCode).containsExactly(
+            Tuple.tuple("REACHED", null), Tuple.tuple("UNREACHABLE", "NO_ROUTE"),
+            Tuple.tuple("UNREACHABLE", "POI_NOT_FOUND"), Tuple.tuple("REACHED", null));
+        assertThat(r.segments()).extracting(seg -> seg.fromPoiId() + ">" + seg.toPoiId())
+            .containsExactly("null>" + first, first + ">" + last);
+        assertThat(r.distanceMeters()).isCloseTo(10.0, within(1e-9));
+
+        assertCode(() -> routeService.routeMultiStop(actor, multiStop(t.venue(), t.floor(), ORIGIN, List.of(island), false, null, null)),
+            "NO_REACHABLE_STOP");
+        assertCode(() -> routeService.routeMultiStop(actor, multiStop(t.venue(), t.floor(), ORIGIN, List.of(first, first), false, null, null)),
+            "INVALID_STOPS");
+        List<UUID> tooMany = new ArrayList<>();
+        for (int i = 0; i < 11; i++) {
+            tooMany.add(UUID.randomUUID());
+        }
+        assertCode(() -> routeService.routeMultiStop(actor, multiStop(t.venue(), t.floor(), ORIGIN, tooMany, true, null, null)),
+            "INVALID_STOPS");
+        assertCode(() -> routeService.routeMultiStop(actor, multiStop(t.venue(), t.floor(), new double[]{50, 0, 0}, List.of(first), false,
+            null, null)), "START_OUT_OF_BOUNDS");
+    }
+
+    @Test
+    void aStepFreeMultiStopRouteReportsTheStopOnlyAStepReachesAsInaccessible() {
+        var t = calibratedTree();
+        // STANDARD: 0 -> 5 -> 10, a step between 5 and 10. STEP_FREE: the step's edge is not baked.
+        UUID std = corridor(t, t.floor(), "STANDARD", new double[]{0, 0, 0}, new double[]{5, 0, 0});
+        UUID stdTop = insertNode(t.org(), t.venue(), std, t.floor(), 10, 0, 0.17);
+        UUID stdMid = jdbc.sql("SELECT id FROM navigation_node WHERE graph_id = :g AND x = 5").param("g", std).query(UUID.class).single();
+        insertEdge(t.org(), t.venue(), std, stdMid, stdTop, false, 1.2, 30.0);
+        UUID sf = corridor(t, t.floor(), "STEP_FREE", new double[]{0, 0, 0}, new double[]{5, 0, 0});
+        insertNode(t.org(), t.venue(), sf, t.floor(), 10, 0, 0.17);
+        UUID lower = insertPoi(t.org(), t.venue(), t.floor(), "Lower", null, 5, 0, 0);
+        UUID upper = insertPoi(t.org(), t.venue(), t.floor(), "Upper", null, 10, 0, 0.17);
+        Actor actor = actorFor(t.org(), t.venue());
+
+        assertThat(routeService.routeMultiStop(actor, multiStop(t.venue(), t.floor(), ORIGIN, List.of(upper, lower), false, "STANDARD", null))
+            .complete()).isTrue();
+        MultiStopResponse stepFree = routeService.routeMultiStop(actor,
+            multiStop(t.venue(), t.floor(), ORIGIN, List.of(upper, lower), false, "STEP_FREE", null));
+        assertThat(stepFree.visitOrder()).containsExactly(lower);
+        assertThat(stepFree.stops().get(0).failureCode()).isEqualTo("NO_ACCESSIBLE_ROUTE");
+        assertThat(stepFree.accessibilityProfile()).isEqualTo("STEP_FREE");
+    }
+
+    @Test
+    void aMultiStopRouteCrossesFloorsAndBackOverAVerifiedElevator() {
+        TwoFloors f = twoFloors("STANDARD", "STEP_FREE");
+        Actor actor = actorFor(f.t().org(), f.t().venue());
+        UUID lift = register(actor, f, "ELEVATOR", null, null, 1.1);
+        // On a graph node: a point between the corridor's two nodes would be equidistant from both (a snapping tie).
+        UUID ground = insertPoi(f.t().org(), f.t().venue(), f.t().floor(), "Ground cafe", null, 0, 0, 0);
+
+        MultiStopRequest upAndBack = multiStop(f.t().venue(), f.t().floor(), ORIGIN, List.of(f.office(), ground), false, "STEP_FREE", null);
+        MultiStopResponse unverified = routeService.routeMultiStop(actor, upAndBack);
+        assertThat(unverified.visitOrder()).as("the unverified lift is not used step-free").containsExactly(ground);
+        assertThat(unverified.stops().get(0).failureCode()).isEqualTo("FLOOR_CONNECTION_UNAVAILABLE");
+
+        connections.setAccessibilityVerified(actor, f.t().venue(), lift, true);
+        MultiStopResponse r = routeService.routeMultiStop(actor, upAndBack);
+        assertThat(r.complete()).isTrue();
+        assertThat(r.segments()).allSatisfy(seg -> assertThat(seg.route().floorTransitions()).singleElement()
+            .satisfies(tr -> assertThat(tr.connectorType()).isEqualTo("ELEVATOR")));
+        assertThat(r.waypoints()).filteredOn(w -> w.kind().equals("STOP")).singleElement()
+            .satisfies(w -> assertThat(w.floorId()).isEqualTo(f.floor1()));
+        assertThat(r.estimatedDurationSeconds()).isCloseTo((15.0 + 15.0) / WALK_ACCESSIBLE + 2 * ELEVATOR_SECONDS, within(1e-9));
+    }
+
+    @Test
+    void verifyingAccessibilityNeedsRegisteredMeasurementsAndIsNeverPossibleForStairs() {
+        TwoFloors f = twoFloors("STANDARD");
+        Actor actor = actorFor(f.t().org(), f.t().venue());
+        UUID stairs = register(actor, f, "STAIRS", 6.0, 33.0, 1.5);
+        UUID unmeasured = register(actor, f, "ELEVATOR", null, null, null);
+        UUID ramp = register(actor, f, "RAMP", 12.0, null, 1.5);
+        assertCode(() -> connections.setAccessibilityVerified(actor, f.t().venue(), stairs, true), "INVALID_FLOOR_CONNECTION");
+        assertCode(() -> connections.setAccessibilityVerified(actor, f.t().venue(), unmeasured, true), "INVALID_FLOOR_CONNECTION");
+        assertCode(() -> connections.setAccessibilityVerified(actor, f.t().venue(), ramp, true), "INVALID_FLOOR_CONNECTION");
+
+        UUID lift = register(actor, f, "ELEVATOR", null, null, 1.1);
+        var verified = connections.setAccessibilityVerified(actor, f.t().venue(), lift, true);
+        assertThat(verified.accessibilityVerifiedAt()).isNotNull();
+        assertThat(verified.accessibilityVerifiedBy()).isEqualTo("test-user");
+        var withdrawn = connections.setAccessibilityVerified(actor, f.t().venue(), lift, false);
+        assertThat(withdrawn.accessibilityVerifiedAt()).isNull();
+        assertThat(withdrawn.accessibilityVerifiedBy()).isNull();
+    }
+
+    // ---- graph cache, republished versions and concurrent requests -----------------------------------------
+
+    @Test
+    void aCachedGraphIsNeverServedAfterTheFloorPublishesANewOne() {
+        var t = calibratedTree();
+        UUID first = corridor(t, t.floor(), "STANDARD", new double[]{0, 0, 0}, new double[]{5, 0, 0});
+        UUID destination = insertPoi(t.org(), t.venue(), t.floor(), "Desk", null, 5, 0, 0);
+        Actor actor = actorFor(t.org(), t.venue());
+        RouteRequest req = request(t.venue(), t.floor(), ORIGIN, destination, null, null);
+
+        assertThat(routeService.route(actor, req).routingSources().get(0).graphId()).isEqualTo(first);
+        long hits = routeService.graphCacheStats().hits();
+        long misses = routeService.graphCacheStats().misses();
+        assertThat(routeService.route(actor, req).routingSources().get(0).graphId()).isEqualTo(first);
+        assertThat(routeService.graphCacheStats().hits()).as("the second request reads no nodes or edges").isGreaterThan(hits);
+        assertThat(routeService.graphCacheStats().misses()).isEqualTo(misses);
+
+        // A new bake is published (the old graph is retired): routing switches at once, with the new geometry.
+        UUID second = corridor(t, t.floor(), "STANDARD", new double[]{0, 0, 0}, new double[]{0, 4, 0}, new double[]{5, 4, 0},
+            new double[]{5, 0, 0});
+        fx.publishDrafts(t.org(), t.venue(), t.floor());
+        RouteResponse after = routeService.route(actor, req);
+        assertThat(after.routingSources().get(0).graphId()).isEqualTo(second);
+        assertThat(after.distanceMeters()).isCloseTo(13.0, within(1e-9));
+    }
+
+    @Test
+    void concurrentRouteRequestsAllGetTheSameCorrectAnswer() throws Exception {
+        var t = calibratedTree();
+        corridor(t, t.floor(), "STANDARD", new double[]{0, 0, 0}, new double[]{2.5, 0, 0}, new double[]{5, 0, 0},
+            new double[]{5, 5, 0});
+        UUID a = insertPoi(t.org(), t.venue(), t.floor(), "A", null, 5, 0, 0);
+        UUID b = insertPoi(t.org(), t.venue(), t.floor(), "B", null, 5, 5, 0);
+        Actor actor = actorFor(t.org(), t.venue());
+        List<Callable<Double>> calls = new ArrayList<>();
+        for (int i = 0; i < 24; i++) {
+            UUID dest = i % 2 == 0 ? a : b;
+            // Every third request reports an obstacle off the corridor: per-request exclusions never leak into the cache.
+            List<BlockedRegion> blocked = i % 3 == 0 ? List.of(new BlockedRegion(t.floor(), 0.5, 3, 1.5, 4, NOW)) : null;
+            calls.add(() -> routeService.route(actor, request(t.venue(), t.floor(), ORIGIN, dest, null, blocked)).distanceMeters());
+        }
+        ExecutorService pool = Executors.newFixedThreadPool(8);
+        try {
+            List<Future<Double>> results = pool.invokeAll(calls);
+            for (int i = 0; i < results.size(); i++) {
+                assertThat(results.get(i).get()).isCloseTo(i % 2 == 0 ? 5.0 : 10.0, within(1e-9));
+            }
+        } finally {
+            pool.shutdownNow();
+        }
     }
 }

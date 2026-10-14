@@ -1,5 +1,7 @@
 package dev.chaya.api.navigation;
 
+import dev.chaya.api.navigation.NavigationDtos.MultiStopRequest;
+import dev.chaya.api.navigation.NavigationDtos.MultiStopResponse;
 import dev.chaya.api.navigation.NavigationDtos.RouteRequest;
 import dev.chaya.api.navigation.NavigationDtos.RouteResponse;
 import dev.chaya.api.security.Actor;
@@ -7,6 +9,7 @@ import dev.chaya.api.security.ActorAuthentication;
 import dev.chaya.api.web.ProblemResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import jakarta.validation.Valid;
+import java.util.UUID;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -30,17 +33,36 @@ public class NavigationController {
     @ProblemResponse(status = 400, description = "INVALID_START, INVALID_ACCESSIBILITY, INVALID_BLOCKED_REGION")
     @ProblemResponse(status = 404, description = "NO_ROUTE, NO_ACCESSIBLE_ROUTE, FLOOR_CONNECTION_UNAVAILABLE, or the "
             + "venue is not visible")
+    @ProblemResponse(status = 422, description = "START_OUT_OF_BOUNDS, START_OFF_NAVMESH, DESTINATION_OUT_OF_BOUNDS, "
+            + "DESTINATION_OFF_NAVMESH")
     @ProblemResponse(status = 409, description = "NAVMESH_NOT_READY, METRIC_CALIBRATION_REQUIRED, VERSION_MISMATCH, "
             + "VERSION_WRONG_FLOOR")
     @PostMapping("/routes")
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR','VIEWER','PUBLIC_VIEWER')")
     public RouteResponse route(@Valid @RequestBody RouteRequest request) {
-        // The venue is in the body, not the path, so VenueScopeFilter cannot narrow the actor: do it here. A member of the
-        // venue must hold a role there (any role may route); a non-member is refused as 404 by the service's TenantGuard.
-        Actor actor = ActorAuthentication.currentActor().atVenue(request.venueId());
-        if (actor.isMemberOf(request.venueId()) && actor.rolesAt(request.venueId()).isEmpty()) {
+        return routes.route(actorAt(request.venueId()), request);
+    }
+
+    @Operation(summary = "Route from a start through several destinations, in the given or the fastest order",
+            description = "Each segment is routed like POST /routes. Stops that cannot be reached are reported per stop and "
+                + "skipped; the route continues from the last stop reached (docs/navigation.md).")
+    @ProblemResponse(status = 400, description = "INVALID_STOPS, INVALID_START, INVALID_ACCESSIBILITY, INVALID_BLOCKED_REGION")
+    @ProblemResponse(status = 404, description = "NO_REACHABLE_STOP, or the venue is not visible")
+    @ProblemResponse(status = 409, description = "NAVMESH_NOT_READY, METRIC_CALIBRATION_REQUIRED (start floor), VERSION_WRONG_FLOOR")
+    @ProblemResponse(status = 422, description = "START_OUT_OF_BOUNDS, START_OFF_NAVMESH")
+    @PostMapping("/routes/multi-stop")
+    @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR','VIEWER','PUBLIC_VIEWER')")
+    public MultiStopResponse multiStop(@Valid @RequestBody MultiStopRequest request) {
+        return routes.routeMultiStop(actorAt(request.venueId()), request);
+    }
+
+    /** The venue is in the body, not the path, so VenueScopeFilter cannot narrow the actor: do it here. A member of the
+     * venue must hold a role there (any role may route); a non-member is refused as 404 by the service's TenantGuard. */
+    private static Actor actorAt(UUID venueId) {
+        Actor actor = ActorAuthentication.currentActor().atVenue(venueId);
+        if (actor.isMemberOf(venueId) && actor.rolesAt(venueId).isEmpty()) {
             throw new AccessDeniedException("no role at this venue");
         }
-        return routes.route(actor, request);
+        return actor;
     }
 }

@@ -48,7 +48,11 @@ abstract class PipelineTestSupport extends CaptureTestSupport {
     }
 
     protected Started startRun(String startBody) throws Exception {
-        var c = ctx();
+        return startRun(ctx(), startBody);
+    }
+
+    /** A run of a new capture on `c`'s floor: a second run in the same venue (another floor, or the same one again). */
+    protected Started startRun(Ctx c, String startBody) throws Exception {
         UUID capture = newCapture(c);
         var u = upload(c, capture, "VIDEO", "walk.mp4", "video/mp4", mp4(4096));
         awaitSettled(c, capture, u.mediaId());

@@ -3,6 +3,7 @@ package dev.chaya.api.navigation;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -13,8 +14,23 @@ public final class NavigationDtos {
     /** A region the AR client observed as blocked (a person, a cart, a closed door -- whatever it actually detected), as
      * an axis-aligned horizontal footprint in canonical metres on one floor, in that floor's current frame. It blocks the
      * full height of the floor: every graph node inside it and every route segment crossing it is excluded. Never
-     * invented server-side; see RouteService. */
-    public record BlockedRegion(@NotNull UUID floorId, double minX, double minY, double maxX, double maxY) {}
+     * invented server-side; see RouteService.
+     *
+     * <p>observedAt (required): when the device observed it. An observation older than
+     * chaya.navigation.obstacle-max-age-seconds, or stamped in the future beyond the allowed clock skew, is rejected
+     * (reported in the response's rejectedObstacles, not routed around). coordinateFrameId (optional): the frame the
+     * device was localized in; an observation in another frame than the one the floor is routed in is rejected too. */
+    public record BlockedRegion(@NotNull UUID floorId, double minX, double minY, double maxX, double maxY, Instant observedAt,
+                                UUID coordinateFrameId) {
+
+        public BlockedRegion(UUID floorId, double minX, double minY, double maxX, double maxY, Instant observedAt) {
+            this(floorId, minX, minY, maxX, maxY, observedAt, null);
+        }
+    }
+
+    /** A reported obstacle that was not used: index is its position in the request's blockedRegions; reason is
+     * STALE_OBSERVATION, FUTURE_OBSERVATION or FRAME_MISMATCH. */
+    public record RejectedObstacle(int index, UUID floorId, String reason, String detail) {}
 
     /** accessibility: "STANDARD" (default) or "STEP_FREE". start: [x, y, z] in canonical venue metres (+Z up) on
      * floorId, in the floor's current coordinate frame (RouteService; docs/coordinate-frames.md).
@@ -32,6 +48,8 @@ public final class NavigationDtos {
         }
     }
 
+    /** kind: START, WAYPOINT, TRANSITION (the end of a floor's leg at a floor connection), STOP (an intermediate
+     * destination of a multi-stop route) or DESTINATION. */
     public record Waypoint(double x, double y, double z, UUID floorId, String kind) {}
 
     /** One crossing of a registered floor connection (FloorConnectionService). poiId is the landing the route leaves
@@ -55,7 +73,34 @@ public final class NavigationDtos {
     /** distanceMeters: the 3-D length of the waypoint polyline of every floor leg, in canonical metres, plus the
      * registered walked length of every stairs/ramp connection. estimatedDurationSeconds: each walked length divided by
      * the (assumed) speed for it, plus a fixed (assumed) time per elevator ride. */
+    /** rejectedObstacles: reported obstacles that were not routed around, and why (BlockedRegion). */
     public record RouteResponse(List<Waypoint> waypoints, double distanceMeters, double estimatedDurationSeconds,
                                 List<FloorTransition> floorTransitions, String accessibilityProfile,
-                                List<String> accessibilityConstraintsApplied, List<RoutingSource> routingSources) {}
+                                List<String> accessibilityConstraintsApplied, List<RoutingSource> routingSources,
+                                List<RejectedObstacle> rejectedObstacles) {}
+
+    /** A route from start through several destinations (RouteService#routeMultiStop). stopPoiIds are visited in the order
+     * given unless optimizeOrder is true, in which case the order that minimises the estimated duration is chosen. The
+     * other fields mean what they mean in RouteRequest. */
+    public record MultiStopRequest(@NotNull UUID venueId, @NotNull UUID floorId,
+                                   @NotNull @Size(min = 3, max = 3) List<Double> start, @NotNull @Size(min = 1) List<UUID> stopPoiIds,
+                                   boolean optimizeOrder, String accessibility, @Valid List<BlockedRegion> blockedRegions,
+                                   UUID scanVersionId) {}
+
+    /** One leg of a multi-stop route: from the start (fromPoiId null) or a reached stop, to the next reached stop. */
+    public record RouteSegment(int index, UUID fromPoiId, UUID toPoiId, RouteResponse route) {}
+
+    /** What became of one requested stop: REACHED (visitIndex is its position in the route) or UNREACHABLE (with the code
+     * a single route to it would have failed with, and why). requestedIndex is its position in the request. */
+    public record StopResult(UUID poiId, int requestedIndex, Integer visitIndex, String status, String failureCode,
+                             String failureMessage) {}
+
+    /** visitOrder: the reached stops in route order. waypoints: every segment's waypoints joined into one continuous route
+     * (an intermediate stop is a STOP waypoint). distanceMeters, estimatedDurationSeconds: sums over the segments.
+     * complete: every requested stop was reached. */
+    public record MultiStopResponse(List<UUID> visitOrder, boolean orderOptimized, boolean complete, List<StopResult> stops,
+                                    List<RouteSegment> segments, List<Waypoint> waypoints, double distanceMeters,
+                                    double estimatedDurationSeconds, String accessibilityProfile,
+                                    List<String> accessibilityConstraintsApplied, List<RoutingSource> routingSources,
+                                    List<RejectedObstacle> rejectedObstacles) {}
 }

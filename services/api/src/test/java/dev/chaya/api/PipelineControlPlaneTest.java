@@ -564,7 +564,7 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
     }
 
     private RouteService routesNeeding(double clearanceM) {
-        return new RouteService(jdbc, guard, new dev.chaya.api.navigation.NavigationProperties(0, 0, 0, clearanceM, 0, 0, 0, false),
+        return new RouteService(jdbc, guard, dev.chaya.api.navigation.NavigationProperties.withMinAccessibleClearance(clearanceM),
             frames, versions);
     }
 

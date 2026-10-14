@@ -13,6 +13,21 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *   <li>maxAccessibleSlopeDeg ~4.76 degrees is the ADA 1:12 ramp limit.</li>
  * </ul>
  *
+ * <p>Request handling, not planning constants:
+ * <ul>
+ *   <li>obstacleMaxAgeSeconds (120): a reported obstacle observed longer ago than this is rejected, not routed around --
+ *       the client saw something that may have moved since. obstacleMaxFutureSkewSeconds (10): an observation stamped
+ *       further in the future than this is rejected too (a wrong device clock).</li>
+ *   <li>endpointBoundsMarginM (1.0): how far outside the horizontal footprint of a floor's navmesh graph (its polygon
+ *       centroids and portals) a start or destination may lie before it is refused as out of bounds.</li>
+ *   <li>agentRadiusM (0.35): the walking body's radius, the same as the worker's navmesh_agent_radius_m. Where a
+ *       reported obstacle reaches a navmesh portal, the edge stays open only if the opening left there is at least twice
+ *       this wide (STEP_FREE: at least the accessible clear width); see RouteService#freePortal.</li>
+ *   <li>maxStops (10): the most destinations one multi-stop request may name.</li>
+ *   <li>graphCacheMaxGraphs (64): how many navigation graphs' nodes and edges are kept in memory. A graph's content is
+ *       immutable once it leaves DRAFT (V6), so a cached copy keyed by its id can never be stale.</li>
+ * </ul>
+ *
  * <p>acceptSyntheticGraphs (default false, and never set in application.yml) lets RouteService route on a
  * navigation_graph that was not derived from a Recast navmesh (source SYNTHETIC, V18) -- hand-built test fixtures.
  * Production refuses those with NAVMESH_NOT_READY; see RouteService. */
@@ -20,7 +35,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public record NavigationProperties(double standardWalkingSpeedMps, double accessibleWalkingSpeedMps, double stairsSpeedMps,
                                    double minAccessibleClearanceM, double maxAccessibleSlopeDeg,
                                    double elevatorTransitionSeconds, double nodeSnapMaxDistanceMeters,
-                                   boolean acceptSyntheticGraphs) {
+                                   boolean acceptSyntheticGraphs, double obstacleMaxAgeSeconds, double obstacleMaxFutureSkewSeconds,
+                                   double endpointBoundsMarginM, int maxStops, int graphCacheMaxGraphs, double agentRadiusM) {
 
     public NavigationProperties {
         if (standardWalkingSpeedMps <= 0) standardWalkingSpeedMps = 1.3;
@@ -30,5 +46,16 @@ public record NavigationProperties(double standardWalkingSpeedMps, double access
         if (maxAccessibleSlopeDeg <= 0) maxAccessibleSlopeDeg = Math.toDegrees(Math.atan(1.0 / 12.0));
         if (elevatorTransitionSeconds <= 0) elevatorTransitionSeconds = 45;
         if (nodeSnapMaxDistanceMeters <= 0) nodeSnapMaxDistanceMeters = 10.0;
+        if (obstacleMaxAgeSeconds <= 0) obstacleMaxAgeSeconds = 120;
+        if (obstacleMaxFutureSkewSeconds <= 0) obstacleMaxFutureSkewSeconds = 10;
+        if (endpointBoundsMarginM <= 0) endpointBoundsMarginM = 1.0;
+        if (maxStops <= 0) maxStops = 10;
+        if (graphCacheMaxGraphs <= 0) graphCacheMaxGraphs = 64;
+        if (agentRadiusM <= 0) agentRadiusM = 0.35;
+    }
+
+    /** Defaults for everything but the accessible clear width (tests that vary only that). */
+    public static NavigationProperties withMinAccessibleClearance(double minAccessibleClearanceM) {
+        return new NavigationProperties(0, 0, 0, minAccessibleClearanceM, 0, 0, 0, false, 0, 0, 0, 0, 0, 0);
     }
 }

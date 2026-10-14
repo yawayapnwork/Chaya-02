@@ -7,6 +7,7 @@ import dev.chaya.api.web.ProblemResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -26,6 +27,9 @@ import org.springframework.web.bind.annotation.RestController;
 public class FloorConnectionController {
 
     public record StatusRequest(@NotBlank String status) {}
+
+    /** verified: true records that the connection's registered accessibility was checked on site; false withdraws it. */
+    public record AccessibilityVerificationRequest(@NotNull Boolean verified) {}
 
     private final FloorConnectionService connections;
 
@@ -62,6 +66,17 @@ public class FloorConnectionController {
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR')")
     public Connection setStatus(@PathVariable UUID venueId, @PathVariable UUID connectionId, @Valid @RequestBody StatusRequest body) {
         return connections.setStatus(ActorAuthentication.currentActor(), venueId, connectionId, body.status());
+    }
+
+    @Operation(summary = "Record (or withdraw) on-site verification of a floor connection's accessibility",
+            description = "STEP_FREE routes cross floors only over elevators and ramps whose registered clear width (and ramp "
+                + "slope) were verified on site (docs/navigation.md).")
+    @ProblemResponse(status = 400, description = "INVALID_FLOOR_CONNECTION: stairs, or nothing registered to verify")
+    @PutMapping("/{connectionId}/accessibility-verification")
+    @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER')")
+    public Connection setAccessibilityVerification(@PathVariable UUID venueId, @PathVariable UUID connectionId,
+                                                   @Valid @RequestBody AccessibilityVerificationRequest body) {
+        return connections.setAccessibilityVerified(ActorAuthentication.currentActor(), venueId, connectionId, body.verified());
     }
 
     @Operation(summary = "Delete a floor connection")

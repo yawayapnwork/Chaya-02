@@ -103,6 +103,12 @@ chaya:
     max-accessible-slope-deg: 4.76
     elevator-transition-seconds: 45
     node-snap-max-distance-meters: 10.0
+    obstacle-max-age-seconds: 120
+    obstacle-max-future-skew-seconds: 10
+    endpoint-bounds-margin-m: 1.0
+    max-stops: 10
+    graph-cache-max-graphs: 64
+    agent-radius-m: 0.35
   rescan:
     # The control plane's own copy of the alignment quality gate (see dev.chaya.api.rescan.RescanService
     # and chaya_worker.region_alignment.alignment_confidence); re-checked here independently of whatever

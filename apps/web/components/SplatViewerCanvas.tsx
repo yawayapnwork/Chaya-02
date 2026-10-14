@@ -34,9 +34,12 @@ interface SplatViewerCanvasProps {
   pois: Poi[];
   selectedPoiId: string | null;
   onSelectPoi: (id: string | null) => void;
-  /** A real route's waypoints (POST /api/v1/navigation/routes), already filtered to this floor, in order.
-   * null/empty draws nothing -- there is no synthetic fallback line when a real route is unavailable. */
-  routeWaypoints: { x: number; y: number; z: number }[] | null;
+  /** A real route's stretches on this floor (POST /api/v1/navigation/routes; lib/viewer-route runsOnFloor), each in
+   * order. null/empty draws nothing -- there is no synthetic fallback line when a real route is unavailable. A STOP or
+   * DESTINATION waypoint gets an end marker. */
+  routeRuns: { x: number; y: number; z: number; kind?: string }[][] | null;
+  /** The POIs the route visits: highlighted, with their labels always shown. */
+  destinationPoiIds?: string[];
   onProgress: (percent: number) => void;
   /** Called once the splats have actually been drawn (the first frame after the library's first sort), never merely
    * when the file has been parsed. */
@@ -51,14 +54,16 @@ type Controls = NonNullable<InstanceType<typeof GaussianSplats3D.Viewer>["contro
 
 const MARKER_COLOUR = "#2563eb";
 const SELECTED_COLOUR = "#f59e0b";
+const DESTINATION_COLOUR = "#16a34a";
 /** A pointer that moved further than this between down and up was a drag (orbit/pan), not a click. */
 const CLICK_SLOP_PX = 5;
 
-function styleMarker(dot: HTMLElement, label: HTMLElement, selected: boolean, hovered: boolean) {
-  dot.style.background = selected ? SELECTED_COLOUR : MARKER_COLOUR;
-  dot.style.width = dot.style.height = selected ? "18px" : "14px";
-  label.style.display = selected || hovered ? "block" : "none";
-  label.style.fontWeight = selected ? "600" : "400";
+function styleMarker(dot: HTMLElement, label: HTMLElement, selected: boolean, hovered: boolean, destination = false) {
+  dot.style.background = selected ? SELECTED_COLOUR : destination ? DESTINATION_COLOUR : MARKER_COLOUR;
+  dot.style.width = dot.style.height = selected || destination ? "18px" : "14px";
+  dot.dataset.destination = destination ? "true" : "false";
+  label.style.display = selected || hovered || destination ? "block" : "none";
+  label.style.fontWeight = selected || destination ? "600" : "400";
 }
 
 /** The Three.js / GaussianSplats3D render surface. Everything about camera controls, the splat scene and
@@ -73,7 +78,8 @@ export default function SplatViewerCanvas({
   pois,
   selectedPoiId,
   onSelectPoi,
-  routeWaypoints,
+  routeRuns,
+  destinationPoiIds,
   onProgress,
   onLoaded,
   onError,
@@ -84,7 +90,8 @@ export default function SplatViewerCanvas({
   // The route has its own scene, drawn after the splats: in the viewer's threeScene it is drawn first and the splats
   // (blended, without depth writes) are composited over it, so a route along the floor vanished under the floor's splats.
   const routeSceneRef = useRef<THREE.Scene | null>(null);
-  const routeMeshRef = useRef<THREE.Mesh | null>(null);
+  const routeMeshRef = useRef<THREE.Group | null>(null);
+  const destinationIdsRef = useRef<string[]>(destinationPoiIds ?? []);
   const markerElsRef = useRef<Map<string, { dot: HTMLDivElement; label: HTMLDivElement }>>(new Map());
   const selectedPoiIdRef = useRef(selectedPoiId);
   const poisRef = useRef(pois);
@@ -361,8 +368,7 @@ export default function SplatViewerCanvas({
       overlaySceneRef.current = null;
       routeSceneRef.current = null;
       if (routeMeshRef.current) {
-        routeMeshRef.current.geometry.dispose();
-        (routeMeshRef.current.material as THREE.Material).dispose();
+        disposeGroup(routeMeshRef.current);
         routeMeshRef.current = null;
       }
       if (renderer) {
@@ -423,9 +429,10 @@ export default function SplatViewerCanvas({
       });
       wrapper.append(dot, label);
       const selected = () => poi.id === selectedPoiIdRef.current;
-      styleMarker(dot, label, selected(), false);
-      dot.addEventListener("mouseenter", () => styleMarker(dot, label, selected(), true));
-      dot.addEventListener("mouseleave", () => styleMarker(dot, label, selected(), false));
+      const destination = () => destinationIdsRef.current.includes(poi.id);
+      styleMarker(dot, label, selected(), false, destination());
+      dot.addEventListener("mouseenter", () => styleMarker(dot, label, selected(), true, destination()));
+      dot.addEventListener("mouseleave", () => styleMarker(dot, label, selected(), false, destination()));
       dot.addEventListener("pointerdown", (e) => e.stopPropagation()); // not the start of an orbit or a background click
       dot.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -439,10 +446,13 @@ export default function SplatViewerCanvas({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pois, blobUrl]);
 
-  // Restyle on selection change without rebuilding the markers.
+  // Restyle on selection or destination change without rebuilding the markers.
+  const destinationKey = (destinationPoiIds ?? []).join(",");
   useEffect(() => {
-    markerElsRef.current.forEach(({ dot, label }, id) => styleMarker(dot, label, id === selectedPoiId, false));
-  }, [selectedPoiId]);
+    destinationIdsRef.current = destinationKey ? destinationKey.split(",") : [];
+    markerElsRef.current.forEach(({ dot, label }, id) =>
+      styleMarker(dot, label, id === selectedPoiId, false, destinationIdsRef.current.includes(id)));
+  }, [selectedPoiId, destinationKey]);
 
   // Navigation route overlay: the real waypoint sequence from POST /api/v1/navigation/routes (real
   // Dijkstra over the baked navmesh graph -- see docs/navigation.md). Nothing is drawn when a route
@@ -452,26 +462,38 @@ export default function SplatViewerCanvas({
     if (!scene) return;
     if (routeMeshRef.current) {
       scene.remove(routeMeshRef.current);
-      routeMeshRef.current.geometry.dispose();
-      (routeMeshRef.current.material as THREE.Material).dispose();
+      disposeGroup(routeMeshRef.current);
       routeMeshRef.current = null;
     }
-    if (!toCanonical || !routeWaypoints || routeWaypoints.length < 2) return;
-    // A tube through the waypoints exactly (straight segments, no smoothing), a few centimetres thick so it reads at any
-    // zoom (WebGL lines are one pixel wide). Drawn over the splats so the floor never hides it.
-    const path = new THREE.CurvePath<THREE.Vector3>();
-    for (let i = 1; i < routeWaypoints.length; i++) {
-      const a = routeWaypoints[i - 1];
-      const b = routeWaypoints[i];
-      path.add(new THREE.LineCurve3(new THREE.Vector3(a.x, a.y, a.z), new THREE.Vector3(b.x, b.y, b.z)));
+    const runs = (routeRuns ?? []).filter((run) => run.length >= 2);
+    if (!toCanonical || runs.length === 0) return;
+    // A tube through each stretch's waypoints exactly (straight segments, no smoothing), a few centimetres thick so it
+    // reads at any zoom (WebGL lines are one pixel wide), and a sphere where the route stops or ends. Drawn over the
+    // splats so the floor never hides it.
+    const group = new THREE.Group();
+    group.name = "chaya-route";
+    for (const run of runs) {
+      const path = new THREE.CurvePath<THREE.Vector3>();
+      for (let i = 1; i < run.length; i++) {
+        const a = run[i - 1];
+        const b = run[i];
+        path.add(new THREE.LineCurve3(new THREE.Vector3(a.x, a.y, a.z), new THREE.Vector3(b.x, b.y, b.z)));
+      }
+      const geometry = new THREE.TubeGeometry(path, Math.max(2, (run.length - 1) * 8), 0.04, 8, false);
+      const material = new THREE.MeshBasicMaterial({ color: 0xf59e0b, depthTest: false, transparent: true, opacity: 0.9 });
+      group.add(new THREE.Mesh(geometry, material));
+      for (const w of run) {
+        if (w.kind !== "STOP" && w.kind !== "DESTINATION") continue;
+        const end = new THREE.Mesh(new THREE.SphereGeometry(0.15, 16, 12),
+          new THREE.MeshBasicMaterial({ color: 0x16a34a, depthTest: false, transparent: true, opacity: 0.95 }));
+        end.name = `chaya-route-${w.kind.toLowerCase()}`;
+        end.position.set(w.x, w.y, w.z + 0.15);
+        group.add(end);
+      }
     }
-    const geometry = new THREE.TubeGeometry(path, Math.max(2, (routeWaypoints.length - 1) * 8), 0.04, 8, false);
-    const material = new THREE.MeshBasicMaterial({ color: 0xf59e0b, depthTest: false, transparent: true, opacity: 0.9 });
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.name = "chaya-route";
-    scene.add(mesh);
-    routeMeshRef.current = mesh;
-  }, [routeWaypoints, blobUrl, toCanonical]);
+    scene.add(group);
+    routeMeshRef.current = group;
+  }, [routeRuns, blobUrl, toCanonical]);
 
   return (
     <div
@@ -512,4 +534,13 @@ export default function SplatViewerCanvas({
       data-testid="splat-canvas"
     />
   );
+}
+
+function disposeGroup(group: THREE.Group) {
+  group.traverse((o) => {
+    if (o instanceof THREE.Mesh) {
+      o.geometry.dispose();
+      (o.material as THREE.Material).dispose();
+    }
+  });
 }

@@ -164,9 +164,15 @@ def seed_synthetic(stack: Stack) -> tuple[Nav, list[dict]]:
     stairs = (poi(0, "Stairs (ground)", "stairs", 5, 5), poi(1, "Stairs (level 1)", "stairs", 5, 5))
     elevator = (poi(0, "Elevator (ground)", "elevator", 25, 5), poi(1, "Elevator (level 1)", "elevator", 25, 5))
     for connector, (a, b), length, slope, clearance in (("STAIRS", stairs, 8.0, 30.0, 1.2), ("ELEVATOR", elevator, None, None, 1.1)):
-        s.call(user, "POST", f"/api/v1/venues/{venue}/floor-connections", json={
+        r = s.call(user, "POST", f"/api/v1/venues/{venue}/floor-connections", json={
             "connectorType": connector, "fromFloorId": floors[0], "fromPoiId": a, "toFloorId": floors[1], "toPoiId": b,
-            "bidirectional": True, "lengthM": length, "maxSlopeDeg": slope, "minClearanceM": clearance}).raise_for_status()
+            "bidirectional": True, "lengthM": length, "maxSlopeDeg": slope, "minClearanceM": clearance})
+        r.raise_for_status()
+        if connector == "ELEVATOR":
+            # STEP_FREE crosses floors only over a connection verified on site (V37). This synthetic fixture's elevator is
+            # declared verified by the self-test itself; it says nothing about any real elevator.
+            s.call(user, "PUT", f"/api/v1/venues/{venue}/floor-connections/{r.json()['id']}/accessibility-verification",
+                   json={"verified": True}).raise_for_status()
     room_e = poi(0, "Room E", "room", 10, 10)
     cafe = poi(1, "Cafe", "food", 20, 5)
     pairs = [{"name": "A -> Room E (same floor)", "floor": floors[0], "start": [0.0, 0.0, 0.0], "poi": room_e},

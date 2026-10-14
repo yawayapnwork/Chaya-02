@@ -127,6 +127,8 @@ public enum WaypointKind: String, Codable, Sendable {
     case start = "START"
     case waypoint = "WAYPOINT"
     case transition = "TRANSITION"
+    /// An intermediate destination of a multi-stop route (POST /navigation/routes/multi-stop).
+    case stop = "STOP"
     case destination = "DESTINATION"
 }
 

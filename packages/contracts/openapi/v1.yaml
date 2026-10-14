@@ -594,6 +594,13 @@ paths:
                 $ref: "#/components/schemas/Problem"
           description: "NAVMESH_NOT_READY, METRIC_CALIBRATION_REQUIRED, VERSION_MISMATCH,\
             \ VERSION_WRONG_FLOOR"
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "START_OUT_OF_BOUNDS, START_OFF_NAVMESH, DESTINATION_OUT_OF_BOUNDS,\
+            \ DESTINATION_OFF_NAVMESH"
         "429":
           content:
             application/problem+json:
@@ -612,6 +619,87 @@ paths:
       - bearerAuth: []
       - viewerToken: []
       summary: Route between two points of a venue on its baked navigation graph
+      tags:
+      - navigation-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
+      - OPERATOR
+      - VIEWER
+      - PUBLIC_VIEWER
+  /api/v1/navigation/routes/multi-stop:
+    post:
+      description: Each segment is routed like POST /routes. Stops that cannot be
+        reached are reported per stop and skipped; the route continues from the last
+        stop reached (docs/navigation.md).
+      operationId: navigationMultiStop
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MultiStopRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MultiStopResponse"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "INVALID_STOPS, INVALID_START, INVALID_ACCESSIBILITY, INVALID_BLOCKED_REGION"
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "The caller's roles do not allow this operation (empty body),\
+            \ or an operation-specific refusal (problem with a code)"
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "NO_REACHABLE_STOP, or the venue is not visible"
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "NAVMESH_NOT_READY, METRIC_CALIBRATION_REQUIRED (start floor),\
+            \ VERSION_WRONG_FLOOR"
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "START_OUT_OF_BOUNDS, START_OFF_NAVMESH"
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      - viewerToken: []
+      summary: "Route from a start through several destinations, in the given or the\
+        \ fastest order"
       tags:
       - navigation-controller
       x-chaya-roles:
@@ -3868,6 +3956,83 @@ paths:
       - OPERATOR
       - VIEWER
       - PUBLIC_VIEWER
+  /api/v1/venues/{venueId}/floor-connections/{connectionId}/accessibility-verification:
+    put:
+      description: STEP_FREE routes cross floors only over elevators and ramps whose
+        registered clear width (and ramp slope) were verified on site (docs/navigation.md).
+      operationId: floorConnectionSetAccessibilityVerification
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: connectionId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccessibilityVerificationRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Connection"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "INVALID_FLOOR_CONNECTION: stairs, or nothing registered to\
+            \ verify"
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "The caller's roles do not allow this operation (empty body),\
+            \ or an operation-specific refusal (problem with a code)"
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Not found, or not visible to the caller's organization or\
+            \ venue (code NOT_FOUND)"
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      summary: Record (or withdraw) on-site verification of a floor connection's accessibility
+      tags:
+      - floor-connection-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
   /api/v1/venues/{venueId}/floor-connections/{connectionId}/status:
     put:
       operationId: floorConnectionSetStatus
@@ -7401,6 +7566,13 @@ components:
         venueId:
           type: string
           format: uuid
+    AccessibilityVerificationRequest:
+      type: object
+      properties:
+        verified:
+          type: boolean
+      required:
+      - verified
     Action:
       type: object
       properties:
@@ -7661,6 +7833,9 @@ components:
     BlockedRegion:
       type: object
       properties:
+        coordinateFrameId:
+          type: string
+          format: uuid
         floorId:
           type: string
           format: uuid
@@ -7676,6 +7851,9 @@ components:
         minY:
           type: number
           format: double
+        observedAt:
+          type: string
+          format: date-time
       required:
       - floorId
     BoundsView:
@@ -7964,6 +8142,11 @@ components:
     Connection:
       type: object
       properties:
+        accessibilityVerifiedAt:
+          type: string
+          format: date-time
+        accessibilityVerifiedBy:
+          type: string
         bidirectional:
           type: boolean
         connectorType:
@@ -9309,6 +9492,89 @@ components:
           items:
             type: integer
             format: int32
+    MultiStopRequest:
+      type: object
+      properties:
+        accessibility:
+          type: string
+        blockedRegions:
+          type: array
+          items:
+            $ref: "#/components/schemas/BlockedRegion"
+        floorId:
+          type: string
+          format: uuid
+        optimizeOrder:
+          type: boolean
+        scanVersionId:
+          type: string
+          format: uuid
+        start:
+          type: array
+          items:
+            type: number
+            format: double
+          maxItems: 3
+          minItems: 3
+        stopPoiIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+          maxItems: 2147483647
+          minItems: 1
+        venueId:
+          type: string
+          format: uuid
+      required:
+      - floorId
+      - start
+      - stopPoiIds
+      - venueId
+    MultiStopResponse:
+      type: object
+      properties:
+        accessibilityConstraintsApplied:
+          type: array
+          items:
+            type: string
+        accessibilityProfile:
+          type: string
+        complete:
+          type: boolean
+        distanceMeters:
+          type: number
+          format: double
+        estimatedDurationSeconds:
+          type: number
+          format: double
+        orderOptimized:
+          type: boolean
+        rejectedObstacles:
+          type: array
+          items:
+            $ref: "#/components/schemas/RejectedObstacle"
+        routingSources:
+          type: array
+          items:
+            $ref: "#/components/schemas/RoutingSource"
+        segments:
+          type: array
+          items:
+            $ref: "#/components/schemas/RouteSegment"
+        stops:
+          type: array
+          items:
+            $ref: "#/components/schemas/StopResult"
+        visitOrder:
+          type: array
+          items:
+            type: string
+            format: uuid
+        waypoints:
+          type: array
+          items:
+            $ref: "#/components/schemas/Waypoint"
     NextWaypointView:
       type: object
       properties:
@@ -10143,6 +10409,19 @@ components:
         "y":
           type: number
           format: double
+    RejectedObstacle:
+      type: object
+      properties:
+        detail:
+          type: string
+        floorId:
+          type: string
+          format: uuid
+        index:
+          type: integer
+          format: int32
+        reason:
+          type: string
     RelocalizationRequest:
       type: object
       properties:
@@ -10424,6 +10703,10 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/FloorTransition"
+        rejectedObstacles:
+          type: array
+          items:
+            $ref: "#/components/schemas/RejectedObstacle"
         routingSources:
           type: array
           items:
@@ -10432,6 +10715,20 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Waypoint"
+    RouteSegment:
+      type: object
+      properties:
+        fromPoiId:
+          type: string
+          format: uuid
+        index:
+          type: integer
+          format: int32
+        route:
+          $ref: "#/components/schemas/RouteResponse"
+        toPoiId:
+          type: string
+          format: uuid
     RoutingSource:
       type: object
       properties:
@@ -10939,6 +11236,24 @@ components:
           minLength: 1
       required:
       - status
+    StopResult:
+      type: object
+      properties:
+        failureCode:
+          type: string
+        failureMessage:
+          type: string
+        poiId:
+          type: string
+          format: uuid
+        requestedIndex:
+          type: integer
+          format: int32
+        status:
+          type: string
+        visitIndex:
+          type: integer
+          format: int32
     Storage:
       type: object
       properties:

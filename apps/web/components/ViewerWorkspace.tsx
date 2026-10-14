@@ -20,16 +20,19 @@ import { formatBytes, formatDate } from "@/lib/viewer-format";
 import { checkSceneScope } from "@/lib/artifact-integrity";
 import { type Scoped, forScene, initialVersion, sceneKey, versionLabel } from "@/lib/version-scope";
 import { type SearchPosition, type SearchResult } from "@/lib/search-api";
-import { type RouteResponse, planRoute } from "@/lib/navigation-api";
+import { type RouteResponse, planMultiStopRoute, planRoute } from "@/lib/navigation-api";
 import {
   type RouteFailure,
   type RouteProfile,
+  classifyRouteError,
   describeRouteFailure,
   formatDistance,
   formatDuration,
   routeOverlay,
   routeSummary,
 } from "@/lib/viewer-route";
+import { type PlannedStop, type SegmentOutcome, moveStop, planStops } from "@/lib/multi-stop";
+import { routeInstructions } from "@/lib/route-instructions";
 import { type ViewerFailure, classifyViewerError } from "@/lib/viewer-errors";
 import { ArtifactCache } from "@/lib/artifact-cache";
 import { viewerResources } from "@/lib/viewer-resources";
@@ -53,8 +56,9 @@ const artifactCache = new ArtifactCache();
 /** How often the progress of a floor's in-progress reconstruction is refreshed. */
 const PROGRESS_POLL_MS = 15_000;
 
-/** One accessibility profile's answer from the routing API: a route, or the reason there is none. */
-type RouteOutcome = { ok: true; route: RouteResponse } | { ok: false; failure: RouteFailure; detail: string };
+/** One accessibility profile's answer from the routing API: a route through the stops it could reach (with what became
+ * of each stop), or the reason there is none. */
+type RouteOutcome = { ok: true; route: RouteResponse; stops: PlannedStop[] } | { ok: false; failure: RouteFailure; detail: string };
 const PROFILES: RouteProfile[] = ["STANDARD", "STEP_FREE"];
 const PROFILE_LABEL: Record<RouteProfile, string> = { STANDARD: "Standard route", STEP_FREE: "Step-free route" };
 
@@ -103,8 +107,15 @@ export default function ViewerWorkspace() {
   const [loadedPois, setLoadedPois] = useState<Scoped<Poi[]> | null>(null);
   const [selectedPoiId, setSelectedPoiId] = useState<string | null>(null);
   const [routeFromId, setRouteFromId] = useState<string>("");
-  const [routeToId, setRouteToId] = useState<string>("");
+  // The destinations, in the order the route visits them (lib/multi-stop). One entry is an ordinary A-to-B route.
+  const [routeStopIds, setRouteStopIds] = useState<string[]>([]);
+  const setRouteToId = (id: string) => setRouteStopIds(id ? [id] : []);
   const [routeProfile, setRouteProfile] = useState<RouteProfile>("STANDARD");
+  // Segment results of the scene on screen, reused when only some destinations change. Cleared by "Recalculate".
+  const segmentCacheRef = useRef(new Map<string, SegmentOutcome>());
+  const [routeRecalc, setRouteRecalc] = useState(0);
+  const [optimizing, setOptimizing] = useState<string | null>(null);
+  const [online, setOnline] = useState(true);
   // Both profiles are requested for the same start and destination, so the step-free alternative (or the reason there
   // is none) is shown next to the standard route.
   const [loadedRoutes, setLoadedRoutes] = useState<Scoped<Record<RouteProfile, RouteOutcome>> | null>(null);
@@ -370,7 +381,10 @@ export default function ViewerWorkspace() {
   const canvasKey = currentKey ?? "";
   const routeOutcomes = forScene(loadedRoutes, currentKey);
   const routeFrom = pois.find((p) => p.id === routeFromId) ?? null;
-  const routeTo = pois.find((p) => p.id === routeToId) ?? null;
+  const routeStops = useMemo(
+    () => routeStopIds.map((id) => pois.find((p) => p.id === id)).filter((p): p is Poi => p !== undefined),
+    [routeStopIds, pois],
+  );
   const selectedPoi = pois.find((p) => p.id === selectedPoiId) ?? null;
 
   // Selecting a search result shows its floor and selects its POI: the effect below focuses the camera on it once its
@@ -401,30 +415,68 @@ export default function ViewerWorkspace() {
   // On a finalized version the route is planned on that version (its pinned navmesh graph and frame), never on the
   // floor's current graph, which may belong to a newer version. Both accessibility profiles are planned, so the
   // step-free alternative is offered whenever the API finds one, and its absence is stated when it does not.
+  // Several destinations are visited in the order listed, one route segment per destination (lib/multi-stop): changing
+  // one destination re-requests only the segments into and out of it.
+  useEffect(() => {
+    segmentCacheRef.current.clear(); // a new scene: nothing planned for another version or floor is reused
+  }, [currentKey]);
+  // Back online after a request failed for want of a connection: plan again without being asked.
+  const networkFailedRef = useRef(false);
+  useEffect(() => {
+    const update = () => {
+      setOnline(navigator.onLine);
+      if (navigator.onLine && networkFailedRef.current) setRouteRecalc((n) => n + 1);
+    };
+    update();
+    window.addEventListener("online", update);
+    window.addEventListener("offline", update);
+    return () => {
+      window.removeEventListener("online", update);
+      window.removeEventListener("offline", update);
+    };
+  }, []);
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
-      if (!routeFrom || !routeTo || !venueId || !currentKey) {
+      if (!routeFrom || routeStops.length === 0 || !venueId || !currentKey) {
         setLoadedRoutes(null);
         setRouteBusy(false);
         return;
       }
       setRouteBusy(true);
+      const startFloor = routeFrom.floorId ?? floorId;
       const plan = async (profile: RouteProfile): Promise<RouteOutcome> => {
-        try {
-          const route = await planRoute({
-            venueId,
-            floorId: routeFrom.floorId ?? floorId,
-            start: [routeFrom.x, routeFrom.y, routeFrom.z],
-            destinationPoiId: routeTo.id,
-            accessibility: profile,
-            scanVersionId: scanVersionId ?? undefined,
-          });
-          return { ok: true, route };
-        } catch (e) {
-          const code = e instanceof ApiError ? e.code : "";
-          return { ok: false, failure: describeRouteFailure(code, message(e), profile), detail: message(e) };
-        }
+        const result = await planStops({
+          scope: currentKey,
+          profile,
+          start: { key: `POI:${routeFrom.id}`, floorId: startFloor, position: [routeFrom.x, routeFrom.y, routeFrom.z] },
+          stops: routeStops.map((p) => ({ id: p.id, floorId: p.floorId ?? startFloor, position: [p.x, p.y, p.z] as [number, number, number] })),
+          cache: segmentCacheRef.current,
+          fetchSegment: async (from, to) => {
+            try {
+              const route = await planRoute({
+                venueId,
+                floorId: from.floorId,
+                start: from.position,
+                destinationPoiId: to.id,
+                accessibility: profile,
+                scanVersionId: scanVersionId ?? undefined,
+              });
+              return { ok: true, route };
+            } catch (e) {
+              const f = classifyRouteError(e, profile, navigator.onLine);
+              return { ok: false, code: f.code, message: f.detail, retryable: f.retryable === true };
+            }
+          },
+        });
+        if (result.route) return { ok: true, route: result.route, stops: result.stops };
+        const first = result.interrupted ?? result.stops.find((x) => x.status === "UNREACHABLE");
+        const code = first?.code ?? "";
+        const detail = (first?.message ?? "") || "No destination could be reached.";
+        const failure = code === "SESSION_EXPIRED" || code === "NETWORK_UNAVAILABLE"
+          ? { ...classifyRouteError(code === "SESSION_EXPIRED" ? { status: 401, code, message: detail } : new TypeError(detail), profile) }
+          : { ...describeRouteFailure(routeStops.length > 1 && result.stops.every((x) => x.status === "UNREACHABLE") ? "NO_REACHABLE_STOP" : code, detail, profile) };
+        return { ok: false, failure, detail };
       };
       const [standard, stepFree] = await Promise.all(PROFILES.map(plan));
       if (cancelled) return;
@@ -435,12 +487,54 @@ export default function ViewerWorkspace() {
     return () => {
       cancelled = true;
     };
-  }, [routeFrom, routeTo, venueId, floorId, currentKey, scanVersionId]);
+  }, [routeFrom, routeStops, venueId, floorId, currentKey, scanVersionId, routeRecalc]);
+
+  useEffect(() => {
+    const outcomes = forScene(loadedRoutes, currentKey);
+    networkFailedRef.current = !!outcomes
+      && PROFILES.some((p) => !outcomes[p].ok && (outcomes[p] as { failure: RouteFailure }).failure.kind === "network");
+  }, [loadedRoutes, currentKey]);
+
+  function cancelRoute() {
+    setRouteStopIds([]);
+    setLoadedRoutes(null);
+  }
+
+  function recalculateRoute() {
+    segmentCacheRef.current.clear();
+    setRouteRecalc((n) => n + 1);
+  }
+
+  /** Asks the server for the fastest order of the destinations (POST /navigation/routes/multi-stop with optimizeOrder),
+   * then shows them in that order; destinations it could not reach stay at the end of the list. */
+  async function optimizeStopOrder() {
+    if (!routeFrom || routeStops.length < 2 || !venueId) return;
+    setOptimizing(null);
+    try {
+      const r = await planMultiStopRoute({
+        venueId,
+        floorId: routeFrom.floorId ?? floorId,
+        start: [routeFrom.x, routeFrom.y, routeFrom.z],
+        stopPoiIds: routeStops.map((p) => p.id),
+        optimizeOrder: true,
+        accessibility: routeProfile,
+        scanVersionId: scanVersionId ?? undefined,
+      });
+      setRouteStopIds([...r.visitOrder, ...routeStopIds.filter((id) => !r.visitOrder.includes(id))]);
+    } catch (e) {
+      setOptimizing(classifyRouteError(e, routeProfile, navigator.onLine).message);
+    }
+  }
 
   const routeResponse = useMemo(() => {
     const outcome = routeOutcomes?.[routeProfile];
     return outcome?.ok ? outcome.route : null;
   }, [routeOutcomes, routeProfile]);
+  const reachedStops = useMemo(() => {
+    const outcome = routeOutcomes?.[routeProfile];
+    if (!outcome?.ok) return [];
+    return outcome.stops.filter((x) => x.status === "REACHED").map((x) => pois.find((p) => p.id === x.id)).filter((p): p is Poi => !!p);
+  }, [routeOutcomes, routeProfile, pois]);
 
   // POIs and routes are canonical venue metres; they are drawn on the splat only through its calibrated frame, and only
   // POIs placed in that same frame (docs/coordinate-frames.md).
@@ -466,6 +560,14 @@ export default function ViewerWorkspace() {
     const f = floors.find((x) => x.id === id);
     return f ? `${f.name} (level ${f.level})` : id;
   };
+  const instructions = useMemo(() => {
+    if (!routeResponse) return [];
+    const name = (id: string) => {
+      const f = floors.find((x) => x.id === id);
+      return f ? `${f.name} (level ${f.level})` : id;
+    };
+    return routeInstructions(routeResponse, { floorName: name, stopName: (i) => reachedStops[i]?.label ?? null });
+  }, [routeResponse, reachedStops, floors]);
 
   // Selecting a POI -- in the list, on the canvas or from search, including one on another floor whose scene is still
   // loading -- moves the camera to it once its scene is ready. A POI not placed on this reconstruction is not focused.
@@ -590,7 +692,8 @@ export default function ViewerWorkspace() {
               pois={placedPois}
               selectedPoiId={selectedPoiId}
               onSelectPoi={selectPoi}
-              routeWaypoints={overlay?.waypoints ?? null}
+              routeRuns={overlay?.runs ?? null}
+              destinationPoiIds={routeResponse ? reachedStops.map((p) => p.id) : []}
               onProgress={(percent) => setLoadState({ key: canvasKey, value: { phase: "preparing", percent } })}
               onLoaded={(splatCount) => setLoadState({ key: canvasKey, value: { phase: "ready", splatCount } })}
               onError={(e) => setLoadState({ key: canvasKey, value: { phase: "error", failure: classifyViewerError(e) } })}
@@ -770,13 +873,57 @@ export default function ViewerWorkspace() {
                     {pois.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
                   </select>
                 </label>
-                <label className="block text-xs">
-                  To
-                  <select className="mt-0.5 block w-full rounded border p-1" value={routeToId} onChange={(e) => setRouteToId(e.target.value)}>
-                    <option value="">Select a POI…</option>
-                    {pois.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+                <div className="text-xs">
+                  <p>To {routeStopIds.length > 1 ? `(${routeStopIds.length} stops, visited in this order)` : ""}</p>
+                  <ol className="mt-0.5 space-y-1" data-testid="route-stops">
+                    {routeStopIds.map((id, i) => {
+                      const stop = pois.find((p) => p.id === id);
+                      const outcome = routeOutcomes?.[routeProfile];
+                      const planned = outcome?.ok ? outcome.stops.find((x) => x.id === id) : undefined;
+                      return (
+                        <li key={id} className="flex items-center gap-1" data-testid="route-stop">
+                          <span className="w-4 text-zinc-500">{i + 1}.</span>
+                          <span className="flex-1 truncate">{stop?.label ?? id}</span>
+                          {planned?.status === "UNREACHABLE" && (
+                            <span className="text-red-700" data-testid="route-stop-unreachable" title={planned.message ?? undefined}>
+                              unreachable
+                            </span>
+                          )}
+                          <button className="rounded border px-1" aria-label="Move up" disabled={i === 0}
+                            onClick={() => setRouteStopIds(moveStop(routeStopIds, i, -1))}>↑</button>
+                          <button className="rounded border px-1" aria-label="Move down" disabled={i === routeStopIds.length - 1}
+                            onClick={() => setRouteStopIds(moveStop(routeStopIds, i, 1))}>↓</button>
+                          <button className="rounded border px-1" aria-label="Remove destination"
+                            onClick={() => setRouteStopIds(routeStopIds.filter((x) => x !== id))}>×</button>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                  <select className="mt-1 block w-full rounded border p-1" value="" aria-label="Add a destination"
+                    onChange={(e) => e.target.value && setRouteStopIds([...routeStopIds, e.target.value])}>
+                    <option value="">{routeStopIds.length === 0 ? "Select a destination…" : "Add another destination…"}</option>
+                    {pois.filter((p) => !routeStopIds.includes(p.id)).map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
                   </select>
-                </label>
+                </div>
+                {routeStopIds.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    <button className="rounded border bg-white px-2 py-0.5 text-xs" onClick={cancelRoute} data-testid="route-cancel">
+                      Cancel route
+                    </button>
+                    <button className="rounded border bg-white px-2 py-0.5 text-xs" onClick={recalculateRoute} disabled={routeBusy}
+                      data-testid="route-recalculate">
+                      Recalculate
+                    </button>
+                    {routeStopIds.length > 1 && (
+                      <button className="rounded border bg-white px-2 py-0.5 text-xs" onClick={optimizeStopOrder} disabled={routeBusy}
+                        data-testid="route-optimize">
+                        Fastest order
+                      </button>
+                    )}
+                  </div>
+                )}
+                {optimizing && <p role="alert" className="text-xs text-red-700">{optimizing}</p>}
+                {!online && <p className="text-xs text-amber-700" data-testid="route-offline">Offline: routes are planned again when the connection returns.</p>}
                 {routeBusy && <p className="text-xs text-zinc-500">Finding a route…</p>}
                 {routeOutcomes && !routeBusy && (
                   <div className="space-y-2" role="radiogroup" aria-label="Route options">
@@ -794,6 +941,12 @@ export default function ViewerWorkspace() {
                             <p className="font-medium">{PROFILE_LABEL[profile]}</p>
                             <p>No route available: {outcome.failure.message}</p>
                             {outcome.failure.message !== outcome.detail && <p className="mt-0.5 text-red-700/80">{outcome.detail}</p>}
+                            {outcome.failure.kind === "session-expired" && !isPublicLink && (
+                              <button className="mt-1 rounded border bg-white px-2 py-0.5" onClick={() => void signIn(window.location.pathname + window.location.search)}>Sign in again</button>
+                            )}
+                            {outcome.failure.kind === "network" && (
+                              <button className="mt-1 rounded border bg-white px-2 py-0.5" onClick={recalculateRoute}>Retry</button>
+                            )}
                           </div>
                         );
                       }
@@ -809,6 +962,16 @@ export default function ViewerWorkspace() {
                           className={`block w-full rounded border p-2 text-left text-xs text-zinc-700 ${active ? "border-amber-400 bg-amber-50" : "hover:bg-zinc-50"}`}
                         >
                           <p className="font-medium">{PROFILE_LABEL[profile]}{active ? " · shown" : " · select to show"}</p>
+                          {profile === "STEP_FREE" && (
+                            <p className="text-emerald-800" data-testid="route-accessible-status">
+                              Step-free: no steps or stairs; only measured, accessible-width paths and verified lifts or ramps.
+                            </p>
+                          )}
+                          {outcome.stops.some((x) => x.status === "UNREACHABLE") && (
+                            <p className="text-red-700" data-testid="route-partial">
+                              {outcome.stops.filter((x) => x.status === "UNREACHABLE").length} destination(s) cannot be reached and are skipped.
+                            </p>
+                          )}
                           {summary.distanceMeters !== null && (
                             <p>
                               {formatDistance(summary.distanceMeters)}
@@ -844,6 +1007,17 @@ export default function ViewerWorkspace() {
                       <p className="text-xs text-zinc-600" data-testid="route-other-floors">
                         The route continues on {overlay.otherFloorIds.map(floorName).join(", ")}; switch floors to see that part.
                       </p>
+                    )}
+                    {instructions.length > 0 && (
+                      <ol className="space-y-0.5 rounded border p-2 text-xs text-zinc-700" data-testid="route-instructions"
+                        aria-label="Directions">
+                        {instructions.map((ins) => (
+                          <li key={`${ins.waypointIndex}-${ins.kind}`}>
+                            {ins.text}
+                            {ins.toNextMeters > 0 && <span className="text-zinc-500"> · then {formatDistance(ins.toNextMeters)}</span>}
+                          </li>
+                        ))}
+                      </ol>
                     )}
                   </div>
                 )}

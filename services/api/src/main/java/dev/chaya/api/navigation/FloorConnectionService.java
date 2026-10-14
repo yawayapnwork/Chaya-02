@@ -7,6 +7,8 @@ import dev.chaya.api.web.ApiException;
 import dev.chaya.api.web.NotFoundException;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -42,12 +44,16 @@ public class FloorConnectionService {
     public record ConnectionData(String connectorType, UUID fromFloorId, UUID fromPoiId, UUID toFloorId, UUID toPoiId,
                                  Boolean bidirectional, Double lengthM, Double maxSlopeDeg, Double minClearanceM) {}
 
+    /** accessibilityVerifiedAt/By: when and by whom venue staff confirmed on site that the registered clear width (and a
+     * ramp's slope) are right and the connector is usable step-free (V37); null until then. STEP_FREE routing uses only
+     * verified connections. */
     public record Connection(UUID id, String connectorType, UUID fromFloorId, UUID fromPoiId, UUID toFloorId, UUID toPoiId,
-                             boolean bidirectional, Double lengthM, Double maxSlopeDeg, Double minClearanceM, String status) {}
+                             boolean bidirectional, Double lengthM, Double maxSlopeDeg, Double minClearanceM, String status,
+                             Instant accessibilityVerifiedAt, String accessibilityVerifiedBy) {}
 
     private static final String SELECT = """
             SELECT id, connector_type, from_floor_id, from_poi_id, to_floor_id, to_poi_id, bidirectional, length_m,
-                   max_slope_deg, min_clearance_m, status
+                   max_slope_deg, min_clearance_m, status, accessibility_verified_at, accessibility_verified_by
               FROM floor_connection
              WHERE venue_id = :v AND organization_id = :o AND deleted_at IS NULL
             """;
@@ -67,7 +73,11 @@ public class FloorConnectionService {
             rs.getObject("from_floor_id", UUID.class), rs.getObject("from_poi_id", UUID.class),
             rs.getObject("to_floor_id", UUID.class), rs.getObject("to_poi_id", UUID.class), rs.getBoolean("bidirectional"),
             nullableDouble(rs, "length_m"), nullableDouble(rs, "max_slope_deg"), nullableDouble(rs, "min_clearance_m"),
-            rs.getString("status"));
+            rs.getString("status"), instant(rs.getTimestamp("accessibility_verified_at")), rs.getString("accessibility_verified_by"));
+    }
+
+    private static Instant instant(Timestamp t) {
+        return t == null ? null : t.toInstant();
     }
 
     private static Double nullableDouble(ResultSet rs, String column) throws SQLException {
@@ -125,6 +135,33 @@ public class FloorConnectionService {
             throw new NotFoundException("floor connection not found");
         }
         audit.success(actor, venueId, "floor_connection.status", "floor_connection", connectionId, Map.of("status", s));
+        return get(actor, venueId, connectionId);
+    }
+
+    /**
+     * Records that the connection's accessibility was verified on site (or withdraws that): the registered clear width
+     * (and a ramp's registered slope) were checked against the real connector, and it can be used without steps. STEP_FREE
+     * routing crosses floors only over verified connections. Stairs are never step-free and cannot be verified as such; a
+     * connection without a registered clear width (or a ramp without a registered slope) has nothing to verify.
+     */
+    @Transactional
+    public Connection setAccessibilityVerified(Actor actor, UUID venueId, UUID connectionId, boolean verified) {
+        Connection c = get(actor, venueId, connectionId);
+        if (verified) {
+            if (c.connectorType().equals("STAIRS")) {
+                throw invalid("stairs are never step-free, so their accessibility cannot be verified");
+            }
+            if (c.minClearanceM() == null || (c.connectorType().equals("RAMP") && c.maxSlopeDeg() == null)) {
+                throw invalid("register the connector's clear width" + (c.connectorType().equals("RAMP") ? " and slope" : "")
+                    + " before verifying its accessibility: a verification confirms registered measurements");
+            }
+        }
+        jdbc.sql("UPDATE floor_connection SET accessibility_verified_at = CASE WHEN :ok THEN now() END, "
+                + "accessibility_verified_by = CASE WHEN :ok THEN :by END WHERE id = :id AND venue_id = :v AND organization_id = :o")
+            .param("ok", verified).param("by", actor.subject()).param("id", connectionId).param("v", venueId)
+            .param("o", actor.organizationId()).update();
+        audit.success(actor, venueId, "floor_connection.accessibility_verification", "floor_connection", connectionId,
+            Map.of("verified", verified));
         return get(actor, venueId, connectionId);
     }
 

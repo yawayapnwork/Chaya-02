@@ -259,9 +259,18 @@ route may use between two floors:
 | `lengthM` | walked length in metres, measured on site | STAIRS and RAMP; refused for ELEVATOR |
 | `minClearanceM` | narrowest clear width (ramp width, elevator door), metres | for STEP_FREE use |
 | `maxSlopeDeg` | a ramp's steepest slope, degrees | for STEP_FREE use of a RAMP |
+| `accessibilityVerifiedAt`, `accessibilityVerifiedBy` | when and by whom the connector's accessibility was verified on site (V37); read-only | for STEP_FREE use |
 
 A multi-stop elevator is one connection per pair of floors it serves. `PUT …/{id}/status` sets `IN_SERVICE` or
-`OUT_OF_SERVICE` (an elevator under maintenance); routing skips the latter. Creation is refused with `400
+`OUT_OF_SERVICE` (an elevator under maintenance); routing skips the latter.
+
+A registered width or slope is a claim, so STEP_FREE does not rely on it alone. `PUT …/{id}/accessibility-verification`
+with `{"verified": true}` (ADMIN, VENUE_MANAGER) records who confirmed on site that the connector is usable without steps
+and that its registered clear width (and a ramp's slope) are right; `{"verified": false}` withdraws it. Stairs cannot be
+verified, and neither can a connection with nothing registered to verify (no width, or a ramp without a slope):
+`400 INVALID_FLOOR_CONNECTION`. The registered measurements cannot be edited after creation, so a verification always
+refers to the values it was given for. Connections that existed before V37 start unverified: step-free routes between
+floors fail closed (`FLOOR_CONNECTION_UNAVAILABLE`, naming each unverified connection) until staff verify them. Creation is refused with `400
 INVALID_FLOOR_CONNECTION` for:
 
 - an unknown type;
@@ -294,7 +303,15 @@ A RECAST_NAVMESH graph ingested before portals were recorded is not routable: `N
   gravity-aligned +Z), and the destination POI must be placed in it. The request's `start` and `blockedRegions` are
   canonical metres on their floor, in that frame.
 - **Snapping**: the start and the destination each join the nearest graph node within
-  `chaya.navigation.node-snap-max-distance-meters` whose straight segment to them crosses no reported obstacle.
+  `chaya.navigation.node-snap-max-distance-meters` whose straight segment to them crosses no reported obstacle. Ties go
+  to the lower node id, so the same request always gives the same path.
+- **Endpoints**: before any search, each endpoint is checked against its floor's graph. A point outside the horizontal
+  footprint of the graph's polygon centroids and portals by more than `chaya.navigation.endpoint-bounds-margin-m` (1 m),
+  more than 1 m below its lowest walkable surface or more than 2.5 m above its highest (an AR client sends its camera
+  position, held up to eye height) is `422 START_OUT_OF_BOUNDS` / `DESTINATION_OUT_OF_BOUNDS`. A point inside the
+  footprint but with no polygon centroid within the snap distance is `422 START_OFF_NAVMESH` / `DESTINATION_OFF_NAVMESH`.
+  Limitation: the graph stores polygon centroids, not polygon outlines, so a point inside a thin wall that is within the
+  snap distance of a polygon is snapped, not refused.
 - **Accessibility** (`accessibility: "STEP_FREE"`, default `"STANDARD"`) fails closed. It routes on the STEP_FREE
   graph and uses an edge only when all of these hold:
   - it was baked step-free;
@@ -313,16 +330,35 @@ A RECAST_NAVMESH graph ingested before portals were recorded is not routable: `N
   on one floor is a real floor-local route over that floor's graph. Crossing a connection costs its registered length,
   or its elevator time. The search minimises estimated duration, so it can chain connections through intermediate
   floors. Two floors therefore no longer need a shared venue datum.
-- **Dynamic obstacles**: each `blockedRegions` entry is an axis-aligned horizontal box the AR client observed on one
-  floor. It blocks that floor's full height, for one query only; nothing is written to the database. It excludes:
+- **Dynamic obstacles**: each `blockedRegions` entry is an axis-aligned horizontal box the client observed on one
+  floor, with `observedAt` (required) and optionally the `coordinateFrameId` it was localized in. It blocks that floor's
+  full height, for one query only; nothing is written to the database and no navmesh is rebuilt. An entry is rejected,
+  and reported in the response's `rejectedObstacles` rather than routed around, when it was observed more than
+  `chaya.navigation.obstacle-max-age-seconds` (120 s) ago (`STALE_OBSERVATION`), is stamped more than
+  `obstacle-max-future-skew-seconds` (10 s) in the future (`FUTURE_OBSERVATION`), or names another frame than the one the
+  floor is routed in (`FRAME_MISMATCH`). An entry without `observedAt` is `400 INVALID_BLOCKED_REGION`. An accepted box
+  excludes:
   - every graph node inside it;
-  - every edge whose segment crosses it (Liang–Barsky segment/box clipping), even with both endpoints outside;
+  - every edge whose centroid-to-centroid segment crosses it (Liang–Barsky segment/box clipping), even with both endpoints
+    outside;
+  - every edge whose Detour portal it narrows below the walking body (below). Where the edge stays open, the route is
+    string-pulled through the part of the portal the boxes leave free;
   - a start or destination snap segment that crosses it.
 
-  A start or destination inside a box has no route. An edge is excluded when its centroid-to-centroid segment crosses
-  a box, not when a box merely clips a polygon. The reported path is checked as well: if the string-pulled path
+  The opening at a portal is the portal extended by `chaya.navigation.agent-radius-m` (0.35 m) at both ends -- Recast put
+  the portal's endpoints where a body's centre can be -- or, when wider, the edge's measured clear width centred on the
+  portal (Recast rounds erosion up to whole voxels: in the venue fixture the 1.1 m doorway's portal is only 0.2 m long). The
+  boxes cut that opening into free pieces, and the edge stays open when the widest is at least 2 × the agent radius
+  (0.7 m), or the accessible clear width (0.9 m) for STEP_FREE. This is accurate to about one voxel (0.1 m).
+
+  A start or destination inside a box has no route. The reported path is checked as well: if the string-pulled path
   crosses a box, the route falls back to portal midpoints, then to the checked centroid segments, and never reports a
   path through a reported obstacle.
+- **Graph cache**: a graph's nodes and edges are immutable once it leaves DRAFT (V6), so `RouteService` keeps up to
+  `chaya.navigation.graph-cache-max-graphs` (64) of them in memory, keyed by graph id. Which graph a floor routes on is
+  still read from the database on every request (ACTIVE status, frame, scan version), so a re-bake, a new version or a
+  new frame takes effect immediately and a retired graph is only ever used by a request pinned to its version. Obstacles,
+  accessibility rules and endpoint checks are applied to a per-request copy and are never cached.
 - **Distance and time**:
   - An edge's routing weight is the 3-D distance between its nodes' canonical positions. The stored `length_m` is
     not read.
@@ -347,6 +383,7 @@ A RECAST_NAVMESH graph ingested before portals were recorded is not routable: `N
   unmeasured slope and clearance were excluded.
 - `routingSources`: for every floor leg, the graph routed on, its `source`, and the navmesh SHA-256 and
   recastnavigation version it was baked with.
+- `rejectedObstacles`: every reported obstacle that was not routed around, with its index in the request and why.
 
 ### Failure states
 
@@ -358,15 +395,72 @@ A failure never returns a fabricated or partial path.
 | `NAVMESH_NOT_READY` | 409 | The start or destination floor has no ACTIVE RECAST_NAVMESH graph for the profile, or has one baked in an older frame. The message names the refused graph. |
 | `FLOOR_CONNECTION_UNAVAILABLE` | 404 | The destination is on another floor, and no chain of usable registered connections joins the floors for this profile. The message lists each unusable connection and why. |
 | `NO_ACCESSIBLE_ROUTE` | 404 | STEP_FREE was requested and no path meets the measured constraints. The message counts the edges excluded for each reason. |
-| `NO_ROUTE` | 404 | STANDARD was requested and the graph does not connect the start and destination: it is disconnected, a point is too far to snap, or reported obstacles cut the path. |
+| `NO_ROUTE` | 404 | STANDARD was requested and the graph does not connect the start and destination: it is disconnected, or reported obstacles cut the path. |
+| `START_OUT_OF_BOUNDS`, `DESTINATION_OUT_OF_BOUNDS` | 422 | The point is outside the floor graph's footprint (plus the margin), or far above or below its walkable surfaces. |
+| `START_OFF_NAVMESH`, `DESTINATION_OFF_NAVMESH` | 422 | No navmesh polygon is within the snap distance of the point. |
 
 A connection is unusable when it is out of service, when it is stairs and STEP_FREE was requested, when a width or
-slope STEP_FREE needs is unregistered or fails, when a landing is not in its floor's current frame, or when a floor is
-not routable. The edge-exclusion reasons for `NO_ACCESSIBLE_ROUTE` are: unmeasured clearance, too narrow, unmeasured
+slope STEP_FREE needs is unregistered or fails, when STEP_FREE was requested and its accessibility was not verified on
+site, when a landing is not in its floor's current frame, or when a floor is not routable. The edge-exclusion reasons for `NO_ACCESSIBLE_ROUTE` are: unmeasured clearance, too narrow, unmeasured
 slope, too steep, not step-free, and reported obstacles.
 
-Request validation returns `400`: `INVALID_ACCESSIBILITY`, `INVALID_BLOCKED_REGION` (non-finite bounds or min > max),
-or `INVALID_START` (non-finite). The worker's own Detour query (`chaya_worker.recast.find_path`) also fails with
+Request validation returns `400`: `INVALID_ACCESSIBILITY`, `INVALID_BLOCKED_REGION` (non-finite bounds, min > max, or
+no `observedAt`), or `INVALID_START` (non-finite).
+
+## Multi-stop routes: `POST /api/v1/navigation/routes/multi-stop`
+
+`RouteService#routeMultiStop`. The request is a route request with `stopPoiIds` (1 to `chaya.navigation.max-stops`,
+default 10, each once) instead of one destination, and `optimizeOrder`.
+
+- Each segment is exactly a single route (everything above applies) from the previous reached point to the next stop.
+  All segments share one request's graphs, obstacles and floor connections. A multi-floor segment crosses connections as
+  usual, so a tour can go up a lift and come back down.
+- **Order**: without `optimizeOrder` the stops are visited in the order given. With it, the order with the least total
+  estimated duration is chosen, starting at the start and ending at whichever stop is last: Held-Karp dynamic programming
+  over the segment durations, exact (at most 12 stops). Ties are broken deterministically (the same request always gets
+  the same order).
+- **Unreachable stops**: a stop that cannot be reached gets the failure code a single route to it would get (`NO_ROUTE`,
+  `NO_ACCESSIBLE_ROUTE`, `FLOOR_CONNECTION_UNAVAILABLE`, `DESTINATION_OUT_OF_BOUNDS`, `VERSION_MISMATCH`,
+  `POI_NOT_FOUND`, ...), and the route continues from the last stop it did reach. Problems with the start fail the whole
+  request. When no stop can be reached the answer is `404 NO_REACHABLE_STOP`, listing each stop's reason.
+- **Response**: `visitOrder` (reached stops in order), `orderOptimized`, `complete` (every stop reached), `stops` (each
+  requested stop's `requestedIndex`, `visitIndex`, `REACHED` or `UNREACHABLE` with its code and message), `segments`
+  (each a full route response), and the joined route: `waypoints` (an intermediate destination is a `STOP` waypoint;
+  the point shared by two segments is listed once), summed `distanceMeters` and `estimatedDurationSeconds`,
+  `accessibilityConstraintsApplied`, `routingSources` and `rejectedObstacles`.
+- Request validation: `400 INVALID_STOPS` (none, a duplicate, or too many).
+
+## Clients: presenting and following a route
+
+The web clients share pure, unit-tested modules; the components only wire positions and requests into them.
+
+- **Instructions** (`apps/web/lib/route-instructions.ts`): depart, each turn of at least 20° at an inner vertex of a
+  floor's polyline (slight below 45°, sharp from 135°; left and right about canonical +Z), each floor connection ("Take the
+  lift to Level 1"), each intermediate stop, and arrival, with the distance to the next instruction. Distances are the
+  route's own 3-D polyline lengths in canonical metres plus the registered walked length of each stairs or ramp
+  connection; the step between two floors' waypoints is never measured, because the two floors' frames are unrelated.
+- **Progress** (`locateOnRoute`): the device is projected onto the route in plan view, and only from its previous
+  position up to 5 m further along, unless it is more than 3 m off the route, so a route that passes the same place twice
+  is neither jumped ahead on nor walked back. Remaining distance is measured along the route.
+- **Arrival** (`updateArrival`): a stop or the destination counts as reached only when, continuously for 2 s, the device
+  is localized on its floor, on the segment that ends there, and within 1.5 m of it both along the route and in a straight
+  line. A tracking gap restarts the dwell. Stops are reached in order; the route then stays complete.
+- **Obstacles** (`apps/web/lib/obstacle-reroute.ts`): only observations from a real source on the device are reported,
+  and observations older than 120 s are dropped. A reroute is requested only when a new or moved obstacle (moved by more
+  than 0.3 m) comes within the walking body's radius of the path still ahead, and at most every 5 s. **Neither web
+  client has an obstacle source**: WebXR offers no obstacle detection here, and the iOS client does not report any. The
+  Android AR overlay states that the route does not adapt to obstacles; no client claims live detection.
+- **Viewer** (`ViewerWorkspace`): one or more destinations, in a list that can be reordered, trimmed, or put in the
+  fastest order (the multi-stop endpoint with `optimizeOrder`). Each segment is one route request, cached by scene, scan
+  version, profile, obstacles and endpoints (`apps/web/lib/multi-stop.ts`): changing one destination re-requests only the
+  segments into and out of it. Segments routed on different graphs of one floor (a republish between requests) are never
+  joined: the cache is dropped and the whole route planned again. The route's stretches on the floor shown are drawn
+  with a marker at each stop and the destination, and the destinations' POI markers are highlighted. Both profiles are
+  shown, the step-free one with what it guarantees. A route can be cancelled or recalculated; an expired sign-in or
+  viewer link is reported as such (with a sign-in action), and a network failure offers a retry and is planned again
+  when the connection returns.
+- **Android AR** (`ArWorkspace`): the next instruction and the distance left along the route; arrival as above; a
+  recalculate action. The worker's own Detour query (`chaya_worker.recast.find_path`) also fails with
 `NO_ROUTE`.
 
 ## What is measured and what is assumed
@@ -387,15 +481,40 @@ or `INVALID_START` (non-finite). The worker's own Detour query (`chaya_worker.re
 
 ### Routing: what has and has not been validated
 
-- **With real Recast output:** `PipelineControlPlaneTest` ingests the real Recast output for the fixture mesh (see the
-  baking section) and routes on it.
+- **On real Recast/Detour output (synthetic venue geometry):** the navmesh in `packages/contracts/fixtures/navmesh` is
+  the real output of chaya-navmesh 1.1.0 / recastnavigation 1.6.0 for the synthetic venue of
+  `services/reconstruction/tests/navmesh/venue_scene.py`. On 2026-10-14 it was regenerated with the tool built on this
+  machine (MinGW GCC 6.3): `navmesh.bin` and the manifest were byte-identical to the committed files, and the graph
+  differed only by an empty `source` block the tests overwrite. Two test classes ingest it through the pipeline's own
+  NAVIGATION_BAKING ingestion and route with production settings (no synthetic graphs):
+  - `PipelineControlPlaneTest`: string-pulled routes clear of the wall and the sofa; STANDARD climbs the step, STEP_FREE
+    takes the ramp; the required clear width picks the doorway or fails with `NO_ACCESSIBLE_ROUTE`; a graph edge without
+    a portal is refused.
+  - `RealNavmeshNavigationTest`:
+    - a three-stop route, in the given order and optimised (optimised is never slower), every segment clear of walls and
+      furniture;
+    - an obstacle in the 1.1 m doorway reroutes through the 1.6 m one, and the same observation 10 minutes old does not;
+      both doorways blocked fails `NO_ROUTE`;
+    - a bin leaving about 0.85 m of the 1.1 m doorway: still walkable, but STEP_FREE goes through the wide doorway;
+    - endpoints outside the navmesh are refused, and a start at camera height is accepted;
+    - 32 concurrent requests (mixed profiles and obstacles) give exactly the sequential answers;
+    - two floors, each its own ingested navmesh in its own frame, joined by stairs and a lift: STANDARD takes the stairs;
+      STEP_FREE is refused until the lift is verified, then takes it, and is refused again when the lift is out of
+      service;
+    - the floor reconstructed again: a destination in the superseded frame is refused, the current state routes on the
+      new graph, and a request pinned to the old scan version still routes on the old navmesh, with identical waypoints;
+    - the configured clear width (1.3 m, 1.8 m) decides the doorway or fails closed.
 - **Algorithmic unit tests only.** These use synthetic fixtures and are not evidence of navigation in any venue.
   - `RouteServiceTest` hand-builds graphs, frames and connections to test the routing rules:
     - unknown and insufficient clearance, steep and unmeasured slope, and steps;
-    - stairs, elevators and ramps, including fail-closed width and slope;
+    - stairs, elevators and ramps, including fail-closed width and slope, and unverified accessibility;
     - multi-floor routing between floors with unrelated frames, and chained connections;
     - out-of-service connections, and landings in a stale frame;
     - an obstacle that blocks an edge without covering a node, and rerouting around a dynamic obstacle;
+    - stale, future and wrong-frame obstacle observations;
+    - endpoints out of bounds and off the navmesh;
+    - multi-stop: kept and optimised order, unreachable intermediate stops, step-free stops, a tour up a lift and back;
+    - the graph cache: a republished graph is used at once; concurrent requests;
     - metric distance and duration from the geometry rather than stored lengths;
     - every failure code.
   - `RouteGeometryTest` covers segment/box blocking and polyline length.
@@ -403,7 +522,35 @@ or `INVALID_START` (non-finite). The worker's own Detour query (`chaya_worker.re
     turns exactly at the inner corner; a jogging corridor that the centroid polyline leaves, but the pulled path does not.
   - `tests/unit/test_navigation_baking.py` covers slope, rise and run against canonical +Z, and a step between two
     level polygons.
+  - Web (`npm test`): `route-instructions.test.ts` (turns, connector distances, monotone progress, arrival dwell and
+    the premature-arrival cases: through a wall, on the wrong floor, on another floor's leg), `obstacle-reroute.test.ts`,
+    `multi-stop.test.ts` (only changed segments re-requested, unreachable stops, interruptions, republished graphs),
+    `viewer-route.test.ts`. Playwright (`e2e/viewer-interaction.spec.ts`) drives the viewer against a mocked API:
+    several destinations, highlighting, removal without re-requests, recalculate, cancel, and an expired sign-in.
 - **Not validated:**
-  - No real venue has been routed on.
-  - No real multi-floor venue has registered connections.
+  - No real venue has been routed on. No real reconstruction has been through NAVIGATION_BAKING (the stages before it
+    need a CUDA GPU and Open3D, docs/E2E_VALIDATION.md).
+  - No real multi-floor venue has registered or verified connections.
   - No real reconstruction has put a stair or ramp into the navmesh input. The synthetic venue fixture does (above).
+  - No device has reported an obstacle: no client has an obstacle source, so dynamic obstacles have only been exercised
+    with obstacles the tests report.
+  - Instructions, progress and arrival have never run on a device walking a real route.
+
+### Physical validation still required
+
+Before navigation can be called validated in a venue, these need doing on site, with a real reconstruction:
+
+1. Bake a real, calibrated reconstruction of at least one floor (a GPU host) and check the navmesh against the building:
+   walls and furniture block, doorways connect, no walkable area is missing or invented. Measure semantic-label quality
+   on floors, stairs and furniture, and reconstruction height noise against `navmesh_step_min_rise_m` (0.03 m).
+2. Measure a sample of doorway and corridor widths with a tape and compare them with `min_clearance_m`; walk ramps with
+   an inclinometer and compare with `max_slope_deg`.
+3. For every floor connection: measure stairs and ramp walked lengths, door and car widths and ramp slopes, register
+   them, and only then record the accessibility verification. Confirm each landing POI is where the connector really is.
+4. Walk routes with a localized device (Android WebXR and iOS): check that the drawn route matches the floor, that
+   distance remaining agrees with a measured wheel, that turns are announced where the corridor turns, that arrival is
+   declared within about 1.5 m and not before, and that floor handoffs happen at the connector.
+5. Walk STEP_FREE routes with a wheelchair user (or a wheelchair-width trolley) and confirm every passage and lift is
+   usable as claimed.
+6. If an obstacle source is added to a client, validate its observations (position error, latency, false positives)
+   before reporting them to routing.

@@ -100,7 +100,7 @@ test("navigation: both profiles are requested; the standard route is drawn and t
   const before = await settledFrame(page);
 
   await page.getByRole("combobox", { name: "From" }).selectOption({ label: red.label });
-  await page.getByRole("combobox", { name: "To" }).selectOption({ label: green.label });
+  await page.getByRole("combobox", { name: "Add a destination" }).selectOption({ label: green.label });
   await expect(page.getByTestId("route-STANDARD")).toContainText("3.2 m · ~3 s (estimate)");
   await expect(page.getByTestId("route-STEP_FREE")).toHaveAttribute("data-failure", "no-accessible-route");
   await expect(page.getByTestId("route-STEP_FREE")).toContainText("No step-free route exists");
@@ -120,7 +120,7 @@ test("navigation: an unreachable destination is reported as such, and nothing is
   await loadScene(page);
 
   await page.getByRole("combobox", { name: "From" }).selectOption({ label: red.label });
-  await page.getByRole("combobox", { name: "To" }).selectOption({ label: green.label });
+  await page.getByRole("combobox", { name: "Add a destination" }).selectOption({ label: green.label });
   await expect(page.getByTestId("route-STANDARD")).toHaveAttribute("data-failure", "unreachable");
   await expect(page.getByTestId("route-STANDARD")).toContainText("cannot be reached");
   await expect(page.getByTestId("route-STANDARD")).toContainText("on this floor"); // the API's own reason stays visible
@@ -136,8 +136,55 @@ test("navigation: a route planned in another coordinate frame is refused, not dr
   });
   await loadScene(page);
   await page.getByRole("combobox", { name: "From" }).selectOption({ label: red.label });
-  await page.getByRole("combobox", { name: "To" }).selectOption({ label: green.label });
+  await page.getByRole("combobox", { name: "Add a destination" }).selectOption({ label: green.label });
   await expect(page.getByTestId("route-mismatch")).toContainText("different coordinate frame");
+});
+
+test("navigation: several destinations are routed in order, highlighted, and cancelled; only changed segments are re-requested", async ({ page }) => {
+  test.setTimeout(3 * SCENE_TIMEOUT);
+  await mockViewerApi(page, RUN_ID, { calibrated: true });
+  const requests = await mockRoutes(page, {
+    STANDARD: { body: fixtureRoute("STANDARD") },
+    STEP_FREE: { status: 404, code: "NO_ACCESSIBLE_ROUTE", detail: "no step-free route" },
+  });
+  await loadScene(page);
+  const third = FIXTURE.pois_by_construction[2];
+
+  await page.getByRole("combobox", { name: "From" }).selectOption({ label: red.label });
+  await page.getByRole("combobox", { name: "Add a destination" }).selectOption({ label: green.label });
+  await page.getByRole("combobox", { name: "Add a destination" }).selectOption({ label: third.label });
+  await expect(page.getByTestId("route-stop")).toHaveCount(2);
+  await expect(page.getByTestId("route-STANDARD")).toContainText("6.4 m"); // two segments of 3.2 m
+  await expect(page.getByTestId("route-instructions")).toContainText(`Arrive at stop: ${green.label}`);
+  await expect(page.getByTestId("route-instructions")).toContainText(`Arrive at ${third.label}`);
+  await expect(page.locator('.chaya-poi-marker[data-destination="true"]')).toHaveCount(2);
+  const afterTwo = requests.length;
+
+  // Removing the last destination re-requests nothing: the first segment is reused for both profiles.
+  await page.getByTestId("route-stop").nth(1).getByRole("button", { name: "Remove destination" }).click();
+  await expect(page.getByTestId("route-STANDARD")).toContainText("3.2 m");
+  expect(requests.length).toBe(afterTwo);
+
+  // Recalculate asks again; cancel clears the route and its highlight.
+  await page.getByTestId("route-recalculate").click();
+  await expect.poll(() => requests.length).toBe(afterTwo + 2);
+  await page.getByTestId("route-cancel").click();
+  await expect(page.getByTestId("route-STANDARD")).toHaveCount(0);
+  await expect(page.locator('.chaya-poi-marker[data-destination="true"]')).toHaveCount(0);
+});
+
+test("navigation: an expired sign-in is reported as such, not as an unreachable destination", async ({ page }) => {
+  test.setTimeout(3 * SCENE_TIMEOUT);
+  await mockViewerApi(page, RUN_ID, { calibrated: true });
+  await mockRoutes(page, {
+    STANDARD: { status: 401, code: "HTTP_401", detail: "token expired" },
+    STEP_FREE: { status: 401, code: "HTTP_401", detail: "token expired" },
+  });
+  await loadScene(page);
+  await page.getByRole("combobox", { name: "From" }).selectOption({ label: red.label });
+  await page.getByRole("combobox", { name: "Add a destination" }).selectOption({ label: green.label });
+  await expect(page.getByTestId("route-STANDARD")).toHaveAttribute("data-failure", "session-expired");
+  await expect(page.getByTestId("route-STANDARD")).toContainText("expired");
 });
 
 test("keyboard: the focused scene zooms and resets from the keyboard, and typing elsewhere never changes it", async ({ page }) => {
