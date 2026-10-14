@@ -11,6 +11,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
@@ -24,6 +25,9 @@ import org.springframework.web.client.RestClientException;
  * it: every call after that fails immediately (callers fall back or retry later) and never touches DNS or the
  * network. A probe on its own daemon thread checks GET /health/ready every chaya.search.vision-probe-interval and
  * closes the breaker once the service reports ready (model loaded), not merely reachable.
+ *
+ * <p>A 4xx answer (other than 408/429) is about the one text, not the service: it raises EmbeddingRejectedException and
+ * leaves the breaker closed, so one text the service refuses cannot stall every search and the whole embedding backlog.
  */
 @Component
 public class HttpTextEmbeddingClient implements TextEmbeddingClient, DisposableBean {
@@ -64,6 +68,13 @@ public class HttpTextEmbeddingClient implements TextEmbeddingClient, DisposableB
         EmbedResponse response;
         try {
             response = client.post().uri("/v1/embed-text").body(new EmbedRequest(text)).retrieve().body(EmbedResponse.class);
+        } catch (HttpClientErrorException e) {
+            int status = e.getStatusCode().value();
+            if (status != 408 && status != 429) {
+                // This text was refused; the service itself answered. Other texts still go through.
+                throw new EmbeddingRejectedException("the vision service refused to embed this text: " + e.getMessage(), e);
+            }
+            throw fail("the vision service (embedding model) is unavailable: " + e.getMessage(), e);
         } catch (RestClientException e) {
             throw fail("the vision service (embedding model) is unavailable: " + e.getMessage(), e);
         }

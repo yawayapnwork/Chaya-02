@@ -19,7 +19,7 @@ import { detectDeviceProfile, type DeviceProfile } from "@/lib/device-profile";
 import { formatBytes, formatDate } from "@/lib/viewer-format";
 import { checkSceneScope } from "@/lib/artifact-integrity";
 import { type Scoped, forScene, initialVersion, sceneKey, versionLabel } from "@/lib/version-scope";
-import { type SearchResult } from "@/lib/search-api";
+import { type SearchPosition, type SearchResult } from "@/lib/search-api";
 import { type RouteResponse, planRoute } from "@/lib/navigation-api";
 import {
   type RouteFailure,
@@ -373,10 +373,27 @@ export default function ViewerWorkspace() {
   const routeTo = pois.find((p) => p.id === routeToId) ?? null;
   const selectedPoi = pois.find((p) => p.id === selectedPoiId) ?? null;
 
+  // Selecting a search result shows its floor and selects its POI: the effect below focuses the camera on it once its
+  // scene is ready, and the canvas highlights the selected POI.
   function onSelectSearchResult(result: SearchResult) {
-    if (result.floorId !== floorId) setFloorId(result.floorId);
+    if (result.floorId && result.floorId !== floorId) setFloorId(result.floorId);
     selectPoi(result.poiId);
   }
+
+  // "Navigate" on a search result: it becomes the route's destination (planned below from the From POI, both profiles).
+  function onNavigateToResult(result: SearchResult) {
+    onSelectSearchResult(result);
+    setRouteToId(result.poiId);
+  }
+
+  // Where the person searching is, for "nearest": the route's From POI, which stands in for the traveller's position here
+  // (an AR client sends its tracked position). Only a POI placed in the frame being viewed is a usable position.
+  const searchPosition: SearchPosition | null = useMemo(
+    () => (routeFrom && routeFrom.floorId && routeFrom.frameStatus === "CURRENT"
+      ? { label: routeFrom.label, floorId: routeFrom.floorId, x: routeFrom.x, y: routeFrom.y, z: routeFrom.z }
+      : null),
+    [routeFrom],
+  );
 
   // Real routing (POST /api/v1/navigation/routes): "from" POI stands in for the traveller's current
   // position (a live AR client would send its own tracked position instead). No client-side fallback is
@@ -640,7 +657,8 @@ export default function ViewerWorkspace() {
 
         {venueId && (
           <aside className="max-h-[45dvh] w-full shrink-0 space-y-4 overflow-y-auto border-t bg-white p-4 text-sm md:max-h-none md:w-80 md:border-l md:border-t-0">
-            <SemanticSearchPanel venueId={venueId} floorId={floorId} scanVersionId={scanVersionId} onSelectResult={onSelectSearchResult} />
+            <SemanticSearchPanel venueId={venueId} floorId={floorId} scanVersionId={scanVersionId} position={searchPosition}
+              selectedPoiId={selectedPoiId} onSelectResult={onSelectSearchResult} onNavigate={onNavigateToResult} />
 
             {reconstruction && pendingHere && (
               <section className="rounded border border-sky-200 bg-sky-50 p-2 text-xs text-sky-900" data-testid="newer-processing">

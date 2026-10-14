@@ -29,6 +29,7 @@ exact command to run once it does.
 | `b1_capture_path/reconstruction_coverage.py` | floor-plan coverage of real reconstructions (for when paired captures exist) |
 | `b2_geometry_cleanup/run.py` | cleanup methods on a real trained splat, plus a COLMAP-evidence proxy |
 | `b3_semantic_search/run.py`, `dataset.json` | semantic vs lexical search through the real API |
+| `b3_semantic_search/phrasing.json`, `inprocess_texts.py` | B3's queries in sentence templates and misspelt (derived mechanically), and the CLIP-vector request for running B3 in process (`services/api` `SearchBenchmarkTest`) |
 | `b4_navigation/run.py` | STANDARD vs STEP_FREE routes through the real router |
 | `b5_incremental_rescan/run.py` | alignment accuracy under a known misalignment, and rescan scope |
 | `docker/open3d.Dockerfile` | worker package + Open3D (CPU), for B2 and B5 |
@@ -46,6 +47,8 @@ Prerequisites:
 ```bash
 python benchmarks/b1_capture_path/run.py
 python benchmarks/b3_semantic_search/run.py --env-file <env> --reps 3
+# B3 in process (no stack): real SemanticSearchService + Testcontainers Postgres; results in target/search-benchmark/
+(cd services/api && mvn test -Dtest=SearchBenchmarkTest)
 python benchmarks/b4_navigation/run.py --env-file <env> --synthetic
 
 docker build -f benchmarks/docker/open3d.Dockerfile -t chaya-bench-open3d .

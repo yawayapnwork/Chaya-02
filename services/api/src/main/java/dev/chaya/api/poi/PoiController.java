@@ -26,11 +26,12 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/venues/{venueId}/pois")
 public class PoiController {
 
+    /** accessible (optional): staff checked whether the place is wheelchair accessible; omitted keeps what was recorded. */
     public record PoiRequest(UUID floorId, UUID spaceId, @NotBlank String label, String category,
                              String description, List<String> tags, @NotNull Double x, @NotNull Double y,
-                             @NotNull Double z) {
+                             @NotNull Double z, Boolean accessible) {
         PoiData toData() {
-            return new PoiData(floorId, spaceId, label, category, description, tags, x, y, z);
+            return new PoiData(floorId, spaceId, label, category, description, tags, x, y, z, accessible);
         }
     }
 

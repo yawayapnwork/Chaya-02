@@ -7239,10 +7239,15 @@ paths:
       - OPERATOR
   /api/v1/venues/{venueId}/search:
     get:
-      description: "q: natural-language query (required). floorId: restrict to one\
-        \ floor. topK: result count (clamped to chaya.search.max-top-k). accessible:\
-        \ only POIs marked accessible. scanVersionId: only the POIs of that FINALIZED\
-        \ scan version. Rate limited per caller (chaya.rate-limit.search-per-minute)."
+      description: "q: natural-language query (required), e.g. 'find the nearest staircase'.\
+        \ floorId: restrict to one floor. topK: result count (clamped to chaya.search.max-top-k).\
+        \ accessible: only POIs marked accessible (a query asking for an accessible\
+        \ place sets it too). scanVersionId: only the POIs of that FINALIZED scan\
+        \ version. position (x,y,z canonical metres) and positionFloorId: the searcher's\
+        \ position on that floor, in its current coordinate frame (or the scan version's);\
+        \ a query asking for the nearest one is then ordered by walking-route distance\
+        \ from it. Without a position 'nearest' is reported as not applied. Rate limited\
+        \ per caller (chaya.rate-limit.search-per-minute)."
       operationId: searchSearch
       parameters:
       - in: path
@@ -7275,6 +7280,20 @@ paths:
           type: boolean
       - in: query
         name: scanVersionId
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: position
+        required: false
+        schema:
+          type: array
+          items:
+            type: number
+            format: double
+      - in: query
+        name: positionFloorId
         required: false
         schema:
           type: string
@@ -8021,6 +8040,13 @@ components:
       required:
       - reconstruction
       - venue
+    Correction:
+      type: object
+      properties:
+        from:
+          type: string
+        to:
+          type: string
     Cost:
       type: object
       properties:
@@ -9681,6 +9707,8 @@ components:
     Poi:
       type: object
       properties:
+        accessible:
+          type: boolean
         category:
           type: string
         coordinateFrameId:
@@ -9725,6 +9753,8 @@ components:
     PoiRequest:
       type: object
       properties:
+        accessible:
+          type: boolean
         category:
           type: string
         description:
@@ -10615,13 +10645,50 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/TermCount"
+    SearchInterpretation:
+      type: object
+      properties:
+        accessibilityRequired:
+          type: boolean
+        corrections:
+          type: array
+          items:
+            $ref: "#/components/schemas/Correction"
+        lexicalTerms:
+          type: array
+          items:
+            type: string
+        normalized:
+          type: string
+        spatialModifier:
+          type: string
+        spatialModifierApplied:
+          type: boolean
+        spatialNote:
+          type: string
+        subject:
+          type: string
+        synonymGroups:
+          type: array
+          items:
+            type: string
+        targetKind:
+          type: string
     SearchResponse:
       type: object
       properties:
+        accessibilityUnconfirmed:
+          type: array
+          items:
+            $ref: "#/components/schemas/SearchResult"
         closestMatches:
           type: array
           items:
             $ref: "#/components/schemas/SearchResult"
+        interpretation:
+          $ref: "#/components/schemas/SearchInterpretation"
+        lowConfidence:
+          type: boolean
         matchType:
           type: string
         query:
@@ -10632,23 +10699,46 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SearchResult"
+        suggestions:
+          type: array
+          items:
+            type: string
     SearchResult:
       type: object
       properties:
+        accessible:
+          type: boolean
         boundingBox:
           type: object
           additionalProperties: {}
         category:
           type: string
+        detectionArtifactId:
+          type: string
+          format: uuid
         detectionConfidence:
           type: number
           format: double
+        distanceKind:
+          type: string
+        distanceMeters:
+          type: number
+          format: double
+        duplicateIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        exactMatch:
+          type: boolean
         floorId:
           type: string
           format: uuid
         imageSimilarity:
           type: number
           format: double
+        indexStatus:
+          type: string
         label:
           type: string
         lexicalSimilarity:
@@ -10659,17 +10749,32 @@ components:
         localizationUncertaintyM:
           type: number
           format: double
+        lowConfidence:
+          type: boolean
         matchedBy:
           type: string
+        matchedTerm:
+          type: string
+        pipelineRunId:
+          type: string
+          format: uuid
         poiId:
           type: string
           format: uuid
+        provenance:
+          type: object
+          additionalProperties: {}
         rankScore:
           type: number
           format: double
         relevanceMargin:
           type: number
           format: double
+        routeStatus:
+          type: string
+        scanVersionId:
+          type: string
+          format: uuid
         similarity:
           type: number
           format: double

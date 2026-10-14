@@ -9,7 +9,10 @@ import java.io.UncheckedIOException;
 import java.nio.file.Path;
 import java.util.Locale;
 import java.util.Random;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
@@ -31,6 +34,12 @@ public class TestEmbeddingConfig {
     public static final AtomicBoolean UNAVAILABLE = new AtomicBoolean(false);
     public static final String MODEL = "test-embedding";
     public static final AtomicBoolean REAL_CLIP = new AtomicBoolean(false);
+    /** When set: serve REAL CLIP text vectors from this fixture ({"text_model", "texts": {text: [512]}}) instead, recording
+     * every text it lacks in {@link #MISSING} (and failing that call). SearchBenchmarkTest uses it for B3. */
+    public static final AtomicReference<JsonNode> TEXT_FIXTURE = new AtomicReference<>();
+    public static final Set<String> MISSING = java.util.Collections.synchronizedSet(new TreeSet<>());
+    /** Texts the stand-in vision service refuses (HTTP 4xx in production: EmbeddingRejectedException). */
+    public static final Set<String> REJECT = java.util.concurrent.ConcurrentHashMap.newKeySet();
     public static final Path CLIP_FIXTURE = Path.of("../../packages/contracts/fixtures/search/clip-vit-b32-openai.json");
     private static JsonNode clipFixture;
 
@@ -93,6 +102,19 @@ public class TestEmbeddingConfig {
         return text -> {
             if (UNAVAILABLE.get()) {
                 throw new EmbeddingUnavailableException("vision service is down (test)");
+            }
+            if (REJECT.contains(text)) {
+                throw new dev.chaya.api.search.EmbeddingRejectedException("422 refused (test)", null);
+            }
+            JsonNode fixture = TEXT_FIXTURE.get();
+            if (fixture != null) {
+                String key = text.strip().toLowerCase(Locale.ROOT);
+                JsonNode v = fixture.get("texts").get(key);
+                if (v == null) {
+                    MISSING.add(key);
+                    throw new IllegalStateException("no real CLIP vector for '" + key + "' in the text fixture");
+                }
+                return new TextEmbeddingClient.Embedding(vector(v), fixture.get("text_model").asText());
             }
             if (REAL_CLIP.get()) {
                 return new TextEmbeddingClient.Embedding(clipText(text), clipFixture().get("text_model").asText());

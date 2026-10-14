@@ -931,15 +931,22 @@ public class PipelineService {
      * superseded first. Each POI names the version. An artifact that cannot be read refuses the publication rather than
      * publishing the version without its detections. Returns {superseded, created}. */
     private int[] applyDetections(RunRow run) {
-        record Stored(String key, String sha256) {}
+        record Stored(String key, String sha256, UUID id) {}
         Stored stored = jdbc.sql("""
-                SELECT a.object_key, a.checksum_sha256 FROM processing_artifact a JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id
+                SELECT a.object_key, a.checksum_sha256, a.id FROM processing_artifact a JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id
                  WHERE sr.run_id = :r AND sr.status = 'SUCCEEDED' AND a.kind = 'DETECTED_OBJECTS' ORDER BY a.created_at DESC LIMIT 1
-                """).param("r", run.id()).query((rs, i) -> new Stored(rs.getString(1), rs.getString(2))).optional().orElse(null);
+                """).param("r", run.id())
+            .query((rs, i) -> new Stored(rs.getString(1), rs.getString(2), rs.getObject(3, UUID.class))).optional().orElse(null);
         String key = stored == null ? null : TenantKeys.require(stored.key(), run.orgId(), run.venueId());
         UUID floorId = jdbc.sql("SELECT floor_id FROM capture_session WHERE id = :c").param("c", run.captureId())
             .query(UUID.class).optional().orElse(null);
         if (key == null || floorId == null) {
+            return new int[]{0, 0};
+        }
+        // Applied once per artifact: a publication that is attempted again never doubles the venue's detected objects.
+        if (jdbc.sql("SELECT EXISTS (SELECT 1 FROM poi_version WHERE detection_artifact_id = :a)").param("a", stored.id())
+                .query(Boolean.class).single()) {
+            log.warn("run {}: the detections of artifact {} are already POIs; not ingested again", run.id(), stored.id());
             return new int[]{0, 0};
         }
         Map<String, Object> doc;
@@ -956,8 +963,11 @@ public class PipelineService {
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> objects = (List<Map<String, Object>>) doc.getOrDefault("objects", List.of());
         int created = 0;
+        DetectionSource detectionSource = new DetectionSource(stored.id(), stored.sha256(), embeddingModel,
+            doc.get("detector_model") instanceof String m ? m : null,
+            doc.get("detector_fine_tuned") instanceof Boolean b ? b : null);
         for (Map<String, Object> obj : objects) {
-            if (insertDetectedPoi("run " + run.id(), run, floorId, obj, embeddingModel, frameId)) {
+            if (insertDetectedPoi("run " + run.id(), run, floorId, obj, detectionSource, frameId)) {
                 created++;
             }
         }
@@ -1451,9 +1461,14 @@ public class PipelineService {
      * backfill, exactly like a manual POI's (V21__search_embedding_spaces.sql). The bounding box keeps the frame it was
      * measured in (sourceFrame), as V12__semantic_search.sql documents.
      */
+    /** The DETECTED_OBJECTS artifact a detection is ingested from, and what it says produced its objects. */
+    private record DetectionSource(UUID artifactId, String artifactSha256, String embeddingModel, String detectorModel,
+                                   Boolean detectorFineTuned) {}
+
     @SuppressWarnings("unchecked")
-    private boolean insertDetectedPoi(String source, RunRow run, UUID floorId, Map<String, Object> obj, String embeddingModel,
+    private boolean insertDetectedPoi(String source, RunRow run, UUID floorId, Map<String, Object> obj, DetectionSource from,
                                       UUID frameId) {
+        String embeddingModel = from.embeddingModel();
         List<Number> position = obj.get("position") instanceof List<?> p ? (List<Number>) p : null;
         List<Number> embedding = obj.get("embedding") instanceof List<?> e ? (List<Number>) e : null;
         if (position == null || position.size() != 3 || embedding == null || embedding.isEmpty()) {
@@ -1502,18 +1517,38 @@ public class PipelineService {
                 bboxJson = null;
             }
         }
+        // Provenance (V36): the artifact, and what the worker reported produced this object -- every frame its merged
+        // detections came from, not only the one its box is from.
+        Map<String, Object> provenance = new LinkedHashMap<>();
+        provenance.put("artifactSha256", from.artifactSha256());
+        provenance.put("detectorModel", from.detectorModel());
+        provenance.put("detectorFineTuned", from.detectorFineTuned());
+        provenance.put("embeddingModel", embeddingModel);
+        provenance.put("sourceFrame", obj.get("source_frame") instanceof String f && !f.isBlank() ? f : null);
+        provenance.put("sourceFrames", obj.get("source_frames") instanceof List<?> frames
+            ? frames.stream().filter(f -> f instanceof String).sorted().toList() : null);
+        provenance.put("detectionsMerged", obj.get("detections_merged") instanceof Number n ? n.intValue() : null);
+        String provenanceJson;
+        try {
+            provenanceJson = mapper.writeValueAsString(provenance);
+        } catch (JsonProcessingException e) {
+            return false;
+        }
         UUID poiId = jdbc.sql("INSERT INTO poi (organization_id, venue_id, floor_id) VALUES (:o, :v, :f) RETURNING id")
             .param("o", run.orgId()).param("v", run.venueId()).param("f", floorId).query(UUID.class).single();
         jdbc.sql("INSERT INTO poi_version (organization_id, venue_id, poi_id, version_number, label, tags, x, y, z, "
                 + "image_embedding, image_embedding_model, source, detection_confidence, bounding_box, pipeline_run_id, "
-                + "coordinate_frame_id, scan_version_id, created_by, localization_status, localization_uncertainty_m, localization) "
+                + "coordinate_frame_id, scan_version_id, created_by, localization_status, localization_uncertainty_m, localization, "
+                + "detection_artifact_id, detection_provenance) "
                 + "VALUES (:o, :v, :p, 1, :label, '{}', :x, :y, :z, CAST(:emb AS vector), :model, 'AUTO_DETECTED', :conf, "
-                + "CAST(:bbox AS jsonb), :run, :frame, :sv, 'system:semantic-indexing', :locStatus, :locUnc, CAST(:loc AS jsonb))")
+                + "CAST(:bbox AS jsonb), :run, :frame, :sv, 'system:semantic-indexing', :locStatus, :locUnc, CAST(:loc AS jsonb), "
+                + ":artifact, CAST(:prov AS jsonb))")
             .param("o", run.orgId()).param("v", run.venueId()).param("p", poiId).param("label", label)
             .param("x", position.get(0).doubleValue()).param("y", position.get(1).doubleValue()).param("z", position.get(2).doubleValue())
             .param("emb", vectorLiteral(embedding)).param("model", embeddingModel).param("conf", confidence)
             .param("bbox", bboxJson).param("run", run.id()).param("frame", frameId).param("sv", run.scanVersionId())
-            .param("locStatus", localizationStatus).param("locUnc", localizationUncertainty).param("loc", localizationJson).update();
+            .param("locStatus", localizationStatus).param("locUnc", localizationUncertainty).param("loc", localizationJson)
+            .param("artifact", from.artifactId()).param("prov", provenanceJson).update();
         return true;
     }
 

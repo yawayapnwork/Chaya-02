@@ -1,7 +1,11 @@
 # Semantic object search
 
-How a natural-language (or voice) query like "where's the couch" finds a real, spatially located object
-in a venue's reconstruction.
+How a natural-language (or voice) query like "where's the couch" or "find the nearest staircase" finds a real,
+spatially located object or destination in a venue's reconstruction.
+
+What can be searched: staff-placed POIs (`source = 'MANUAL'`) and objects detected in a published reconstruction
+(`AUTO_DETECTED`, always tied to the pipeline run, scan version and DETECTED_OBJECTS artifact that produced them). Nothing
+else is indexed: there is no other source of searchable objects.
 
 ## Pipeline: detection to storage
 
@@ -26,8 +30,8 @@ stage) runs once per successful reconstruction:
    guard only. The cost is the other way round: an object labelled "sofa" in one frame and "couch" in another (the
    prompt has both) stays two POIs, a duplicate rather than a lost object.
 6. Publishes a `DETECTED_OBJECTS` artifact: canonical position, image embedding, confidence, the bounding box
-   together with the frame it was measured in (both from the most confident member), and `localization` (below). The
-   report counts the detections rejected for lack of depth evidence, by reason.
+   together with the frame it was measured in (both from the most confident member), `source_frames` (every member's
+   frame), and `localization` (below). The report counts the detections rejected for lack of depth evidence, by reason.
 
 ## Localization: from a 2D box to a 3D point
 
@@ -88,6 +92,15 @@ crop's vector is stored as `image_embedding`/`image_embedding_model` (V21__searc
 is not 512-d is skipped with a warning instead of failing the report. The object's text-space `embedding` is left
 empty for the backfill below, exactly like a manual POI's.
 
+**Provenance (V36__search_provenance_and_index_retries.sql).** Each detected POI also stores `detection_artifact_id` (the
+checksum-verified DETECTED_OBJECTS artifact it was read from) and `detection_provenance`: the artifact's SHA-256, the
+detector and embedding model (and whether the detector was fine-tuned), the box's frame, every frame the merged
+detections came from, and how many were merged. Search returns them with each detected result (`pipelineRunId`,
+`scanVersionId`, `detectionArtifactId`, `provenance`). Rows ingested before V36 keep only their run and version. A
+publication applies one artifact's detections once: if POIs already exist for that artifact, they are not ingested again.
+An object without a 3-D position is a broken contract that fails the stage (`DETECTED_OBJECTS_INVALID`), never a POI
+without coordinates. Erasure deletes the detected POIs of an erased artifact with it.
+
 ## The embedding backfill (manual and detected POIs)
 
 A POI placed or edited by venue staff (`PoiService`), or ingested from a detection, is stored without a text-space
@@ -99,7 +112,8 @@ embedding, and search cannot see it until it has one. `dev.chaya.api.search.PoiE
   set the operations dashboard counts as "awaiting embedding". Superseded versions are never searched, so they are
   never embedded.
 - **What text:** the POI's own metadata: label, category and tags, joined and de-duplicated case-insensitively
-  (`PoiEmbeddingService.embeddingText`). Tags are where staff enter alternative names. There is no synonym table.
+  (`PoiEmbeddingService.embeddingText`). Tags are where staff enter alternative names. The synonym table (below) is
+  applied to queries only; a POI's embedded text is only what staff entered.
   Measured on docs/BENCHMARKS.md B3, this beats embedding the label alone on every query type. A detected object has
   only its label (the detection-prompt phrase Grounding DINO matched), so that is what is embedded.
 - **Which model:** the same CLIP text tower as queries (`TextEmbeddingClient` → services/vision). The model id
@@ -109,6 +123,12 @@ embedding, and search cannot see it until it has one. `dev.chaya.api.search.PoiE
   got there first. An embedding is never overwritten.
 - **When vision is down:** nothing is written. The pass stops, logs once, and the backlog is worked off when vision
   returns. Search meanwhile falls back to lexical matching as before.
+- **When vision refuses one text** (HTTP 4xx other than 408/429: `EmbeddingRejectedException`): the circuit breaker stays
+  closed, the refusal is recorded in `poi_embedding_failure` (attempts, last error) and that POI is retried after 30 s,
+  then 1, 2, 4 ... minutes, at most hourly, while the rest of the backlog is embedded. Before, the backlog took the oldest
+  pending POI first on every pass, so one such text would have stalled it for good. A success deletes the record.
+- **Until a POI is embedded** it is still found by name (the lexical match below), marked `indexStatus =
+  PENDING_EMBEDDING`, with no similarity, margin or rank score: it is never compared in a vector space it has no vector in.
 
 ## How CLIP is used (verified)
 
@@ -130,15 +150,46 @@ vs 35/44 and zero-shot crop labels 14/15 vs 13/15: within noise at this size. Sw
 vector's model id (and so, by the model check, hide them until re-embedded), which needs a re-embedding job that does
 not exist yet.
 
+## Query understanding
+
+`dev.chaya.api.search.QueryInterpreter` reads the query before anything is matched. Rules only, no language model, and
+deterministic: the same query and venue always read the same way. The reading is returned as `interpretation`.
+
+1. **Normalise:** Unicode NFKC, lower case, punctuation to spaces, whitespace collapsed (`"Where’s the RECEPTION??"` ->
+   `where s the reception`).
+2. **Modifiers** are recognised and taken out of the matched text:
+   - spatial: "nearest", "closest", "nearby", "near me", ... -> `spatialModifier = NEAREST`. It is applied only with a
+     position (below); without one the response says `spatialModifierApplied = false`, `spatialNote = NO_POSITION`.
+   - accessibility: "wheelchair accessible", "step-free", "barrier-free", "accessible", ... ->
+     `accessibilityRequired`. Answered only from what staff recorded (below), never from a label or what a detection
+     looks like.
+3. **Request phrasing** at the start ("where is", "find", "show me", "take me to", articles) and courtesy at the end
+   ("please") are stripped. What is left is the `subject`: "Find the nearest staircase." -> `staircase`.
+4. **Spelling:** a subject word of 5+ letters that is neither a word of the venue's own POI texts nor of the synonym
+   table is corrected to the one such word within 1 edit (5-7 letters) or 2 edits (8+), Damerau-Levenshtein; never when
+   two candidates tie, never into a short word ("gift" stays "gift"), and never a singular/plural of a dictionary word.
+   Corrections are returned (`corrections`) and shown ("Showing results for "staircase" (you typed "staircse")").
+5. **Synonyms:** a small table of common venue words in `QueryInterpreter.SYNONYMS` (stairs/staircase/stairway,
+   elevator/lift, restroom/toilet/loo, entrance/entry, reception/front desk, sofa/couch/settee, ...): synonyms and plurals
+   only, not kinds of things ("armchair" is not a "chair"). It adds phrasings to the **lexical** match ("main staircase"
+   -> "main stairs", "main stairway"); it never changes what CLIP embeds and never touches POI texts.
+6. **What CLIP embeds:** the subject; or, when reading the query changed nothing but case, spacing and punctuation, the
+   query exactly as typed (so "jacket drop-off" reaches CLIP unchanged).
+7. **Target kind** (`targetKind`): `NAMED_PLACE` when exactly one staff POI's label is the subject or a synonym of it
+   ("Where is the reception?" with one "Reception desk"), `CATEGORY` when the subject is a synonym group or equals the
+   category, a tag or a detector label of relevant POIs ("nearest staircase", "sofa"), else `DESCRIPTION` (matched by
+   meaning only: "something to sit on"). An exact name/category/tag match ranks first within its tier (below).
+
 ## Query: text/voice to ranked results
 
 1. The browser (`apps/web/components/SemanticSearchPanel.tsx`) sends a typed or voice-transcribed query
-   string to `GET /api/v1/venues/{venueId}/search`. The Web Speech API
+   string to `GET /api/v1/venues/{venueId}/search`, with the searcher's position when the viewer has one (the route's
+   From POI: `position=x&position=y&position=z&positionFloorId=...`). The Web Speech API
    (`apps/web/lib/voice-input.ts`) only ever produces that text string; it is never itself the matching
    mechanism.
-2. `dev.chaya.api.search.SemanticSearchService` embeds the query with CLIP's text tower, via `TextEmbeddingClient` ->
-   services/vision's `POST /v1/embed-text`, and learns which model produced it. There is no synonym table: "couch"
-   finds "sofa" because CLIP puts related phrases near each other.
+2. `dev.chaya.api.search.SemanticSearchService` reads the query (above), embeds its subject with CLIP's text tower, via
+   `TextEmbeddingClient` -> services/vision's `POST /v1/embed-text`, and learns which model produced it. "couch" finds
+   "sofa" because CLIP puts related phrases near each other, and also by name through the synonym table.
 3. **Ranking.** Every POI in scope (the venue/organization via `TenantGuard`, an optional floor, an optional
    accessibility filter on `attributes->>'accessible'`) that has a text embedding from the query's model is scored
    (the whole scope, not the HNSW top k; a venue's POIs number in the hundreds to thousands).
@@ -159,13 +210,14 @@ not exist yet.
        as close to the query as to **every** detector label in scope (needs at least 2 distinct labels). No threshold
        to calibrate: the competing labels are the reference. `matchedBy = IMAGE` marks results admitted only this way.
 
-   - *lexical / fuzzy* (any POI): pg_trgm `strict_word_similarity` between the query and the POI's text (label,
-     category, tags). A misspelt name is relevant if it reaches `chaya.search.lexical-min-similarity` (0.5):
+   - *lexical / fuzzy* (any POI): pg_trgm `strict_word_similarity` between the query's phrasings (`lexicalTerms`: the
+     subject, the subject as typed, its synonym-table variants; the best one counts, the user's own words first on a tie)
+     and the POI's text (label, category, tags). A misspelt name is relevant if it reaches
+     `chaya.search.lexical-min-similarity` (0.5):
      "recepton" scores 0.58 against the reception desk, which real CLIP ranks only fourth for that query; "fire
      extingusher" 0.75. Strict means whole words, so "sign" is 0.33 against "design studio" (the non-strict form
-     gives 0.8). `matchedBy = LEXICAL` marks results admitted only this way. 0.5 was chosen on a handful of such pairs,
-     not calibrated. Synonyms still come only from CLIP and the staff's tags: "settee" has no trigram in common with
-     "couch".
+     gives 0.8). `matchedBy = LEXICAL` marks results admitted only this way, `SYNONYM` those admitted only through a
+     synonym-table phrasing (`matchedTerm` says which). 0.5 was chosen on a handful of such pairs, not calibrated.
 
    **Spatial validity.** Every result has a `spatialStatus`:
 
@@ -176,9 +228,11 @@ not exist yet.
    | `STALE_FRAME` | In an older coordinate frame: the floor was re-reconstructed and the POI not re-placed |
    | `UNBOUND` | In no frame: the floor had no calibration when it was placed |
 
-   **Order:** relevant results first; then **every `VALID` result before every other**; then the rank score; then image
-   similarity; then id. The spatial tier is a sort key, not a weight, so no text, lexical or image similarity can lift
-   a position that cannot be shown above one that can.
+   **Order** (deterministic: identical inputs and data give identical orders): relevant results first; then **every
+   `VALID` result before every other**; then, for a "nearest" query with a position, distance (below); then exact
+   name/category/tag matches (`exactMatch`); then the rank score; then lexical similarity; then image similarity; then
+   POI id. The spatial tier is a sort key, not a weight, so no text, lexical or image similarity can lift a position that
+   cannot be shown above one that can.
 
    **Rank score** (`rankScore`), within a tier:
 
@@ -194,7 +248,8 @@ not exist yet.
    B3 has not been re-run with them. Every pre-existing real-CLIP ranking test still passes.
 4. **Relevance.** CLIP places almost any two short phrases at cosine ~0.8, so the nearest POIs come back even for
    things the venue does not have ("swimming pool" -> "Water fountain"). A POI, manual or detected, counts as a result
-   if its text similarity exceeds the query's **mean similarity to the distinct POI texts in scope** by
+   if its text similarity exceeds the query's **mean similarity to the distinct POI texts in scope** (scope here is the
+   venue, floor and version, never narrowed by the accessibility filter, which applies to results afterwards) by
    `chaya.search.relevance-min-margin` (0.078), or if the image test above admits it. A real match stands out from the
    rest of the venue; a query for something absent is about equally close to everything.
    - The mean is over **distinct** text vectors, so 200 detected "chair"s count once, not 200 times; otherwise a
@@ -227,8 +282,63 @@ not exist yet.
    - Without the breaker, when the vision container was gone, the JVM re-resolved its hostname every 10 s (its
      negative DNS cache) and each lookup took ~3.7 s, so about one search in nine stalled
      (docs/BENCHMARKS.md B3).
-6. Every query is logged to `search_query` with the number of **results** (not closest matches), so queries the
-   venue has nothing for appear in the dashboard's zero-result view.
+6. Every query is logged to `search_query` (normalised) with the number of **results** (not closest matches) and the
+   whole call's latency, so queries the venue has nothing for appear in the dashboard's zero-result view.
+
+## Nearest: distances from the searcher's position
+
+Only with a position: `position` (x, y, z canonical metres) on `positionFloorId`, in that floor's current coordinate
+frame (or the searched scan version's), exactly like a route's start. A floor of another venue, or a non-finite
+coordinate, is refused (`INVALID_POSITION`). With a scan version, a position on another floor is not used
+(`spatialNote = POSITION_NOT_ON_VERSION_FLOOR`).
+
+- **Distance = a real route** from `RouteService` (the same router as `POST /navigation/routes`; `STEP_FREE` when
+  accessibility is required), so "nearest" means nearest to walk to, not as the crow flies: a staircase 3 m away behind a
+  wall is after one 7 m away down an open corridor (`SemanticSearchQueryTest`).
+- **Bounded work:** only relevant `VALID` results are routed. Same-floor candidates are routed in increasing
+  straight-line distance, which is a lower bound of any walking route in the same frame, and routing stops once k routed
+  results are no farther than the next candidate's lower bound: the first k are then exactly the k nearest of them. At
+  most `chaya.search.max-route-evaluations` (20) routes per search; candidates on other floors are routed after the
+  same-floor ones, in relevance order, while that cap allows. Candidates not routed say `routeStatus = NOT_EVALUATED`.
+- **No routable graph** on the floor (`NAVMESH_NOT_READY`, `METRIC_CALIBRATION_REQUIRED`): the straight-line distance in
+  the floor's frame is used instead, labelled `distanceKind = STRAIGHT_LINE`, and the viewer calls it that.
+- **Unreachable** (`NO_ROUTE`, `NO_ACCESSIBLE_ROUTE`): no distance; ranked after every result with one.
+- **Order within the VALID tier:** route distances, then straight-line estimates, then not routed (same floor: by lower
+  bound), then unreachable; ties keep the relevance order. Results not `VALID` follow, unmeasured.
+- **Navigate:** the viewer plans the route to a result with the same router (both profiles), from the same From POI.
+
+## Accessibility
+
+A query asking for an accessible place (or `accessible=true`) returns only POIs whose `attributes.accessible` is boolean
+`true`: what staff recorded through the POI API (`PoiRequest.accessible`; an edit that omits it keeps the recorded
+value). It is never inferred from a label ("Accessible restroom" is text, not a record) or from an image. When nothing
+recorded as accessible matches, `results` is empty and `accessibilityUnconfirmed` lists the matches nobody recorded
+either way, so the viewer can say exactly that; a POI recorded as **not** accessible is never offered. Routes for such a
+query use the STEP_FREE profile.
+
+## Duplicates and low confidence
+
+- **Duplicates:** clustering never merges two detector labels (above), so one sofa detected as "sofa" in some frames
+  and "couch" in others is two POIs. In results, a detected object is folded into a better-ranked detected object of the
+  same synonym group (or the same label) on the same floor, both `VALID`, within `chaya.search.duplicate-distance-m`
+  (0.75 m, the clustering distance); the kept one lists the others in `duplicateIds`. Staff POIs are never folded.
+- **Low confidence:** a detected object whose detector confidence is unknown or below `chaya.search.low-confidence-below`
+  (0.5, a display choice above the detector's 0.35 box threshold, not calibrated) is `lowConfidence`. The response is
+  `lowConfidence` when every result is a low-confidence detection or was admitted by the uncalibrated image test alone;
+  the viewer then says "possible matches only".
+- **Suggestions:** when nothing matched, `suggestions` are the labels of the closest candidates, which are POIs that exist
+  in scope. Nothing is suggested that a search would not return.
+
+## Index lifecycle
+
+- **Scan version changes:** nothing is rebuilt in place, because nothing is cached outside the rows. Search reads each
+  floor's current version through `poi_version_is_current` (V28) on every query, so a newly published version's POIs
+  replace the old ones at once, a re-scan's superseded detections disappear with the publication, and an unpublished or
+  replaced version's detections are never returned. Its new POIs are embedded by the backfill within one interval and are
+  findable by name until then.
+- **Stale embeddings:** a vector is compared only with a query of the same model; a POI whose vector is of another model
+  takes part by name only until the backfill re-embeds it ("Embedding model changes" below).
+- **Failures and retries:** see the backfill above. Ingestion of a publication's detections is idempotent per artifact.
 
 ## Embedding model changes
 

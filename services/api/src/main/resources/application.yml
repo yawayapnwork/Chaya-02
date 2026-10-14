@@ -91,6 +91,10 @@ chaya:
     relevance-min-margin: 0.078
     relevance-min-pois: 8
     closest-matches: 3
+    # Result flags and "nearest" (docs/search.md): not calibrated, see SearchProperties.
+    low-confidence-below: 0.5
+    duplicate-distance-m: 0.75
+    max-route-evaluations: 20
   navigation:
     standard-walking-speed-mps: 1.3
     accessible-walking-speed-mps: 1.0

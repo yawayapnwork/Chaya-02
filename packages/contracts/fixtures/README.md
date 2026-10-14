@@ -19,6 +19,7 @@ loads is missing from the index; the `frontend` and `python` workflows run it be
 | `navmesh/*` | Real `chaya-navmesh` (Recast/Detour) output for `services/reconstruction/tests/fixtures/navmesh/room_with_doorway.obj` | The API ingests and routes on real Detour output without building the native tool | `PipelineControlPlaneTest`, `ScanVersionLineageTest` | `tests/navmesh/test_recast_fixture.py` (needs the built tool) |
 | `synthetic-calibration.json` | A hand-chosen similarity and points | The same frame maths is checked in Python, Java and TypeScript | `test_frames.py`, `SimilarityTest`, `coordinate-frame.test.ts`, … | `generate_synthetic_calibration.py` |
 | `search/clip-vit-b32-openai.json` | Real CLIP ViT-B/32 vectors (see its `provenance`) | Ranking tests with real embeddings without running CLIP | `SemanticSearchRankingTest` | its `provenance` field |
+| `search/b3-clip-vit-b32-openai.json` | Real CLIP ViT-B/32 text vectors of every text B3 embeds (POI texts, queries, phrasing.json's derived queries) | B3 run in process, without a running vision service (docs/BENCHMARKS.md) | `SearchBenchmarkTest` | `benchmarks/b3_semantic_search/inprocess_texts.py` + `clip_vectors.py` |
 
 `*.ksplat` and `*.ply` are git-ignored repository-wide (captures and reconstructions must never be committed); the root
 `.gitignore` re-includes exactly the four files above by path, and the `.gitattributes` in `ksplat/` and `viewer-scene/`

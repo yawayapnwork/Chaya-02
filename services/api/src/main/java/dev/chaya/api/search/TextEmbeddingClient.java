@@ -1,9 +1,10 @@
 package dev.chaya.api.search;
 
 /** Embeds free-text into the same vector space POI embeddings live in (CLIP's joint image/text space --
- * see chaya_worker.clip_embeddings and services/vision). This is the actual mechanism behind matching a
+ * see chaya_worker.clip_embeddings and services/vision). This is the main mechanism behind matching a
  * query like "couch" against a POI labelled "sofa": CLIP's text and image towers were trained so that
- * semantically related text and images land near each other, not a hardcoded synonym table. */
+ * semantically related text and images land near each other. QueryInterpreter's small synonym table only adds name
+ * matches for common venue words; it covers nothing CLIP is not also asked about. */
 public interface TextEmbeddingClient {
 
     /** A vector and the exact model that produced it (recorded as poi_version.embedding_model). */

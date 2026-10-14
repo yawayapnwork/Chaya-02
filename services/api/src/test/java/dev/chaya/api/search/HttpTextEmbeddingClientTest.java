@@ -44,7 +44,7 @@ class HttpTextEmbeddingClientTest {
         });
         server.start();
         SearchProperties props = new SearchProperties("http://127.0.0.1:" + server.getAddress().getPort(), Duration.ofSeconds(2),
-            10, 50, Duration.ofMillis(100), null, 0, 0, null, null, null);
+            10, 50, Duration.ofMillis(100), null, 0, 0, null, null, null, null, null, 0, 0);
         client = new HttpTextEmbeddingClient(RestClient.builder(), props);
     }
 
@@ -105,6 +105,20 @@ class HttpTextEmbeddingClientTest {
         int probesAfterClose = readyCalls.get();
         Thread.sleep(300);
         assertThat(readyCalls.get()).as("no probing while closed").isEqualTo(probesAfterClose);
+    }
+
+    @Test
+    void aTextTheServiceRefusesIsRejectedWithoutOpeningTheBreakerButARateLimitIsAnOutage() throws IOException {
+        server.removeContext("/v1/embed-text");
+        AtomicInteger status = new AtomicInteger(422);
+        server.createContext("/v1/embed-text", ex -> reply(ex, status.get(), "{\"detail\":\"no\"}"));
+        assertThatThrownBy(() -> client.embedWithModel("an unembeddable text")).isInstanceOf(EmbeddingRejectedException.class);
+        assertThat(client.available()).as("one refused text says nothing about the others").isTrue();
+
+        status.set(429);
+        assertThatThrownBy(() -> client.embedWithModel("cafe")).isInstanceOf(EmbeddingUnavailableException.class)
+            .isNotInstanceOf(EmbeddingRejectedException.class);
+        assertThat(client.available()).isFalse();
     }
 
     @Test

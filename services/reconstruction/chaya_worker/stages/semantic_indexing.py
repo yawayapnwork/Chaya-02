@@ -110,7 +110,8 @@ def cluster_by_distance(objects: list[dict[str, Any]], distance: float) -> list[
 
     Each output's `embedding` is the mean of its members' (already L2-normalised) CLIP image embeddings, re-normalised;
     `position` is the members' centroid; `confidence` is the max over members; `bbox_px` and `source_frame` come together
-    from the single most confident member, so the box always refers to the frame it was measured in.
+    from the single most confident member, so the box always refers to the frame it was measured in; `source_frames` lists
+    every member's frame.
 
     `localization` keeps how well the position is supported (docs/search.md, "Localization"): MULTI_VIEW when members
     come from at least two frames, else SINGLE_VIEW; `view_spread_m`, the RMS distance of the members from the centroid
@@ -154,6 +155,8 @@ def cluster_by_distance(objects: list[dict[str, Any]], distance: float) -> list[
             "embedding": mean_embedding.tolist(),
             "bbox_px": best_member["bbox_px"],
             "source_frame": best_member["source_frame"],
+            # Every frame a merged detection came from (provenance: the control plane stores them with the POI).
+            "source_frames": sorted({m["source_frame"] for m in members}),
             "detections_merged": len(members),
             "support_points": max(m["support_points"] for m in members),
             "localization": {

@@ -344,6 +344,7 @@ public class ErasureService {
                 + " OR coordinate_frame_id IN " + in("frame") + ")",
             // Detected objects are derived from the capture's frames (their image embeddings are of frame crops).
             "INSERT INTO erase_set SELECT 'detected', id FROM poi_version WHERE venue_id = :v AND (pipeline_run_id IN " + in("run")
+                + " OR detection_artifact_id IN " + in("artifact")
                 + " OR (source = 'AUTO_DETECTED' AND (scan_version_id IN " + in("version") + " OR coordinate_frame_id IN " + in("frame") + ")))",
             "INSERT INTO erase_set SELECT 'poi', poi_id FROM poi_version WHERE id IN " + in("detected"),
         };

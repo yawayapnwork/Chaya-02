@@ -25,6 +25,10 @@ import org.springframework.stereotype.Service;
  * <p>The vision call happens outside any transaction. The write is {@code UPDATE ... WHERE embedding IS NULL}: the one
  * update the immutability trigger allows, and a no-op if another API instance got there first.
  *
+ * <p>Failures: an outage of the vision service stops the pass without writing anything (the next pass retries). A text the
+ * service refuses (EmbeddingRejectedException) is recorded in poi_embedding_failure and retried with exponential backoff,
+ * while the rest of the backlog proceeds; until it succeeds that POI is found by name only.
+ *
  * <p>When the vision service's model changes, {@link #reembedStale} re-embeds the text of every live POI whose embedding
  * came from another model (V35__poi_reembedding.sql). Until then search simply does not see those POIs by meaning: it never
  * compares vectors of different models.
@@ -42,6 +46,7 @@ public class PoiEmbeddingService {
               JOIN poi p ON p.id = v.poi_id
              WHERE v.embedding IS NULL
                AND p.deleted_at IS NULL
+               AND NOT EXISTS (SELECT 1 FROM poi_embedding_failure f WHERE f.poi_version_id = v.id AND f.next_attempt_at > now())
                AND v.version_number = (SELECT max(version_number) FROM poi_version WHERE poi_id = v.poi_id)
              ORDER BY v.created_at
              LIMIT :n
@@ -53,6 +58,7 @@ public class PoiEmbeddingService {
               JOIN poi p ON p.id = v.poi_id
              WHERE v.embedding IS NOT NULL AND v.embedding_model IS DISTINCT FROM :model
                AND p.deleted_at IS NULL
+               AND NOT EXISTS (SELECT 1 FROM poi_embedding_failure f WHERE f.poi_version_id = v.id AND f.next_attempt_at > now())
                AND v.version_number = (SELECT max(version_number) FROM poi_version WHERE poi_id = v.poi_id)
              ORDER BY v.created_at
              LIMIT :n
@@ -63,8 +69,22 @@ public class PoiEmbeddingService {
 
     record Pending(UUID id, String label, String category, List<String> tags) {}
 
-    /** What one pass did. {@code stoppedBecause} is null when the backlog (up to the batch size) was worked through. */
-    public record Result(int embedded, int skipped, String stoppedBecause) {}
+    /** What one pass did. {@code stoppedBecause} is null when the backlog (up to the batch size) was worked through.
+     * {@code rejected}: texts the vision service refused, recorded in poi_embedding_failure and retried later. */
+    public record Result(int embedded, int skipped, String stoppedBecause, int rejected) {
+        public Result(int embedded, int skipped, String stoppedBecause) {
+            this(embedded, skipped, stoppedBecause, 0);
+        }
+    }
+
+    // A refused text is retried after 30 s, then 1, 2, 4 ... minutes, at most hourly (V36__search_provenance_and_index_retries).
+    private static final String RECORD_FAILURE = """
+            INSERT INTO poi_embedding_failure (poi_version_id, attempts, last_error, next_attempt_at)
+            VALUES (:id, 1, :err, now() + interval '30 seconds')
+            ON CONFLICT (poi_version_id) DO UPDATE
+               SET attempts = poi_embedding_failure.attempts + 1, last_error = EXCLUDED.last_error, last_attempt_at = now(),
+                   next_attempt_at = now() + least(interval '1 hour', interval '30 seconds' * power(2, poi_embedding_failure.attempts))
+            """;
 
     private final JdbcClient jdbc;
     private final TextEmbeddingClient embeddings;
@@ -107,13 +127,19 @@ public class PoiEmbeddingService {
             .list();
         int embedded = 0;
         int skipped = 0;
+        int rejected = 0;
         for (Pending p : pending) {
             TextEmbeddingClient.Embedding e;
             try {
                 e = embeddings.embedWithModel(embeddingText(p.label(), p.category(), p.tags()));
+            } catch (EmbeddingRejectedException ex) {
+                // This one text was refused: back it off and carry on with the rest of the backlog.
+                recordFailure(p.id(), ex.getMessage());
+                rejected++;
+                continue;
             } catch (EmbeddingUnavailableException ex) {
                 // Nothing is written; the rows stay pending and the next pass retries them.
-                return new Result(embedded, skipped, ex.getMessage());
+                return new Result(embedded, skipped, ex.getMessage(), rejected);
             }
             if (e.vector().length != EMBEDDING_DIM) {
                 // A model with another width cannot be stored next to the others; never truncate or pad.
@@ -125,13 +151,14 @@ public class PoiEmbeddingService {
                     + "WHERE id = :id AND embedding IS NULL")
                 .param("e", SemanticSearchService.vectorLiteral(e.vector())).param("m", e.model()).param("id", p.id())
                 .update();
+            clearFailure(p.id());
             if (rows == 1) {
                 embedded++;
             } else {
                 skipped++; // embedded concurrently by another instance
             }
         }
-        return new Result(embedded, skipped, null);
+        return new Result(embedded, skipped, null, rejected);
     }
 
     /**
@@ -152,12 +179,17 @@ public class PoiEmbeddingService {
             .list();
         int embedded = 0;
         int skipped = 0;
+        int rejected = 0;
         for (Pending p : stale) {
             TextEmbeddingClient.Embedding e;
             try {
                 e = embeddings.embedWithModel(embeddingText(p.label(), p.category(), p.tags()));
+            } catch (EmbeddingRejectedException ex) {
+                recordFailure(p.id(), ex.getMessage());
+                rejected++;
+                continue;
             } catch (EmbeddingUnavailableException ex) {
-                return new Result(embedded, skipped, ex.getMessage());
+                return new Result(embedded, skipped, ex.getMessage(), rejected);
             }
             if (!model.equals(e.model())) {
                 return new Result(embedded, skipped, "the embedding model changed from " + model + " to " + e.model() + " during the pass");
@@ -171,13 +203,23 @@ public class PoiEmbeddingService {
                     + "WHERE id = :id AND embedding IS NOT NULL AND embedding_model IS DISTINCT FROM :m")
                 .param("e", SemanticSearchService.vectorLiteral(e.vector())).param("m", e.model()).param("id", p.id())
                 .update();
+            clearFailure(p.id());
             if (rows == 1) {
                 embedded++;
             } else {
                 skipped++;
             }
         }
-        return new Result(embedded, skipped, null);
+        return new Result(embedded, skipped, null, rejected);
+    }
+
+    private void recordFailure(UUID poiVersionId, String error) {
+        log.warn("the vision service refused the text of POI version {}; retried later: {}", poiVersionId, error);
+        jdbc.sql(RECORD_FAILURE).param("id", poiVersionId).param("err", error == null ? "refused" : error).update();
+    }
+
+    private void clearFailure(UUID poiVersionId) {
+        jdbc.sql("DELETE FROM poi_embedding_failure WHERE poi_version_id = :id").param("id", poiVersionId).update();
     }
 
     /** POI versions search cannot see yet (the same definition as the operations dashboard's "awaiting embedding"). */

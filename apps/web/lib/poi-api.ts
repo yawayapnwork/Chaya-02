@@ -23,6 +23,8 @@ export interface Poi {
   scanVersionId: string | null;
   /** Whether this POI is part of what its floor publishes now (its current scan version or an ancestor). */
   current: boolean;
+  /** What staff recorded about wheelchair accessibility (attributes.accessible); null when nobody did. */
+  accessible?: boolean | null;
 }
 
 /** Without scanVersionId: the POIs every floor publishes now (its current scan version). With it: exactly the POIs of that finalized scan version, each

@@ -55,6 +55,7 @@ def test_cluster_by_distance_merges_the_same_object_seen_from_several_frames():
     assert near["support_points"] == 4  # max over members
     assert near["position"] == pytest.approx([0.05, 0, 0])  # centroid
     assert (near["source_frame"], near["bbox_px"]) == ("a.jpg", {"x": 1})  # box and its frame from one member
+    assert near["source_frames"] == ["a.jpg", "b.jpg"]  # provenance: every member's frame
     assert np.linalg.norm(near["embedding"]) == pytest.approx(1.0, abs=1e-6)  # re-normalised mean embedding
 
 

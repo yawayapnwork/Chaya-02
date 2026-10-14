@@ -435,7 +435,8 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
             + "\"objects\":[{\"label\":\"" + label + "\",\"confidence\":" + confidence + ",\"position\":[" + x + "," + y + "," + z + "],"
             + "\"embedding\":[" + embedding + "],"
             + "\"bbox_px\":{\"x\":10,\"y\":20,\"width\":50,\"height\":80,\"frameWidth\":640,\"frameHeight\":480},"
-            + "\"source_frame\":\"000012.jpg\",\"detections_merged\":3,\"support_points\":9,"
+            + "\"source_frame\":\"000012.jpg\",\"source_frames\":[\"000012.jpg\",\"000004.jpg\",\"000020.jpg\"],"
+            + "\"detections_merged\":3,\"support_points\":9,"
             + "\"localization\":{\"method\":\"ZBUFFERED_NEAREST_COVERING_LAYER\",\"status\":\"MULTI_VIEW\",\"views\":3,"
             + "\"view_spread_m\":0.12,\"depth_spread_m\":0.05,\"uncertainty_m\":0.12,\"coverage\":0.6}},"
             // a claimed localization that is not well-formed is never stored as evidence: this object is skipped
@@ -518,6 +519,28 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
         UUID storedFrame = jdbc.sql("SELECT v.coordinate_frame_id FROM poi p JOIN poi_version v ON v.poi_id = p.id "
                 + "WHERE p.venue_id = :v AND v.source = 'AUTO_DETECTED'").param("v", s.c().venue()).query(UUID.class).single();
         assertThat(storedFrame).as("the POI's coordinates are canonical metres in that frame").isEqualTo(UUID.fromString(frameId));
+
+        // Provenance (V36): the artifact the POI was read from, and what the worker said produced it.
+        record Provenance(UUID artifact, String json, UUID expectedArtifact, String expectedSha) {}
+        Provenance p = jdbc.sql("""
+                SELECT v.detection_artifact_id, v.detection_provenance::text, a.id, a.checksum_sha256
+                  FROM poi p JOIN poi_version v ON v.poi_id = p.id
+                  JOIN processing_artifact a ON a.venue_id = p.venue_id AND a.kind = 'DETECTED_OBJECTS'
+                  JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id AND sr.status = 'SUCCEEDED'
+                 WHERE p.venue_id = :v AND v.source = 'AUTO_DETECTED'""")
+            .param("v", s.c().venue())
+            .query((rs, i) -> new Provenance(rs.getObject(1, UUID.class), rs.getString(2), rs.getObject(3, UUID.class), rs.getString(4)))
+            .single();
+        assertThat(p.artifact()).as("the DETECTED_OBJECTS artifact of the succeeded attempt").isEqualTo(p.expectedArtifact());
+        JsonNode provenance = mapper.readTree(p.json());
+        assertThat(provenance.get("artifactSha256").asText()).isEqualTo(p.expectedSha());
+        assertThat(provenance.get("detectorModel").asText()).isEqualTo("IDEA-Research/grounding-dino-tiny");
+        assertThat(provenance.get("detectorFineTuned").asBoolean()).isFalse();
+        assertThat(provenance.get("embeddingModel").asText()).isEqualTo("open_clip:ViT-B-32:openai");
+        assertThat(provenance.get("sourceFrame").asText()).isEqualTo("000012.jpg");
+        assertThat(provenance.get("sourceFrames")).extracting(JsonNode::asText)
+            .as("every frame its merged detections came from, sorted").containsExactly("000004.jpg", "000012.jpg", "000020.jpg");
+        assertThat(provenance.get("detectionsMerged").asInt()).isEqualTo(3);
     }
 
     // ---- NAVIGATION_BAKING ingestion (real Recast output -> navigation_graph rows -> routing) -------------

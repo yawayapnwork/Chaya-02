@@ -21,11 +21,21 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param lexicalWeight            weight of that lexical similarity in the rank score (docs/search.md, "Ranking")
  * @param evidenceWeight           weight of a detected object's evidence shortfall (1 - confidence x view support) in the
  *                                 rank score. Both weights are small on purpose: they reorder near-ties in CLIP similarity
- *                                 and never replace it. Not calibrated: B3 has not been re-run with them */
+ *                                 and never replace it. Not calibrated: B3 has not been re-run with them
+ * @param lowConfidenceBelow       a detected object whose detector confidence is below this (or unknown) is flagged
+ *                                 lowConfidence in results. 0.5 is a display choice above the detector's own box threshold
+ *                                 (0.35, chaya_worker Settings.object_detection_box_threshold); not calibrated
+ * @param duplicateDistanceM       two detected objects of one synonym group ("sofa", "couch") on one floor and in one frame
+ *                                 closer than this are one object in results: the same distance SEMANTIC_INDEXING merges
+ *                                 same-label detections at (object_cluster_distance_m, 0.75 m)
+ * @param maxRouteEvaluations      at most this many routes are planned per "nearest" search (docs/search.md, "Nearest")
+ * @param candidateLimit           how many scored candidates one search reads from the database before relevance,
+ *                                 duplicate folding and distance ordering pick the results */
 @ConfigurationProperties("chaya.search")
 public record SearchProperties(String visionServiceUrl, Duration visionTimeout, int defaultTopK, int maxTopK,
                                Duration visionProbeInterval, Double relevanceMinMargin, int relevanceMinPois, int closestMatches,
-                               Double lexicalMinSimilarity, Double lexicalWeight, Double evidenceWeight) {
+                               Double lexicalMinSimilarity, Double lexicalWeight, Double evidenceWeight, Double lowConfidenceBelow,
+                               Double duplicateDistanceM, int maxRouteEvaluations, int candidateLimit) {
 
     public SearchProperties {
         if (visionTimeout == null) {
@@ -57,6 +67,18 @@ public record SearchProperties(String visionServiceUrl, Duration visionTimeout, 
         }
         if (evidenceWeight == null) {
             evidenceWeight = 0.05;
+        }
+        if (lowConfidenceBelow == null) {
+            lowConfidenceBelow = 0.5;
+        }
+        if (duplicateDistanceM == null) {
+            duplicateDistanceM = 0.75;
+        }
+        if (maxRouteEvaluations <= 0) {
+            maxRouteEvaluations = 20;
+        }
+        if (candidateLimit <= 0) {
+            candidateLimit = 200;
         }
     }
 }

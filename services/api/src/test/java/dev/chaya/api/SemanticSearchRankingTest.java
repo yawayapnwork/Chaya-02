@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.within;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import dev.chaya.api.search.PoiEmbeddingService;
+import dev.chaya.api.search.SearchDtos;
 import dev.chaya.api.search.SearchDtos.SearchResponse;
 import dev.chaya.api.search.SearchDtos.SearchResult;
 import dev.chaya.api.search.SemanticSearchService;
@@ -291,20 +292,23 @@ class SemanticSearchRankingTest extends AbstractIntegrationTest {
     // ---- lexical / fuzzy and synonyms -------------------------------------------------------------------------------
 
     @Test
-    void aMisspeltNameIsFoundByItsWholeWordTrigramsWhereClipAloneDoesNotRankIt() {
-        // Real CLIP puts "recepton" closer to "plant" (0.873) than to the reception desk's text (0.869): by similarity alone
-        // the desk would be fourth and below the relevance margin. The whole-word trigram match admits it and ranks it.
+    void aMisspeltNameIsCorrectedAgainstTheVenuesOwnWordsAndStillMatchedByItsTrigrams() {
+        // Real CLIP puts "recepton" closer to "plant" (0.873) than to the reception desk's text (0.869): embedded as typed,
+        // the desk would be fourth and below the relevance margin. The query is corrected to the venue's own word first
+        // ("reception", one edit away), and the whole-word trigram match of the typed word admits the desk independently.
         SearchResponse r = query("recepton");
+        assertThat(r.interpretation().corrections()).containsExactly(new SearchDtos.Correction("recepton", "reception"));
+        assertThat(r.interpretation().subject()).isEqualTo("reception");
         assertThat(r.results()).isNotEmpty();
         SearchResult desk = r.results().get(0);
         assertThat(desk.poiId()).isEqualTo(id("Reception desk"));
-        assertThat(desk.matchedBy()).isEqualTo("LEXICAL");
         assertThat(desk.lexicalSimilarity()).isGreaterThanOrEqualTo(0.5);
 
         for (String[] typo : new String[][]{{"fire extingusher", "Fire extinguisher"}, {"elevater", "Elevator A"}}) {
             SearchResponse t2 = query(typo[0]);
             assertThat(t2.results()).as(typo[0]).isNotEmpty();
             assertThat(t2.results().get(0).poiId()).as(typo[0]).isEqualTo(id(typo[1]));
+            assertThat(t2.interpretation().corrections()).as(typo[0]).hasSize(1);
         }
     }
 
@@ -322,14 +326,42 @@ class SemanticSearchRankingTest extends AbstractIntegrationTest {
     }
 
     @Test
-    void synonymsAreFoundThroughClipNotThroughASynonymTable() {
-        // "sofa" and "settee" share no trigram with "couch"; only CLIP's text geometry relates them.
+    void synonymsAreFoundThroughClipAndTheSynonymTable() {
+        // "sofa" and "settee" share no trigram with "couch". CLIP's text geometry relates them, and so does the synonym
+        // table (QueryInterpreter), which adds "couch" as a phrasing for the name match.
         for (String q : List.of("sofa", "settee", "couch")) {
             SearchResponse r = query(q);
             assertThat(r.results().get(0).poiId()).as(q).isEqualTo(id("couch-3"));
         }
         assertThat(poiIds(query("sofa").results())).as("and the lounge, whose tags say sofas").contains(id("Lounge"));
-        assertThat(query("settee").results().get(0).lexicalSimilarity()).isZero();
+        SearchResponse settee = query("settee");
+        assertThat(settee.interpretation().synonymGroups()).containsExactly("sofa");
+        assertThat(settee.results().get(0).matchedTerm()).as("matched by name through the table").isEqualTo("couch");
+        assertThat(settee.results().get(0).exactMatch()).isTrue();
+
+        // A synonym the table does not have: CLIP alone relates it (B3: "espresso" -> Cafe, margin 0.09).
+        SearchResponse espresso = query("espresso");
+        assertThat(espresso.interpretation().synonymGroups()).isEmpty();
+        assertThat(espresso.results()).isNotEmpty();
+        assertThat(espresso.results().get(0).poiId()).isEqualTo(id("Cafe"));
+        assertThat(espresso.results().get(0).matchedBy()).isEqualTo("TEXT");
+        assertThat(espresso.results().get(0).lexicalSimilarity()).isLessThan(0.5);
+    }
+
+    @Test
+    void aQuestionOrRequestFindsWhatTheBareWordFinds() {
+        // The request phrasing is taken off before CLIP sees the query, so it no longer dilutes it.
+        for (String q : List.of("Where is the sofa?", "Find the nearest couch", "show me the closest settee")) {
+            SearchResponse r = query(q);
+            assertThat(r.results()).as(q).isNotEmpty();
+            assertThat(r.results().get(0).poiId()).as(q).isEqualTo(id("couch-3"));
+            assertThat(r.interpretation().targetKind()).as(q).isEqualTo("CATEGORY");
+        }
+        SearchResponse nearest = query("Find the nearest couch");
+        assertThat(nearest.interpretation().spatialModifier()).isEqualTo("NEAREST");
+        assertThat(nearest.interpretation().spatialModifierApplied()).as("no position was given").isFalse();
+        assertThat(nearest.interpretation().spatialNote()).isEqualTo("NO_POSITION");
+        assertThat(nearest.results()).allSatisfy(x -> assertThat(x.distanceMeters()).isNull());
     }
 
     // ---- spatial validity (review CV-1) ------------------------------------------------------------------------------
@@ -421,9 +453,18 @@ class SemanticSearchRankingTest extends AbstractIntegrationTest {
         UUID stale = manual(t, "Cafe", "food", List.of("coffee", "snacks"), 30, 0, "open_clip:ViT-L-14:openai");
         UUID foreignImage = detected(t, run, "couch-3", "couch", 31, 0, 0, model, "open_clip:ViT-L-14:openai");
 
+        // Its stale vector is never scored: it can only be found by name, marked as not (yet) indexed in the current model,
+        // and ranks after the POI that is.
         SearchResponse cafe = query("cafe");
-        assertThat(poiIds(cafe.results())).doesNotContain(stale);
-        assertThat(poiIds(cafe.closestMatches())).doesNotContain(stale);
+        assertThat(java.util.stream.Stream.concat(cafe.results().stream(), cafe.closestMatches().stream())
+            .filter(x -> x.poiId().equals(stale))).allSatisfy(x -> {
+                assertThat(x.indexStatus()).isEqualTo("PENDING_EMBEDDING");
+                assertThat(x.relevanceMargin()).isNull();
+                assertThat(x.rankScore()).isNull();
+                assertThat(x.matchedBy()).isEqualTo("LEXICAL");
+            });
+        assertThat(cafe.results().get(0).poiId()).isEqualTo(id("Cafe"));
+        assertThat(cafe.results().get(0).indexStatus()).isEqualTo("INDEXED");
 
         SearchResult other = query("couch").results().stream().filter(x -> x.poiId().equals(foreignImage)).findFirst().orElseThrow();
         assertThat(other.imageSimilarity()).as("its text embedding is comparable, its image embedding is not").isNull();

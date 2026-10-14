@@ -40,16 +40,27 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class PoiService {
 
+    /** accessible: whether staff checked that the place is wheelchair accessible (attributes.accessible); null leaves
+     * what was recorded before unchanged (nothing, for a new POI). Search answers accessibility queries only from this
+     * (docs/search.md), never from a label or an image. */
     public record PoiData(UUID floorId, UUID spaceId, String label, String category, String description,
-                          List<String> tags, double x, double y, double z) {}
+                          List<String> tags, double x, double y, double z, Boolean accessible) {
 
+        public PoiData(UUID floorId, UUID spaceId, String label, String category, String description, List<String> tags,
+                       double x, double y, double z) {
+            this(floorId, spaceId, label, category, description, tags, x, y, z, null);
+        }
+    }
+
+    /** accessible: attributes.accessible as staff recorded it; null when nobody did. */
     public record Poi(UUID id, UUID floorId, UUID spaceId, int version, String label, String category,
                       String description, List<String> tags, double x, double y, double z, UUID coordinateFrameId,
-                      String frameStatus, UUID scanVersionId, boolean current) {}
+                      String frameStatus, UUID scanVersionId, boolean current, Boolean accessible) {}
 
     private static final String LATEST = """
             SELECT p.id, p.floor_id, p.space_id, v.version_number, v.label, v.category, v.description,
                    v.tags, v.x, v.y, v.z, v.coordinate_frame_id, v.scan_version_id,
+                   CASE WHEN jsonb_typeof(v.attributes->'accessible') = 'boolean' THEN (v.attributes->>'accessible')::boolean END AS accessible,
                    CASE WHEN v.coordinate_frame_id IS NULL THEN 'UNBOUND'
                         WHEN v.coordinate_frame_id = f.current_coordinate_frame_id THEN 'CURRENT'
                         ELSE 'STALE' END AS frame_status,
@@ -65,6 +76,7 @@ public class PoiService {
     private static final String IN_VERSION = """
             SELECT p.id, p.floor_id, p.space_id, v.version_number, v.label, v.category, v.description,
                    v.tags, v.x, v.y, v.z, v.coordinate_frame_id, v.scan_version_id,
+                   CASE WHEN jsonb_typeof(v.attributes->'accessible') = 'boolean' THEN (v.attributes->>'accessible')::boolean END AS accessible,
                    CASE WHEN v.coordinate_frame_id IS NULL THEN 'UNBOUND'
                         WHEN v.coordinate_frame_id = :frame THEN 'CURRENT'
                         ELSE 'STALE' END AS frame_status,
@@ -101,7 +113,8 @@ public class PoiService {
             rs.getObject("space_id", UUID.class), rs.getInt("version_number"), rs.getString("label"),
             rs.getString("category"), rs.getString("description"), List.of(tags),
             rs.getDouble("x"), rs.getDouble("y"), rs.getDouble("z"), rs.getObject("coordinate_frame_id", UUID.class),
-            rs.getString("frame_status"), rs.getObject("scan_version_id", UUID.class), rs.getBoolean("current"));
+            rs.getString("frame_status"), rs.getObject("scan_version_id", UUID.class), rs.getBoolean("current"),
+            rs.getObject("accessible", Boolean.class));
     }
 
     @Transactional(readOnly = true)
@@ -206,11 +219,17 @@ public class PoiService {
     }
 
     private void insertVersion(Actor actor, UUID venueId, UUID poi, int number, PoiData d) {
+        // A new version keeps the previous version's attributes (an edit of the label must not forget that staff recorded
+        // the place as accessible); accessible, when given, replaces that one attribute.
         jdbc.sql("INSERT INTO poi_version (organization_id, venue_id, poi_id, version_number, label, category, description, "
-                + "tags, x, y, z, coordinate_frame_id, scan_version_id, created_by) VALUES (:o, :v, :p, :n, :label, :cat, :desc, "
-                + "ARRAY(SELECT jsonb_array_elements_text(CAST(:tags AS jsonb))), :x, :y, :z, "
+                + "tags, x, y, z, coordinate_frame_id, scan_version_id, created_by, attributes) VALUES (:o, :v, :p, :n, :label, :cat, "
+                + ":desc, ARRAY(SELECT jsonb_array_elements_text(CAST(:tags AS jsonb))), :x, :y, :z, "
                 + "(SELECT current_coordinate_frame_id FROM floor WHERE id = CAST(:floor AS uuid)), "
-                + "floor_current_scan_version(CAST(:floor AS uuid)), :by)")
+                + "floor_current_scan_version(CAST(:floor AS uuid)), :by, "
+                + "COALESCE((SELECT attributes FROM poi_version WHERE poi_id = :p AND version_number = :n - 1), '{}'::jsonb)"
+                + " || CASE WHEN CAST(:acc AS boolean) IS NULL THEN '{}'::jsonb"
+                + "         ELSE jsonb_build_object('accessible', CAST(:acc AS boolean)) END)")
+            .param("acc", d.accessible())
             .param("o", actor.organizationId()).param("v", venueId).param("p", poi).param("n", number)
             .param("label", d.label()).param("cat", d.category()).param("desc", d.description())
             .param("tags", toJson(d.tags() == null ? List.of() : d.tags()))

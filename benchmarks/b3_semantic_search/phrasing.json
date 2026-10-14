@@ -1,0 +1,10 @@
+{
+  "name": "chaya-b3-phrasing-v1",
+  "provenance": "DERIVED MECHANICALLY on 2026-10-14 from dataset.json (unchanged) before any search result was computed with it. No new query or expected answer was written: every derived query keeps its source query's `expected` list. Templates wrap the B3 query in the sentence forms users type or say ('Where is the reception?', 'Find the nearest staircase'). The misspelling rule deletes one character mechanically. Regression/sanity only, like the rest of B3.",
+  "templates": ["where is the {q}?", "find the nearest {q}", "show me the closest {q}"],
+  "template_types": ["exact", "ambiguous", "zero_result"],
+  "misspelling": {
+    "rule": "for each query of the listed types: take its longest word (the first on a tie); if it has at least 5 letters, delete the character at index len(word) // 2; queries without such a word are skipped",
+    "types": ["exact", "ambiguous"]
+  }
+}

@@ -32,6 +32,45 @@ class PoiEmbeddingServiceTest extends AbstractIntegrationTest {
     @AfterEach
     void visionBack() {
         TestEmbeddingConfig.UNAVAILABLE.set(false);
+        TestEmbeddingConfig.REJECT.clear();
+    }
+
+    @Test
+    void aTextTheVisionServiceRefusesIsBackedOffWhileTheRestOfTheBacklogIsEmbedded() {
+        var t = fx.tree();
+        Actor a = manager(t.org(), t.venue());
+        var refused = pois.create(a, t.venue(), new PoiData(t.floor(), null, "Unembeddable", null, null, List.of(), 0, 0, 0));
+        var fine = pois.create(a, t.venue(), new PoiData(t.floor(), null, "Cloakroom", "service", null, List.of(), 1, 0, 0));
+        TestEmbeddingConfig.REJECT.add("Unembeddable");
+
+        PoiEmbeddingService.Result r = embeddings.embedPending(10_000);
+        assertThat(r.stoppedBecause()).as("a refused text does not stop the pass").isNull();
+        assertThat(r.rejected()).isGreaterThanOrEqualTo(1);
+        assertThat(version(fine.id(), 1).hasEmbedding()).as("the rest of the backlog proceeds").isTrue();
+        assertThat(version(refused.id(), 1).hasEmbedding()).isFalse();
+        UUID refusedVersion = jdbc.sql("SELECT id FROM poi_version WHERE poi_id = :p").param("p", refused.id()).query(UUID.class).single();
+        record Failure(int attempts, boolean backedOff) {}
+        java.util.function.Supplier<Failure> failure = () -> jdbc.sql(
+                "SELECT attempts, next_attempt_at > now() FROM poi_embedding_failure WHERE poi_version_id = :v")
+            .param("v", refusedVersion).query((rs, i) -> new Failure(rs.getInt(1), rs.getBoolean(2))).single();
+        assertThat(failure.get()).isEqualTo(new Failure(1, true));
+
+        // While backed off it is not asked for again.
+        embeddings.embedPending(10_000);
+        assertThat(failure.get().attempts()).isEqualTo(1);
+
+        // Once due, it is retried; refused again, the backoff grows; accepted, the failure is cleared.
+        jdbc.sql("UPDATE poi_embedding_failure SET next_attempt_at = now() - interval '1 second' WHERE poi_version_id = :v")
+            .param("v", refusedVersion).update();
+        embeddings.embedPending(10_000);
+        assertThat(failure.get()).isEqualTo(new Failure(2, true));
+        jdbc.sql("UPDATE poi_embedding_failure SET next_attempt_at = now() - interval '1 second' WHERE poi_version_id = :v")
+            .param("v", refusedVersion).update();
+        TestEmbeddingConfig.REJECT.clear();
+        embeddings.embedPending(10_000);
+        assertThat(version(refused.id(), 1).hasEmbedding()).isTrue();
+        assertThat(jdbc.sql("SELECT count(*) FROM poi_embedding_failure WHERE poi_version_id = :v").param("v", refusedVersion)
+            .query(Integer.class).single()).isZero();
     }
 
     private Actor manager(UUID org, UUID venue) {
@@ -57,14 +96,15 @@ class PoiEmbeddingServiceTest extends AbstractIntegrationTest {
     void aManuallyCreatedPoiBecomesFindableBySemanticSearchOnceEmbedded() {
         var t = fx.tree();
         Actor a = manager(t.org(), t.venue());
-        var restroom = pois.create(a, t.venue(), new PoiData(t.floor(), null, "Accessible restroom", "restroom", null,
+        var restroom = pois.create(a, t.venue(), new PoiData(t.floor(), null, "Family restroom", "restroom", null,
             List.of("toilet", "wc"), 8.5, 0, 3));
         pois.create(a, t.venue(), new PoiData(t.floor(), null, "Cafe", "food", null, List.of("coffee"), 12, 0, -4));
 
         assertThat(version(restroom.id(), 1).hasEmbedding()).isFalse();
-        SearchResponse before = search.search(a, t.venue(), "Accessible restroom, restroom, toilet, wc", null, null, null);
+        SearchResponse before = search.search(a, t.venue(), "Family restroom, restroom, toilet, wc", null, null, null);
         assertThat(before.matchType()).isEqualTo("embedding");
-        assertThat(before.results()).as("not searchable before the backfill").isEmpty();
+        assertThat(before.results()).as("not searchable by meaning before the backfill: found by name only")
+            .allSatisfy(x -> assertThat(x.indexStatus()).isEqualTo("PENDING_EMBEDDING"));
 
         PoiEmbeddingService.Result r = embeddings.embedPending(10_000);
         assertThat(r.stoppedBecause()).isNull();
@@ -73,12 +113,13 @@ class PoiEmbeddingServiceTest extends AbstractIntegrationTest {
         assertThat(row.hasEmbedding()).isTrue();
         assertThat(row.model()).isEqualTo(TestEmbeddingConfig.MODEL);
         // The exact text that was embedded: label, category, tags (deterministic test vectors make this checkable).
-        assertThat(embeddingIs(restroom.id(), 1, TestEmbeddingConfig.embedFor("Accessible restroom, restroom, toilet, wc"))).isTrue();
+        assertThat(embeddingIs(restroom.id(), 1, TestEmbeddingConfig.embedFor("Family restroom, restroom, toilet, wc"))).isTrue();
 
-        SearchResponse after = search.search(a, t.venue(), "Accessible restroom, restroom, toilet, wc", null, null, null);
+        SearchResponse after = search.search(a, t.venue(), "Family restroom, restroom, toilet, wc", null, null, null);
         assertThat(after.matchType()).isEqualTo("embedding");
         assertThat(after.results()).hasSize(2);
-        assertThat(after.results().get(0).label()).isEqualTo("Accessible restroom");
+        assertThat(after.results().get(0).label()).isEqualTo("Family restroom");
+        assertThat(after.results().get(0).indexStatus()).isEqualTo("INDEXED");
     }
 
     @Test
@@ -194,7 +235,12 @@ class PoiEmbeddingServiceTest extends AbstractIntegrationTest {
         Row currentBefore = version(current.id(), 1);
         String query = PoiEmbeddingService.embeddingText("Reception desk", null, List.of("front desk"));
         assertThat(search.search(a, t.venue(), query, null, null, null).results())
-            .as("an old-model vector is never compared with a query of the new model").extracting(r -> r.label()).doesNotContain("Reception desk");
+            .as("an old-model vector is never compared with a query of the new model: found by name at most")
+            .filteredOn(r -> r.label().equals("Reception desk"))
+            .allSatisfy(r -> {
+                assertThat(r.indexStatus()).isEqualTo("PENDING_EMBEDDING");
+                assertThat(r.relevanceMargin()).isNull();
+            });
 
         // Vision down: nothing is written.
         TestEmbeddingConfig.UNAVAILABLE.set(true);
