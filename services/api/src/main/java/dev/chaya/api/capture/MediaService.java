@@ -37,9 +37,23 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Service
 public class MediaService {
 
-    public record InitRequest(MediaKind kind, String filename, String contentType, long sizeBytes, String sha256) {}
+    /** clientFileId (optional): the id the client gave the file in its local upload queue. Opening an upload again with
+     * the same id in the same capture returns the existing upload instead of a second copy (offline capture recovery). */
+    public record InitRequest(MediaKind kind, String filename, String contentType, long sizeBytes, String sha256, UUID clientFileId) {
 
-    public record InitResult(UUID mediaId, int partSizeBytes, int totalParts) {}
+        public InitRequest(MediaKind kind, String filename, String contentType, long sizeBytes, String sha256) {
+            this(kind, filename, contentType, sizeBytes, sha256, null);
+        }
+    }
+
+    /** existing: the upload was already opened under this clientFileId; status is where it is now (PENDING to resume, or
+     * a verdict). For a new upload status is PENDING. */
+    public record InitResult(UUID mediaId, int partSizeBytes, int totalParts, boolean existing, String status) {
+
+        public InitResult(UUID mediaId, int partSizeBytes, int totalParts) {
+            this(mediaId, partSizeBytes, totalParts, false, "PENDING");
+        }
+    }
 
     public record MediaView(UUID id, MediaKind kind, MediaStatus status, String filename, String claimedContentType,
                             String detectedContentType, long sizeBytes, String sha256, String rejectionCode,
@@ -108,6 +122,12 @@ public class MediaService {
         if (!SHA256.matcher(sha).matches()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_CHECKSUM", "sha256 must be 64 lowercase hex characters");
         }
+        if (r.clientFileId() != null) {
+            InitResult known = byClientFileId(captureId, r.clientFileId(), r.sizeBytes(), sha);
+            if (known != null) {
+                return known;
+            }
+        }
         int existing = jdbc.sql("SELECT count(*) FROM capture_media WHERE capture_session_id = :c").param("c", captureId)
             .query(Integer.class).single();
         if (existing >= uploads.maxFilesPerCapture()) {
@@ -129,12 +149,12 @@ public class MediaService {
             tx.executeWithoutResult(s -> {
                 jdbc.sql("INSERT INTO capture_media (id, organization_id, venue_id, capture_session_id, kind, original_filename, "
                         + "claimed_content_type, declared_size_bytes, declared_sha256, bucket, object_key, upload_id, "
-                        + "part_size_bytes, total_parts) VALUES (:id, :o, :v, :c, :k, :f, :ct, :size, :sha, "
-                        + ":bucket, :key, :up, :ps, :tp)")
+                        + "part_size_bytes, total_parts, client_file_id) VALUES (:id, :o, :v, :c, :k, :f, :ct, :size, :sha, "
+                        + ":bucket, :key, :up, :ps, :tp, :cf)")
                     .param("id", mediaId).param("o", actor.organizationId()).param("v", venueId).param("c", captureId)
                     .param("k", r.kind().name()).param("f", filename).param("ct", claimed).param("size", r.sizeBytes())
                     .param("sha", sha).param("bucket", bucket).param("key", key).param("up", uploadId)
-                    .param("ps", partSize).param("tp", totalParts).update();
+                    .param("ps", partSize).param("tp", totalParts).param("cf", r.clientFileId()).update();
                 if (capture.status() == CaptureStatus.CREATED) {
                     jdbc.sql("UPDATE capture_session SET status = 'UPLOADING' WHERE id = :c AND status = 'CREATED'")
                         .param("c", captureId).update();
@@ -142,11 +162,37 @@ public class MediaService {
                 audit.success(actor, venueId, "media.upload_init", "capture_media", mediaId,
                     Map.of("kind", r.kind().name(), "sizeBytes", r.sizeBytes()));
             });
+        } catch (org.springframework.dao.DuplicateKeyException e) {
+            // A concurrent retry with the same clientFileId opened it first: use that one.
+            store.abortMultipart(key, uploadId);
+            InitResult known = r.clientFileId() == null ? null : byClientFileId(captureId, r.clientFileId(), r.sizeBytes(), sha);
+            if (known == null) {
+                throw e;
+            }
+            return known;
         } catch (RuntimeException e) {
             store.abortMultipart(key, uploadId);
             throw e;
         }
         return new InitResult(mediaId, partSize, totalParts);
+    }
+
+    /** The upload already opened in this capture under clientFileId, or null. The same id for other bytes is refused. */
+    private InitResult byClientFileId(UUID captureId, UUID clientFileId, long sizeBytes, String sha) {
+        record Known(UUID id, long size, String sha, int partSize, int totalParts, String status) {}
+        Known k = jdbc.sql("SELECT id, declared_size_bytes, declared_sha256, part_size_bytes, total_parts, status FROM capture_media "
+                + "WHERE capture_session_id = :c AND client_file_id = :cf")
+            .param("c", captureId).param("cf", clientFileId)
+            .query((rs, i) -> new Known(rs.getObject(1, UUID.class), rs.getLong(2), rs.getString(3), rs.getInt(4), rs.getInt(5),
+                rs.getString(6))).optional().orElse(null);
+        if (k == null) {
+            return null;
+        }
+        if (k.size() != sizeBytes || !k.sha().equals(sha)) {
+            throw new ApiException(HttpStatus.CONFLICT, "CLIENT_FILE_CONFLICT",
+                "clientFileId " + clientFileId + " already names a file with another size or checksum in this capture");
+        }
+        return new InitResult(k.id(), k.partSize(), k.totalParts(), true, k.status());
     }
 
     /** Stores one part. Idempotent: re-sending a part replaces it, which is how interrupted uploads resume. */

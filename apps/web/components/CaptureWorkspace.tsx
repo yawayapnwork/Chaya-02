@@ -11,7 +11,6 @@ import {
   type Venue,
   cancelProcessing,
   completeUpload,
-  createCapture,
   getCapture,
   getProcessing,
   listCaptures,
@@ -43,24 +42,11 @@ const WORKFLOW_LABEL: Record<ItemState, string> = {
   FAILED: "failed",
   NOT_AVAILABLE: "not available",
 };
-import { type UploadState, retryValidation, uploadFile } from "@/lib/uploader";
-import { checkFileLocally, explainCode, formatBytes } from "@/lib/upload-plan";
-
-interface FileRow {
-  key: string;
-  file: File;
-  state: UploadState;
-}
-
-const PHASE_LABEL: Record<UploadState["phase"], string> = {
-  hashing: "Computing checksum",
-  uploading: "Uploading",
-  validating: "Validating on the server",
-  accepted: "Accepted",
-  rejected: "Rejected",
-  quarantined: "Quarantined",
-  error: "Failed",
-};
+import { checkFileLocally, explainCode, kindForType } from "@/lib/upload-plan";
+import type { SessionSummary } from "@/lib/capture-queue";
+import { captureQueue, currentOwnerKey, queueStore, setQueueOwner, syncNow } from "@/lib/capture-queue-browser";
+import { type StorageStatus, requestPersistentStorage, storageStatus } from "@/lib/capture-queue-idb";
+import CaptureQueuePanel, { FileRowView } from "@/components/CaptureQueuePanel";
 
 /**
  * What this browser actually reports about the device. Nothing is inferred or filled in: camera intrinsics, lens
@@ -106,7 +92,16 @@ export default function CaptureWorkspace() {
   const [venueId, setVenueId] = useState("");
   const [floorId, setFloorId] = useState("");
   const [capture, setCapture] = useState<Capture | null>(null);
-  const [rows, setRows] = useState<FileRow[]>([]);
+  // The durable upload queue (lib/capture-queue): sessions and files are recorded on this device first, then synchronised.
+  const [summaries, setSummaries] = useState<SessionSummary[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [online, setOnline] = useState(true);
+  const [storage, setStorage] = useState<StorageStatus | null>(null);
+  const [savedElsewhere, setSavedElsewhere] = useState(0);
+  const [hashing, setHashing] = useState<{ name: string; fraction: number } | null>(null);
+  const [notices, setNotices] = useState<string[]>([]);
+  // Files chosen in this tab, by queue id: calibration marks pixels on them (the stored copy is gone once accepted).
+  const [tabFiles, setTabFiles] = useState<Map<string, File>>(new Map());
   const [processing, setProcessing] = useState<ProcessingStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -133,8 +128,17 @@ export default function CaptureWorkspace() {
       try {
         const user = await userManager().getUser();
         if (cancelled) return;
-        if (!user || user.expired) return setSignedIn(false);
+        if (!user || user.expired) {
+          // Nobody is signed in: say that sessions are waiting on this device, but nothing about whose or what.
+          setQueueOwner(null);
+          queueStore().sessionCount().then((n) => !cancelled && setSavedElsewhere(n), () => undefined);
+          return setSignedIn(false);
+        }
+        setQueueOwner(await currentOwnerKey());
         setSignedIn(true);
+        // Signing in (again) resumes whatever an expired sign-in paused.
+        await captureQueue().resumeAfterSignIn();
+        void syncNow();
         const vs = await listVenues();
         if (cancelled) return;
         setVenues(vs);
@@ -154,8 +158,46 @@ export default function CaptureWorkspace() {
     listCaptures(venueId).then((cs) => setOpenCaptures(cs.filter((c) => !["COMPLETED", "FAILED"].includes(c.status))), fail);
   }, [venueId, fail]);
 
-  // What the server holds for this capture: after a reload, interrupted uploads are resumed by choosing the same file again.
-  const settledRows = rows.filter((r) => ["accepted", "rejected", "quarantined", "error"].includes(r.state.phase)).length;
+  // The queue's state, refreshed whenever it changes (progress included), and the connection and storage status.
+  useEffect(() => {
+    if (!signedIn) return;
+    const q = captureQueue();
+    let pending = false;
+    const refresh = () => {
+      if (pending) return;
+      pending = true;
+      setTimeout(() => {
+        pending = false;
+        q.list().then(setSummaries, () => undefined);
+      }, 100);
+    };
+    refresh();
+    const unsubscribe = q.subscribe(refresh);
+    const updateOnline = () => setOnline(navigator.onLine);
+    updateOnline();
+    window.addEventListener("online", updateOnline);
+    window.addEventListener("offline", updateOnline);
+    return () => {
+      unsubscribe();
+      window.removeEventListener("online", updateOnline);
+      window.removeEventListener("offline", updateOnline);
+    };
+  }, [signedIn]);
+  const fileCount = summaries.reduce((n, s) => n + s.files.length, 0);
+  useEffect(() => {
+    storageStatus().then(setStorage, () => undefined);
+  }, [fileCount]);
+
+  const active = summaries.find((s) => s.session.localId === activeSessionId) ?? null;
+  const activeServerId = active?.session.serverCaptureId ?? null;
+  // A session recorded on this device becomes the capture on screen once the server has created it.
+  useEffect(() => {
+    if (!activeServerId || !active || captureId === activeServerId) return;
+    getCapture(active.session.venueId, activeServerId).then(setCapture, fail);
+  }, [activeServerId, active, captureId, fail]);
+
+  // What the server holds for this capture (files uploaded from elsewhere, or before this device's queue existed).
+  const settledRows = active?.files.filter((f) => ["ACCEPTED", "REJECTED", "QUARANTINED"].includes(f.state)).length ?? 0;
   useEffect(() => {
     if (!captureId || !venueOfCapture) return;
     listMedia(venueOfCapture, captureId).then(setServerMedia, fail);
@@ -193,20 +235,22 @@ export default function CaptureWorkspace() {
     return () => clearInterval(id);
   }, [captureId, venueOfCapture, captureStatus, fail]);
 
-  const patchRow = (key: string, state: UploadState) =>
-    setRows((rs) => rs.map((r) => (r.key === key ? { ...r, state } : r)));
-
+  /** Records the session on this device first; it is created on the server now if online, or when back online. */
   async function onCreate() {
     setError(null);
     setBusy(true);
     try {
-      setCapture(
-        await createCapture(venueId, {
-          floorId: floorId || undefined,
-          device: await deviceMetadata(),
-          startedAt: new Date().toISOString(),
-        }),
-      );
+      const venue = venues.find((v) => v.id === venueId);
+      const floor = floors.find((f) => f.id === floorId);
+      const s = await captureQueue().createSession({
+        venueId, venueName: venue?.name ?? venueId, floorId: floor?.id ?? null, floorName: floor?.name ?? null,
+        // What the floor publishes now; a server that predates the field leaves it unknown (no check).
+        expectedScanVersionId: floor ? floor.currentScanVersionId : undefined,
+        device: await deviceMetadata(),
+      });
+      setCapture(null);
+      setActiveSessionId(s.localId);
+      void syncNow();
     } catch (e) {
       fail(e);
     } finally {
@@ -214,8 +258,9 @@ export default function CaptureWorkspace() {
     }
   }
 
+  /** Queues the chosen files: each is checksummed, kept on this device when it fits, and uploaded by the queue. */
   async function onFiles(list: FileList | null) {
-    if (!capture || !list) return;
+    if (!active || !list) return;
     setError(null);
     const problems: string[] = [];
     const accepted: File[] = [];
@@ -225,24 +270,52 @@ export default function CaptureWorkspace() {
       else accepted.push(f);
     }
     if (problems.length) setError(problems.join("\n"));
-    const added: FileRow[] = accepted.map((file) => ({
-      key: `${file.name}-${file.size}-${crypto.randomUUID()}`,
-      file,
-      state: { phase: "hashing", progress: 0 },
-    }));
-    setRows((rs) => [...rs, ...added]);
     if (fileInput.current) fileInput.current.value = "";
-    // One file at a time keeps memory and bandwidth predictable for large videos.
-    for (const row of added) {
-      await uploadFile(capture.venueId, capture.id, row.file, (s) => patchRow(row.key, s));
+    if (accepted.length === 0) return;
+    await requestPersistentStorage();
+    try {
+      const results = await captureQueue().addFiles(
+        active.session.localId,
+        accepted.map((file) => ({ file, name: file.name, type: file.type, kind: kindForType(file.type) ?? "METADATA" })),
+        (name, fraction) => setHashing({ name, fraction }),
+      );
+      setNotices(results.filter((r) => !r.durable).map((r) => `${r.name}: ${r.reason}`));
+      // Keep this tab's File objects for calibration marking (matched to the queue's records by name and size).
+      const files = await queueStore().files(active.session.localId);
+      setTabFiles((m) => {
+        const next = new Map(m);
+        for (const file of accepted) {
+          const rec = files.find((f) => f.name === file.name && f.size === file.size && !next.has(f.localId));
+          if (rec) next.set(rec.localId, file);
+        }
+        return next;
+      });
+    } catch (e) {
+      fail(e);
+    } finally {
+      setHashing(null);
     }
+    void syncNow();
   }
 
+  /** Continues a capture the server already has. Its files are queued on this device like a new session's. */
   async function onResumeCapture(c: Capture) {
     setError(null);
     setBusy(true);
     try {
       const fresh = await getCapture(c.venueId, c.id);
+      const q = captureQueue();
+      let local = (await q.list()).find((x) => x.session.serverCaptureId === fresh.id);
+      if (!local) {
+        const floor = floors.find((f) => f.id === fresh.floorId);
+        const s = await q.createSession({
+          venueId: fresh.venueId, venueName: venues.find((v) => v.id === fresh.venueId)?.name ?? fresh.venueId,
+          floorId: fresh.floorId, floorName: floor?.name ?? null, expectedScanVersionId: undefined, device: fresh.device,
+          serverCaptureId: fresh.id,
+        });
+        local = { session: s, files: [], pending: 0, failed: 0, accepted: 0, synced: false, overdue: false };
+      }
+      setActiveSessionId(local.session.localId);
       setCapture(fresh);
       if (fresh.status === "PROCESSING") setProcessing(await getProcessing(fresh.venueId, fresh.id));
     } catch (e) {
@@ -252,17 +325,16 @@ export default function CaptureWorkspace() {
     }
   }
 
-  const localFiles = new Map(rows.filter((r) => r.state.mediaId).map((r) => [r.state.mediaId as string, r.file]));
-  const unfinishedOnServer = serverMedia.filter((m) => ["PENDING", "QUARANTINED"].includes(m.status) && !localFiles.has(m.id));
+  const activeFiles = active?.files ?? [];
+  const localFiles = new Map(
+    activeFiles.filter((f) => f.mediaId && tabFiles.has(f.localId)).map((f) => [f.mediaId as string, tabFiles.get(f.localId) as File]),
+  );
+  const queuedMediaIds = new Set(activeFiles.map((f) => f.mediaId).filter(Boolean));
+  const unfinishedOnServer = serverMedia.filter((m) => ["PENDING", "QUARANTINED"].includes(m.status) && !queuedMediaIds.has(m.id));
 
-  const resume = (row: FileRow) =>
-    capture && uploadFile(capture.venueId, capture.id, row.file, (s) => patchRow(row.key, s), row.state.mediaId);
-
-  const retry = (row: FileRow) =>
-    capture && row.state.mediaId && retryValidation(capture.venueId, capture.id, row.state.mediaId, (s) => patchRow(row.key, s));
-
-  const settled = rows.length > 0 && rows.every((r) => ["accepted", "rejected"].includes(r.state.phase));
-  const anyAccepted = rows.some((r) => r.state.phase === "accepted");
+  // Finishing needs the server's verdict on every file of the session: queued, uploading or unchecked files block it.
+  const settled = activeFiles.length > 0 && activeFiles.every((f) => ["ACCEPTED", "REJECTED"].includes(f.state));
+  const anyAccepted = activeFiles.some((f) => f.state === "ACCEPTED");
 
   // What this run has really produced (lib/workflow-status.ts). The viewer lists only published versions, so it is linked
   // only once this run is one of them, and then to exactly this run.
@@ -335,6 +407,12 @@ export default function CaptureWorkspace() {
         <h1 className="text-2xl font-semibold">Capture</h1>
         <p className="mt-2 text-zinc-600">Sign in to create a capture session and upload media.</p>
         {error && <p role="alert" className="mt-4 whitespace-pre-line text-red-700">{error}</p>}
+        {savedElsewhere > 0 && (
+          <p className="mt-4 rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900" data-testid="queue-signed-out">
+            {savedElsewhere} capture session(s) are saved on this device and have not all been uploaded. They upload after the
+            account that recorded them signs in (signing in needs a connection).
+          </p>
+        )}
         <button className="mt-6 rounded bg-black px-4 py-2 text-white" onClick={() => signIn("/capture")}>
           Sign in
         </button>
@@ -359,12 +437,30 @@ export default function CaptureWorkspace() {
         </p>
       )}
 
-      {!capture && (
+      <CaptureQueuePanel
+        queue={captureQueue()}
+        summaries={summaries}
+        online={online}
+        storage={storage}
+        onSync={() => void syncNow()}
+        onSignIn={() => void signIn("/capture")}
+        activeSessionId={activeSessionId}
+        onOpen={(s) => {
+          setCapture(null);
+          setProcessing(null);
+          setActiveSessionId(s.session.localId);
+        }}
+      />
+
+      {!capture && !active && (
         <section aria-labelledby="new-session" className="space-y-4">
           <h2 id="new-session" className="text-lg font-medium">1. New capture session</h2>
           <label className="block">
             <span className="text-sm">Venue</span>
-            <select className="mt-1 block w-full rounded border p-2" value={venueId} onChange={(e) => { setVenueId(e.target.value); setFloorId(""); setFloors([]); }}>
+            <select className="mt-1 block w-full rounded border p-2" value={venueId} onChange={(e) => {
+              if (e.target.value === venueId) return; // re-selecting the same venue keeps its floors
+              setVenueId(e.target.value); setFloorId(""); setFloors([]);
+            }}>
               <option value="">Select a venue…</option>
               {venues.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
             </select>
@@ -406,9 +502,18 @@ export default function CaptureWorkspace() {
         </section>
       )}
 
-      {capture && ["CREATED", "UPLOADING"].includes(capture.status) && (
+      {active && (!capture || ["CREATED", "UPLOADING"].includes(capture.status)) && (
         <section aria-labelledby="upload" className="space-y-4">
           <h2 id="upload" className="text-lg font-medium">2. Upload media</h2>
+          <p className="text-sm" data-testid="active-session-status">
+            {active.session.conflict
+              ? "This session needs your decision (see Uploads on this device)."
+              : !active.session.serverCaptureId
+                ? online
+                  ? "Creating the session on the server…"
+                  : "Recorded on this device. It is created on the server when you are back online."
+                : "Created on the server. Files upload as they are added."}
+          </p>
           <p className="text-sm text-zinc-600">
             Video (mp4, mov, webm, mkv), images (jpeg, png, heic) and JSON metadata. Every file is checked, scanned and
             verified by the server before it is accepted.
@@ -434,47 +539,31 @@ export default function CaptureWorkspace() {
               <p className="mt-1">Choose the same file again to resume: its checksum is matched and only the missing parts are sent.</p>
             </div>
           )}
-          <ul className="space-y-3">
-            {rows.map((r) => (
-              <li key={r.key} className="rounded border p-3">
-                <div className="flex justify-between gap-4 text-sm">
-                  <span className="truncate font-medium">{r.file.name}</span>
-                  <span className="shrink-0 text-zinc-600">{formatBytes(r.file.size)}</span>
-                </div>
-                {["hashing", "uploading"].includes(r.state.phase) && (
-                  <div className="mt-2">
-                    <div
-                      role="progressbar"
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-valuenow={Math.round(r.state.progress * 100)}
-                      aria-label={`${PHASE_LABEL[r.state.phase]} ${r.file.name}`}
-                      className="h-2 w-full overflow-hidden rounded bg-zinc-200"
-                    >
-                      <div className="h-full bg-black transition-[width]" style={{ width: `${Math.round(r.state.progress * 100)}%` }} />
-                    </div>
-                  </div>
-                )}
-                <p className="mt-1 text-sm" aria-live="polite">
-                  <span className={r.state.phase === "accepted" ? "text-green-700" : ["rejected", "error"].includes(r.state.phase) ? "text-red-700" : r.state.phase === "quarantined" ? "text-amber-700" : ""}>
-                    {PHASE_LABEL[r.state.phase]}
-                    {["hashing", "uploading"].includes(r.state.phase) && ` ${Math.round(r.state.progress * 100)}%`}
-                  </span>
-                  {r.state.message && <> — {r.state.phase === "error" ? r.state.message : explainCode(r.state.message, r.state.message)}</>}
-                </p>
-                {r.state.phase === "error" && r.state.mediaId && (
-                  <button className="mt-2 text-sm underline" onClick={() => resume(r)}>Resume upload</button>
-                )}
-                {r.state.phase === "quarantined" && (
-                  <button className="mt-2 text-sm underline" onClick={() => retry(r)}>Retry validation</button>
-                )}
-              </li>
+          {hashing && (
+            <p className="text-sm" aria-live="polite">Computing checksum of {hashing.name}: {Math.round(hashing.fraction * 100)}%</p>
+          )}
+          {notices.length > 0 && (
+            <ul role="status" className="list-disc rounded border border-amber-300 bg-amber-50 p-2 pl-6 text-sm text-amber-900" data-testid="storage-notices">
+              {notices.map((n) => <li key={n}>{n}</li>)}
+            </ul>
+          )}
+          <ul className="space-y-2" data-testid="active-files">
+            {activeFiles.map((f) => (
+              <FileRowView key={f.localId} f={f} progress={captureQueue().progress.get(f.localId)}
+                onRetry={() => void captureQueue().retryFile(f.localId, active.session.localId).then(syncNow)}
+                onDiscard={() => void captureQueue().discardFile(f.localId, active.session.localId)} />
             ))}
           </ul>
-          <button className="rounded bg-black px-4 py-2 text-white disabled:opacity-50" disabled={!settled || !anyAccepted || busy} onClick={onFinish}>
+          <button className="rounded bg-black px-4 py-2 text-white disabled:opacity-50"
+            disabled={!capture || !settled || !anyAccepted || busy} onClick={onFinish}>
             Finish upload
           </button>
-          {!settled && rows.length > 0 && <p className="text-sm text-zinc-600">Waiting for all files to be accepted or rejected.</p>}
+          {!settled && activeFiles.length > 0 && (
+            <p className="text-sm text-zinc-600">Waiting for the server to accept or reject every file.</p>
+          )}
+          <button className="ml-3 text-sm underline" onClick={() => { setActiveSessionId(null); setCapture(null); setProcessing(null); }}>
+            Back to sessions
+          </button>
         </section>
       )}
 

@@ -491,6 +491,10 @@ public class ErasureService {
         n.put("capture_media_part", u("DELETE FROM capture_media_part WHERE media_id IN " + in("media")));
         n.put("capture_media", u("DELETE FROM capture_media WHERE id IN " + in("media")));
         n.put("scan", u("DELETE FROM scan WHERE id IN " + in("scan")));
+        // An erased session is never recreated by a client that still holds it offline (V38, CaptureService#create).
+        n.put("capture_client_session_tombstone", u("INSERT INTO capture_client_session_tombstone (organization_id, operator_id, "
+            + "client_session_id) SELECT organization_id, operator_id, client_session_id FROM capture_session WHERE id IN " + C
+            + " AND client_session_id IS NOT NULL ON CONFLICT DO NOTHING"));
         n.put("capture_session", u("DELETE FROM capture_session WHERE id IN " + C));
         n.values().removeIf(v -> v == 0);
         return n;

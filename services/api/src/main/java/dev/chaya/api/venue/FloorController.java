@@ -27,7 +27,9 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/venues/{venueId}/floors")
 public class FloorController {
 
-    public record Floor(UUID id, int level, String name) {}
+    /** currentScanVersionId: the scan version the floor publishes now (null: none). A capture client records it with a
+     * session, so a session synchronised later can tell that the floor was republished meanwhile. */
+    public record Floor(UUID id, int level, String name, UUID currentScanVersionId) {}
 
     public record CreateFloor(int level, @NotBlank String name) {}
 
@@ -48,9 +50,11 @@ public class FloorController {
     public List<Floor> list(@PathVariable UUID venueId) {
         Actor actor = ActorAuthentication.currentActor();
         guard.requireVenue(actor, venueId);
-        return jdbc.sql("SELECT id, level, name FROM floor WHERE venue_id = :v AND organization_id = :o AND deleted_at IS NULL ORDER BY level")
+        return jdbc.sql("SELECT id, level, name, current_scan_version_id FROM floor WHERE venue_id = :v AND organization_id = :o "
+                + "AND deleted_at IS NULL ORDER BY level")
             .param("v", venueId).param("o", actor.organizationId())
-            .query((rs, i) -> new Floor(rs.getObject("id", UUID.class), rs.getInt("level"), rs.getString("name"))).list();
+            .query((rs, i) -> new Floor(rs.getObject("id", UUID.class), rs.getInt("level"), rs.getString("name"),
+                rs.getObject("current_scan_version_id", UUID.class))).list();
     }
 
     @Operation(summary = "Create a floor (admin, venue-manager)")
@@ -63,7 +67,7 @@ public class FloorController {
         guard.requireVenue(actor, venueId);
         Floor f = jdbc.sql("INSERT INTO floor (organization_id, venue_id, level, name) VALUES (:o, :v, :l, :n) RETURNING id, level, name")
             .param("o", actor.organizationId()).param("v", venueId).param("l", body.level()).param("n", body.name())
-            .query((rs, i) -> new Floor(rs.getObject("id", UUID.class), rs.getInt("level"), rs.getString("name"))).single();
+            .query((rs, i) -> new Floor(rs.getObject("id", UUID.class), rs.getInt("level"), rs.getString("name"), null)).single();
         audit.success(actor, venueId, "floor.create", "floor", f.id(), Map.of("level", f.level()));
         return f;
     }

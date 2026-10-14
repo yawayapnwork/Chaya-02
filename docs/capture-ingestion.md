@@ -22,9 +22,9 @@ and UI say so; nothing pretends the pipeline ran.
 
 | Call | Purpose |
 |---|---|
-| `POST /` `{floorId?, device{}, startedAt?}` | Create a session. `device` is free-form JSON (max 16 KiB); operator, venue, org come from the token |
+| `POST /` `{floorId?, device{}, startedAt?, clientSessionId?, expectedScanVersion?}` | Create a session. `device` is free-form JSON (max 16 KiB); operator, venue, org come from the token. With `clientSessionId`, a repeat by the same operator returns the existing session (200 instead of 201); see "Offline capture" |
 | `GET /`, `GET /{id}` | List / inspect (status, device, start, end, duration, quality state, media counts) |
-| `POST /{id}/media` `{kind, filename, contentType, sizeBytes, sha256}` | Open an upload. Returns `mediaId`, `partSizeBytes`, `totalParts` |
+| `POST /{id}/media` `{kind, filename, contentType, sizeBytes, sha256, clientFileId?}` | Open an upload. Returns `mediaId`, `partSizeBytes`, `totalParts`, `existing`, `status`. With `clientFileId`, a repeat returns the same upload (200) with its current status |
 | `PUT /{id}/media/{m}/parts/{n}` raw body, optional `X-Part-Sha256` | Send one part. Exactly `partSizeBytes` (last part: the remainder). Idempotent |
 | `GET /{id}/media/{m}` | Status and which parts the server holds (resume) |
 | `POST /{id}/media/{m}/complete` | Assemble and start asynchronous validation. Also retries a `QUARANTINED` file |
@@ -116,8 +116,114 @@ Accepted images record their decoded size (`pixelWidth`/`pixelHeight`, read from
 video and HEIC). Calibration measurements and the pixels they are marked at are recorded with the capture:
 [capture-calibration.md](capture-calibration.md).
 
+## Offline capture and the local upload queue
+
+The capture page records a session and its files **on the device first** and synchronises them with the server, so a
+lost connection, a closed tab or a browser restart never loses what was captured, and nothing is ever shown as uploaded
+before the server says so. Code: `apps/web/lib/capture-queue.ts` (the queue and its rules),
+`lib/capture-queue-idb.ts` (storage), `lib/capture-queue-browser.ts` (wiring), `components/CaptureQueuePanel.tsx` (UI).
+
+**Platform.** The only capture client is the web app (`apps/ios-ar` is AR navigation and uploads nothing), so the durable
+store is the browser's **IndexedDB**: sessions, files and the media bytes themselves (as Blobs). No SQLite, no
+localStorage. A native capture client, if one is added, would use its platform's durable store (e.g. Core Data or files
+in Application Support on iOS) with the same server contract.
+
+**What is stored.** Per session: the client ids, owner, venue and floor (ids and names), device metadata, start time, the
+floor's published scan version when recorded, the server's capture id once known, and any conflict. Per file: name,
+type, size, SHA-256, the server's media id, state, attempts and the last error. Media bytes are kept only until the server
+has **accepted** the file, then deleted from the device. **No token is ever stored**: requests use the in-memory sign-in
+(`lib/auth.ts`); a test reads the whole database and finds none.
+
+**Storage limits.** Before a file is stored, the browser's estimate (`navigator.storage.estimate`) must leave the file plus
+64 MiB free, and the browser can still refuse (`QuotaExceededError`). A file that cannot be stored is held by the page
+only, uploads while the page stays open, and is marked "Not saved on this device". The page asks for persistent storage
+(`navigator.storage.persist`) and shows whether the browser granted it; without it the browser may evict the queue
+under storage pressure.
+
+**Identity.** Every record carries its owner (OIDC issuer and subject). Only the signed-in account's records are listed,
+opened or synchronised; signed out, the page only says how many sessions are waiting, never whose or what. On the server,
+`clientSessionId` is scoped to the operator, and venue access is checked on every request, so one account's queued data
+cannot be synchronised under another identity or into a venue the account cannot see.
+
+**Synchronisation.** One tab synchronises at a time (Web Locks, where available). Per session: create it on the server
+(idempotent by `clientSessionId`), then per file, one at a time:
+
+1. re-hash the stored copy; a copy that no longer matches the SHA-256 taken when the file was added, or is missing
+   (evicted, or held by a page that closed), is `CORRUPTED` and **never sent**;
+2. open the upload (idempotent by `clientFileId`: a retry after a lost answer gets the same upload, or its verdict);
+3. ask which parts the server has and send only the missing ones, each with its own `X-Part-Sha256`;
+4. complete, then poll until the server's verdict. `ACCEPTED` is the only success state. `REJECTED` and `QUARANTINED`
+   are shown as such; a quarantined file can have its validation retried.
+
+Recoverable failures (no answer, 5xx, 408, 429) wait `1 s × 2^(attempt−1)`, capped at 60 s, minus up to 50 % jitter, at
+most 8 attempts; then the file is `FAILED` until the user retries it. Time spent offline costs no attempt; the queue
+resumes on the browser's `online` event. A request refused by the server's rules (type, size) is a rejection, not a retry.
+
+**Expired sign-in.** A 401, or no token the silent renewal can get, pauses the session (`Sign in to continue`) with every
+file left as it was and no attempt used. After signing in again (which needs a connection), the queue resumes.
+
+**Conflicts.** These stop the session and keep all local data until the user chooses:
+
+| Conflict | Detected by | User's choices |
+|---|---|---|
+| Venue deleted, or access lost | 404/403, and the venue missing from `GET /venues` | Check again, or discard |
+| Floor deleted | 404 when the session is created | Discard |
+| Capture session gone | 404 on the capture while the venue is visible | Upload into a new session, or discard |
+| Session closed elsewhere | 409 `CAPTURE_NOT_ACCEPTING_UPLOADS` | Upload into a new session, or discard |
+| Capture **erased** | 410 `CAPTURE_ERASED` | Discard only: an erased capture is never uploaded again |
+| Floor republished since recording | 409 `SCAN_VERSION_CHANGED` (the session sent `expectedScanVersion`) | Upload anyway, or discard |
+| Client id reused for other data | 409 `CLIENT_SESSION_CONFLICT` / `CLIENT_FILE_CONFLICT` | Upload into a new session, or discard |
+
+**Server side (V38).**
+- `capture_session.client_session_id` is unique per organization and operator. A repeat returns the existing session; the
+  same id for another venue or floor is `409 CLIENT_SESSION_CONFLICT`. Concurrent repeats create one session.
+- `capture_media.client_file_id` is unique per capture. A repeat returns the existing upload; the same id for other bytes
+  is `409 CLIENT_FILE_CONFLICT`. Concurrent repeats open one upload.
+- `expectedScanVersion` is checked only when a session is first created. `GET /floors` now returns each floor's
+  `currentScanVersionId`.
+- Erasure writes a `capture_client_session_tombstone` (organization, operator subject, the client's random id; nothing
+  about the capture) so the erased session cannot be recreated (`410 CAPTURE_ERASED`).
+
+**Retention on the device.** Accepted files' bytes are deleted at once; a synchronised session can be removed from the
+list (the server keeps it). Unsynchronised sessions older than 14 days are flagged so the user uploads or discards them.
+They are never deleted automatically, because they may be the only copy. A capture erased on the server is never
+re-uploaded.
+
+### Offline recovery: what was verified, and where
+
+| Behaviour | Real browser (Chromium, Playwright `e2e/capture-offline.spec.ts`) | Unit (`lib/capture-queue.test.ts`) | Real server (`CaptureOfflineRecoveryTest`) |
+|---|---|---|---|
+| Offline recording, saved-locally status, nothing sent | yes (browser offline mode) | yes | – |
+| Browser restart (new page, same profile), sign in, automatic upload | yes | yes (new queue on the same store) | – |
+| Network drop mid-upload, only missing parts re-sent | yes (connection reset on part 2) | yes | yes (partial parts, repeated part) |
+| Lost answer: no duplicate session or file | yes | yes | yes, including concurrent repeats |
+| Expired sign-in pauses, resumes after sign-in | yes (401) | yes | yes (expired JWT refused) |
+| Insufficient storage | yes (emulated `storage.estimate`) | yes (estimate and `QuotaExceededError`) | – |
+| Corrupted local media never sent | yes (IndexedDB blob altered) | yes | – |
+| Server rejection shown as rejection | yes | yes (verdict and refused claim) | – |
+| Bounded backoff, retry control | yes (503 then "Retry now") | yes (delays, cap, 8 attempts) | – |
+| Deleted venue, scan-version change, erased capture | yes (venue, scan version) | yes (all conflicts) | yes (scan version, erasure tombstone, lost venue access) |
+| No credential in the queue | yes (whole IndexedDB, localStorage, sessionStorage) | yes | – |
+
+The browser specs run the real page, the real IndexedDB store, real SHA-256 and real XHR uploads against a **stateful
+mock** of the capture API (`e2e/capture-fixture.ts`). The server's own guarantees are tested separately against real
+PostgreSQL and MinIO.
+
+**Still environment-dependent, not verified here:**
+- Other browsers. Only Chromium was run: Safari/iOS (IndexedDB Blob storage, eviction after 7 days without use, quota
+  prompts) and Firefox are untested.
+- Real storage pressure and eviction. The "too little storage" case emulates the browser's estimate; a real full disk,
+  and the browser evicting non-persistent storage, were not produced. Whether `persist()` is granted depends on the
+  browser's heuristics.
+- A real device losing its radio, and very large videos (multi-GB re-hashing before upload takes time and battery).
+  The tests use kilobyte files.
+- Real Keycloak session expiry and silent-renew failure. The tests use 401 responses and a mock OIDC provider.
+- The full stack (real API + Keycloak + MinIO + ClamAV) driven by the browser queue.
+- Two tabs synchronising at once. The Web Locks guard and server idempotency are in place, but no test opens two tabs.
+
 ## What is verified
 - `mvn verify`: real PostgreSQL + real MinIO in Testcontainers, real files (PNG/JPEG via ImageIO, MP4-signature fixtures, JSON). The malware scanner is replaced by a stand-in only in those tests.
 - The production clamd client against a fake daemon (protocol) and, on demand, a real ClamAV container (`ClamAvLiveTest`).
 - The built jar run against real Postgres, MinIO, ClamAV and Keycloak with a script (token from Keycloak, 3-part video, EICAR, disguised executable, checksum, complete, processing).
-- Not verified: the browser UI in an actual browser (lint, typecheck, unit tests and production build only).
+- The capture page's offline queue in a real browser (Chromium): "Offline recovery: what was verified" above. The rest of
+  the capture page has not been driven in a browser.

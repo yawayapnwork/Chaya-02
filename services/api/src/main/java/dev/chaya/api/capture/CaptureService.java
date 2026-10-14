@@ -20,6 +20,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
@@ -90,7 +91,44 @@ public class CaptureService {
     }
 
     public CaptureView create(Actor actor, UUID venueId, UUID floorId, Map<String, Object> device, Instant startedAt) {
+        return create(actor, venueId, floorId, device, startedAt, null, null).capture();
+    }
+
+    /** The floor's published scan version the client saw when it recorded the session: versionId null means "none". */
+    public record ExpectedScanVersion(UUID versionId) {}
+
+    /** replayed: the session already existed under this clientSessionId and is returned, not created again. */
+    public record Created(CaptureView capture, boolean replayed) {}
+
+    /**
+     * Creates a session, idempotently when the client names it (docs/capture-ingestion.md, "Offline capture"):
+     * <ul>
+     *   <li>clientSessionId: the id the client recorded the session under (possibly offline). The same operator creating
+     *       a session with the same id again gets the existing one back ({@code replayed}), so a retry after a lost answer
+     *       never makes a second session. Reusing the id for another venue or floor is 409 CLIENT_SESSION_CONFLICT.</li>
+     *   <li>expectedScanVersion: the floor's published scan version when the client recorded the session. If the floor
+     *       publishes another one now, creation is refused with 409 SCAN_VERSION_CHANGED, so the operator decides
+     *       explicitly whether to continue. Checked only when a session is first created, never on a replay.</li>
+     *   <li>A session that was erased is never created again under its clientSessionId: 410 CAPTURE_ERASED (V38).</li>
+     * </ul>
+     */
+    public Created create(Actor actor, UUID venueId, UUID floorId, Map<String, Object> device, Instant startedAt,
+                          UUID clientSessionId, ExpectedScanVersion expectedScanVersion) {
         guard.requireVenue(actor, venueId);
+        if (clientSessionId != null) {
+            boolean erased = jdbc.sql("SELECT EXISTS (SELECT 1 FROM capture_client_session_tombstone WHERE organization_id = :o "
+                    + "AND operator_id = :op AND client_session_id = :cs)")
+                .param("o", actor.organizationId()).param("op", actor.subject()).param("cs", clientSessionId)
+                .query(Boolean.class).single();
+            if (erased) {
+                throw new ApiException(HttpStatus.GONE, "CAPTURE_ERASED", "the capture session recorded under clientSessionId "
+                    + clientSessionId + " was erased; it is not created again");
+            }
+            CaptureView existing = byClientSessionId(actor, clientSessionId, venueId, floorId);
+            if (existing != null) {
+                return new Created(existing, true);
+            }
+        }
         if (floorId != null && jdbc.sql("SELECT count(*) FROM floor WHERE id = :f AND venue_id = :v AND deleted_at IS NULL")
                 .param("f", floorId).param("v", venueId).query(Integer.class).single() == 0) {
             throw new NotFoundException("floor not found");
@@ -104,15 +142,55 @@ public class CaptureService {
         if (started.isAfter(Instant.now().plus(Duration.ofMinutes(5)))) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_START_TIME", "startedAt is in the future");
         }
-        UUID id = tx.execute(s -> {
-            UUID created = jdbc.sql("INSERT INTO capture_session (organization_id, venue_id, floor_id, operator_id, device, started_at) "
-                    + "VALUES (:o, :v, :f, :op, CAST(:d AS jsonb), :s) RETURNING id")
-                .param("o", actor.organizationId()).param("v", venueId).param("f", floorId).param("op", actor.subject())
-                .param("d", deviceJson).param("s", Timestamp.from(started)).query(UUID.class).single();
-            audit.success(actor, venueId, "capture.create", "capture_session", created, Map.of());
-            return created;
-        });
-        return get(actor, venueId, id);
+        if (expectedScanVersion != null && floorId != null) {
+            UUID current = jdbc.sql("SELECT current_scan_version_id FROM floor WHERE id = :f").param("f", floorId)
+                .query((rs, i) -> rs.getObject(1, UUID.class)).single();
+            if (!java.util.Objects.equals(current, expectedScanVersion.versionId())) {
+                throw new ApiException(HttpStatus.CONFLICT, "SCAN_VERSION_CHANGED", "the floor's published scan version is now "
+                    + (current == null ? "none" : current) + ", not " + (expectedScanVersion.versionId() == null ? "none"
+                        : expectedScanVersion.versionId()) + " as when this session was recorded; confirm to continue");
+            }
+        }
+        UUID id;
+        try {
+            id = tx.execute(s -> {
+                UUID created = jdbc.sql("INSERT INTO capture_session (organization_id, venue_id, floor_id, operator_id, device, "
+                        + "started_at, client_session_id) VALUES (:o, :v, :f, :op, CAST(:d AS jsonb), :s, :cs) RETURNING id")
+                    .param("o", actor.organizationId()).param("v", venueId).param("f", floorId).param("op", actor.subject())
+                    .param("d", deviceJson).param("s", Timestamp.from(started)).param("cs", clientSessionId)
+                    .query(UUID.class).single();
+                audit.success(actor, venueId, "capture.create", "capture_session", created,
+                    clientSessionId == null ? Map.of() : Map.of("clientSessionId", clientSessionId.toString()));
+                return created;
+            });
+        } catch (DuplicateKeyException e) {
+            // A concurrent retry of the same request created it first.
+            CaptureView existing = byClientSessionId(actor, clientSessionId, venueId, floorId);
+            if (existing == null) {
+                throw e;
+            }
+            return new Created(existing, true);
+        }
+        return new Created(get(actor, venueId, id), false);
+    }
+
+    /** The operator's session recorded under clientSessionId, or null. Refuses an id already used for another venue or
+     * floor (the client reused an id, or replays a request it changed). */
+    private CaptureView byClientSessionId(Actor actor, UUID clientSessionId, UUID venueId, UUID floorId) {
+        record Owner(UUID id, UUID venue, UUID floor) {}
+        Owner o = jdbc.sql("SELECT id, venue_id, floor_id FROM capture_session WHERE organization_id = :o AND operator_id = :op "
+                + "AND client_session_id = :cs")
+            .param("o", actor.organizationId()).param("op", actor.subject()).param("cs", clientSessionId)
+            .query((rs, i) -> new Owner(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class), rs.getObject(3, UUID.class)))
+            .optional().orElse(null);
+        if (o == null) {
+            return null;
+        }
+        if (!o.venue().equals(venueId) || !java.util.Objects.equals(o.floor(), floorId)) {
+            throw new ApiException(HttpStatus.CONFLICT, "CLIENT_SESSION_CONFLICT",
+                "clientSessionId " + clientSessionId + " already names a session of another venue or floor");
+        }
+        return get(actor, venueId, o.id());
     }
 
     public CaptureView get(Actor actor, UUID venueId, UUID captureId) {

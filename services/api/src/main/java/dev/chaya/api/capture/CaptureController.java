@@ -23,6 +23,7 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -32,7 +33,14 @@ import org.springframework.web.bind.annotation.RestController;
 @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR')")
 public class CaptureController {
 
-    public record CreateCapture(UUID floorId, Map<String, Object> device, Instant startedAt) {}
+    /** clientSessionId and expectedScanVersion: see CaptureService#create (offline capture recovery). */
+    public record CreateCapture(UUID floorId, Map<String, Object> device, Instant startedAt, UUID clientSessionId,
+                                CaptureService.ExpectedScanVersion expectedScanVersion) {
+
+        public CreateCapture(UUID floorId, Map<String, Object> device, Instant startedAt) {
+            this(floorId, device, startedAt, null, null);
+        }
+    }
 
     public record CompleteUpload(Instant endedAt, Double durationSeconds) {}
 
@@ -44,12 +52,16 @@ public class CaptureController {
         this.media = media;
     }
 
-    @Operation(summary = "Create a capture session (status CREATED)")
+    @Operation(summary = "Create a capture session (status CREATED)",
+            description = "201 when created; 200 with the existing session when the same operator repeats a clientSessionId.")
+    @ProblemResponse(status = 409, description = "CLIENT_SESSION_CONFLICT, SCAN_VERSION_CHANGED")
+    @ProblemResponse(status = 410, description = "CAPTURE_ERASED: the session recorded under this clientSessionId was erased")
     @PostMapping
-    @ResponseStatus(HttpStatus.CREATED)
-    public CaptureView create(@PathVariable UUID venueId, @RequestBody(required = false) CreateCapture body) {
+    public ResponseEntity<CaptureView> create(@PathVariable UUID venueId, @RequestBody(required = false) CreateCapture body) {
         CreateCapture b = body == null ? new CreateCapture(null, null, null) : body;
-        return captures.create(ActorAuthentication.currentActor(), venueId, b.floorId(), b.device(), b.startedAt());
+        CaptureService.Created c = captures.create(ActorAuthentication.currentActor(), venueId, b.floorId(), b.device(), b.startedAt(),
+            b.clientSessionId(), b.expectedScanVersion());
+        return ResponseEntity.status(c.replayed() ? HttpStatus.OK : HttpStatus.CREATED).body(c.capture());
     }
 
     @Operation(summary = "List capture sessions")
@@ -70,11 +82,12 @@ public class CaptureController {
     @ProblemResponse(status = 413, description = "FILE_TOO_LARGE: larger than the limit for its kind, or "
             + "DEVICE_METADATA_TOO_LARGE")
     @ProblemResponse(status = 415, description = "UNSUPPORTED_MEDIA_TYPE: content type not allowed")
+    @ProblemResponse(status = 409, description = "CLIENT_FILE_CONFLICT: clientFileId already names another file")
     @PostMapping("/{captureId}/media")
-    @ResponseStatus(HttpStatus.CREATED)
-    public MediaService.InitResult initMedia(@PathVariable UUID venueId, @PathVariable UUID captureId,
-                                             @RequestBody MediaService.InitRequest body) {
-        return media.init(ActorAuthentication.currentActor(), venueId, captureId, body);
+    public ResponseEntity<MediaService.InitResult> initMedia(@PathVariable UUID venueId, @PathVariable UUID captureId,
+                                                             @RequestBody MediaService.InitRequest body) {
+        MediaService.InitResult r = media.init(ActorAuthentication.currentActor(), venueId, captureId, body);
+        return ResponseEntity.status(r.existing() ? HttpStatus.OK : HttpStatus.CREATED).body(r);
     }
 
     @Operation(summary = "List capture artifacts")

@@ -45,6 +45,7 @@ There are no thumbnails. Neither the API nor the worker generates any. The viewe
 | Table(s) | Content | Capture / version erasure | Venue erasure |
 |---|---|---|---|
 | `capture_session` | operator subject, device, timings, re-scan region | deleted | deleted |
+| `capture_client_session_tombstone` (V38) | operator subject and the client's random session id, nothing else | **written**, so an offline client cannot recreate the erased session (410 `CAPTURE_ERASED`) | written |
 | `capture_media`, `capture_media_part` | **original filename**, checksums, object key | deleted | deleted |
 | `capture_measurement`, `capture_measurement_observation` | calibration measurements, their creator, and the pixels they were marked at | deleted | deleted |
 | `capture_calibration_attempt`, `coordinate_frame_measurement` | calibration attempts and frame-to-measurement links | deleted (also when only the frame or run is erased) | deleted |

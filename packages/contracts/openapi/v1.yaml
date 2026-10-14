@@ -1130,6 +1130,8 @@ paths:
       - VENUE_MANAGER
       - OPERATOR
     post:
+      description: 201 when created; 200 with the existing session when the same operator
+        repeats a clientSessionId.
       operationId: captureCreate
       parameters:
       - in: path
@@ -1144,12 +1146,12 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateCapture"
       responses:
-        "201":
+        "200":
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/CaptureView"
-          description: Created
+          description: OK
         "400":
           content:
             application/problem+json:
@@ -1174,6 +1176,19 @@ paths:
                 $ref: "#/components/schemas/Problem"
           description: "Not found, or not visible to the caller's organization or\
             \ venue (code NOT_FOUND)"
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "CLIENT_SESSION_CONFLICT, SCAN_VERSION_CHANGED"
+        "410":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "CAPTURE_ERASED: the session recorded under this clientSessionId\
+            \ was erased"
         "429":
           content:
             application/problem+json:
@@ -2947,12 +2962,12 @@ paths:
               $ref: "#/components/schemas/InitRequest"
         required: true
       responses:
-        "201":
+        "200":
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/InitResult"
-          description: Created
+          description: OK
         "400":
           content:
             application/problem+json:
@@ -2982,7 +2997,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
-          description: "CAPTURE_NOT_ACCEPTING_UPLOADS, TOO_MANY_FILES"
+          description: "CLIENT_FILE_CONFLICT: clientFileId already names another file"
         "413":
           content:
             application/problem+json:
@@ -8285,9 +8300,14 @@ components:
     CreateCapture:
       type: object
       properties:
+        clientSessionId:
+          type: string
+          format: uuid
         device:
           type: object
           additionalProperties: {}
+        expectedScanVersion:
+          $ref: "#/components/schemas/ExpectedScanVersion"
         floorId:
           type: string
           format: uuid
@@ -8649,6 +8669,12 @@ components:
           minLength: 1
       required:
       - secret
+    ExpectedScanVersion:
+      type: object
+      properties:
+        versionId:
+          type: string
+          format: uuid
     FailRequest:
       type: object
       properties:
@@ -8743,6 +8769,9 @@ components:
     Floor:
       type: object
       properties:
+        currentScanVersionId:
+          type: string
+          format: uuid
         id:
           type: string
           format: uuid
@@ -9096,6 +9125,9 @@ components:
     InitRequest:
       type: object
       properties:
+        clientFileId:
+          type: string
+          format: uuid
         contentType:
           type: string
         filename:
@@ -9114,12 +9146,16 @@ components:
     InitResult:
       type: object
       properties:
+        existing:
+          type: boolean
         mediaId:
           type: string
           format: uuid
         partSizeBytes:
           type: integer
           format: int32
+        status:
+          type: string
         totalParts:
           type: integer
           format: int32

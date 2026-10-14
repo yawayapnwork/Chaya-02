@@ -17,7 +17,8 @@ export class ApiError extends Error {
 }
 
 export interface Venue { id: string; name: string; slug: string }
-export interface Floor { id: string; level: number; name: string }
+/** currentScanVersionId: the scan version the floor publishes now (null: none); recorded with an offline session. */
+export interface Floor { id: string; level: number; name: string; currentScanVersionId?: string | null }
 export interface Capture {
   id: string;
   venueId: string;
@@ -51,7 +52,8 @@ export interface MediaItem {
   partSizeBytes: number;
   uploadedParts: number[];
 }
-export interface InitResult { mediaId: string; partSizeBytes: number; totalParts: number }
+/** existing: the upload was already opened under the request's clientFileId (status: where it is now). */
+export interface InitResult { mediaId: string; partSizeBytes: number; totalParts: number; existing?: boolean; status?: string }
 export interface JobItem {
   id: string;
   stage: string;
@@ -142,7 +144,13 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 export const listVenues = () => api<Venue[]>("/venues");
 export const listFloors = (venueId: string) => api<Floor[]>(`/venues/${venueId}/floors`);
 
-export const createCapture = (venueId: string, body: { floorId?: string; device: Record<string, unknown>; startedAt: string }) =>
+export const createCapture = (venueId: string, body: {
+  floorId?: string; device: Record<string, unknown>; startedAt: string;
+  /** Idempotency: the same operator repeating it gets the same session back (offline queue, lib/capture-queue). */
+  clientSessionId?: string;
+  /** Refused with SCAN_VERSION_CHANGED when the floor now publishes another version. */
+  expectedScanVersion?: { versionId: string | null };
+}) =>
   api<Capture>(`/venues/${venueId}/captures`, { method: "POST", body: JSON.stringify(body) });
 
 export const listCaptures = (venueId: string) => api<Capture[]>(`/venues/${venueId}/captures`);
@@ -156,7 +164,7 @@ export const getCapture = (venueId: string, captureId: string) =>
 export const initMedia = (
   venueId: string,
   captureId: string,
-  body: { kind: MediaKind; filename: string; contentType: string; sizeBytes: number; sha256: string },
+  body: { kind: MediaKind; filename: string; contentType: string; sizeBytes: number; sha256: string; clientFileId?: string },
 ) => api<InitResult>(`/venues/${venueId}/captures/${captureId}/media`, { method: "POST", body: JSON.stringify(body) });
 
 export const getMedia = (venueId: string, captureId: string, mediaId: string) =>
