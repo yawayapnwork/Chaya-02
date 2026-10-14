@@ -279,6 +279,56 @@ public class RouteService {
         };
     }
 
+    /** One floor in the floor-transition graph. routable: the floor has a navigation graph this profile can route on (if
+     * not, problem says why). */
+    public record FloorNode(UUID floorId, int level, String name, boolean routable, String problem) {}
+
+    /** A usable direction of a registered connection for the profile. */
+    public record FloorEdge(UUID connectionId, String connectorType, UUID fromFloorId, UUID toFloorId) {}
+
+    /** The venue's floors as routing sees them for one profile: which connections it may use, which it may not and why,
+     * and which floors are connected (components: floors mutually reachable through usable connections). */
+    public record FloorTransitionGraph(String accessibilityProfile, List<FloorNode> floors, List<FloorEdge> edges,
+                                       List<String> unusableConnections, List<List<UUID>> components) {}
+
+    /** The floor-transition graph RouteService routes over (the same usableHops rules), for the venue's live floors. */
+    @Transactional(readOnly = true)
+    public FloorTransitionGraph floorTransitionGraph(Actor actor, UUID venueId, String accessibility) {
+        guard.requireVenue(actor, venueId);
+        String profile = normalizeProfile(accessibility);
+        List<String> problems = new ArrayList<>();
+        List<Hop> hops = usableHops(actor.organizationId(), venueId, profile, problems);
+        record F(UUID id, int level, String name) {}
+        List<F> floors = jdbc.sql("SELECT id, level, name FROM floor WHERE venue_id = :v AND organization_id = :o AND deleted_at IS NULL "
+                + "ORDER BY level").param("v", venueId).param("o", actor.organizationId())
+            .query((rs, i) -> new F(rs.getObject(1, UUID.class), rs.getInt(2), rs.getString(3))).list();
+        List<FloorNode> nodes = new ArrayList<>();
+        for (F f : floors) {
+            String problem = notReadyReason(venueId, f.id(), profile);
+            nodes.add(new FloorNode(f.id(), f.level(), f.name(), problem == null, problem));
+        }
+        List<FloorEdge> edges = hops.stream().map(h -> new FloorEdge(h.connection().id(), h.connection().connectorType(), h.fromFloor(),
+            h.toFloor())).toList();
+        // Components of mutual reachability (a one-way connection alone does not join two floors).
+        List<List<UUID>> components = new ArrayList<>();
+        Set<UUID> placed = new HashSet<>();
+        for (F f : floors) {
+            if (placed.contains(f.id())) {
+                continue;
+            }
+            List<UUID> component = new ArrayList<>();
+            for (F g : floors) {
+                if (!placed.contains(g.id()) && (g.id().equals(f.id())
+                    || (floorsConnected(hops, f.id(), g.id()) && floorsConnected(hops, g.id(), f.id())))) {
+                    component.add(g.id());
+                    placed.add(g.id());
+                }
+            }
+            components.add(component);
+        }
+        return new FloorTransitionGraph(profile, nodes, edges, problems, components);
+    }
+
     /** How the graph cache has been used since start: lookups served from memory, lookups that read the database. */
     public record GraphCacheStats(long hits, long misses, int size) {}
 

@@ -18,7 +18,15 @@ export class ApiError extends Error {
 
 export interface Venue { id: string; name: string; slug: string }
 /** currentScanVersionId: the scan version the floor publishes now (null: none); recorded with an offline session. */
-export interface Floor { id: string; level: number; name: string; currentScanVersionId?: string | null }
+/** A floor's recorded elevation above the venue's elevation reference: measured or surveyed, never estimated. */
+export interface FloorElevation {
+  elevationM: number;
+  source: "SURVEYED" | "MEASURED_ON_SITE";
+  reference: string | null;
+  recordedBy: string;
+  recordedAt: string;
+}
+export interface Floor { id: string; level: number; name: string; currentScanVersionId?: string | null; elevation?: FloorElevation | null }
 export interface Capture {
   id: string;
   venueId: string;
@@ -143,6 +151,25 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export const listVenues = () => api<Venue[]>("/venues");
 export const listFloors = (venueId: string) => api<Floor[]>(`/venues/${venueId}/floors`);
+export const createFloor = (venueId: string, body: { level: number; name: string }) =>
+  api<Floor>(`/venues/${venueId}/floors`, { method: "POST", body: JSON.stringify(body) });
+export const updateFloor = (venueId: string, floorId: string, body: { level: number; name: string }) =>
+  api<Floor>(`/venues/${venueId}/floors/${floorId}`, { method: "PUT", body: JSON.stringify(body) });
+export const setFloorElevation = (venueId: string, floorId: string, body: { elevationM: number; source: string; reference?: string }) =>
+  api<Floor>(`/venues/${venueId}/floors/${floorId}/elevation`, { method: "PUT", body: JSON.stringify(body) });
+export const clearFloorElevation = (venueId: string, floorId: string) =>
+  api<Floor>(`/venues/${venueId}/floors/${floorId}/elevation`, { method: "DELETE" });
+export const deleteFloor = (venueId: string, floorId: string) =>
+  api<void>(`/venues/${venueId}/floors/${floorId}`, { method: "DELETE" });
+
+/** Mirrors dev.chaya.api.venue.FloorService.ConsistencyReport. */
+export interface FloorConsistencyReport {
+  floors: { floorId: string; level: number; name: string; elevation: FloorElevation | null; horizontalDatum: string | null; canonicalFrame: boolean }[];
+  pairs: { fromFloorId: string; toFloorId: string; connectionId: string; alignment: "CONSISTENT" | "INCONSISTENT" | "NOT_COMPARABLE"; detail: string }[];
+  findings: { connectionId: string | null; code: string; severity: "OK" | "WARNING" | "ERROR"; detail: string }[];
+  consistent: boolean;
+}
+export const getFloorConsistency = (venueId: string) => api<FloorConsistencyReport>(`/venues/${venueId}/floors/consistency`);
 
 export const createCapture = (venueId: string, body: {
   floorId?: string; device: Record<string, unknown>; startedAt: string;

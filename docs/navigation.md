@@ -246,6 +246,57 @@ floor's graph. `navigation_edge` can never span two `graph_id`s anyway (its fore
   GPU and Open3D (docs/E2E_VALIDATION.md). Nothing here shows routing quality on real scans: label quality, point
   density on floors and stairs, and reconstruction height noise against `navmesh_step_min_rise_m` are all unmeasured.
 
+## Floors: `/api/v1/venues/{venueId}/floors`
+
+`dev.chaya.api.venue.FloorService`. A floor is what captures, scan versions, POIs, navigation graphs and floor
+connections are recorded against. A capture names its floor when it is created (`floorId`), and its run and scan version
+belong to that floor.
+
+| Call | Who | What |
+|---|---|---|
+| `GET /floors` | any role | Live floors by level, with `currentScanVersionId` and `elevation` (or null) |
+| `POST /floors` `{level, name}` | admin, venue-manager | Create. A level is unique among live floors (`409 FLOOR_LEVEL_TAKEN`) |
+| `PUT /floors/{id}` `{level, name}` | admin, venue-manager | Rename or re-level, refused if the new level contradicts recorded elevations |
+| `PUT /floors/{id}/elevation` `{elevationM, source, reference?}` | admin, venue-manager | Record the floor's elevation |
+| `DELETE /floors/{id}/elevation` | admin, venue-manager | Withdraw it: the elevation is unknown again |
+| `DELETE /floors/{id}` | admin, venue-manager | Soft-delete a floor nothing relies on. `409 FLOOR_IN_USE` while it publishes a scan version, a connection lands on it, or a capture of it is in progress. Its level becomes free |
+| `GET /floors/consistency` | admin, venue-manager, operator | The consistency report (below) |
+
+**Elevation is never measured or estimated by Chaya.** Each floor is reconstructed and calibrated on its own, so how high
+one floor is above another is not something the system observes. V39 stores what staff record: `elevationM` above the
+venue's elevation reference, `source` `SURVEYED` or `MEASURED_ON_SITE`, a free-text `reference` (what 0 m is), and who
+recorded it and when. Unknown stays null; the viewer and capture pages show "elevation not recorded".
+
+**Recorded values are checked against each other when written** (`FloorGeometry`); a contradiction is refused with 400
+rather than stored:
+- levels and elevations must agree in order: a higher level is higher up (`FLOOR_ELEVATION_INCONSISTENT`);
+- a stair or ramp must be at least as long as the rise between its floors' elevations, plus 0.1 m
+  (`CONNECTION_GEOMETRY_INCONSISTENT` when the connection is registered, `FLOOR_ELEVATION_INCONSISTENT` when the elevation
+  is); and a ramp's registered maximum slope must be at least the average slope its rise and length imply;
+- a stair steeper than 50° on average is reported as a warning (`STAIR_GEOMETRY_IMPLAUSIBLE`), not refused.
+
+**Consistency report and cross-floor alignment.** Chaya never merges geometry of different floors, and never stitches
+floors automatically. Floors relate in exactly two ways:
+1. through registered floor connections (below), which is all routing uses;
+2. through a shared surveyed datum. A floor calibrated with surveyed control points (`VENUE_CONTROL_POINTS`,
+   docs/coordinate-frames.md) is in the survey's coordinates. The control-point fit refuses calibrations whose RMS
+   residual exceeds 5 cm (`422`), so an unreliable alignment never becomes a floor's frame.
+
+`GET /floors/consistency` checks every recorded relation. For each connection whose two floors are both calibrated to
+control points, it compares the two landing POIs in that shared datum:
+- their vertical separation against the recorded elevations (0.3 m tolerance: `ELEVATION_DISAGREES_WITH_SURVEY`);
+- an elevator's landings must be vertically aligned within 2.5 m (`LANDINGS_NOT_VERTICALLY_ALIGNED`);
+- a stair's or ramp's landings must be no farther apart than its walked length (`LANDINGS_FARTHER_THAN_WALKED_LENGTH`).
+
+Each such floor pair is `CONSISTENT` or `INCONSISTENT`. Floors with local frames are `NOT_COMPARABLE`: their frames share
+nothing, and nothing about their relative position is claimed. The check assumes both floors were calibrated against
+the same survey. Chaya cannot tell two surveys apart, and a contradiction may mean they were not. The measured landing
+separation is reported as evidence; it is never written into a floor's elevation.
+
+Incremental re-scans of a room or region of one floor are aligned to that floor by REGION_ALIGNMENT, which refuses
+low-confidence registrations (docs/rescan.md). No method aligns two independently captured floors from shared visual
+features: a staircase seen from both floors is not used to register them.
+
 ## Floor connections: `/api/v1/venues/{venueId}/floor-connections`
 
 `dev.chaya.api.navigation.FloorConnectionService` (V22 `floor_connection`). Venue staff register each connection a
@@ -261,6 +312,14 @@ route may use between two floors:
 | `maxSlopeDeg` | a ramp's steepest slope, degrees | for STEP_FREE use of a RAMP |
 | `accessibilityVerifiedAt`, `accessibilityVerifiedBy` | when and by whom the connector's accessibility was verified on site (V37); read-only | for STEP_FREE use |
 
+`GET …/floor-connections/graph?accessibility=STANDARD|STEP_FREE` returns the floor-transition graph routing uses for a
+profile, with the same rules as `RouteService`:
+- each floor and whether it is routable (and why not);
+- each usable direction of each connection;
+- every unusable connection and why;
+- the connected components: floors mutually reachable. A floor alone in its component is disconnected for that
+  profile, and a route to it fails with `FLOOR_CONNECTION_UNAVAILABLE`.
+
 A multi-stop elevator is one connection per pair of floors it serves. `PUT …/{id}/status` sets `IN_SERVICE` or
 `OUT_OF_SERVICE` (an elevator under maintenance); routing skips the latter.
 
@@ -268,8 +327,10 @@ A registered width or slope is a claim, so STEP_FREE does not rely on it alone. 
 with `{"verified": true}` (ADMIN, VENUE_MANAGER) records who confirmed on site that the connector is usable without steps
 and that its registered clear width (and a ramp's slope) are right; `{"verified": false}` withdraws it. Stairs cannot be
 verified, and neither can a connection with nothing registered to verify (no width, or a ramp without a slope):
-`400 INVALID_FLOOR_CONNECTION`. The registered measurements cannot be edited after creation, so a verification always
-refers to the values it was given for. Connections that existed before V37 start unverified: step-free routes between
+`400 INVALID_FLOOR_CONNECTION`. `PUT …/{id}` (ADMIN, VENUE_MANAGER) corrects a registration (type, landings,
+direction, length, slope, clear width). If anything step-free routing relies on changes, the verification is withdrawn
+and must be recorded again, so a verification always refers to the values it was given for. Routes planned afterwards
+use the new registration. Connections that existed before V37 start unverified: step-free routes between
 floors fail closed (`FLOOR_CONNECTION_UNAVAILABLE`, naming each unverified connection) until staff verify them. Creation is refused with `400
 INVALID_FLOOR_CONNECTION` for:
 
@@ -460,7 +521,19 @@ The web clients share pure, unit-tested modules; the components only wire positi
   viewer link is reported as such (with a sign-in action), and a network failure offers a retry and is planned again
   when the connection returns.
 - **Android AR** (`ArWorkspace`): the next instruction and the distance left along the route; arrival as above; a
-  recalculate action. The worker's own Detour query (`chaya_worker.recast.find_path`) also fails with
+  recalculate action.
+- **Transitions that change during navigation** (`apps/web/lib/floor-transitions.ts`). While a route over floor
+  connections is shown, the viewer (every 60 s) and the Android AR session (every 30 s) re-read the venue's connections.
+  If one on the route was removed, went out of service, no longer runs in the route's direction, or (step-free) lost its
+  verification, the route is planned again. A replanned route that still uses the same connection is reported, not
+  replanned again. The server applies the same rules on every request, so a fresh route never uses such a connection.
+- **Viewer floors**:
+  - The floor selector labels each floor with its level and recorded elevation (or "elevation not recorded").
+  - The floor on screen is shown in a badge.
+  - A multi-floor route offers "Show <floor>" for its other floors. The route planned on current versions is carried
+    to that floor, and its leg is drawn only if that floor's routing source matches the version and frame shown
+    (`routeOverlay`).
+  - A route on a pinned historical version stays on its floor. The worker's own Detour query (`chaya_worker.recast.find_path`) also fails with
 `NO_ROUTE`.
 
 ## What is measured and what is assumed
@@ -536,6 +609,35 @@ The web clients share pure, unit-tested modules; the components only wire positi
     with obstacles the tests report.
   - Instructions, progress and arrival have never run on a device walking a real route.
 
+### Multi-floor: what has and has not been validated
+
+- **On real Recast/Detour output:** `RealNavmeshNavigationTest`. Each floor is the real navmesh of the synthetic venue
+  ingested by a full pipeline run, in its own frame.
+  - Two floors joined by stairs and a lift.
+  - Three floors with stairs 0–1 and 1–2 and a lift 0–2: STANDARD climbs both flights through the middle floor;
+    STEP_FREE rides the verified lift; with the lift out of service STEP_FREE fails and the step-free graph has three
+    components.
+  - A historical (superseded) scan version still routes on its own navmesh.
+  - A calibration whose control points do not fit is refused (`422`) and the floor keeps its trusted frame.
+- **On synthetic graphs:** `RouteServiceTest` (disconnected floors and the floor-transition graph per profile; stairs
+  closed, lift re-registered and verification withdrawn, lift closed), `FloorManagementTest` (floor management,
+  elevation rules, connection corrections, the consistency report with consistent, inconsistent and not-comparable
+  pairs), `FloorGeometryTest`.
+- **Clients:**
+  - `floor-transitions.test.ts` and `ar-relocalization.test.ts`: floor identification (pending, confirmed, unexpected,
+    ambiguous) and the transition re-check.
+  - `ar-integration.test.ts`: a two-floor session through an ambiguous view.
+  - Playwright (Chromium): the viewer's floor badge, elevation labels, the "Show <floor>" control, and one replan when a
+    lift on the route closes.
+- **Not validated:**
+  - All multi-floor fixtures are the same synthetic floor ingested several times. The landings, elevations and control
+    points are hand-made, and the floors are related only by hand-registered connections or by the identity "survey"
+    frames of the fixtures. **Nothing here shows that floors of a real building align**, or that automatic multi-floor
+    stitching works: there is no automatic stitching.
+  - No real building's elevations, connections or control points have been recorded.
+  - AR floor identification has not run on a device: real marker visibility across atriums and stairwells, and how
+    long identification takes in practice, are unknown.
+
 ### Physical validation still required
 
 Before navigation can be called validated in a venue, these need doing on site, with a real reconstruction:
@@ -554,3 +656,10 @@ Before navigation can be called validated in a venue, these need doing on site, 
    usable as claimed.
 6. If an obstacle source is added to a client, validate its observations (position error, latency, false positives)
    before reporting them to routing.
+7. Multi-floor:
+   - Record each floor's elevation from a survey or a levelled measurement.
+   - Calibrate floors that must share a datum against one survey's control points, then run
+     `GET /floors/consistency` and resolve every contradiction.
+   - Walk a stairs route and an elevator route between real floors with a device, checking floor identification at
+     each landing (including atriums where another floor's markers are visible) and the replan when a lift is taken out
+     of service.

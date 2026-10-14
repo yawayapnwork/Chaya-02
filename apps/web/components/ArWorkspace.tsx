@@ -95,6 +95,8 @@ import {
 } from "@/lib/route-instructions";
 import { type ObstacleObservation, obstacleSourceStatus, rerouteDecision, toBlockedRegions } from "@/lib/obstacle-reroute";
 import { formatDistance } from "@/lib/viewer-route";
+import { listFloorConnections } from "@/lib/navigation-api";
+import { transitionsStillUsable } from "@/lib/floor-transitions";
 import {
   arRouteRequest,
   arSessionInit,
@@ -561,6 +563,45 @@ export default function ArWorkspace() {
   useEffect(() => { onFrameRef.current = onFrame; }, [onFrame]);
   useEffect(() => { fetchRouteRef.current = fetchRoute; }, [fetchRoute]);
 
+  /** Drops the route so it is planned again from where the device is (on the next localization, or now if localized). */
+  const replanRoute = useCallback(() => {
+    routeRef.current = null;
+    legRef.current = null;
+    progressRef.current = null;
+    positionRef.current = null;
+    arrivalRef.current = null;
+    rendererRef.current?.setRouteVisible(false);
+    const localization = stateRef.current.localization;
+    if (localization && lastViewerRef.current && canAdvanceRoute(stateRef.current)) {
+      void fetchRouteRef.current(lastViewerRef.current, localization.deviceToVenue);
+    }
+    publish(true);
+  }, [publish]);
+
+  const replannedForRef = useRef(new Set<string>());
+  // The floor transitions the route uses are re-checked during the session: a lift that closes, stairs that are removed or
+  // a connection that loses its accessibility verification (step-free) make the route be planned again, never followed.
+  useEffect(() => {
+    if (!inSession || !venueId) return;
+    const id = setInterval(async () => {
+      const route = routeRef.current?.route;
+      if (!route || route.floorTransitions.length === 0 || !navigator.onLine) return;
+      try {
+        const result = transitionsStillUsable(route, await listFloorConnections(venueId));
+        if (!result.usable && !result.connectionIds.every((c) => replannedForRef.current.has(c))) {
+          result.connectionIds.forEach((c) => replannedForRef.current.add(c));
+          setError(`Route changed: ${result.problems.join("; ")}. Planning it again.`);
+          replanRoute();
+        } else if (!result.usable) {
+          setError(`This route uses a connection that is no longer usable: ${result.problems.join("; ")}.`);
+        }
+      } catch {
+        /* the next check may succeed */
+      }
+    }, 30_000);
+    return () => clearInterval(id);
+  }, [inSession, venueId, replanRoute]);
+
   async function startSession() {
     setError(null);
     setSessionProblem(null);
@@ -623,6 +664,8 @@ export default function ArWorkspace() {
 
   const blocking = env.problem ?? null;
   const s = ui.state;
+  const floorNameOf = (id: string | null) => (id ? floors.find((f) => f.id === id)?.name ?? id : "an unknown floor");
+  const detectedFloorId = s.floorCheck?.status === "UNEXPECTED" ? s.floorCheck.detectedFloorId : null;
   return (
     <div className="p-6 space-y-4 max-w-2xl">
       <h1 className="text-xl font-semibold">AR navigation (Android, WebXR)</h1>
@@ -738,6 +781,26 @@ export default function ArWorkspace() {
           </p>
         )}
         {s.lastError && <p className="text-amber-300">Last relocalization failed: {s.lastError}</p>}
+        {s.floorCheck?.status === "AMBIGUOUS" && (
+          <p className="text-amber-300" data-testid="ar-floor-ambiguous">
+            Markers of more than one floor are in view ({s.floorCheck.floorIds.map(floorNameOf).join(", ")}).
+            Point the camera at a marker on your own floor only; the route is not drawn until the floor is certain.
+          </p>
+        )}
+        {detectedFloorId && (
+          <div className="text-amber-300" data-testid="ar-floor-unexpected">
+            <p>
+              The markers in view are on {floorNameOf(detectedFloorId)}, not on {floorNameOf(s.floorId)}. The route for that
+              floor is not drawn.
+            </p>
+            <button className="mt-1 border px-3 py-1 rounded" onClick={() => {
+              dispatch({ type: "ACCEPT_DETECTED_FLOOR" });
+              replanRoute();
+            }}>
+              I am on {floorNameOf(detectedFloorId)}: route from here
+            </button>
+          </div>
+        )}
         {s.state === "FLOOR_TRANSITION" && (
           <p>
             Take the {ui.route?.floorTransitions.find((t) => t.toFloorId === s.floorId)?.connectorType.toLowerCase() ?? "connection"} to

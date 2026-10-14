@@ -54,10 +54,10 @@ class RealNavmeshNavigationTest extends PipelineTestSupport {
     private static final Instant NOW = Instant.now().plusSeconds(1);
 
     /** A floor whose published navigation is the real Recast fixture, ingested by a full pipeline run. */
-    private record Baked(Ctx c, UUID floor, UUID frame, Actor viewer, Actor manager) {}
+    private record Baked(Ctx c, UUID floor, UUID frame, Actor viewer, Actor manager, Started run) {}
 
     private Baked bake(Ctx c) throws Exception {
-        startRun(c, null);
+        Started run = startRun(c, null);
         runThrough("NAVIGATION_BAKING");
         UUID frame = jdbc.sql("SELECT current_coordinate_frame_id FROM floor WHERE id = :f").param("f", c.floor()).query(UUID.class).single();
         Integer recast = jdbc.sql("SELECT count(*) FROM navigation_graph WHERE floor_id = :f AND status = 'ACTIVE' "
@@ -66,7 +66,7 @@ class RealNavmeshNavigationTest extends PipelineTestSupport {
         assertThat(recast).as("both profiles of the real navmesh are published on the floor").isEqualTo(2);
         Actor viewer = new Actor(Actor.Kind.USER, "viewer", c.org(), Set.of(c.venue()), Set.of(Role.VIEWER));
         Actor manager = new Actor(Actor.Kind.USER, "manager", c.org(), Set.of(c.venue()), Set.of(Role.VENUE_MANAGER));
-        return new Baked(c, c.floor(), frame, viewer, manager);
+        return new Baked(c, c.floor(), frame, viewer, manager, run);
     }
 
     private Baked bake() throws Exception {
@@ -342,5 +342,69 @@ class RealNavmeshNavigationTest extends PipelineTestSupport {
         assertThat(doorwayCrossed(wide.route(b.viewer(), across).waypoints())).isEqualTo("WIDE");
         RouteService wider = new RouteService(jdbc, guard, NavigationProperties.withMinAccessibleClearance(1.8), frames, versions);
         assertCode(() -> wider.route(b.viewer(), across), "NO_ACCESSIBLE_ROUTE");
+    }
+
+    // ---- three floors, and an alignment that must be refused ------------------------------------------------
+
+    @Test
+    void aThreeFloorRouteTakesTheStairsThroughTheMiddleFloorOrTheVerifiedLiftAndRecalculatesWhenTheLiftCloses() throws Exception {
+        Baked ground = bake();
+        UUID floor1 = fx.floor(ground.c().org(), ground.c().venue(), 1);
+        Baked first = bake(new Ctx(ground.c().org(), ground.c().venue(), floor1, ground.c().operator()));
+        UUID floor2 = fx.floor(ground.c().org(), ground.c().venue(), 2);
+        Baked second = bake(new Ctx(ground.c().org(), ground.c().venue(), floor2, ground.c().operator()));
+
+        // Stairs 0-1 and 1-2 (each a separately registered flight), and one lift serving floors 0 and 2 only.
+        connections.create(ground.manager(), ground.c().venue(), new ConnectionData("STAIRS", ground.floor(),
+            poi(ground, "Stairs A (0)", 7.0, 6.0, 0.0), floor1, poi(first, "Stairs A (1)", 7.0, 6.0, 0.0), true, 7.0, 32.0, 1.2));
+        connections.create(ground.manager(), ground.c().venue(), new ConnectionData("STAIRS", floor1,
+            poi(first, "Stairs B (1)", 7.0, 1.0, 0.0), floor2, poi(second, "Stairs B (2)", 7.0, 6.0, 0.0), true, 7.0, 32.0, 1.2));
+        UUID lift = connections.create(ground.manager(), ground.c().venue(), new ConnectionData("ELEVATOR", ground.floor(),
+            poi(ground, "Lift (0)", 2.0, 1.0, 0.0), floor2, poi(second, "Lift (2)", 2.0, 1.0, 0.0), true, null, null, 1.1)).id();
+        connections.setAccessibilityVerified(ground.manager(), ground.c().venue(), lift, true);
+        UUID office = poi(second, "Level 2 office", 1.0, 6.0, 0.0);
+        double[] start = {1.0, 6.0, 0.0};
+
+        RouteResponse standard = routes.route(ground.viewer(), request(ground, start, office, "STANDARD", null));
+        assertThat(standard.floorTransitions()).extracting(t -> t.connectorType() + ":" + t.toFloorId())
+            .containsExactly("STAIRS:" + floor1, "STAIRS:" + floor2);
+        assertThat(standard.routingSources()).extracting(s -> s.coordinateFrameId())
+            .containsExactly(ground.frame(), first.frame(), second.frame());
+        assertClearOfWallAndSofa(standard.waypoints());
+
+        RouteResponse stepFree = routes.route(ground.viewer(), request(ground, start, office, "STEP_FREE", null));
+        assertThat(stepFree.floorTransitions()).singleElement().satisfies(t -> {
+            assertThat(t.connectorType()).isEqualTo("ELEVATOR");
+            assertThat(t.toFloorId()).isEqualTo(floor2);
+        });
+        assertThat(stepFree.routingSources()).extracting(s -> s.floorId()).doesNotContain(floor1);
+
+        // The lift closes: the step-free route is gone (the floors are disconnected step-free); the stairs route stays.
+        connections.setStatus(ground.manager(), ground.c().venue(), lift, "OUT_OF_SERVICE");
+        assertCode(() -> routes.route(ground.viewer(), request(ground, start, office, "STEP_FREE", null)), "FLOOR_CONNECTION_UNAVAILABLE");
+        assertThat(routes.floorTransitionGraph(ground.viewer(), ground.c().venue(), "STEP_FREE").components()).hasSize(3);
+        assertThat(routes.route(ground.viewer(), request(ground, start, office, "STANDARD", null)).floorTransitions()).hasSize(2);
+    }
+
+    @Test
+    void anUnreliableCalibrationIsRefusedAndRoutingStaysOnTheFloorsTrustedFrame() throws Exception {
+        Baked b = bake();
+        UUID east = poi(b, "East room", 6.0, 2.5, 0.0);
+        // The fixture's surveyed control points with one of them 1 m off: the similarity fit cannot explain it.
+        java.util.List<java.util.Map<String, Object>> cps = new java.util.ArrayList<>();
+        int i = 0;
+        for (com.fasterxml.jackson.databind.JsonNode cp : calibrationFixture().get("controlPoints")) {
+            double off = i++ == 0 ? 1.0 : 0.0;
+            cps.add(java.util.Map.of("label", cp.get("label").asText(),
+                "reconstruction", mapper.convertValue(cp.get("reconstruction"), java.util.List.class),
+                "venue", java.util.List.of(cp.get("venue").get(0).asDouble() + off, cp.get("venue").get(1).asDouble(), cp.get("venue").get(2).asDouble())));
+        }
+        String body = mapper.writeValueAsString(java.util.Map.of("controlPoints", cps));
+        int code = calibrate(b.run(), body).andReturn().getResponse().getStatus();
+        assertThat(code).as("an alignment the control points do not support is refused").isEqualTo(422);
+        UUID frameNow = jdbc.sql("SELECT current_coordinate_frame_id FROM floor WHERE id = :f").param("f", b.floor()).query(UUID.class).single();
+        assertThat(frameNow).as("the floor keeps its trusted frame").isEqualTo(b.frame());
+        RouteResponse route = routes.route(b.viewer(), request(b, new double[]{1.0, 2.5, 0.0}, east, null, null));
+        assertThat(route.routingSources()).singleElement().satisfies(s -> assertThat(s.coordinateFrameId()).isEqualTo(b.frame()));
     }
 }

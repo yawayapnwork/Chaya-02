@@ -6,7 +6,10 @@
 //   LOCALIZED --TRACKING_LOST or DRIFT_EXCEEDED--> TRACKING_LOST --MARKERS_OBSERVED--> RELOCALIZING --...--> LOCALIZED
 //   LOCALIZED --MARKERS_OBSERVED--> LOCALIZED with a refresh pending (re-solve from a marker seen again; the current
 //                                   transform is kept until the answer, and kept if the answer is refused)
-//   LOCALIZED --FLOOR_HANDOFF--> FLOOR_TRANSITION --MARKERS_OBSERVED (new floor's markers)--> RELOCALIZING --> LOCALIZED
+//   LOCALIZED --FLOOR_HANDOFF--> FLOOR_TRANSITION --MARKERS_OBSERVED (the floor identified, lib/ar-floor-identification)-->
+//                                RELOCALIZING --> LOCALIZED
+//   SEARCHING / FLOOR_TRANSITION with another floor's markers only (UNEXPECTED) --ACCEPT_DETECTED_FLOOR--> the same state on
+//                                the detected floor (the route is then planned again from there)
 //   LOCALIZED --TRACKING_LIMITED--> LIMITED --TRACKING_RESTORED (recovery validated)--> LOCALIZED
 //   LIMITED --TICK after MAX_LIMITED_MS, TRACKING_LOST, or TRACKING_RESTORED with a failed check--> TRACKING_LOST
 //   anything --SESSION_ENDED--> ENDED
@@ -35,6 +38,7 @@
 //     refused (VERSION_MISMATCH / FLOOR_MISMATCH) and never replaces the transform.
 
 import type { Pose } from "./ar-anchor-math.ts";
+import { type FloorCheck, MIN_FLOOR_SIGHTINGS, identifyFloor, pushFloorWindow } from "./ar-floor-identification.ts";
 import type { MarkerObservation } from "./ar-marker-tracking.ts";
 
 export type ArState = "IDLE" | "SEARCHING" | "RELOCALIZING" | "LOCALIZED" | "LIMITED" | "TRACKING_LOST" | "FLOOR_TRANSITION" | "ENDED";
@@ -80,6 +84,11 @@ export interface ArSessionState {
   limitedReason: string | null;
   lastError: string | null;
   nextRequestId: number;
+  /** Floors whose markers were seen in recent frames, while the session is establishing which floor it is on. */
+  floorWindow: string[][];
+  /** Why the session has not localized yet although markers were seen: another floor's markers (UNEXPECTED), several
+   * floors' markers (AMBIGUOUS), or not enough sightings (PENDING). null once identified. */
+  floorCheck: FloorCheck | null;
 }
 
 export type ArEvent =
@@ -95,12 +104,14 @@ export type ArEvent =
   | { type: "TICK"; atMs: number }
   | { type: "DRIFT_EXCEEDED"; reason: string }
   | { type: "FLOOR_HANDOFF"; toFloorId: string }
+  /** The user confirmed being on the floor whose markers the camera sees (floorCheck UNEXPECTED). */
+  | { type: "ACCEPT_DETECTED_FLOOR" }
   | { type: "SESSION_ENDED" };
 
 export function initialArSessionState(): ArSessionState {
   return {
     state: "IDLE", floorId: null, pinnedVersions: {}, localization: null, pending: null, deviceTracking: false,
-    lostReason: null, limitedSinceMs: null, limitedReason: null, lastError: null, nextRequestId: 1,
+    lostReason: null, limitedSinceMs: null, limitedReason: null, lastError: null, nextRequestId: 1, floorWindow: [], floorCheck: null,
   };
 }
 
@@ -137,6 +148,23 @@ export function reduceArSession(s: ArSessionState, e: ArEvent): ArSessionState {
     case "SESSION_STARTED":
       return s.state === "IDLE" ? { ...s, state: "SEARCHING", deviceTracking: false, floorId: e.floorId ?? null } : s;
     case "MARKERS_OBSERVED": {
+      // Establishing the floor (session start, or after a floor change): localize only once the floor is identified.
+      if ((s.state === "SEARCHING" || s.state === "FLOOR_TRANSITION") && s.floorId !== null) {
+        if (!s.deviceTracking || e.observations.length === 0) return s;
+        const expected = s.floorId;
+        const floorWindow = pushFloorWindow(s.floorWindow, e.observations.map((o) => o.floorId ?? expected));
+        const check = identifyFloor(floorWindow, expected, s.state === "FLOOR_TRANSITION" ? MIN_FLOOR_SIGHTINGS : 1);
+        if (check.status !== "CONFIRMED") return { ...s, floorWindow, floorCheck: check };
+        const observations = e.observations.filter((o) => (o.floorId ?? expected) === expected);
+        return {
+          ...s,
+          state: "RELOCALIZING",
+          floorWindow: [],
+          floorCheck: null,
+          pending: { requestId: s.nextRequestId, observations, resumeTo: s.state },
+          nextRequestId: s.nextRequestId + 1,
+        };
+      }
       // only this floor's markers, and an observation is only a measurement while the device itself is tracked
       const observations = e.observations.filter((o) => s.floorId === null || o.floorId === undefined || o.floorId === s.floorId);
       if (!s.deviceTracking || observations.length === 0) return s;
@@ -216,7 +244,12 @@ export function reduceArSession(s: ArSessionState, e: ArEvent): ArSessionState {
       // A transform is valid on one floor only (each floor has its own canonical frame). The next floor starts unlocalized
       // and is localized from one of its own markers.
       if (s.state !== "LOCALIZED" || e.toFloorId === s.floorId) return s; // never from LIMITED: progress is frozen there
-      return { ...s, state: "FLOOR_TRANSITION", floorId: e.toFloorId, localization: null, pending: null, lostReason: null, lastError: null };
+      return { ...s, state: "FLOOR_TRANSITION", floorId: e.toFloorId, localization: null, pending: null, lostReason: null, lastError: null,
+        floorWindow: [], floorCheck: null };
+    case "ACCEPT_DETECTED_FLOOR":
+      // The user is where the markers say. The session localizes on that floor; the caller plans the route again.
+      if (s.floorCheck?.status !== "UNEXPECTED" || (s.state !== "SEARCHING" && s.state !== "FLOOR_TRANSITION")) return s;
+      return { ...s, floorId: s.floorCheck.detectedFloorId, floorCheck: null };
     case "SESSION_ENDED":
       return { ...s, state: "ENDED", pending: null };
     default:

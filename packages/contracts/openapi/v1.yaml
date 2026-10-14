@@ -3794,7 +3794,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
-          description: INVALID_FLOOR_CONNECTION
+          description: "INVALID_FLOOR_CONNECTION, CONNECTION_GEOMETRY_INCONSISTENT"
         "401":
           description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
             \ header)"
@@ -3834,6 +3834,80 @@ paths:
       x-chaya-roles:
       - ADMIN
       - VENUE_MANAGER
+  /api/v1/venues/{venueId}/floor-connections/graph:
+    get:
+      description: "Usable connections, unusable ones and why, and which floors are\
+        \ connected (STANDARD or STEP_FREE)."
+      operationId: floorConnectionGraph
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: accessibility
+        required: false
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FloorTransitionGraph"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Malformed request: an unparseable parameter or body, or a\
+            \ failed validation (code BAD_REQUEST or an operation-specific code)"
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "The caller's roles do not allow this operation (empty body),\
+            \ or an operation-specific refusal (problem with a code)"
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Not found, or not visible to the caller's organization or\
+            \ venue (code NOT_FOUND)"
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      - viewerToken: []
+      summary: The floor-transition graph routing uses for a profile
+      tags:
+      - floor-connection-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
+      - OPERATOR
+      - VIEWER
+      - PUBLIC_VIEWER
   /api/v1/venues/{venueId}/floor-connections/{connectionId}:
     delete:
       operationId: floorConnectionDelete
@@ -3971,6 +4045,81 @@ paths:
       - OPERATOR
       - VIEWER
       - PUBLIC_VIEWER
+    put:
+      description: Changing anything step-free routing relies on withdraws the accessibility
+        verification.
+      operationId: floorConnectionUpdate
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: connectionId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConnectionData"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Connection"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "INVALID_FLOOR_CONNECTION, CONNECTION_GEOMETRY_INCONSISTENT"
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "The caller's roles do not allow this operation (empty body),\
+            \ or an operation-specific refusal (problem with a code)"
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Not found, or not visible to the caller's organization or\
+            \ venue (code NOT_FOUND)"
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      summary: Correct a floor connection's registration
+      tags:
+      - floor-connection-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
   /api/v1/venues/{venueId}/floor-connections/{connectionId}/accessibility-verification:
     put:
       description: STEP_FREE routes cross floors only over elevators and ramps whose
@@ -4238,6 +4387,12 @@ paths:
                 $ref: "#/components/schemas/Problem"
           description: "Not found, or not visible to the caller's organization or\
             \ venue (code NOT_FOUND)"
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: FLOOR_LEVEL_TAKEN
         "429":
           content:
             application/problem+json:
@@ -4255,6 +4410,223 @@ paths:
       security:
       - bearerAuth: []
       summary: "Create a floor (admin, venue-manager)"
+      tags:
+      - floor-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
+  /api/v1/venues/{venueId}/floors/consistency:
+    get:
+      description: "Where two floors are calibrated to surveyed venue control points,\
+        \ connection landings are compared in that shared datum. Floors with local\
+        \ frames are reported as not comparable."
+      operationId: floorConsistency
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          content: {}
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Malformed request: an unparseable parameter or body, or a\
+            \ failed validation (code BAD_REQUEST or an operation-specific code)"
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "The caller's roles do not allow this operation (empty body),\
+            \ or an operation-specific refusal (problem with a code)"
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Not found, or not visible to the caller's organization or\
+            \ venue (code NOT_FOUND)"
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      summary: "Check the venue's floors, elevations and floor connections against\
+        \ each other"
+      tags:
+      - floor-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
+      - OPERATOR
+  /api/v1/venues/{venueId}/floors/{floorId}:
+    delete:
+      operationId: floorDelete
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: floorId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Malformed request: an unparseable parameter or body, or a\
+            \ failed validation (code BAD_REQUEST or an operation-specific code)"
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "The caller's roles do not allow this operation (empty body),\
+            \ or an operation-specific refusal (problem with a code)"
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Not found, or not visible to the caller's organization or\
+            \ venue (code NOT_FOUND)"
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "FLOOR_IN_USE: it publishes a scan version, has connections\
+            \ or open captures"
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      summary: "Delete a floor that nothing relies on (admin, venue-manager)"
+      tags:
+      - floor-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
+    put:
+      operationId: floorUpdate
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: floorId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateFloor"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Floor"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "FLOOR_ELEVATION_INCONSISTENT: the new level contradicts recorded\
+            \ elevations"
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "The caller's roles do not allow this operation (empty body),\
+            \ or an operation-specific refusal (problem with a code)"
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Not found, or not visible to the caller's organization or\
+            \ venue (code NOT_FOUND)"
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: FLOOR_LEVEL_TAKEN
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      summary: "Rename a floor or change its level (admin, venue-manager)"
       tags:
       - floor-controller
       x-chaya-roles:
@@ -4985,6 +5357,151 @@ paths:
       - OPERATOR
       - VIEWER
       - PUBLIC_VIEWER
+  /api/v1/venues/{venueId}/floors/{floorId}/elevation:
+    delete:
+      operationId: floorClearElevation
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: floorId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Floor"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Malformed request: an unparseable parameter or body, or a\
+            \ failed validation (code BAD_REQUEST or an operation-specific code)"
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "The caller's roles do not allow this operation (empty body),\
+            \ or an operation-specific refusal (problem with a code)"
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Not found, or not visible to the caller's organization or\
+            \ venue (code NOT_FOUND)"
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      summary: "Withdraw a floor's recorded elevation (admin, venue-manager)"
+      tags:
+      - floor-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
+    put:
+      description: "Never estimated: an elevation is what someone measured or took\
+        \ from a survey. Refused when it contradicts the order of levels or a registered\
+        \ stair or ramp."
+      operationId: floorSetElevation
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: floorId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetElevation"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Floor"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "INVALID_ELEVATION, FLOOR_ELEVATION_INCONSISTENT"
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "The caller's roles do not allow this operation (empty body),\
+            \ or an operation-specific refusal (problem with a code)"
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Not found, or not visible to the caller's organization or\
+            \ venue (code NOT_FOUND)"
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      summary: "Record a floor's measured or surveyed elevation (admin, venue-manager)"
+      tags:
+      - floor-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
   /api/v1/venues/{venueId}/floors/{floorId}/reconstructions:
     get:
       operationId: reconstructionList
@@ -8494,6 +9011,21 @@ components:
         "y":
           type: number
           format: double
+    Elevation:
+      type: object
+      properties:
+        elevationM:
+          type: number
+          format: double
+        recordedAt:
+          type: string
+          format: date-time
+        recordedBy:
+          type: string
+        reference:
+          type: string
+        source:
+          type: string
     EnqueueJob:
       type: object
       properties:
@@ -8772,6 +9304,8 @@ components:
         currentScanVersionId:
           type: string
           format: uuid
+        elevation:
+          $ref: "#/components/schemas/Elevation"
         id:
           type: string
           format: uuid
@@ -8801,6 +9335,35 @@ components:
           $ref: "#/components/schemas/MeasuredCoverage"
         name:
           type: string
+    FloorEdge:
+      type: object
+      properties:
+        connectionId:
+          type: string
+          format: uuid
+        connectorType:
+          type: string
+        fromFloorId:
+          type: string
+          format: uuid
+        toFloorId:
+          type: string
+          format: uuid
+    FloorNode:
+      type: object
+      properties:
+        floorId:
+          type: string
+          format: uuid
+        level:
+          type: integer
+          format: int32
+        name:
+          type: string
+        problem:
+          type: string
+        routable:
+          type: boolean
     FloorStatus:
       type: object
       properties:
@@ -8847,6 +9410,30 @@ components:
         toPoiId:
           type: string
           format: uuid
+    FloorTransitionGraph:
+      type: object
+      properties:
+        accessibilityProfile:
+          type: string
+        components:
+          type: array
+          items:
+            type: array
+            items:
+              type: string
+              format: uuid
+        edges:
+          type: array
+          items:
+            $ref: "#/components/schemas/FloorEdge"
+        floors:
+          type: array
+          items:
+            $ref: "#/components/schemas/FloorNode"
+        unusableConnections:
+          type: array
+          items:
+            type: string
     FrameView:
       type: object
       properties:
@@ -11140,6 +11727,20 @@ components:
       required:
       - a
       - b
+    SetElevation:
+      type: object
+      properties:
+        elevationM:
+          type: number
+          format: double
+        reference:
+          type: string
+        source:
+          type: string
+          minLength: 1
+      required:
+      - elevationM
+      - source
     SetSceneRequest:
       type: object
       properties:
@@ -11461,6 +12062,18 @@ components:
           format: double
         reason:
           type: string
+    UpdateFloor:
+      type: object
+      properties:
+        level:
+          type: integer
+          format: int32
+        name:
+          type: string
+          minLength: 1
+      required:
+      - level
+      - name
     UpdateVenue:
       type: object
       properties:

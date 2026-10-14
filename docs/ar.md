@@ -236,6 +236,22 @@ IDLE -> SEARCHING -> RELOCALIZING -> LOCALIZED -> TRACKING_LOST -> RELOCALIZING 
   names the connector and the next floor. Only that floor's markers can localize the session again; tracking loss in an
   elevator is expected and only recorded.
 
+  **Floor identification** (`lib/ar-floor-identification.ts`). Before the session localizes on a floor, at session start
+  and after a floor change, the floors of the markers seen in the last 4 frames that saw any are compared:
+  - **CONFIRMED** when only the expected floor's markers were seen: once at session start (the floor the user chose),
+    twice after a floor change (the device just moved between floors).
+  - **AMBIGUOUS** when markers of two floors were seen within the window (a marker visible across an atrium or down a
+    stairwell). Nothing is localized and no route is drawn until one floor's markers are seen alone. The user is asked
+    to point at a marker on their own floor.
+  - **UNEXPECTED** when only another floor's markers were seen twice (off the lift too early, or the wrong stairs).
+    The route overlay is not switched. The user is told which floor the markers belong to, and can confirm "I am on
+    <floor>: route from here" (`ACCEPT_DETECTED_FLOOR`). The session then localizes on that floor and the route is
+    planned again from the device's position there.
+  - **PENDING** otherwise.
+
+  Before this, another floor's markers were silently ignored. A user who got off on the wrong floor stayed in
+  `FLOOR_TRANSITION` with no explanation.
+
 `LOCALIZED` also accepts observations: a registered marker of this floor seen again at least `REFRESH_INTERVAL_MS`
 (5 s) after the last solve is first checked for drift, then re-solved in the background (the route stays drawn on the
 current transform; a refused or failed re-solve keeps it). See "End-to-end chain" below.

@@ -103,6 +103,7 @@ public class FloorConnectionService {
     public Connection create(Actor actor, UUID venueId, ConnectionData d) {
         guard.requireVenue(actor, venueId);
         String type = validate(actor, venueId, d);
+        checkGeometry(type, d);
         UUID id = jdbc.sql("""
                 INSERT INTO floor_connection (organization_id, venue_id, connector_type, from_floor_id, from_poi_id, to_floor_id,
                     to_poi_id, bidirectional, length_m, max_slope_deg, min_clearance_m, created_by)
@@ -118,6 +119,56 @@ public class FloorConnectionService {
         meta.put("toFloorId", d.toFloorId().toString());
         audit.success(actor, venueId, "floor_connection.create", "floor_connection", id, meta);
         return get(actor, venueId, id);
+    }
+
+    /**
+     * Corrects a connection's registration (its type, landings, direction or measurements). A changed connection is not
+     * the one whose accessibility was verified: if anything STEP_FREE relies on changes (type, landings, direction, length,
+     * slope or clear width), the verification is withdrawn and must be recorded again. Routes planned after the update use
+     * the new registration (RouteService reads connections on every request).
+     */
+    @Transactional
+    public Connection update(Actor actor, UUID venueId, UUID connectionId, ConnectionData d) {
+        Connection before = get(actor, venueId, connectionId);
+        String type = validate(actor, venueId, d);
+        checkGeometry(type, d);
+        boolean bidirectional = d.bidirectional() == null || d.bidirectional();
+        boolean changed = !type.equals(before.connectorType()) || !d.fromFloorId().equals(before.fromFloorId())
+            || !d.fromPoiId().equals(before.fromPoiId()) || !d.toFloorId().equals(before.toFloorId())
+            || !d.toPoiId().equals(before.toPoiId()) || bidirectional != before.bidirectional()
+            || !java.util.Objects.equals(d.lengthM(), before.lengthM()) || !java.util.Objects.equals(d.maxSlopeDeg(), before.maxSlopeDeg())
+            || !java.util.Objects.equals(d.minClearanceM(), before.minClearanceM());
+        jdbc.sql("""
+                UPDATE floor_connection SET connector_type = :t, from_floor_id = :ff, from_poi_id = :fp, to_floor_id = :tf,
+                       to_poi_id = :tp, bidirectional = :bi, length_m = :len, max_slope_deg = :slope, min_clearance_m = :clear,
+                       accessibility_verified_at = CASE WHEN :changed THEN NULL ELSE accessibility_verified_at END,
+                       accessibility_verified_by = CASE WHEN :changed THEN NULL ELSE accessibility_verified_by END
+                 WHERE id = :id AND venue_id = :v AND organization_id = :o AND deleted_at IS NULL""")
+            .param("t", type).param("ff", d.fromFloorId()).param("fp", d.fromPoiId()).param("tf", d.toFloorId())
+            .param("tp", d.toPoiId()).param("bi", bidirectional).param("len", d.lengthM()).param("slope", d.maxSlopeDeg())
+            .param("clear", d.minClearanceM()).param("changed", changed).param("id", connectionId).param("v", venueId)
+            .param("o", actor.organizationId()).update();
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("connectorType", type);
+        meta.put("verificationWithdrawn", changed && before.accessibilityVerifiedAt() != null);
+        audit.success(actor, venueId, "floor_connection.update", "floor_connection", connectionId, meta);
+        return get(actor, venueId, connectionId);
+    }
+
+    /** A walked connector must be long enough for the rise between its floors' recorded elevations (FloorGeometry). */
+    private void checkGeometry(String type, ConnectionData d) {
+        Double from = elevation(d.fromFloorId());
+        Double to = elevation(d.toFloorId());
+        var findings = dev.chaya.api.venue.FloorGeometry.connector(type, d.lengthM(), d.maxSlopeDeg(), from, to);
+        if (dev.chaya.api.venue.FloorGeometry.hasErrors(findings)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "CONNECTION_GEOMETRY_INCONSISTENT",
+                dev.chaya.api.venue.FloorGeometry.describe(findings));
+        }
+    }
+
+    private Double elevation(UUID floorId) {
+        return jdbc.sql("SELECT elevation_m FROM floor WHERE id = :f").param("f", floorId)
+            .query((rs, i) -> nullableDouble(rs, "elevation_m")).optional().orElse(null);
     }
 
     /** IN_SERVICE or OUT_OF_SERVICE (an elevator under maintenance, a closed stairwell). Routing skips the latter. */

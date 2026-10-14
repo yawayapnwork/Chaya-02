@@ -900,4 +900,70 @@ class RouteServiceTest extends AbstractIntegrationTest {
             pool.shutdownNow();
         }
     }
+
+    // ---- the floor-transition graph and transitions that change --------------------------------------------
+
+    @Test
+    void theFloorTransitionGraphShowsWhichFloorsAreConnectedForEachProfile() {
+        TwoFloors f = twoFloors("STANDARD", "STEP_FREE");
+        UUID floor2 = calibratedFloor(f.t(), 2);
+        corridor(f.t(), floor2, "STANDARD", new double[]{7, 7, 0}, new double[]{7, 10, 0});
+        corridor(f.t(), floor2, "STEP_FREE", new double[]{7, 7, 0}, new double[]{7, 10, 0});
+        UUID roof = insertPoi(f.t().org(), f.t().venue(), floor2, "Roof garden", null, 7, 10, 0);
+        Actor actor = actorFor(f.t().org(), f.t().venue());
+        register(actor, f, "STAIRS", 6.0, 33.0, 1.2); // stairs only, between floors 0 and 1
+
+        var standard = routeService.floorTransitionGraph(actor, f.t().venue(), "STANDARD");
+        assertThat(standard.components()).containsExactlyInAnyOrder(List.of(f.t().floor(), f.floor1()), List.of(floor2));
+        assertThat(standard.edges()).hasSize(2).allSatisfy(e -> assertThat(e.connectorType()).isEqualTo("STAIRS"));
+        var stepFree = routeService.floorTransitionGraph(actor, f.t().venue(), "STEP_FREE");
+        assertThat(stepFree.components()).hasSize(3);
+        assertThat(stepFree.unusableConnections()).anySatisfy(u -> assertThat(u).contains("stairs are never step-free"));
+
+        // Floor 2 is disconnected: no route reaches it, and the failure says so instead of guessing a way.
+        assertCode(() -> routeService.route(actor, request(f.t().venue(), f.t().floor(), ORIGIN, roof, null, null)),
+            "FLOOR_CONNECTION_UNAVAILABLE");
+        // A verified elevator joins floors 0 and 1 step-free.
+        connections.setAccessibilityVerified(actor, f.t().venue(), register(actor, f, "ELEVATOR", null, null, 1.1), true);
+        assertThat(routeService.floorTransitionGraph(actor, f.t().venue(), "STEP_FREE").components())
+            .containsExactlyInAnyOrder(List.of(f.t().floor(), f.floor1()), List.of(floor2));
+    }
+
+    @Test
+    void aTransitionThatBecomesUnavailableOrChangesIsRoutedAroundOnTheNextRequest() {
+        TwoFloors f = twoFloors("STANDARD", "STEP_FREE");
+        Actor actor = actorFor(f.t().org(), f.t().venue());
+        UUID stairs = register(actor, f, "STAIRS", 6.0, 33.0, 1.2);
+        UUID lift = register(actor, f, "ELEVATOR", null, null, 1.1);
+        connections.setAccessibilityVerified(actor, f.t().venue(), lift, true);
+        RouteRequest standard = request(f.t().venue(), f.t().floor(), ORIGIN, f.office(), "STANDARD", null);
+        RouteRequest stepFree = request(f.t().venue(), f.t().floor(), ORIGIN, f.office(), "STEP_FREE", null);
+
+        assertThat(routeService.route(actor, standard).floorTransitions()).singleElement()
+            .satisfies(t -> assertThat(t.connectionId()).as("stairs: 12 s against a 45 s lift").isEqualTo(stairs));
+        assertThat(routeService.route(actor, stepFree).floorTransitions()).singleElement()
+            .satisfies(t -> assertThat(t.connectionId()).isEqualTo(lift));
+
+        // The stairs close: the standard route recalculates over the lift.
+        connections.setStatus(actor, f.t().venue(), stairs, "OUT_OF_SERVICE");
+        assertThat(routeService.route(actor, standard).floorTransitions()).singleElement()
+            .satisfies(t -> assertThat(t.connectionId()).isEqualTo(lift));
+
+        // The lift's registration is corrected to a narrower door: its verification is withdrawn, so no step-free route
+        // remains until someone verifies it again; the standard route still uses it.
+        connections.update(actor, f.t().venue(), lift, new ConnectionData("ELEVATOR", f.t().floor(), f.landing0(), f.floor1(),
+            f.landing1(), true, null, null, 1.0));
+        assertCode(() -> routeService.route(actor, stepFree), "FLOOR_CONNECTION_UNAVAILABLE");
+        assertThat(routeService.route(actor, standard).floorTransitions()).singleElement()
+            .satisfies(t -> assertThat(t.connectionId()).isEqualTo(lift));
+        connections.setAccessibilityVerified(actor, f.t().venue(), lift, true);
+        assertThat(routeService.route(actor, stepFree).floorTransitions()).hasSize(1);
+
+        // The lift goes out of service as well: the floors are now disconnected for every profile.
+        connections.setStatus(actor, f.t().venue(), lift, "OUT_OF_SERVICE");
+        assertCode(() -> routeService.route(actor, standard), "FLOOR_CONNECTION_UNAVAILABLE");
+        connections.setStatus(actor, f.t().venue(), stairs, "IN_SERVICE");
+        assertThat(routeService.route(actor, standard).floorTransitions()).singleElement()
+            .satisfies(t -> assertThat(t.connectionId()).isEqualTo(stairs));
+    }
 }

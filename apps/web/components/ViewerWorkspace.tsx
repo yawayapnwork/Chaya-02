@@ -20,7 +20,8 @@ import { formatBytes, formatDate } from "@/lib/viewer-format";
 import { checkSceneScope } from "@/lib/artifact-integrity";
 import { type Scoped, forScene, initialVersion, sceneKey, versionLabel } from "@/lib/version-scope";
 import { type SearchPosition, type SearchResult } from "@/lib/search-api";
-import { type RouteResponse, planMultiStopRoute, planRoute } from "@/lib/navigation-api";
+import { type RouteResponse, listFloorConnections, planMultiStopRoute, planRoute } from "@/lib/navigation-api";
+import { floorLabel, transitionsStillUsable } from "@/lib/floor-transitions";
 import {
   type RouteFailure,
   type RouteProfile,
@@ -115,6 +116,13 @@ export default function ViewerWorkspace() {
   const segmentCacheRef = useRef(new Map<string, SegmentOutcome>());
   const [routeRecalc, setRouteRecalc] = useState(0);
   const [optimizing, setOptimizing] = useState<string | null>(null);
+  // A multi-floor route carried to another floor to see its leg there. Only for routes on what floors publish now (never a
+  // pinned historical version); routeOverlay still draws a leg only in its own floor's version and frame.
+  const [followRoute, setFollowRoute] = useState<RouteResponse | null>(null);
+  const [transitionNotice, setTransitionNotice] = useState<string | null>(null);
+  // Connections a recalculation was already triggered for: a new route that still uses one is reported, not replanned
+  // again (no request storm while the server and the connection list disagree for a moment).
+  const replannedForRef = useRef(new Set<string>());
   const [online, setOnline] = useState(true);
   // Both profiles are requested for the same start and destination, so the step-free alternative (or the reason there
   // is none) is shown next to the standard route.
@@ -498,6 +506,7 @@ export default function ViewerWorkspace() {
   function cancelRoute() {
     setRouteStopIds([]);
     setLoadedRoutes(null);
+    setFollowRoute(null);
   }
 
   function recalculateRoute() {
@@ -526,10 +535,42 @@ export default function ViewerWorkspace() {
     }
   }
 
-  const routeResponse = useMemo(() => {
+  const plannedRoute = useMemo(() => {
     const outcome = routeOutcomes?.[routeProfile];
     return outcome?.ok ? outcome.route : null;
   }, [routeOutcomes, routeProfile]);
+  // The route shown: the one planned on this scene, or a multi-floor route carried here from another floor.
+  const routeResponse = plannedRoute ?? (followRoute && !scanVersionId ? followRoute : null);
+
+  // A route over floor transitions is re-checked while it is shown: if a lift or stairs on it closes, is removed, or (for a
+  // step-free route) loses its verification, the route is planned again rather than followed onto it.
+  useEffect(() => {
+    if (!routeResponse || routeResponse.floorTransitions.length === 0 || !venueId) return;
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const result = transitionsStillUsable(routeResponse, await listFloorConnections(venueId));
+        if (cancelled || result.usable) return;
+        if (result.connectionIds.every((id) => replannedForRef.current.has(id))) {
+          setTransitionNotice(`This route uses a connection that is no longer usable: ${result.problems.join("; ")}.`);
+          return;
+        }
+        result.connectionIds.forEach((id) => replannedForRef.current.add(id));
+        setTransitionNotice(`The route changed: ${result.problems.join("; ")}. It was planned again.`);
+        setFollowRoute(null);
+        segmentCacheRef.current.clear();
+        setRouteRecalc((n) => n + 1);
+      } catch {
+        /* a failed check changes nothing; the next one may succeed */
+      }
+    };
+    void check();
+    const id = setInterval(check, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [routeResponse, venueId]);
   const reachedStops = useMemo(() => {
     const outcome = routeOutcomes?.[routeProfile];
     if (!outcome?.ok) return [];
@@ -627,10 +668,16 @@ export default function ViewerWorkspace() {
           <select className="min-h-9 max-w-[60vw] rounded border p-1" value={floorId} onChange={(e) => setFloorId(e.target.value)} disabled={!venueId}>
             <option value="">Select…</option>
             {floors.map((f) => (
-              <option key={f.id} value={f.id}>{f.name} (level {f.level})</option>
+              <option key={f.id} value={f.id}>{floorLabel(f)}</option>
             ))}
           </select>
         </label>
+
+        {floorId && floors.some((f) => f.id === floorId) && (
+          <span className="rounded bg-zinc-900 px-2 py-1 text-sm font-medium text-white" data-testid="current-floor" aria-live="polite">
+            Showing {floorLabel(floors.find((f) => f.id === floorId)!)}
+          </span>
+        )}
 
         <label className="text-sm">
           Reconstruction{" "}
@@ -923,6 +970,15 @@ export default function ViewerWorkspace() {
                   </div>
                 )}
                 {optimizing && <p role="alert" className="text-xs text-red-700">{optimizing}</p>}
+                {transitionNotice && (
+                  <p role="alert" className="text-xs text-amber-800" data-testid="route-transition-notice">{transitionNotice}</p>
+                )}
+                {!plannedRoute && followRoute && routeResponse && (
+                  <p className="text-xs text-zinc-700" data-testid="route-followed">
+                    Showing this floor&apos;s part of the route planned from {floorName(followRoute.waypoints[0]?.floorId ?? "")}.{" "}
+                    <button className="underline" onClick={() => setFloorId(followRoute.waypoints[0]?.floorId ?? floorId)}>Back</button>
+                  </p>
+                )}
                 {!online && <p className="text-xs text-amber-700" data-testid="route-offline">Offline: routes are planned again when the connection returns.</p>}
                 {routeBusy && <p className="text-xs text-zinc-500">Finding a route…</p>}
                 {routeOutcomes && !routeBusy && (
@@ -1004,9 +1060,24 @@ export default function ViewerWorkspace() {
                       <p className="text-xs text-zinc-600">This model is not calibrated, so the route is not drawn on it.</p>
                     )}
                     {overlay && overlay.otherFloorIds.length > 0 && (
-                      <p className="text-xs text-zinc-600" data-testid="route-other-floors">
-                        The route continues on {overlay.otherFloorIds.map(floorName).join(", ")}; switch floors to see that part.
-                      </p>
+                      <div className="text-xs text-zinc-600" data-testid="route-other-floors">
+                        <p>The route also runs on {overlay.otherFloorIds.map(floorName).join(", ")}.</p>
+                        {!scanVersionId ? (
+                          <div className="mt-1 flex flex-wrap gap-2">
+                            {overlay.otherFloorIds.map((id) => (
+                              <button key={id} className="rounded border bg-white px-2 py-0.5" data-testid="route-show-floor"
+                                onClick={() => {
+                                  setFollowRoute(routeResponse);
+                                  setFloorId(id);
+                                }}>
+                                Show {floorName(id)}
+                              </button>
+                            ))}
+                          </div>
+                        ) : (
+                          <p>A route on a historical version stays on its floor.</p>
+                        )}
+                      </div>
                     )}
                     {instructions.length > 0 && (
                       <ol className="space-y-0.5 rounded border p-2 text-xs text-zinc-700" data-testid="route-instructions"

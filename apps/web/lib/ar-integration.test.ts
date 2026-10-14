@@ -87,9 +87,12 @@ test("a known two-floor layout and step-free route, walked through the session c
   dispatch({ type: "SESSION_STARTED", floorId: "floor-1" });
   dispatch({ type: "TRACKING_RESTORED" });
 
-  // Two markers of floor 1 in view (and one of floor 2, which is registered for the session but ignored on this floor).
-  const seen = observe(TRUE_F1, ["a1", "a2", "b1"]);
-  dispatch({ type: "MARKERS_OBSERVED", observations: seen });
+  // Two markers of floor 1 in view, and one of floor 2 across the atrium: which floor the device is on is ambiguous, so
+  // nothing is localized until floor 1's markers are seen without it.
+  dispatch({ type: "MARKERS_OBSERVED", observations: observe(TRUE_F1, ["a1", "a2", "b1"]) });
+  assert.equal(s.state, "SEARCHING");
+  assert.equal(s.floorCheck?.status, "AMBIGUOUS");
+  for (let i = 0; i < 4 && s.state === "SEARCHING"; i++) dispatch({ type: "MARKERS_OBSERVED", observations: observe(TRUE_F1, ["a1", "a2"]) });
   assert.equal(s.state, "RELOCALIZING");
   assert.deepEqual(s.pending!.observations.map((o) => o.anchorId), ["a1", "a2"]);
   dispatch({ type: "RELOCALIZATION_SUCCEEDED", requestId: s.pending!.requestId,
@@ -133,10 +136,16 @@ test("a known two-floor layout and step-free route, walked through the session c
   assert.equal(s.state, "FLOOR_TRANSITION");
   assert.equal(s.localization, null);
 
-  // On floor 2 a floor-1 marker identifies nothing; a floor-2 marker localizes in floor 2's own version and frame.
+  // On floor 2 a floor-1 marker (seen down the stairwell) identifies nothing, and makes the floor ambiguous until floor 2's
+  // markers are seen alone for the whole window; then a floor-2 marker localizes in floor 2's own version and frame.
   dispatch({ type: "MARKERS_OBSERVED", observations: observe(TRUE_F2, ["a3"]) });
   assert.equal(s.state, "FLOOR_TRANSITION");
+  for (let i = 0; i < 3; i++) {
+    dispatch({ type: "MARKERS_OBSERVED", observations: observe(TRUE_F2, ["b1"]) });
+    assert.equal(s.floorCheck?.status, "AMBIGUOUS");
+  }
   dispatch({ type: "MARKERS_OBSERVED", observations: observe(TRUE_F2, ["b1"]) });
+  assert.equal(s.state, "RELOCALIZING");
   dispatch({ type: "RELOCALIZATION_SUCCEEDED", requestId: s.pending!.requestId,
     localization: relocalize(s.pending!.observations, "floor-2", "sv-2", "frame-2", 6000) });
   assert.equal(s.state, "LOCALIZED");

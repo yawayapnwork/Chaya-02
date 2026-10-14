@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { FIXTURE, FLOOR_ID, FRAME_ID, SCENE_TIMEOUT, frameDifference, mockViewerApi, sampleCanvas } from "./viewer-fixture";
+import { FIXTURE, FLOOR_ID, FRAME_ID, SCENE_TIMEOUT, VENUE_ID, frameDifference, mockViewerApi, sampleCanvas } from "./viewer-fixture";
 
 // Viewer interactions on the FORMAT VALIDATION fixture (e2e/viewer-fixture.ts: the production exporter's .ksplat of a
 // synthetic scene, not a venue). The JSON API -- including POST /navigation/routes -- is mocked with the response shapes
@@ -185,6 +185,56 @@ test("navigation: an expired sign-in is reported as such, not as an unreachable 
   await page.getByRole("combobox", { name: "Add a destination" }).selectOption({ label: green.label });
   await expect(page.getByTestId("route-STANDARD")).toHaveAttribute("data-failure", "session-expired");
   await expect(page.getByTestId("route-STANDARD")).toContainText("expired");
+});
+
+test("multi-floor: the current floor and its recorded elevation are shown; a closed lift on the route replans it once", async ({ page }) => {
+  test.setTimeout(3 * SCENE_TIMEOUT);
+  const UPPER = "99999999-9999-9999-9999-999999999999";
+  await mockViewerApi(page, RUN_ID, { calibrated: true });
+  // Registered after the fixture's own mocks, so these answer first.
+  await page.route(`**/mock-api/api/v1/venues/${VENUE_ID}/floors`, (r) => r.fulfill({ contentType: "application/json", body: JSON.stringify([
+    { id: FLOOR_ID, level: 0, name: "Ground Floor", elevation: { elevationM: 0, source: "SURVEYED", reference: null, recordedBy: "s", recordedAt: "2026-10-01T00:00:00Z" } },
+    { id: UPPER, level: 1, name: "Level 1", elevation: null },
+  ]) }));
+  const twoFloorRoute = {
+    ...fixtureRoute("STANDARD"),
+    waypoints: [
+      { x: red.canonical[0], y: red.canonical[1], z: red.canonical[2], floorId: FLOOR_ID, kind: "START" },
+      { x: green.canonical[0], y: green.canonical[1], z: green.canonical[2], floorId: FLOOR_ID, kind: "TRANSITION" },
+      { x: 0, y: 0, z: 0, floorId: UPPER, kind: "WAYPOINT" },
+      { x: 3, y: 0, z: 0, floorId: UPPER, kind: "DESTINATION" },
+    ],
+    floorTransitions: [{ fromFloorId: FLOOR_ID, toFloorId: UPPER, connectorType: "ELEVATOR", poiId: "poi-2", connectionId: "lift-1",
+      toPoiId: "poi-up", distanceMeters: 0, durationSeconds: 45 }],
+  };
+  const requests = await mockRoutes(page, {
+    STANDARD: { body: twoFloorRoute },
+    STEP_FREE: { status: 404, code: "FLOOR_CONNECTION_UNAVAILABLE", detail: "no step-free connection" },
+  });
+  // The lift on the route has just gone out of service.
+  await page.route(`**/mock-api/api/v1/venues/${VENUE_ID}/floor-connections`, (r) => r.fulfill({ contentType: "application/json", body: JSON.stringify([
+    { id: "lift-1", connectorType: "ELEVATOR", fromFloorId: FLOOR_ID, fromPoiId: "poi-2", toFloorId: UPPER, toPoiId: "poi-up",
+      bidirectional: true, lengthM: null, maxSlopeDeg: null, minClearanceM: 1.1, status: "OUT_OF_SERVICE",
+      accessibilityVerifiedAt: null, accessibilityVerifiedBy: null },
+  ]) }));
+  await page.goto(`/viewer?link=good-secret`);
+  // Two floors: none is chosen for the user.
+  await expect(page.getByTestId("current-floor")).toHaveCount(0);
+  await page.getByRole("combobox", { name: "Floor" }).selectOption(FLOOR_ID);
+  const splats = page.locator("dt", { hasText: /^Splats$/ }).locator("xpath=following-sibling::dd[1]");
+  await expect(splats).toHaveText(FIXTURE.splat_count.toLocaleString("en-US"), { timeout: SCENE_TIMEOUT });
+  await expect(page.getByTestId("current-floor")).toHaveText("Showing Ground Floor (level 0 · +0.00 m, surveyed)");
+  await expect(page.getByRole("option", { name: "Level 1 (level 1 · elevation not recorded)" })).toBeAttached();
+
+  await page.getByRole("combobox", { name: "From" }).selectOption({ label: red.label });
+  await page.getByRole("combobox", { name: "Add a destination" }).selectOption({ label: green.label });
+  await expect(page.getByTestId("route-show-floor")).toHaveText("Show Level 1 (level 1)");
+  await expect(page.getByTestId("route-transition-notice")).toContainText("out of service");
+  // One recalculation (both profiles again), then no more for the same connection.
+  await expect.poll(() => requests.length).toBe(4);
+  await page.waitForTimeout(1500);
+  expect(requests.length).toBe(4);
+  await expect(page.getByTestId("route-transition-notice")).toContainText("no longer usable");
 });
 
 test("keyboard: the focused scene zooms and resets from the keyboard, and typing elsewhere never changes it", async ({ page }) => {

@@ -179,10 +179,32 @@ test("an answer solved on another floor is refused", () => {
   assert.match(other.lastError!, /^FLOOR_MISMATCH/);
 });
 
-test("observations of another floor's markers are ignored", () => {
+test("another floor's markers never localize the session: twice seen alone they say the user is on that floor", () => {
   const s = reduceArSession(reduceArSession(initialArSessionState(), { type: "SESSION_STARTED", floorId: "floor-1" }), { type: "TRACKING_RESTORED" });
-  assert.equal(reduceArSession(s, { type: "MARKERS_OBSERVED", observations: [{ ...OBS, floorId: "floor-2" }] }), s);
+  const once = reduceArSession(s, { type: "MARKERS_OBSERVED", observations: [{ ...OBS, floorId: "floor-2" }] });
+  assert.equal(once.state, "SEARCHING");
+  assert.deepEqual(once.floorCheck, { status: "PENDING" });
+  const twice = reduceArSession(once, { type: "MARKERS_OBSERVED", observations: [{ ...OBS, floorId: "floor-2" }] });
+  assert.equal(twice.state, "SEARCHING", "no localization, so no route overlay, on an unexpected floor");
+  assert.deepEqual(twice.floorCheck, { status: "UNEXPECTED", detectedFloorId: "floor-2" });
+  // The user confirms: the session localizes on floor 2 (the caller plans the route again from there).
+  const accepted = reduceArSession(twice, { type: "ACCEPT_DETECTED_FLOOR" });
+  assert.equal(accepted.floorId, "floor-2");
+  assert.equal(reduceArSession(accepted, { type: "MARKERS_OBSERVED", observations: [{ ...OBS, floorId: "floor-2" }] }).state, "RELOCALIZING");
+  // On the chosen floor, at the start of a session, its own marker localizes at once.
   assert.equal(reduceArSession(s, { type: "MARKERS_OBSERVED", observations: [{ ...OBS, floorId: "floor-1" }] }).state, "RELOCALIZING");
+});
+
+test("markers of two floors in view are ambiguous: nothing is decided until one floor's markers are seen alone", () => {
+  const s = reduceArSession(reduceArSession(initialArSessionState(), { type: "SESSION_STARTED", floorId: "floor-1" }), { type: "TRACKING_RESTORED" });
+  let t = reduceArSession(s, { type: "MARKERS_OBSERVED", observations: [{ ...OBS, floorId: "floor-1" }, { ...OBS, anchorId: "x", floorId: "floor-2" }] });
+  assert.equal(t.state, "SEARCHING");
+  assert.deepEqual(t.floorCheck, { status: "AMBIGUOUS", floorIds: ["floor-1", "floor-2"] });
+  assert.equal(reduceArSession(t, { type: "ACCEPT_DETECTED_FLOOR" }), t, "an ambiguous floor cannot be accepted");
+  for (let i = 0; i < 3; i++) t = reduceArSession(t, { type: "MARKERS_OBSERVED", observations: [{ ...OBS, floorId: "floor-1" }] });
+  assert.equal(t.floorCheck?.status, "AMBIGUOUS", "still within the window");
+  t = reduceArSession(t, { type: "MARKERS_OBSERVED", observations: [{ ...OBS, floorId: "floor-1" }] });
+  assert.equal(t.state, "RELOCALIZING");
 });
 
 test("drift drops the transform; the marker in view relocalizes the session", () => {
@@ -202,9 +224,13 @@ test("a floor handoff drops the transform and localizes the next floor from its 
   assert.equal(handed.floorId, "floor-2");
   assert.equal(handed.localization, null, "a transform is never carried to another floor");
   assert.equal(canAdvanceRoute(handed), false);
-  assert.equal(reduceArSession(handed, { type: "MARKERS_OBSERVED", observations: [{ ...OBS, floorId: "floor-1" }] }), handed,
-    "the floor left behind cannot localize the session");
-  const relocalizing = reduceArSession(handed, { type: "MARKERS_OBSERVED", observations: [{ ...OBS, floorId: "floor-2" }] });
+  assert.equal(reduceArSession(handed, { type: "MARKERS_OBSERVED", observations: [{ ...OBS, floorId: "floor-1" }] }).state,
+    "FLOOR_TRANSITION", "the floor left behind cannot localize the session");
+  // Right after a floor change one sighting is not enough to be sure of the floor: two are.
+  const once = reduceArSession(handed, { type: "MARKERS_OBSERVED", observations: [{ ...OBS, floorId: "floor-2" }] });
+  assert.equal(once.state, "FLOOR_TRANSITION");
+  assert.deepEqual(once.floorCheck, { status: "PENDING" });
+  const relocalizing = reduceArSession(once, { type: "MARKERS_OBSERVED", observations: [{ ...OBS, floorId: "floor-2" }] });
   assert.equal(relocalizing.state, "RELOCALIZING");
   const second: Localization = { ...LOC, floorId: "floor-2", scanVersionId: "sv-9", coordinateFrameId: "frame-9" };
   const there = reduceArSession(relocalizing, { type: "RELOCALIZATION_SUCCEEDED", requestId: relocalizing.pending!.requestId, localization: second });

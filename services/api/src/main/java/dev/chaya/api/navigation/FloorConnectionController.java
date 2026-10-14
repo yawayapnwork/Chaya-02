@@ -32,9 +32,11 @@ public class FloorConnectionController {
     public record AccessibilityVerificationRequest(@NotNull Boolean verified) {}
 
     private final FloorConnectionService connections;
+    private final RouteService routes;
 
-    public FloorConnectionController(FloorConnectionService connections) {
+    public FloorConnectionController(FloorConnectionService connections, RouteService routes) {
         this.connections = connections;
+        this.routes = routes;
     }
 
     @Operation(summary = "List the venue's floor connections (stairs, elevators, ramps between floors)")
@@ -52,12 +54,30 @@ public class FloorConnectionController {
     }
 
     @Operation(summary = "Create a floor connection")
-    @ProblemResponse(status = 400, description = "INVALID_FLOOR_CONNECTION")
+    @ProblemResponse(status = 400, description = "INVALID_FLOOR_CONNECTION, CONNECTION_GEOMETRY_INCONSISTENT")
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER')")
     public Connection create(@PathVariable UUID venueId, @RequestBody ConnectionData body) {
         return connections.create(ActorAuthentication.currentActor(), venueId, body);
+    }
+
+    @Operation(summary = "The floor-transition graph routing uses for a profile",
+            description = "Usable connections, unusable ones and why, and which floors are connected (STANDARD or STEP_FREE).")
+    @GetMapping("/graph")
+    @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR','VIEWER','PUBLIC_VIEWER')")
+    public RouteService.FloorTransitionGraph graph(@PathVariable UUID venueId,
+                                                   @org.springframework.web.bind.annotation.RequestParam(required = false) String accessibility) {
+        return routes.floorTransitionGraph(ActorAuthentication.currentActor(), venueId, accessibility);
+    }
+
+    @Operation(summary = "Correct a floor connection's registration",
+            description = "Changing anything step-free routing relies on withdraws the accessibility verification.")
+    @ProblemResponse(status = 400, description = "INVALID_FLOOR_CONNECTION, CONNECTION_GEOMETRY_INCONSISTENT")
+    @PutMapping("/{connectionId}")
+    @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER')")
+    public Connection update(@PathVariable UUID venueId, @PathVariable UUID connectionId, @RequestBody ConnectionData body) {
+        return connections.update(ActorAuthentication.currentActor(), venueId, connectionId, body);
     }
 
     @Operation(summary = "Set a floor connection's status (e.g. out of service)")

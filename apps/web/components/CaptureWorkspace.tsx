@@ -47,6 +47,8 @@ import type { SessionSummary } from "@/lib/capture-queue";
 import { captureQueue, currentOwnerKey, queueStore, setQueueOwner, syncNow } from "@/lib/capture-queue-browser";
 import { type StorageStatus, requestPersistentStorage, storageStatus } from "@/lib/capture-queue-idb";
 import CaptureQueuePanel, { FileRowView } from "@/components/CaptureQueuePanel";
+import FloorManager from "@/components/FloorManager";
+import { floorLabel } from "@/lib/floor-transitions";
 
 /**
  * What this browser actually reports about the device. Nothing is inferred or filled in: camera intrinsics, lens
@@ -470,9 +472,10 @@ export default function CaptureWorkspace() {
             <span className="text-sm">Floor (optional)</span>
             <select className="mt-1 block w-full rounded border p-2" value={floorId} onChange={(e) => setFloorId(e.target.value)} disabled={!venueId}>
               <option value="">No specific floor</option>
-              {floors.map((f) => <option key={f.id} value={f.id}>{f.name} (level {f.level})</option>)}
+              {floors.map((f) => <option key={f.id} value={f.id}>{floorLabel(f)}</option>)}
             </select>
           </label>
+          {venueId && <FloorManager venueId={venueId} floors={floors} onChanged={() => listFloors(venueId).then(setFloors, fail)} />}
           {floorId === "" && venueId && (
             <p className="text-sm text-amber-800">Without a floor, no calibration measurements can be recorded for this capture.</p>
           )}

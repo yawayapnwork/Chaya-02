@@ -134,3 +134,34 @@ export interface MultiStopResponse {
 export const planRoute = (request: RouteRequest) => api<RouteResponse>("/navigation/routes", { method: "POST", body: JSON.stringify(request) });
 export const planMultiStopRoute = (request: MultiStopRequest) =>
   api<MultiStopResponse>("/navigation/routes/multi-stop", { method: "POST", body: JSON.stringify(request) });
+
+/** Mirrors dev.chaya.api.navigation.FloorConnectionService.Connection: a registered stairs, ramp or elevator. */
+export interface FloorConnection {
+  id: string;
+  connectorType: "STAIRS" | "RAMP" | "ELEVATOR";
+  fromFloorId: string;
+  fromPoiId: string;
+  toFloorId: string;
+  toPoiId: string;
+  bidirectional: boolean;
+  lengthM: number | null;
+  maxSlopeDeg: number | null;
+  minClearanceM: number | null;
+  status: "IN_SERVICE" | "OUT_OF_SERVICE";
+  accessibilityVerifiedAt: string | null;
+  accessibilityVerifiedBy: string | null;
+}
+
+export const listFloorConnections = (venueId: string) => api<FloorConnection[]>(`/venues/${venueId}/floor-connections`);
+
+/** Mirrors RouteService.FloorTransitionGraph: the floors as routing sees them for one profile. */
+export interface FloorTransitionGraph {
+  accessibilityProfile: "STANDARD" | "STEP_FREE";
+  floors: { floorId: string; level: number; name: string; routable: boolean; problem: string | null }[];
+  edges: { connectionId: string; connectorType: string; fromFloorId: string; toFloorId: string }[];
+  unusableConnections: string[];
+  components: string[][];
+}
+
+export const getFloorTransitionGraph = (venueId: string, accessibility: string) =>
+  api<FloorTransitionGraph>(`/venues/${venueId}/floor-connections/graph?accessibility=${encodeURIComponent(accessibility)}`);
