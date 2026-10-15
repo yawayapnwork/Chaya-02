@@ -38,7 +38,7 @@ public class VenueScopeFilter extends OncePerRequestFilter {
                 Actor scoped = actor.atVenue(venue.get());
                 if (scoped != actor) {
                     SecurityContext narrowed = SecurityContextHolder.getContextHolderStrategy().createEmptyContext();
-                    ActorAuthentication replacement = new ActorAuthentication(scoped);
+                    ActorAuthentication replacement = new ActorAuthentication(scoped, auth.expiresAt());
                     replacement.setDetails(auth.getDetails());
                     narrowed.setAuthentication(replacement);
                     SecurityContextHolder.setContext(narrowed);

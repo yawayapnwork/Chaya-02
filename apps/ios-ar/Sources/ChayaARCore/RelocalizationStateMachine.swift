@@ -11,6 +11,9 @@ import Foundation
 ///   localized / limited --limited(relocalizing) | notAvailable | interrupted | world anchor lost--> trackingLost
 ///   limited --normal, but the recovery check fails (recoveryRejected)--> trackingLost
 ///   trackingLost --normal--> recovered --markersObserved--> solving --...--> localized
+///   localized --floorHandoff--> floorTransition --markersObserved (the floor identified, FloorIdentification)--> solving
+///   searching / floorTransition with another floor's markers only (.unexpected) --acceptDetectedFloor--> the same phase on
+///                                                                                that floor (the caller plans the route again)
 ///   anything --sessionEnded / sessionFailed--> ended
 ///
 /// Rules:
@@ -26,10 +29,14 @@ import Foundation
 ///   * Tracking loss is sticky. ARKit reporting `.normal` again only gets to `recovered`; the route returns only after a
 ///     registered marker is observed again and the server relocalizes from it.
 ///   * A server answer for a request that is no longer pending is ignored.
-///   * A localization belongs to one floor and one scan version. The session's floor is fixed when it starts; its version
-///     is pinned at the first localization and sent with every later request. An answer for another floor, or in another
+///   * A localization belongs to one floor and one scan version. The session's floor is set when it starts and changes only
+///     through a floor handoff or the user accepting the floor the markers show; each floor's version is pinned at its
+///     first localization and sent with every later request for that floor. An answer for another floor, or in another
 ///     version (the floor was republished mid-session), is refused (FLOOR_MISMATCH / VERSION_MISMATCH) like a failed
 ///     solve: it never replaces the transform, so a stale version's route is never drawn with a new version's transform.
+///   * Floors (docs/ar.md, "Floor handoff"): a transform is valid on one floor only. A handoff drops it; the next floor is
+///     localized only once its markers alone have been seen in `FloorIdentification.minFloorSightings` frames. Markers of
+///     several floors at once (.ambiguous) or of another floor only (.unexpected) localize nothing.
 public enum LimitedReason: String, Equatable, Sendable {
     case initializing, excessiveMotion, insufficientFeatures, relocalizing, other
 
@@ -76,7 +83,10 @@ public struct Localization: Equatable, Sendable {
 }
 
 public enum NavigationPhase: Equatable, Sendable {
-    case idle, searching, solving, localized, limited, trackingLost, recovered, ended
+    case idle, searching, solving, localized, limited, trackingLost, recovered
+    /// Left one floor over a stair, ramp or elevator transition; not localized until the next floor is identified.
+    case floorTransition
+    case ended
 }
 
 /// The tracking status the UI shows (normal / limited / relocalizing / lost / recovered).
@@ -98,11 +108,17 @@ public struct NavigationState: Equatable, Sendable {
     }
 
     public var phase: NavigationPhase = .idle
-    /// The floor this session localizes on (set when it starts). Answers for another floor are refused.
+    /// The floor this session localizes on now (set when it starts, changed by a handoff). Answers for another floor are
+    /// refused.
     public var floorId: UUID?
-    /// The scan version the floor was first localized in. Sent with every later relocalization; an answer in another
-    /// version is refused.
-    public var pinnedScanVersionId: UUID?
+    /// Per floor, the scan version it was first localized in this session. Sent with every later relocalization on that
+    /// floor; an answer in another version is refused.
+    public var pinnedScanVersions: [UUID: UUID] = [:]
+    /// The floors seen in each of the recent frames that saw registered markers, while establishing the floor.
+    public var floorWindow: [[UUID]] = []
+    /// Why the session has not localized although markers were seen: another floor's markers (.unexpected), several floors'
+    /// markers (.ambiguous), or not enough sightings (.pending). nil once identified.
+    public var floorCheck: FloorCheck?
     public var deviceTracking: TrackingQuality = .notAvailable
     /// The current localization; kept while trackingLost/recovered for display only, never used to advance.
     public var localization: Localization?
@@ -113,6 +129,9 @@ public struct NavigationState: Equatable, Sendable {
     public var nextRequestId = 1
 
     public init() {}
+
+    /// The scan version pinned for the session's current floor (nil before its first localization).
+    public var pinnedScanVersionId: UUID? { floorId.flatMap { pinnedScanVersions[$0] } }
 
     public var canAdvanceRoute: Bool { phase == .localized && localization != nil }
 
@@ -140,6 +159,10 @@ public enum NavigationEvent: Equatable, Sendable {
     case tick(at: TimeInterval)
     case sessionInterrupted
     case markersObserved([MarkerObservation])
+    /// The device reached the end of this floor's leg (`RouteGeometry.floorHandoff`); the route continues on `toFloorId`.
+    case floorHandoff(toFloorId: UUID)
+    /// The user confirmed being on the floor whose markers the camera sees (floorCheck .unexpected).
+    case acceptDetectedFloor
     case relocalizationSucceeded(requestId: Int, Localization)
     case relocalizationFailed(requestId: Int, error: String)
     case worldAnchorLost
@@ -214,10 +237,50 @@ public enum RelocalizationStateMachine {
             }
 
         case .markersObserved(let observations):
-            guard s.phase == .searching || s.phase == .recovered, s.deviceTracking == .normal, !observations.isEmpty else { return s }
-            n.phase = .solving
-            n.pending = .init(requestId: s.nextRequestId, observations: observations, resumeTo: s.phase)
-            n.nextRequestId += 1
+            guard s.deviceTracking == .normal, !observations.isEmpty else { return s }
+            switch s.phase {
+            case .searching, .floorTransition:
+                // Establishing the floor (session start, or after a floor change): localize only once it is identified.
+                guard let expected = s.floorId else { return s }
+                let window = FloorIdentification.push(s.floorWindow, observations.map { $0.floorId ?? expected })
+                let check = FloorIdentification.identify(window, expected: expected,
+                                                         minSightings: s.phase == .floorTransition ? FloorIdentification.minFloorSightings : 1)
+                guard check == .confirmed else {
+                    n.floorWindow = window
+                    n.floorCheck = check
+                    return n
+                }
+                n.floorWindow = []
+                n.floorCheck = nil
+                n = solve(n, observations.filter { ($0.floorId ?? expected) == expected }, resumeTo: s.phase)
+            case .recovered:
+                // Only this floor's markers: the transform being re-established is this floor's.
+                let own = observations.filter { $0.floorId == nil || $0.floorId == s.floorId }
+                guard !own.isEmpty else { return s }
+                n = solve(n, own, resumeTo: .recovered)
+            default:
+                return s
+            }
+
+        case .floorHandoff(let toFloorId):
+            // A transform is valid on one floor only (each floor has its own canonical frame). The next floor starts
+            // unlocalized and is localized from its own markers. Never from limited: progress is frozen there.
+            guard s.phase == .localized, toFloorId != s.floorId else { return s }
+            n.phase = .floorTransition
+            n.floorId = toFloorId
+            n.localization = nil
+            n.pending = nil
+            n.lostReason = nil
+            n.lastError = nil
+            n.floorWindow = []
+            n.floorCheck = nil
+
+        case .acceptDetectedFloor:
+            // The user is where the markers say. The session localizes on that floor; the caller plans the route again.
+            guard s.phase == .searching || s.phase == .floorTransition, case .unexpected(let detected)? = s.floorCheck else { return s }
+            n.floorId = detected
+            n.floorCheck = nil
+            n.floorWindow = []
 
         case .relocalizationSucceeded(let requestId, let localization):
             guard s.phase == .solving, let pending = s.pending, pending.requestId == requestId else { return s }
@@ -229,7 +292,7 @@ public enum RelocalizationStateMachine {
             }
             n.phase = .localized
             n.localization = localization
-            n.pinnedScanVersionId = localization.scanVersionId
+            n.pinnedScanVersions[localization.floorId] = localization.scanVersionId
             n.pending = nil
             n.limitedSince = nil
             n.lostReason = nil
@@ -282,13 +345,21 @@ public enum RelocalizationStateMachine {
         return n
     }
 
+    private static func solve(_ s: NavigationState, _ observations: [MarkerObservation], resumeTo: NavigationPhase) -> NavigationState {
+        var n = s
+        n.phase = .solving
+        n.pending = .init(requestId: s.nextRequestId, observations: observations, resumeTo: resumeTo)
+        n.nextRequestId += 1
+        return n
+    }
+
     /// Tracking went bad while a request was in flight: the observation it was made from is no longer in a trustworthy
-    /// frame. Back to searching if never localized, otherwise lost.
+    /// frame. Back to searching (or to the floor transition) if not localized on this floor yet, otherwise lost.
     private static func cancelPending(_ s: NavigationState, reason: String) -> NavigationState {
         var n = s
-        let wasRecovering = s.pending?.resumeTo == .recovered
+        let resumeTo = s.pending?.resumeTo
         n.pending = nil
-        n.phase = wasRecovering ? .trackingLost : .searching
+        n.phase = resumeTo == .recovered ? .trackingLost : resumeTo == .floorTransition ? .floorTransition : .searching
         n.lostReason = reason
         return n
     }

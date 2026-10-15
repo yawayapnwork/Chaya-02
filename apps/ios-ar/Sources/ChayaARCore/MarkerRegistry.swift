@@ -105,6 +105,9 @@ public struct MarkerObservation: Equatable, Sendable {
     /// Measured size / registered printed size (ARKit automatic image scale estimation). 1 means the print is exactly
     /// the registered size.
     public var estimatedScaleFactor: Double
+    /// The floor the marker is registered on (Anchor.floorId). nil only for an observation built without a registry; it
+    /// then counts as the session's floor.
+    public var floorId: UUID? = nil
 
     public var asAnchorObservation: AnchorObservation { AnchorObservation(anchorId: anchorId, observedPose: observedPose) }
 }
@@ -122,7 +125,7 @@ public enum MarkerObservations {
             guard let marker = registry.marker(forReferenceImageName: d.referenceImageName) else { return nil }
             return MarkerObservation(anchorId: marker.anchor.id, markerIdentifier: marker.anchor.markerIdentifier,
                                      observedPose: d.pose, timestamp: d.timestamp, isTracked: d.isTracked,
-                                     estimatedScaleFactor: d.estimatedScaleFactor)
+                                     estimatedScaleFactor: d.estimatedScaleFactor, floorId: marker.anchor.floorId)
         }
     }
 

@@ -21,3 +21,9 @@ export function sseFrameData(frame: string): string | null {
   const dataLines = frame.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trimStart());
   return dataLines.length === 0 ? null : dataLines.join("\n");
 }
+
+/** The value of a field (`event`, `id`, `retry`) in one SSE frame, or null when the frame does not set it. */
+export function sseFrameField(frame: string, field: "event" | "id" | "retry"): string | null {
+  const line = frame.split("\n").find((l) => l.startsWith(`${field}:`));
+  return line === undefined ? null : line.slice(field.length + 1).trimStart();
+}

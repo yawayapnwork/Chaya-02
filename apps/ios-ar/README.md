@@ -5,7 +5,7 @@ Native iOS AR navigation client. iOS Safari has no WebXR, so iOS gets this app i
 
 > **Status: builds in CI; NOT DEVICE-VALIDATED.** No macOS, Xcode or iPhone has been available to the authors; every
 > compile of the ARKit layer and the app has happened in the `ios` CI workflow.
-> - `ChayaARCore` is built and tested on Linux Swift 5.10 (`swift test`, 55 tests as of 2026-10-11).
+> - `ChayaARCore` is built and tested on Linux Swift 5.10 (`swift test`, 72 tests as of 2026-10-15).
 > - The app and the ARKit layer first compiled on 2026-09-30 (`ios` run 36734833669, commit `f99b8a6`, Xcode 15.4 on
 >   `macos-14`): `BUILD SUCCEEDED` for `generic/platform=iOS`, and the 9 app-level tests passed in the iOS Simulator.
 > - The scan-version changes after that run (version pinning, versioned routes, route-leg checks) are type-checked
@@ -64,4 +64,11 @@ design.
    pose carries ARKit's later map corrections into that transform.
 5. The route is planned from the device's canonical position **in the pinned scan version**. Its leg is drawn with
    SceneKit only if the route's `routingSources` entry for the floor names the localization's version and frame, and
-   it is advanced from `ARFrame.camera.transform` while localized.
+   it is advanced from `ARFrame.camera.transform` while localized. A destination on another floor is routed on what
+   each floor publishes now (a version-pinned route stays on its floor).
+6. Floors: every floor's markers are registered. Within 2 m of the end of a leg that ends at a stair, ramp or elevator,
+   the session hands off: the transform is dropped and nothing is drawn until the next floor's markers alone have been
+   seen (`FloorIdentification`); markers of several floors, or of an unexpected floor, localize nothing, and the user
+   can accept an unexpected floor to be routed from there. The route's floor connections are re-checked every 30 s and
+   the route planned again when one closes (docs/ar.md, "Floor handoff (iOS)"). This was added on 2026-10-15 and, like
+   the rest of the ARKit layer, has not run on a device; the app/ARKit part is type-checked only by the `ios` CI run.

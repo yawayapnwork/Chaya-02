@@ -157,6 +157,29 @@ public struct FloorTransition: Codable, Equatable, Sendable {
     public var durationSeconds: Double?
 }
 
+/// Mirrors dev.chaya.api.navigation.FloorConnectionService's connection view (the fields the app uses;
+/// GET /venues/{id}/floor-connections). Read during a session to re-check the transitions a route crosses.
+public struct FloorConnection: Codable, Equatable, Sendable {
+    public enum Status: String, Codable, Sendable {
+        case inService = "IN_SERVICE", outOfService = "OUT_OF_SERVICE"
+    }
+
+    public var id: UUID
+    public var connectorType: String
+    public var fromFloorId: UUID
+    public var toFloorId: UUID
+    public var bidirectional: Bool
+    public var status: Status
+    /// When staff last verified the connection step-free (nil: never, or withdrawn by a correction).
+    public var accessibilityVerifiedAt: Date?
+
+    public init(id: UUID, connectorType: String, fromFloorId: UUID, toFloorId: UUID, bidirectional: Bool, status: Status,
+                accessibilityVerifiedAt: Date?) {
+        self.id = id; self.connectorType = connectorType; self.fromFloorId = fromFloorId; self.toFloorId = toFloorId
+        self.bidirectional = bidirectional; self.status = status; self.accessibilityVerifiedAt = accessibilityVerifiedAt
+    }
+}
+
 /// Mirrors dev.chaya.api.navigation.NavigationDtos.RoutingSource (the fields the app uses): what one floor's leg was
 /// routed on. scanVersionId and coordinateFrameId say which version of the floor, and which canonical frame, the leg's
 /// waypoints are in.

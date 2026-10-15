@@ -46,10 +46,12 @@ public class CaptureController {
 
     private final CaptureService captures;
     private final MediaService media;
+    private final ProcessingBroadcaster processing;
 
-    public CaptureController(CaptureService captures, MediaService media) {
+    public CaptureController(CaptureService captures, MediaService media, ProcessingBroadcaster processing) {
         this.captures = captures;
         this.media = media;
+        this.processing = processing;
     }
 
     @Operation(summary = "Create a capture session (status CREATED)",
@@ -171,8 +173,33 @@ public class CaptureController {
         return captures.cancelProcessing(ActorAuthentication.currentActor(), venueId, captureId);
     }
 
+    @Operation(summary = "Live processing status over Server-Sent Events",
+            description = "Each status event is the full ProcessingStatus, with the status revision as the event id. Send the "
+                + "last id received as Last-Event-ID when reconnecting: the current status is sent only if it differs. Events "
+                + "session-expired (the token used has expired: reconnect with a new one) and gone (the capture no longer "
+                + "exists) end the stream. GET /processing is the snapshot for recovery.")
+    @ApiResponse(responseCode = "200", description = "text/event-stream of ProcessingStatus",
+        content = @Content(mediaType = "text/event-stream", schema = @Schema(implementation = ProcessingStatus.class)))
+    @GetMapping(value = "/{captureId}/processing/stream", produces = org.springframework.http.MediaType.TEXT_EVENT_STREAM_VALUE)
+    public org.springframework.web.servlet.mvc.method.annotation.SseEmitter processingStream(
+            @PathVariable UUID venueId, @PathVariable UUID captureId,
+            @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId) {
+        var actor = ActorAuthentication.currentActor();
+        captures.get(actor, venueId, captureId); // venue-guarded: 404 for anything the caller cannot see
+        Long last = null;
+        if (lastEventId != null) {
+            try {
+                last = Long.parseLong(lastEventId.strip());
+            } catch (NumberFormatException e) {
+                last = null; // not one of ours: send the current status
+            }
+        }
+        return processing.subscribe(venueId, actor.organizationId(), captureId, ActorAuthentication.currentExpiry().orElse(null), last);
+    }
+
     @Operation(summary = "Run status, per-stage execution records and job history",
-            description = "status RUNNING/SUCCEEDED/PARTIAL/FAILED/CANCELLED; quality FINAL, PARTIAL or null.")
+            description = "status RUNNING/SUCCEEDED/PARTIAL/FAILED/CANCELLED; quality FINAL, PARTIAL or null. revision orders "
+                + "statuses; the snapshot to recover from after missed stream events.")
     @GetMapping("/{captureId}/processing")
     public ProcessingStatus processingStatus(@PathVariable UUID venueId, @PathVariable UUID captureId) {
         return captures.processingStatus(ActorAuthentication.currentActor(), venueId, captureId);

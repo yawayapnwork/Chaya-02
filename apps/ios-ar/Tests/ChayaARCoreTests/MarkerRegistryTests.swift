@@ -47,7 +47,8 @@ final class MarkerRegistryTests: XCTestCase {
             ImageDetection(referenceImageName: "someone-else's-image", pose: pose, timestamp: 42.5, isTracked: true, estimatedScaleFactor: 1),
         ], registry: registry)
         XCTAssertEqual(obs, [MarkerObservation(anchorId: stairs.id, markerIdentifier: "stairs", observedPose: pose, timestamp: 42.5,
-                                               isTracked: true, estimatedScaleFactor: 0.97)])
+                                               isTracked: true, estimatedScaleFactor: 0.97, floorId: stairs.floorId)],
+                       "the observation names the floor its marker is registered on")
         XCTAssertEqual(obs[0].asAnchorObservation, AnchorObservation(anchorId: stairs.id, observedPose: pose))
     }
 

@@ -69,6 +69,9 @@ export interface JobItem {
   retryCount: number;
   errorCode: string | null;
   errorMessage: string | null;
+  queuedAt?: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
 }
 export interface ArtifactView {
   id: string;
@@ -118,12 +121,43 @@ export interface RunView {
   retryable: boolean;
   stages: StageView[];
 }
+/** Mirrors CaptureService.ProgressView: counted from stage records only (basis COMPLETED_STAGES). No stage reports
+ * progress within itself, so the active stage has no fraction. */
+export interface ProgressView {
+  stagesTotal: number;
+  stagesSucceeded: number;
+  stagesFailed: number;
+  stagesCancelled: number;
+  stagesNotRun: number;
+  activeStage: string | null;
+  activeStageState: "RUNNING" | "QUEUED" | null;
+  activeStageSince: string | null;
+  activeStageAttempt: number | null;
+  basis: "COMPLETED_STAGES";
+}
+/** A RUNNING job and its worker lease. leaseExpired: the worker has not renewed it; the stage is about to be failed as
+ * WORKER_LOST (never reported done). */
+export interface ActiveJob {
+  jobId: string;
+  stage: string;
+  workerId: string | null;
+  startedAt: string | null;
+  leaseExpiresAt: string | null;
+  leaseExpired: boolean;
+}
+/** revision strictly increases with every committed change of this status (equal revisions: the same state); observedAt
+ * is when the server read it. */
 export interface ProcessingStatus {
   captureId: string;
+  venueId?: string;
   captureStatus: string;
   scanId: string | null;
   run: RunView | null;
   jobs: JobItem[];
+  revision?: number;
+  observedAt?: string;
+  progress?: ProgressView;
+  activeJobs?: ActiveJob[];
 }
 
 async function parseError(res: Response): Promise<ApiError> {

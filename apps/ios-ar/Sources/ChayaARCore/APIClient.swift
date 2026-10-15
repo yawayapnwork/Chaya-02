@@ -132,6 +132,12 @@ public final class APIClient: @unchecked Sendable {
         try await request("/venues/\(venueId.apiString)/pois")
     }
 
+    /// The venue's registered floor connections (stairs, ramps, elevators), with their service status and accessibility
+    /// verification: what a route's floor transitions are re-checked against during a session.
+    public func listFloorConnections(venueId: UUID) async throws -> [FloorConnection] {
+        try await request("/venues/\(venueId.apiString)/floor-connections")
+    }
+
     // ---- anchors ----------------------------------------------------------------------------------------
 
     public func listAnchors(venueId: UUID, floorId: UUID) async throws -> [Anchor] {
@@ -161,8 +167,9 @@ public final class APIClient: @unchecked Sendable {
     /// `start` is canonical venue metres (+Z up) on `floorId` -- the device's position as solved by relocalization.
     /// `scanVersionId`: route on exactly that FINALIZED version of the floor (its pinned navmesh, its frame, the destination
     /// as it is in that version) instead of whatever the floor publishes when the request lands. The AR app passes the
-    /// version its localization was solved in. Such a route stays on that floor (the server refuses another floor's
-    /// destination with VERSION_WRONG_FLOOR).
+    /// version its localization was solved in when the destination is on that floor. Such a route stays on that floor (the
+    /// server refuses another floor's destination with VERSION_WRONG_FLOOR), so a destination on another floor is
+    /// requested without one (`RouteGeometry.routeScanVersion`).
     public func planRoute(venueId: UUID, floorId: UUID, start: Vec3, destinationPoiId: UUID, scanVersionId: UUID?,
                           accessibility: String? = nil) async throws -> RouteResponse {
         try await request("/navigation/routes", method: "POST",

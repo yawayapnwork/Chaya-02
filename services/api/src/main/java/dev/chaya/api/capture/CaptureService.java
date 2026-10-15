@@ -19,11 +19,13 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /** Capture session lifecycle: create, complete upload (with validation), start processing, inspect. */
@@ -38,7 +40,31 @@ public class CaptureService {
     public record JobView(UUID id, String stage, String status, int retryCount, String errorCode,
                           String errorMessage, Instant queuedAt, Instant startedAt, Instant finishedAt) {}
 
-    public record ProcessingStatus(UUID captureId, CaptureStatus captureStatus, UUID scanId, RunView run, List<JobView> jobs) {}
+    /**
+     * The persisted processing state of a capture (docs/pipeline.md, "Live progress"): the snapshot for polling, for
+     * recovery after missed stream events, and the payload of every stream event.
+     * <ul>
+     *   <li>revision: strictly increases with every committed change of what this status shows (V40); equal revisions
+     *       are the same state. A client applies a status only if its revision is not older than the one it shows.</li>
+     *   <li>observedAt: when the server read it; lease expiry below is judged against this time.</li>
+     *   <li>progress: counted from stage records only. No stage reports progress within itself, so there is no
+     *       percentage of the active stage (or of time), and none is invented.</li>
+     *   <li>activeJobs: the RUNNING jobs with their worker and lease. leaseExpired: the worker has not renewed its lease;
+     *       the enforcer fails the stage as WORKER_LOST on its next tick. A stage is never reported done because a worker
+     *       went away: only an accepted report with the stage's contracted outputs makes it SUCCEEDED.</li>
+     * </ul>
+     */
+    public record ProcessingStatus(UUID captureId, UUID venueId, CaptureStatus captureStatus, UUID scanId, RunView run,
+                                   List<JobView> jobs, long revision, Instant observedAt, ProgressView progress,
+                                   List<ActiveJob> activeJobs) {}
+
+    /** basis COMPLETED_STAGES: stagesSucceeded of stagesTotal stages have a successful record. activeStage: the stage
+     * running (or queued) now, its state, since when, and which attempt it is; null when nothing runs or waits. */
+    public record ProgressView(int stagesTotal, int stagesSucceeded, int stagesFailed, int stagesCancelled, int stagesNotRun,
+                               String activeStage, String activeStageState, Instant activeStageSince, Integer activeStageAttempt,
+                               String basis) {}
+
+    public record ActiveJob(UUID jobId, String stage, String workerId, Instant startedAt, Instant leaseExpiresAt, boolean leaseExpired) {}
 
     private static final int MAX_DEVICE_JSON_BYTES = 16 * 1024;
 
@@ -350,16 +376,104 @@ public class CaptureService {
 
     public ProcessingStatus processingStatus(Actor actor, UUID venueId, UUID captureId) {
         CaptureView c = get(actor, venueId, captureId);
-        UUID scan = jdbc.sql("SELECT id FROM scan WHERE capture_session_id = :c AND venue_id = :v")
-            .param("c", captureId).param("v", venueId).query(UUID.class).optional().orElse(null);
-        List<JobView> list = scan == null ? List.of() : jdbc.sql("SELECT id, stage, status, retry_count, error_code, error_message, "
-                + "queued_at, started_at, finished_at FROM processing_job WHERE scan_id = :s ORDER BY created_at")
-            .param("s", scan).query((rs, i) -> new JobView(rs.getObject("id", UUID.class), rs.getString("stage"),
-                rs.getString("status"), rs.getInt("retry_count"), rs.getString("error_code"),
-                rs.getString("error_message"), rs.getTimestamp("queued_at").toInstant(),
-                rs.getTimestamp("started_at") == null ? null : rs.getTimestamp("started_at").toInstant(),
-                rs.getTimestamp("finished_at") == null ? null : rs.getTimestamp("finished_at").toInstant())).list();
-        return new ProcessingStatus(captureId, c.status(), scan, scan == null ? null : pipeline.runView(scan).orElse(null), list);
+        return buildStatus(c.venueId(), captureId);
+    }
+
+    /**
+     * The status for a stream subscriber whose access was checked when it subscribed (CaptureProcessingStreamController):
+     * only within the venue and organization it was authorized for. Empty when the capture is gone (erased).
+     */
+    public Optional<ProcessingStatus> processingStatusForSubscriber(UUID venueId, UUID organizationId, UUID captureId) {
+        boolean visible = jdbc.sql("SELECT EXISTS (SELECT 1 FROM capture_session WHERE id = :c AND venue_id = :v AND organization_id = :o)")
+            .param("c", captureId).param("v", venueId).param("o", organizationId).query(Boolean.class).single();
+        return visible ? Optional.of(buildStatus(venueId, captureId)) : Optional.empty();
+    }
+
+    /** What a stream compares between ticks: the revision, and how many running jobs' leases have expired (a lease expires
+     * with time, not with a write, so it changes the status shown without changing the revision). "gone": no capture. */
+    public String processingStreamKey(UUID captureId) {
+        return jdbc.sql(REVISION).param("c", captureId).query((rs, i) -> rs.getLong(1)).optional()
+            .map(r -> r + ":" + jdbc.sql("SELECT count(*) FROM processing_job j JOIN scan s ON s.id = j.scan_id "
+                    + "WHERE s.capture_session_id = :c AND j.status = 'RUNNING' AND j.lease_expires_at < now()")
+                .param("c", captureId).query(Long.class).single())
+            .orElse("gone");
+    }
+
+    /** The sum of change_seq over the capture's processing rows (V40), in one statement. */
+    private static final String REVISION = """
+            SELECT c.change_seq
+                 + coalesce((SELECT sum(r.change_seq) FROM pipeline_run r JOIN scan s ON s.id = r.scan_id WHERE s.capture_session_id = c.id), 0)
+                 + coalesce((SELECT sum(sr.change_seq) FROM pipeline_stage_run sr JOIN pipeline_run r ON r.id = sr.run_id
+                               JOIN scan s ON s.id = r.scan_id WHERE s.capture_session_id = c.id), 0)
+                 + coalesce((SELECT sum(j.change_seq) FROM processing_job j JOIN scan s ON s.id = j.scan_id WHERE s.capture_session_id = c.id), 0)
+              FROM capture_session c WHERE c.id = :c""";
+
+    private ProcessingStatus buildStatus(UUID venueId, UUID captureId) {
+        // One REPEATABLE READ snapshot, so the revision describes exactly the rows read with it.
+        TransactionTemplate snapshot = new TransactionTemplate(tx.getTransactionManager());
+        snapshot.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);
+        snapshot.setReadOnly(true);
+        return snapshot.execute(st -> {
+            long revision = jdbc.sql(REVISION).param("c", captureId).query((rs, i) -> rs.getLong(1)).single();
+            Instant observedAt = jdbc.sql("SELECT statement_timestamp()").query((rs, i) -> rs.getTimestamp(1).toInstant()).single();
+            CaptureStatus captureStatus = CaptureStatus.valueOf(jdbc.sql("SELECT status FROM capture_session WHERE id = :c")
+                .param("c", captureId).query(String.class).single());
+            UUID scan = jdbc.sql("SELECT id FROM scan WHERE capture_session_id = :c AND venue_id = :v")
+                .param("c", captureId).param("v", venueId).query(UUID.class).optional().orElse(null);
+            List<JobView> list = scan == null ? List.of() : jdbc.sql("SELECT id, stage, status, retry_count, error_code, error_message, "
+                    + "queued_at, started_at, finished_at FROM processing_job WHERE scan_id = :s ORDER BY created_at")
+                .param("s", scan).query((rs, i) -> new JobView(rs.getObject("id", UUID.class), rs.getString("stage"),
+                    rs.getString("status"), rs.getInt("retry_count"), rs.getString("error_code"),
+                    rs.getString("error_message"), rs.getTimestamp("queued_at").toInstant(),
+                    rs.getTimestamp("started_at") == null ? null : rs.getTimestamp("started_at").toInstant(),
+                    rs.getTimestamp("finished_at") == null ? null : rs.getTimestamp("finished_at").toInstant())).list();
+            List<ActiveJob> active = scan == null ? List.of() : jdbc.sql("SELECT id, stage, worker_id, started_at, lease_expires_at, "
+                    + "lease_expires_at < statement_timestamp() AS expired FROM processing_job WHERE scan_id = :s AND status = 'RUNNING' "
+                    + "ORDER BY started_at")
+                .param("s", scan).query((rs, i) -> new ActiveJob(rs.getObject("id", UUID.class), rs.getString("stage"),
+                    rs.getString("worker_id"), rs.getTimestamp("started_at") == null ? null : rs.getTimestamp("started_at").toInstant(),
+                    rs.getTimestamp("lease_expires_at") == null ? null : rs.getTimestamp("lease_expires_at").toInstant(),
+                    rs.getBoolean("expired"))).list();
+            RunView run = scan == null ? null : pipeline.runView(scan).orElse(null);
+            return new ProcessingStatus(captureId, venueId, captureStatus, scan, run, list, revision, observedAt, progress(run, list), active);
+        });
+    }
+
+    /** Progress from stage records only (see ProcessingStatus). */
+    static ProgressView progress(RunView run, List<JobView> jobs) {
+        if (run == null) {
+            return new ProgressView(0, 0, 0, 0, 0, null, null, null, null, "COMPLETED_STAGES");
+        }
+        int ok = 0;
+        int failed = 0;
+        int cancelled = 0;
+        int notRun = 0;
+        String activeStage = null;
+        String activeState = null;
+        Integer attempt = null;
+        for (var st : run.stages()) {
+            switch (st.state()) {
+                case "SUCCEEDED" -> ok++;
+                case "FAILED" -> failed++;
+                case "CANCELLED" -> cancelled++;
+                case "NOT_RUN" -> notRun++;
+                default -> { }
+            }
+            if (activeStage == null && ("RUNNING".equals(st.state()) || "QUEUED".equals(st.state()))) {
+                activeStage = st.stage();
+                activeState = st.state();
+                attempt = st.attempts() + 1;
+            }
+        }
+        Instant since = null;
+        if (activeStage != null) {
+            String stage = activeStage;
+            String status = activeState;
+            JobView job = jobs.stream().filter(j -> j.stage().equals(stage) && j.status().equals(status)).reduce((a, b) -> b).orElse(null);
+            since = job == null ? null : "RUNNING".equals(status) && job.startedAt() != null ? job.startedAt() : job.queuedAt();
+        }
+        return new ProgressView(run.stages().size(), ok, failed, cancelled, notRun, activeStage, activeState, since, attempt,
+            "COMPLETED_STAGES");
     }
 
     /** Compare-and-set transition; refuses anything the state machine does not allow. */

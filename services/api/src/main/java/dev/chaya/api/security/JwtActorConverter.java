@@ -50,7 +50,7 @@ public class JwtActorConverter implements Converter<Jwt, AbstractAuthenticationT
             venueIds.add(uuidClaim(venueClaim, "venue_id"));
         }
         return new ActorAuthentication(new Actor(Actor.Kind.USER, jwt.getSubject(), orgId, Set.copyOf(venueIds), roles,
-            venueRoles(jwt.getClaim("venue_roles"))));
+            venueRoles(jwt.getClaim("venue_roles"))), jwt.getExpiresAt());
     }
 
     /** "venueId:role" entries -> venue -> roles. Only venue-manager, operator and viewer can be granted per venue. */

@@ -48,6 +48,8 @@ import { captureQueue, currentOwnerKey, queueStore, setQueueOwner, syncNow } fro
 import { type StorageStatus, requestPersistentStorage, storageStatus } from "@/lib/capture-queue-idb";
 import CaptureQueuePanel, { FileRowView } from "@/components/CaptureQueuePanel";
 import FloorManager from "@/components/FloorManager";
+import { followCaptureProcessing } from "@/lib/processing-stream";
+import { type LiveState, isNewer } from "@/lib/processing-live";
 import { floorLabel } from "@/lib/floor-transitions";
 
 /**
@@ -122,6 +124,10 @@ export default function CaptureWorkspace() {
   const captureId = capture?.id;
   const venueOfCapture = capture?.venueId;
   const captureStatus = capture?.status;
+  const captureStatusRef = useRef(captureStatus);
+  useEffect(() => {
+    captureStatusRef.current = captureStatus;
+  }, [captureStatus]);
 
   // Sign-in state and venues.
   useEffect(() => {
@@ -220,22 +226,27 @@ export default function CaptureWorkspace() {
     };
   }, [captureId, venueOfCapture, capture?.floorId, stageSignature]);
 
-  // Poll processing status while processing is going on (or has failed and may be retried).
+  // Follow processing live (lib/processing-live.ts): Server-Sent Events with the status revision for ordering, reconnection
+  // with Last-Event-ID, polling of the snapshot while the stream is down, and a stop when the sign-in expires. Followed
+  // for as long as a run exists, so a retry or cancellation made elsewhere shows here too.
+  const [live, setLive] = useState<LiveState | undefined>(undefined);
+  // Every status (stream, poll, or the answer to retry/cancel/start) goes through one rule: shown only if newer.
+  const applyProcessing = useCallback((p: ProcessingStatus) =>
+    setProcessing((prev) => (!prev || prev.captureId !== p.captureId || isNewer(prev, p) ? p : prev)), []);
+  const hasRun = !!processing?.run;
   useEffect(() => {
-    if (!captureId || !venueOfCapture || captureStatus !== "PROCESSING") return;
-    const tick = async () => {
-      try {
-        const p = await getProcessing(venueOfCapture, captureId);
-        setProcessing(p);
-        if (p.captureStatus !== captureStatus) setCapture(await getCapture(venueOfCapture, captureId));
-      } catch (e) {
-        fail(e);
+    if (!captureId || !venueOfCapture || (captureStatus !== "PROCESSING" && !hasRun)) return;
+    const handle = followCaptureProcessing(venueOfCapture, captureId, (p) => {
+      applyProcessing(p);
+      if (p.captureStatus !== captureStatusRef.current) {
+        getCapture(venueOfCapture, captureId).then(setCapture, () => undefined);
       }
-    };
-    tick();
-    const id = setInterval(tick, 3000);
-    return () => clearInterval(id);
-  }, [captureId, venueOfCapture, captureStatus, fail]);
+    }, (state) => {
+      setLive(state);
+      if (state === "SESSION_EXPIRED") setSignedIn(false);
+    });
+    return () => handle.close();
+  }, [captureId, venueOfCapture, captureStatus, hasRun, applyProcessing]);
 
   /** Records the session on this device first; it is created on the server now if online, or when back online. */
   async function onCreate() {
@@ -319,7 +330,8 @@ export default function CaptureWorkspace() {
       }
       setActiveSessionId(local.session.localId);
       setCapture(fresh);
-      if (fresh.status === "PROCESSING") setProcessing(await getProcessing(fresh.venueId, fresh.id));
+      // After a refresh, a capture that is being or was processed shows its run again (finished runs included).
+      if (["PROCESSING", "COMPLETED", "FAILED"].includes(fresh.status)) applyProcessing(await getProcessing(fresh.venueId, fresh.id));
     } catch (e) {
       fail(e);
     } finally {
@@ -365,7 +377,7 @@ export default function CaptureWorkspace() {
     setBusy(true);
     try {
       const status = await startProcessing(capture.venueId, capture.id, { timeBudgetSeconds: timeBudgetMinutes * 60 });
-      setProcessing(status);
+      applyProcessing(status);
       setCapture({ ...capture, status: status.captureStatus });
     } catch (e) {
       fail(e);
@@ -379,7 +391,7 @@ export default function CaptureWorkspace() {
     setError(null);
     setBusy(true);
     try {
-      setProcessing(await retryProcessing(capture.venueId, capture.id));
+      applyProcessing(await retryProcessing(capture.venueId, capture.id));
     } catch (e) {
       fail(e);
     } finally {
@@ -393,7 +405,7 @@ export default function CaptureWorkspace() {
     setBusy(true);
     try {
       const status = await cancelProcessing(capture.venueId, capture.id);
-      setProcessing(status);
+      applyProcessing(status);
       setCapture(await getCapture(capture.venueId, capture.id));
     } catch (e) {
       fail(e);
@@ -630,7 +642,7 @@ export default function CaptureWorkspace() {
               <Link className="underline" href={viewerHref}>View this reconstruction</Link>
             </p>
           )}
-          <ProcessingPanel status={processing} busy={busy} onRetry={onRetryProcessing} onCancel={onCancelProcessing} />
+          <ProcessingPanel status={processing} busy={busy} onRetry={onRetryProcessing} onCancel={onCancelProcessing} live={live} />
         </section>
       )}
     </main>

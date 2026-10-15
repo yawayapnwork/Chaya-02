@@ -403,18 +403,35 @@ A server answer to a request overtaken by a loss is ignored, and its world ancho
 
 ### Scan versions (iOS)
 
-The same rules as the Android chain (steps 2, 5 and 8 above), for the one floor an iOS session runs on:
+The same rules as the Android chain (steps 2, 5 and 8 above), for each floor an iOS session runs on:
 
 | Rule | Where | Checked by |
 |---|---|---|
 | An anchor whose pose was never entered against a scan version (`scanVersionId`/`poseId` null) is `UNVERSIONED` and not registered as a reference image | `AnchorSupport.of` | `MarkerRegistryTests` |
-| The session's floor is fixed at start; the first successful solve pins its `scanVersionId`, which every later `relocalize` sends (the server answers `409 VERSION_MISMATCH` if the floor was republished) | `RelocalizationStateMachine`, `ARSessionManager` | `RelocalizationStateMachineTests`, `APIClientCodingTests` |
-| An answer for another floor or in another version is refused (`FLOOR_MISMATCH` / `VERSION_MISMATCH`): it never replaces the transform, the route stays hidden, and the next attempt waits the 1.5 s retry interval | `RelocalizationStateMachine.refusal` | `RelocalizationStateMachineTests` |
-| The route is requested **in the localization's scan version** (`POST /navigation/routes` with `scanVersionId`): the server routes on that version's pinned navmesh and frame, to the destination as it is in that version. iOS destinations are on the session's floor, which such a route requires | `APIClient.planRoute`, `ARSessionManager` | `APIClientCodingTests` |
+| The session's floor is set at start and changes only by a floor handoff or the user accepting the floor the markers show (below); each floor's first successful solve pins its `scanVersionId` (`pinnedScanVersions`), which every later `relocalize` on that floor sends (the server answers `409 VERSION_MISMATCH` if the floor was republished) | `RelocalizationStateMachine`, `ARSessionManager` | `RelocalizationStateMachineTests`, `FloorHandoffTests`, `APIClientCodingTests` |
+| An answer for another floor or in another version is refused (`FLOOR_MISMATCH` / `VERSION_MISMATCH`): it never replaces the transform, the route stays hidden, and the next attempt waits the 1.5 s retry interval | `RelocalizationStateMachine.refusal` | `RelocalizationStateMachineTests`, `FloorHandoffTests` |
+| A destination on the session's floor is routed **in the localization's scan version** (`POST /navigation/routes` with `scanVersionId`): the server routes on that version's pinned navmesh and frame, to the destination as it is in that version. A destination on another floor is routed on what each floor publishes now (a version-pinned route stays on its floor, `VERSION_WRONG_FLOOR`), as on Android | `RouteGeometry.routeScanVersion`, `APIClient.planRoute`, `NavigationViewModel` | `FloorHandoffTests`, `APIClientCodingTests` |
 | The leg is drawn only if its `routingSources` entry names the localization's version and frame (`VERSION_MISMATCH`, `FRAME_MISMATCH`, `ROUTE_SOURCE_MISSING`, `NO_LEG_ON_FLOOR` otherwise), re-checked after every later localization | `RouteGeometry.leg(of:for:)`, `ARSessionManager.applyRoute` | `VenueFramesTests`, `AppLevelTests` |
 
-Not on iOS (the Android client has them): drift detection and refresh while localized, blending between fixes, and
-floor handoff. An iOS session is one floor; a route that leaves it shows "continues on another floor" and stops there.
+### Floor handoff (iOS)
+
+Added 2026-10-15; the same rules as Android step 10 and `lib/ar-floor-identification.ts`:
+
+| Rule | Where | Checked by |
+|---|---|---|
+| Every floor's trackable markers are loaded and registered as ARKit detection images when the session starts (ARKit fixes them then); each `MarkerObservation` carries the floor its anchor is registered on. Destinations are offered on every floor | `NavigationViewModel.loadMarkers`, `MarkerObservations.observe` | `MarkerRegistryTests` |
+| Within `RouteGeometry.handoffRadiusMeters` (2 m) of the end of this floor's drawn leg, when it ends at a `TRANSITION`: event `floorHandoff`, phase `floorTransition`, the transform and world anchor dropped, nothing drawn and progress frozen. Never from `limited` | `RouteGeometry.floorHandoff`, `ARSessionManager.handOff` | `FloorHandoffTests` |
+| The next floor is localized only after `FloorIdentification` confirms it: its markers alone in 2 of the last 4 frames that saw markers (1 at session start, on the floor the user chose). Markers of several floors at once are `ambiguous`; another floor's alone (2 frames) is `unexpected`; neither localizes anything | `FloorIdentification`, `RelocalizationStateMachine` | `FloorHandoffTests` |
+| On `unexpected` the app names the floor and offers "I am on …: route from here"; on that, the session localizes on that floor and the route is planned again from there | `ARSessionManager.acceptDetectedFloor`, `StatusText` | `FloorHandoffTests` (state machine); the button only by the `ios` CI compile |
+| The next floor's leg is drawn with the same version/frame check as the first. A recovery after tracking loss uses only the current floor's markers | `ARSessionManager.applyRoute`, `RelocalizationStateMachine` | `FloorHandoffTests` |
+| Every 30 s while the route crosses floors, `GET …/floor-connections` re-checks its transitions (`FloorTransitions.stillUsable`): one removed, out of service, no longer running this way, or (step-free) no longer verified gets the route planned again, once per connection | `ARSessionManager.checkTransitionsIfDue` | `FloorHandoffTests` (the check); the polling only by the `ios` CI compile |
+
+What has not been checked: the ARKit layer and the app changes above were only syntax-checked (`swiftc -parse`) here;
+they are first type-checked by the next `ios` CI run, and nothing has run on a device. Registering every floor's
+images makes ARKit's detection set larger; how detection behaves with many images, and whether 2 frames of one floor's
+markers are enough evidence in a real stairwell or atrium, is unmeasured.
+
+Not on iOS (the Android client has them): drift detection and refresh while localized, and blending between fixes.
 iOS has the same failure states, multi-marker handling (set-aside markers are named), validated recovery from `limited`
 (`VenueFrames.recoveryProblem`, event `recoveryRejected`) and a "Step-free route" toggle as Android. iOS users are never
 sent to the WebXR page: iOS Safari has no `navigator.xr`, so `/ar` shows `WEBXR_UNAVAILABLE`, and the native app is the
@@ -432,7 +449,7 @@ iOS client.
 
 The app opens a public viewer link (`/viewer?link=…` or the secret) and exchanges it at
 `POST /public/viewer-token` for a venue-bound token. It sends that token as `X-Chaya-Viewer-Token`, as the web viewer
-does. The token allows floors, POIs, anchors, target images, routes and relocalization for that one venue
+does. The token allows floors, floor connections, POIs, anchors, target images, routes and relocalization for that one venue
 (see "Security").
 
 ## Chain audit (2026-10-11)
@@ -470,6 +487,7 @@ Test tiers, from pure functions to physical devices:
 | Device/canonical axis boundary, gravity-tilt check | `ArDeviceFrameTest.java`, `ar-frame-boundary.test.ts`, `VenueFramesTests.swift` | No — pure functions |
 | Relocalization state machine | `ar-relocalization.test.ts`, `RelocalizationStateMachineTests.swift` (incl. AR-2's startup `initializing` case) | No — pure state transitions |
 | iOS frames and the canonical/ARKit axis boundary, world-anchor correction, route progress, route-leg version/frame check; marker registry (image → anchor id, unversioned anchors); version pinning; wire format (null residual, Java instants, `scanVersionId`, `routingSources`) | `VenueFramesTests.swift`, `MarkerRegistryTests.swift`, `RelocalizationStateMachineTests.swift`, `APIClientCodingTests.swift` | No — `swift test`, Linux CI (`ios` workflow, `core` job) |
+| iOS floor handoff: floor identification (confirmed, pending, ambiguous, unexpected), handoff on two- and three-floor routes, per-floor version pins, refusals after a handoff, transition re-checks (closed, removed, one-way, unverified), the multi-floor route request, floor-connection wire format | `FloorHandoffTests.swift` | No — `swift test`; hand-built routes, not a real venue |
 | iOS app level: capability/permission states, ARKit tracking-state mapping, transforms, reference images, renderer placement, the session manager's callbacks | `App/ChayaARTests/AppLevelTests.swift` | No — iOS Simulator (`ios` workflow, `app` job; first green 2026-09-30) |
 | Web camera → AR world → venue chain, world-anchor correction, route placement and progress | `ar-route.test.ts` | No — pure functions |
 | Web session request (no hit test), marker → device → waypoint chain, route/version/frame check, drift, blending between fixes, floor handoff, the route request (version pin, step-free) | `ar-navigation.test.ts` | No — pure functions, mathematical fixtures |

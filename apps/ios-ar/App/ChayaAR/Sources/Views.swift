@@ -66,13 +66,13 @@ struct SetupScreen: View {
                 }
                 if let venue = model.venue {
                     Section(venue.name) {
-                        Picker("Floor", selection: $model.selectedFloorId) {
+                        Picker("Start floor", selection: $model.selectedFloorId) {
                             Text("Select…").tag(UUID?.none)
                             ForEach(model.floors) { Text($0.name).tag(UUID?.some($0.id)) }
                         }
                         Picker("Destination", selection: $model.selectedDestinationId) {
                             Text("Select…").tag(UUID?.none)
-                            ForEach(model.destinations) { Text($0.label).tag(UUID?.some($0.id)) }
+                            ForEach(model.destinations) { Text(model.destinationLabel($0)).tag(UUID?.some($0.id)) }
                         }
                         .disabled(model.selectedFloorId == nil)
                     }
@@ -116,7 +116,9 @@ struct ARNavigationScreen: View {
             }
             VStack(alignment: .leading, spacing: 4) {
                 ValidationBanner()
-                if let snapshot = model.snapshot { StatusText(snapshot: snapshot) }
+                if let snapshot = model.snapshot {
+                    StatusText(snapshot: snapshot, model: model)
+                }
                 Button("End AR") { model.stop() }
                     .buttonStyle(.borderedProminent)
             }
@@ -129,6 +131,9 @@ struct ARNavigationScreen: View {
 
 struct StatusText: View {
     let snapshot: ARSessionManager.Snapshot
+    let model: NavigationViewModel
+
+    @MainActor func floorName(_ id: UUID?) -> String { model.floorName(id) }
 
     var body: some View {
         let s = snapshot.state
@@ -159,6 +164,11 @@ struct StatusText: View {
             case .trackingLost:
                 Text("Tracking lost (\(s.lostReason ?? "")). Route position frozen" +
                      (snapshot.progress.map { String(format: " at %.1f m to go", $0.remainingMeters) } ?? "") + ".")
+            case .floorTransition:
+                Text("Changing floors" + (snapshot.handoff?.connectorType.map { " by \($0.lowercased())" } ?? "")
+                     + " to \(floorName(s.floorId)). The route is hidden until this floor is identified: point the camera at "
+                     + "one of its registered markers.")
+                    .accessibilityIdentifier("ar-floor-transition")
             case .recovered:
                 Text("Tracking recovered. Point the camera at a registered marker to relocalize before the route returns.")
             case .ended:
@@ -179,8 +189,26 @@ struct StatusText: View {
             if let route = snapshot.route, route.accessibilityProfile == "STEP_FREE" {
                 Text("Step-free route: \(route.accessibilityConstraintsApplied.joined(separator: "; ")).")
             }
-            if let route = snapshot.route, let transition = route.floorTransitions.first {
-                Text("The route continues on another floor via \(transition.connectorType).")
+            switch s.floorCheck {
+            case .ambiguous(let floors)?:
+                Text("Markers of more than one floor are in view (\(floors.map { floorName($0) }.joined(separator: ", "))). Point the "
+                     + "camera at a marker on your own floor only; the route is not drawn until the floor is certain.")
+                    .foregroundColor(.yellow).accessibilityIdentifier("ar-floor-ambiguous")
+            case .unexpected(let detected)?:
+                Text("The markers in view are on \(floorName(detected)), not on \(floorName(s.floorId)). The route for that "
+                     + "floor is not drawn.")
+                    .foregroundColor(.yellow).accessibilityIdentifier("ar-floor-unexpected")
+                Button("I am on \(floorName(detected)): route from here") { model.acceptDetectedFloor() }
+                    .buttonStyle(.bordered)
+            default:
+                EmptyView()
+            }
+            if let problem = snapshot.transitionProblem { Text(problem).foregroundColor(.yellow) }
+            if let route = snapshot.route, s.phase == .localized || s.phase == .limited,
+               let floorId = s.localization?.floorId,
+               let transition = route.floorTransitions.first(where: { $0.fromFloorId == floorId }) {
+                Text("This floor's part of the route ends at the \(transition.connectorType.lowercased()) to "
+                     + "\(floorName(transition.toFloorId)).")
             }
         }
         .font(.subheadline)
@@ -195,6 +223,7 @@ struct StatusText: View {
         case .limited: return "LIMITED"
         case .trackingLost: return "TRACKING_LOST"
         case .recovered: return "RECOVERED"
+        case .floorTransition: return "FLOOR_TRANSITION"
         case .ended: return "ENDED"
         }
     }

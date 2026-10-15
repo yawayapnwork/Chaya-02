@@ -15,7 +15,7 @@ import Foundation
 ///      ARAnchor is added at the observed marker's pose; ARKit keeps moving it as it refines its map, and that correction
 ///      is applied to the transform every frame (VenueFrames.anchorCorrectedDeviceToVenue).
 ///   4. On the first localization the route is planned from the device's canonical position, in the localization's scan
-///      version. Its leg is drawn only if the server routed it in that version and coordinate frame
+///      version when the destination is on that floor (RouteGeometry.routeScanVersion). Its leg is drawn only if the server routed it in that version and coordinate frame
 ///      (RouteGeometry.leg(of:for:)), re-checked on every later localization. Each frame the route is placed with the
 ///      corrected transform and progress is advanced from ARKit's camera transform, only while localized.
 ///   5. ARKit's camera tracking state, session interruptions, errors, and the world anchor's disappearance drive
@@ -25,6 +25,14 @@ import Foundation
 ///   6. Failed requests are classified (ArFailure): an expired viewer link stops relocalization and routing; a network
 ///      failure is retried (the route too, while localized); a marker the server will no longer use is dropped for the
 ///      session; an answer that set markers aside as inconsistent says which.
+///   7. Floors (docs/ar.md, "Floor handoff"): every floor's markers are registered for the session. Within
+///      `RouteGeometry.handoffRadiusMeters` of the end of this floor's leg (a TRANSITION) the session hands off: the
+///      transform and world anchor are dropped (each floor has its own canonical frame) and the next floor is localized
+///      from its own markers once FloorIdentification confirms it, in its own pinned version, and its leg drawn after the
+///      same version/frame check. Markers of another floor only are reported, never used; the user may accept that floor,
+///      and the route is then planned again from there. The route's floor connections are re-checked every
+///      `transitionCheckInterval` s; one that closed, was removed, changed direction or lost its step-free verification
+///      gets the route planned again.
 ///
 /// Every value comes from an ARFrame/ARAnchor/ARCamera callback or from the server; nothing is fabricated, and where
 /// ARKit has not detected something the value stays absent. It needs a physical device: the iOS Simulator does not
@@ -33,10 +41,13 @@ import Foundation
 @available(iOS 16.0, *)
 public final class ARSessionManager: NSObject, ARSessionDelegate {
 
-    /// The observations, and the scan version the session pinned for the floor (nil before the first localization).
-    public typealias Relocalize = @Sendable ([AnchorObservation], UUID?) async throws -> RelocalizationResponse
-    /// The device's canonical start, and the scan version the localization it was computed with was solved in.
-    public typealias PlanRoute = @Sendable (Vec3, UUID) async throws -> RouteResponse
+    /// The observations, the floor they are registered on, and the scan version the session pinned for that floor (nil
+    /// before its first localization).
+    public typealias Relocalize = @Sendable ([AnchorObservation], UUID, UUID?) async throws -> RelocalizationResponse
+    /// The device's canonical start, and the localization it was computed with (its floor, version and frame).
+    public typealias PlanRoute = @Sendable (Vec3, Localization) async throws -> RouteResponse
+    /// The venue's floor connections, to re-check the route's transitions.
+    public typealias ListConnections = @Sendable () async throws -> [FloorConnection]
 
     /// What the UI shows.
     public struct Snapshot: Equatable {
@@ -52,6 +63,10 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
         public var failure: ArFailure?
         /// Markers the last localization set aside as inconsistent with the others (moved, misidentified, mis-registered).
         public var setAsideMarkers: [String] = []
+        /// The floor transition the session last handed off over (cleared once the next floor is localized).
+        public var handoff: RouteGeometry.Handoff?
+        /// Why the route had to be planned again: a floor connection on it can no longer be used as planned.
+        public var transitionProblem: String?
     }
 
     public let session = ARSession()
@@ -60,12 +75,20 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
     public private(set) var snapshot: Snapshot
 
     private let registry: MarkerRegistry
-    private let floorId: UUID
+    private let startFloorId: UUID
     private let relocalize: Relocalize
     private let planRoute: PlanRoute
+    private let listConnections: ListConnections?
+    private var lastTransitionCheckAt: TimeInterval = -.infinity
+    private var transitionCheckInFlight = false
+    /// Connections the route was already planned again for: a second failing check does not replan in a loop.
+    private var replannedFor = Set<UUID>()
+    static let transitionCheckInterval: TimeInterval = 30
 
     private var routePoints: [Vec3] = []
     private var routeRequested = false
+    /// Bumped by `replan`: a route answer for an earlier request is dropped.
+    private var routeGeneration = 0
     private var worldAnchor: (anchor: ARAnchor, poseAtSolve: Pose, addedAt: TimeInterval, seen: Bool)?
     private var lastFailureAt: TimeInterval = -.infinity
     private var lastPublishAt: TimeInterval = 0
@@ -83,11 +106,14 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
     static let worldAnchorGrace: TimeInterval = 1.0
     static let worldAnchorName = "chaya.localization"
 
-    public init(registry: MarkerRegistry, floorId: UUID, relocalize: @escaping Relocalize, planRoute: @escaping PlanRoute) {
+    /// `registry`: the markers of every floor the session may reach; `floorId`: the floor the user starts on.
+    public init(registry: MarkerRegistry, floorId: UUID, relocalize: @escaping Relocalize, planRoute: @escaping PlanRoute,
+                listConnections: ListConnections? = nil) {
         self.registry = registry
-        self.floorId = floorId
+        self.startFloorId = floorId
         self.relocalize = relocalize
         self.planRoute = planRoute
+        self.listConnections = listConnections
         self.snapshot = Snapshot(state: NavigationState())
         super.init()
         session.delegate = self
@@ -106,7 +132,7 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
         configuration.maximumNumberOfTrackedImages = min(referenceImages.count, 4)
         configuration.automaticImageScaleEstimationEnabled = true
         session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
-        dispatch(.sessionStarted(floorId: floorId))
+        dispatch(.sessionStarted(floorId: startFloorId))
     }
 
     public func stop() {
@@ -135,6 +161,7 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
         dispatch(.tick(at: frame.timestamp))
         observeMarkers(in: frame)
         updateRoute(in: frame)
+        checkTransitionsIfDue()
     }
 
     public func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
@@ -195,7 +222,8 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
 
     private func observeMarkers(in frame: ARFrame) {
         let phase = snapshot.state.phase
-        guard phase == .searching || phase == .recovered, snapshot.state.deviceTracking == .normal, blocked == nil,
+        guard phase == .searching || phase == .recovered || phase == .floorTransition, snapshot.state.deviceTracking == .normal,
+              blocked == nil,
               frame.timestamp - lastFailureAt > Self.retryAfterFailure else { return }
         let detections = frame.anchors.compactMap { $0 as? ARImageAnchor }.map { ImageDetection($0, timestamp: frame.timestamp) }
         let observations = MarkerObservations.observe(detections, registry: registry).filter { !unavailableAnchors.contains($0.anchorId) }
@@ -208,29 +236,32 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
         }
         snapshot.lastRejectedObservation = nil
         dispatch(.markersObserved(eligible))
-        guard snapshot.state.phase == .solving, let pending = snapshot.state.pending else { return }
+        // Not solving: the floor is not identified yet (markers of another floor, or of several), or nothing applied.
+        guard snapshot.state.phase == .solving, let pending = snapshot.state.pending, let floorId = snapshot.state.floorId,
+              let first = pending.observations.first else { return }
 
-        // The world anchor is added in this frame, at the pose the first marker was measured at.
-        let anchorPose = eligible[0].observedPose
+        // The world anchor is added in this frame, at the pose the first marker used was measured at.
+        let anchorPose = first.observedPose
         let anchor = ARAnchor(name: Self.worldAnchorName, transform: anchorPose.simdTransform)
         session.add(anchor: anchor)
         let requestId = pending.requestId
-        let body = eligible.map(\.asAnchorObservation)
+        let used = pending.observations.map(\.anchorId)
+        let body = pending.observations.map(\.asAnchorObservation)
         let pinnedVersion = snapshot.state.pinnedScanVersionId
         let cameraPose = Pose(frame.camera.transform)
         let relocalize = self.relocalize
         Task { @MainActor [weak self] in
             do {
-                let result = try await relocalize(body, pinnedVersion)
-                self?.solved(requestId: requestId, result: result, anchorIds: eligible.map(\.anchorId), anchor: anchor,
+                let result = try await relocalize(body, floorId, pinnedVersion)
+                self?.solved(requestId: requestId, result: result, floorId: floorId, anchorIds: used, anchor: anchor,
                              anchorPose: anchorPose, cameraPose: cameraPose)
             } catch {
-                self?.failed(requestId: requestId, error: error, anchor: anchor, anchorIds: eligible.map(\.anchorId))
+                self?.failed(requestId: requestId, error: error, anchor: anchor, anchorIds: used)
             }
         }
     }
 
-    private func solved(requestId: Int, result: RelocalizationResponse, anchorIds: [UUID], anchor: ARAnchor,
+    private func solved(requestId: Int, result: RelocalizationResponse, floorId: UUID, anchorIds: [UUID], anchor: ARAnchor,
                         anchorPose: Pose, cameraPose: Pose) {
         let now = ProcessInfo.processInfo.systemUptime
         let setAside = Set(result.rejectedAnchorIds ?? [])
@@ -249,14 +280,82 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
         }
         if let previous = worldAnchor { session.remove(anchor: previous.anchor) }
         worldAnchor = (anchor, anchorPose, now, false)
+        snapshot.handoff = nil
         if snapshot.route == nil {
             if !routeRequested {
                 routeRequested = true
                 fetchRoute(from: VenueFrames.devicePositionInVenue(camera: cameraPose, deviceToVenue: localization.deviceToVenue),
-                           scanVersionId: localization.scanVersionId)
+                           localization: localization)
             }
         } else {
-            applyRoute() // a new localization may be in another frame than the route: re-check before drawing
+            // A new localization may be in another frame than the route, or on the next floor after a handoff: re-check
+            // before drawing that floor's leg.
+            applyRoute()
+        }
+    }
+
+    /// The user confirmed being on the floor whose markers the camera sees (floorCheck .unexpected). The session localizes
+    /// there, and the route is planned again from there: the old one assumed another floor.
+    public func acceptDetectedFloor() {
+        let before = snapshot.state.floorId
+        dispatch(.acceptDetectedFloor)
+        if snapshot.state.floorId != before { replan() }
+    }
+
+    /// Drops the route and plans it again: at once while localized (updateRoute), otherwise at the next localization.
+    private func replan() {
+        routeGeneration += 1
+        snapshot.route = nil
+        snapshot.progress = nil
+        routeRequested = false
+        lastRouteAttemptAt = -.infinity
+        routePoints = []
+        renderer.setRoute([])
+        renderer.hide()
+        publish(force: true)
+    }
+
+    /// The device reached the end of this floor's leg: leave the floor. The transform and world anchor belong to this
+    /// floor's frame and are dropped; nothing is drawn until the next floor is identified and localized.
+    private func handOff(_ handoff: RouteGeometry.Handoff) {
+        dispatch(.floorHandoff(toFloorId: handoff.toFloorId))
+        guard snapshot.state.phase == .floorTransition else { return }
+        let world = worldAnchor
+        worldAnchor = nil // before the removal is reported: leaving the floor is not a loss
+        if let world { session.remove(anchor: world.anchor) }
+        routePoints = []
+        snapshot.progress = nil
+        snapshot.handoff = handoff
+        renderer.setRoute([])
+        renderer.hide()
+        publish(force: true)
+    }
+
+    /// Every `transitionCheckInterval` s while the route crosses floors: are its connections still usable as planned?
+    private func checkTransitionsIfDue() {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard let listConnections, !transitionCheckInFlight, blocked == nil, let route = snapshot.route,
+              !route.floorTransitions.isEmpty, now - lastTransitionCheckAt > Self.transitionCheckInterval else { return }
+        lastTransitionCheckAt = now
+        transitionCheckInFlight = true
+        Task { @MainActor [weak self] in
+            let connections = try? await listConnections() // a failed check is repeated at the next interval
+            guard let self else { return }
+            self.transitionCheckInFlight = false
+            guard let connections, self.snapshot.route == route else { return }
+            let check = FloorTransitions.stillUsable(route, connections: connections)
+            if check.usable {
+                self.snapshot.transitionProblem = nil
+            } else if check.connectionIds.allSatisfy(self.replannedFor.contains) {
+                // Planned again already, and the new route still uses it: say so rather than replanning in a loop.
+                self.snapshot.transitionProblem = "This route uses a connection that is no longer usable: "
+                    + check.problems.joined(separator: "; ") + "."
+            } else {
+                self.replannedFor.formUnion(check.connectionIds)
+                self.snapshot.transitionProblem = "Route changed: \(check.problems.joined(separator: "; ")). Planning it again."
+                self.replan()
+            }
+            self.publish(force: true)
         }
     }
 
@@ -278,20 +377,22 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
         publish(force: true)
     }
 
-    /// Planned once, from where the device was when first localized, on the scan version that localization was solved in.
-    /// A failure is a routing error, not a localization one: the localization stays.
-    private func fetchRoute(from start: Vec3, scanVersionId: UUID) {
+    /// Planned once, from where the device was when first localized, with that localization (the caller pins the route to
+    /// its scan version when the destination is on its floor), and again only after `replan`. A failure is a routing
+    /// error, not a localization one: the localization stays.
+    private func fetchRoute(from start: Vec3, localization: Localization) {
         guard blocked == nil else { return }
         lastRouteAttemptAt = ProcessInfo.processInfo.systemUptime
         let planRoute = self.planRoute
+        let generation = routeGeneration
         Task { @MainActor [weak self] in
             do {
-                let route = try await planRoute(start, scanVersionId)
-                guard let self else { return }
+                let route = try await planRoute(start, localization)
+                guard let self, generation == self.routeGeneration else { return } // superseded by a replan
                 self.snapshot.route = route
                 self.applyRoute()
             } catch {
-                guard let self else { return }
+                guard let self, generation == self.routeGeneration else { return }
                 let failure = ArFailure.classify(error)
                 if failure.kind == .sessionExpired { self.blocked = failure }
                 self.routeRequested = false // retried while localized (updateRoute), or at the next localization
@@ -346,9 +447,16 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
         if snapshot.route == nil && !routeRequested && blocked == nil && state.canAdvanceRoute
             && uptime - lastRouteAttemptAt > Self.routeRetryInterval {
             routeRequested = true
-            fetchRoute(from: device, scanVersionId: localization.scanVersionId)
+            fetchRoute(from: device, localization: localization)
         }
         snapshot.progress = RouteGeometry.advance(snapshot.progress, canAdvance: state.canAdvanceRoute, points: routePoints, device: device)
+        // This floor's leg was drawn and ends at a stair, ramp or elevator the device has reached: hand off to the next floor.
+        if state.canAdvanceRoute, !routePoints.isEmpty, let route = snapshot.route,
+           let handoff = RouteGeometry.floorHandoff(route, floorId: localization.floorId,
+                                                    remainingMeters: snapshot.progress?.remainingMeters) {
+            handOff(handoff)
+            return
+        }
         renderer.update(venueToWorld: VenueFrames.venueToWorld(deviceToVenue: deviceToVenue),
                         nextIndex: snapshot.progress?.nextIndex ?? 0, visible: !routePoints.isEmpty)
         publish(force: false)

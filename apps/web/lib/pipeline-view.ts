@@ -121,3 +121,66 @@ export function shortSha(sha: string | null): string {
 export function durationSeconds(startedAt: string, finishedAt: string): number {
   return Math.max(0, (Date.parse(finishedAt) - Date.parse(startedAt)) / 1000);
 }
+
+// ---- live progress (docs/pipeline.md, "Live progress") ---------------------------------------------------------------
+
+export interface StageLike {
+  stage: string;
+  state: "PENDING" | "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED" | "NOT_RUN";
+  attempts: number;
+  lastRun: { artifacts: { kind: string; sizeBytes: number; partial: boolean }[] } | null;
+}
+
+export interface PipelineProgress {
+  /** Stages with a successful record, and all stages. This is stage completion, not a share of the time the run takes:
+   * stages differ by orders of magnitude in duration, so it is never shown as a percentage of the job. */
+  completed: number;
+  total: number;
+  /** The stage running or waiting now, and whether it is running. Its own progress is unknown (indeterminate): no stage
+   * reports progress within itself. */
+  activeStage: string | null;
+  activeRunning: boolean;
+  /** The whole job is over (successfully or not); completed === total only for a fully succeeded run. */
+  jobFinished: boolean;
+  label: string;
+}
+
+export function pipelineProgress(run: { status: RunLike["status"]; stages: StageLike[] } | null): PipelineProgress {
+  if (!run) return { completed: 0, total: 0, activeStage: null, activeRunning: false, jobFinished: false, label: "Not started" };
+  const total = run.stages.length;
+  const completed = run.stages.filter((s) => s.state === "SUCCEEDED").length;
+  const active = run.stages.find((s) => s.state === "RUNNING") ?? run.stages.find((s) => s.state === "QUEUED") ?? null;
+  const jobFinished = run.status !== "RUNNING";
+  let label = `${completed} of ${total} stages completed`;
+  if (active) label += active.state === "RUNNING" ? ` · now: ${stageLabel(active.stage)}` : ` · waiting for a worker: ${stageLabel(active.stage)}`;
+  return { completed, total, activeStage: active?.stage ?? null, activeRunning: active?.state === "RUNNING", jobFinished, label };
+}
+
+export type FailureKind = "RETRYABLE" | "TERMINAL" | "INTERRUPTED" | "CANCELLED" | null;
+
+/**
+ * How a run ended badly: CANCELLED by someone; INTERRUPTED when the worker was lost or the time budget ran out (the
+ * stage did not fail on its own); RETRYABLE when the server says a retry can succeed; TERMINAL when it cannot (the input
+ * itself is unusable). null for a run that is running or succeeded.
+ */
+export function failureKind(run: RunLike | null): FailureKind {
+  if (!run) return null;
+  if (run.status === "CANCELLED") return "CANCELLED";
+  if (run.status !== "FAILED") return null;
+  if (run.failureCode === "WORKER_LOST" || run.failureCode === "TIME_LIMIT_EXCEEDED") return "INTERRUPTED";
+  return run.retryable ? "RETRYABLE" : "TERMINAL";
+}
+
+/** Every output the run's stages have published so far, stage by stage. */
+export function availableArtifacts(stages: StageLike[]): { stage: string; kind: string; sizeBytes: number; partial: boolean }[] {
+  return stages.flatMap((s) => (s.state === "SUCCEEDED" && s.lastRun ? s.lastRun.artifacts.map((a) => ({ stage: s.stage, ...a })) : []));
+}
+
+/** "No heartbeat from worker-1 since 10:42:05": a running stage whose worker has gone quiet, before it is failed. */
+export function staleLeaseMessage(jobs: { stage: string; workerId: string | null; leaseExpiresAt: string | null; leaseExpired: boolean }[]): string | null {
+  const stale = jobs.find((j) => j.leaseExpired);
+  if (!stale) return null;
+  return `The worker${stale.workerId ? ` ${stale.workerId}` : ""} running ${stageLabel(stale.stage)} has stopped sending heartbeats` +
+    `${stale.leaseExpiresAt ? ` (its lease ran out at ${new Date(stale.leaseExpiresAt).toLocaleTimeString()})` : ""}. ` +
+    "The stage will be marked as lost shortly; it can then be retried. Nothing it may have produced is counted as done.";
+}
