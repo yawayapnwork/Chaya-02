@@ -8,6 +8,8 @@ export interface RunLike {
   failureCode: string | null;
   failureMessage: string | null;
   retryable: boolean;
+  retriesRemaining?: number | null;
+  retryBlockedReason?: string | null;
 }
 
 export type Tone = "info" | "success" | "warning" | "error";
@@ -160,8 +162,8 @@ export type FailureKind = "RETRYABLE" | "TERMINAL" | "INTERRUPTED" | "CANCELLED"
 
 /**
  * How a run ended badly: CANCELLED by someone; INTERRUPTED when the worker was lost or the time budget ran out (the
- * stage did not fail on its own); RETRYABLE when the server says a retry can succeed; TERMINAL when it cannot (the input
- * itself is unusable). null for a run that is running or succeeded.
+ * stage did not fail on its own); RETRYABLE when the server would re-queue it; TERMINAL when it would not
+ * (retryBlockedText says why). null for a run that is running or succeeded.
  */
 export function failureKind(run: RunLike | null): FailureKind {
   if (!run) return null;
@@ -169,6 +171,33 @@ export function failureKind(run: RunLike | null): FailureKind {
   if (run.status !== "FAILED") return null;
   if (run.failureCode === "WORKER_LOST" || run.failureCode === "TIME_LIMIT_EXCEEDED") return "INTERRUPTED";
   return run.retryable ? "RETRYABLE" : "TERMINAL";
+}
+
+/** Why a FAILED run cannot be retried, in words (null when it can, or when it did not fail). Mirrors the server's own
+ * retry preconditions (PipelineService.retry), which it reports as retryBlockedReason. */
+export function retryBlockedText(run: RunLike | null): string | null {
+  if (!run || run.status !== "FAILED" || run.retryable) return null;
+  switch (run.retryBlockedReason) {
+    case "RETRIES_EXHAUSTED":
+      return "This stage has used all its retries. Upload the capture again, or ask an administrator to look at the failure.";
+    case "PII_STAGING_PURGED":
+      return "The unanonymised frames this stage needs were deleted under the retention policy, so it can no longer be retried. Upload the capture again to reprocess it.";
+    case "ALIGNMENT_REJECTED":
+      return "This re-scan's alignment was rejected and its version is final. Start a new re-scan instead.";
+    case "PARENT_NOT_CURRENT":
+      return "The floor has published a newer version since this re-scan started, so it can never be published. Start a new re-scan.";
+    case "VERSION_SUPERSEDED":
+      return "The floor publishes a newer version than this run's, so this run can never be published. Reconstruct or re-scan again.";
+    default:
+      return "Retrying cannot fix this failure.";
+  }
+}
+
+/** Which attempt a stage is on: its job's retry count + 1. A cancelled or still running attempt has no stage record yet,
+ * so the records alone (`attempts`) can be one behind. */
+export function stageAttempt(stage: Pick<StageLike, "stage" | "attempts">, jobs: { stage: string; retryCount: number }[]): number {
+  const fromJobs = jobs.filter((j) => j.stage === stage.stage).reduce((n, j) => Math.max(n, j.retryCount + 1), 0);
+  return Math.max(stage.attempts, fromJobs, 1);
 }
 
 /** Every output the run's stages have published so far, stage by stage. */

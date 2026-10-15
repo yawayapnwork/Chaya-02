@@ -119,6 +119,10 @@ export interface RunView {
   failureCode: string | null;
   failureMessage: string | null;
   retryable: boolean;
+  /** For a stage whose job failed: how many more times it may be re-queued (null when not applicable). */
+  retriesRemaining?: number | null;
+  /** Why a FAILED run cannot be retried: a permanent failure code, RETRIES_EXHAUSTED or PII_STAGING_PURGED. */
+  retryBlockedReason?: string | null;
   stages: StageView[];
 }
 /** Mirrors CaptureService.ProgressView: counted from stage records only (basis COMPLETED_STAGES). No stage reports

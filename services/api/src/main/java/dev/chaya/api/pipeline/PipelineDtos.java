@@ -57,8 +57,11 @@ public final class PipelineDtos {
     /**
      * quality is FINAL only for a fully completed run, PARTIAL only for an explicitly time-boxed result that
      * contains a reconstruction, and null otherwise. A PARTIAL result must never be presented as finalized.
+     * retryable: a FAILED run that POST .../retry would re-queue. Otherwise retryBlockedReason says why not (a permanent
+     * failure code, RETRIES_EXHAUSTED, PII_STAGING_PURGED); retriesRemaining counts the re-queues left for a failed job.
      */
     public record RunView(UUID id, String status, String quality, boolean privacyEnabled, int timeBudgetSeconds,
                           Instant startedAt, Instant deadlineAt, Instant finishedAt, String failureStage,
-                          String failureCode, String failureMessage, boolean retryable, List<StageView> stages) {}
+                          String failureCode, String failureMessage, boolean retryable, Integer retriesRemaining,
+                          String retryBlockedReason, List<StageView> stages) {}
 }

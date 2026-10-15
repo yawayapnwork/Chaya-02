@@ -1932,10 +1932,35 @@ public class PipelineService {
             stages.add(new StageView(stage, state, runs.size(), last));
         }
         String status = (String) r.get("status");
+        String failureCode = (String) r.get("failure_code");
+        String failureStage = (String) r.get("failure_stage");
+        // retryable says what POST .../retry would do (retry above): the same preconditions, so a client never offers a retry
+        // the server refuses. retriesRemaining: for a stage whose job failed, how many more times it may be re-queued.
+        Integer retriesRemaining = null;
+        String retryBlockedReason = null;
+        if (status.equals("FAILED")) {
+            if (failureCode != null && PERMANENT_FAILURES.contains(failureCode)) {
+                retryBlockedReason = failureCode;
+            } else if (failureStage != null) {
+                record Attempts(String status, int count, int max) {}
+                Optional<Attempts> job = jdbc.sql("SELECT status, retry_count, max_retries FROM processing_job WHERE run_id = :r "
+                        + "AND stage = :s ORDER BY created_at DESC LIMIT 1").param("r", runId).param("s", failureStage)
+                    .query((rs, i) -> new Attempts(rs.getString(1), rs.getInt(2), rs.getInt(3))).optional();
+                if (job.isPresent() && job.get().status().equals("FAILED")) {
+                    retriesRemaining = Math.max(0, job.get().max() - job.get().count());
+                    if (retriesRemaining == 0) {
+                        retryBlockedReason = "RETRIES_EXHAUSTED";
+                    }
+                }
+                if (retryBlockedReason == null && needsPurgedPii(loadRun(runId), JobStage.valueOf(failureStage))) {
+                    retryBlockedReason = "PII_STAGING_PURGED";
+                }
+            }
+        }
         return Optional.of(new RunView(runId, status, (String) r.get("quality"), (Boolean) r.get("privacy_enabled"),
             ((Number) r.get("time_budget_seconds")).intValue(), instant(r.get("started_at")), instant(r.get("deadline_at")),
-            instant(r.get("finished_at")), (String) r.get("failure_stage"), (String) r.get("failure_code"),
-            (String) r.get("failure_message"), status.equals("FAILED") && (r.get("failure_code") == null || !PERMANENT_FAILURES.contains(r.get("failure_code"))), stages));
+            instant(r.get("finished_at")), failureStage, failureCode, (String) r.get("failure_message"),
+            status.equals("FAILED") && retryBlockedReason == null, retriesRemaining, retryBlockedReason, stages));
     }
 
     private StageRunView stageRunView(Map<String, Object> sr) {

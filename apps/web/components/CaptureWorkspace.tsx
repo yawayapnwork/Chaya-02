@@ -233,9 +233,11 @@ export default function CaptureWorkspace() {
   // Every status (stream, poll, or the answer to retry/cancel/start) goes through one rule: shown only if newer.
   const applyProcessing = useCallback((p: ProcessingStatus) =>
     setProcessing((prev) => (!prev || prev.captureId !== p.captureId || isNewer(prev, p) ? p : prev)), []);
-  const hasRun = !!processing?.run;
+  // One flag, not its two inputs: loading the first snapshot gives the run, and that must not close and reopen a stream
+  // that is already following it.
+  const followLive = captureStatus === "PROCESSING" || !!processing?.run;
   useEffect(() => {
-    if (!captureId || !venueOfCapture || (captureStatus !== "PROCESSING" && !hasRun)) return;
+    if (!captureId || !venueOfCapture || !followLive) return;
     const handle = followCaptureProcessing(venueOfCapture, captureId, (p) => {
       applyProcessing(p);
       if (p.captureStatus !== captureStatusRef.current) {
@@ -246,7 +248,7 @@ export default function CaptureWorkspace() {
       if (state === "SESSION_EXPIRED") setSignedIn(false);
     });
     return () => handle.close();
-  }, [captureId, venueOfCapture, captureStatus, hasRun, applyProcessing]);
+  }, [captureId, venueOfCapture, followLive, applyProcessing]);
 
   /** Records the session on this device first; it is created on the server now if online, or when back online. */
   async function onCreate() {

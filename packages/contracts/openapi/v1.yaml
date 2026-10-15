@@ -3308,7 +3308,8 @@ paths:
   /api/v1/venues/{venueId}/captures/{captureId}/processing:
     get:
       description: "status RUNNING/SUCCEEDED/PARTIAL/FAILED/CANCELLED; quality FINAL,\
-        \ PARTIAL or null."
+        \ PARTIAL or null. revision orders statuses; the snapshot to recover from\
+        \ after missed stream events."
       operationId: captureProcessingStatus
       parameters:
       - in: path
@@ -3600,6 +3601,86 @@ paths:
       - bearerAuth: []
       summary: Re-queue the stage a FAILED run stopped at (fresh time budget; bounded
         retries)
+      tags:
+      - capture-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
+      - OPERATOR
+  /api/v1/venues/{venueId}/captures/{captureId}/processing/stream:
+    get:
+      description: "Each status event is the full ProcessingStatus, with the status\
+        \ revision as the event id. Send the last id received as Last-Event-ID when\
+        \ reconnecting: the current status is sent only if it differs. Events session-expired\
+        \ (the token used has expired: reconnect with a new one) and gone (the capture\
+        \ no longer exists) end the stream. GET /processing is the snapshot for recovery."
+      operationId: captureProcessingStream
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: captureId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: header
+        name: Last-Event-ID
+        required: false
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/ProcessingStatus"
+          description: text/event-stream of ProcessingStatus
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Malformed request: an unparseable parameter or body, or a\
+            \ failed validation (code BAD_REQUEST or an operation-specific code)"
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "The caller's roles do not allow this operation (empty body),\
+            \ or an operation-specific refusal (problem with a code)"
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Not found, or not visible to the caller's organization or\
+            \ venue (code NOT_FOUND)"
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      summary: Live processing status over Server-Sent Events
       tags:
       - capture-controller
       x-chaya-roles:
@@ -8120,6 +8201,24 @@ components:
           enum:
           - PIPELINE_RUN
           - JOB
+    ActiveJob:
+      type: object
+      properties:
+        jobId:
+          type: string
+          format: uuid
+        leaseExpired:
+          type: boolean
+        leaseExpiresAt:
+          type: string
+          format: date-time
+        stage:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        workerId:
+          type: string
     Anchor:
       type: object
       properties:
@@ -10825,6 +10924,10 @@ components:
     ProcessingStatus:
       type: object
       properties:
+        activeJobs:
+          type: array
+          items:
+            $ref: "#/components/schemas/ActiveJob"
         captureId:
           type: string
           format: uuid
@@ -10843,9 +10946,20 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/JobView"
+        observedAt:
+          type: string
+          format: date-time
+        progress:
+          $ref: "#/components/schemas/ProgressView"
+        revision:
+          type: integer
+          format: int64
         run:
           $ref: "#/components/schemas/RunView"
         scanId:
+          type: string
+          format: uuid
+        venueId:
           type: string
           format: uuid
     Progress:
@@ -10875,6 +10989,36 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/WaypointStatus"
+    ProgressView:
+      type: object
+      properties:
+        activeStage:
+          type: string
+        activeStageAttempt:
+          type: integer
+          format: int32
+        activeStageSince:
+          type: string
+          format: date-time
+        activeStageState:
+          type: string
+        basis:
+          type: string
+        stagesCancelled:
+          type: integer
+          format: int32
+        stagesFailed:
+          type: integer
+          format: int32
+        stagesNotRun:
+          type: integer
+          format: int32
+        stagesSucceeded:
+          type: integer
+          format: int32
+        stagesTotal:
+          type: integer
+          format: int32
     QualityBatchRequest:
       type: object
       properties:
@@ -11396,6 +11540,11 @@ components:
         privacyEnabled:
           type: boolean
         quality:
+          type: string
+        retriesRemaining:
+          type: integer
+          format: int32
+        retryBlockedReason:
           type: string
         retryable:
           type: boolean

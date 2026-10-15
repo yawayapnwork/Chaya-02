@@ -94,6 +94,9 @@ export function followProcessing(deps: LiveDeps, onStatus: (s: ProcessingStatus)
     }
   };
   const stopped = () => controller.signal.aborted || state === "SESSION_EXPIRED" || state === "GONE";
+  /** Consecutive connection attempts that never went live. Reset by a live connection, so a page open for hours that loses
+   * its stream now and then reconnects after the base delay, not after the backoff of all the drops it ever had. */
+  let failures = 0;
 
   /** One connection; returns how it ended. */
   async function connectOnce(): Promise<"ended" | "expired" | "gone" | "unauthorized"> {
@@ -108,6 +111,7 @@ export function followProcessing(deps: LiveDeps, onStatus: (s: ProcessingStatus)
     if (res.status === 404 || res.status === 403) return "gone";
     if (!res.ok || !res.body) throw new Error(`processing stream: HTTP ${res.status}`);
     setState("LIVE");
+    failures = 0;
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -129,7 +133,6 @@ export function followProcessing(deps: LiveDeps, onStatus: (s: ProcessingStatus)
   }
 
   (async () => {
-    let failures = 0;
     while (!stopped()) {
       let outcome: Awaited<ReturnType<typeof connectOnce>> | "error";
       try {

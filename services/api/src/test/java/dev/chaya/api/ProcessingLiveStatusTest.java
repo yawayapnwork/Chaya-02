@@ -126,14 +126,33 @@ class ProcessingLiveStatusTest extends PipelineTestSupport {
         assertThat(failed.get("run").get("failureStage").asText()).isEqualTo("INPUT_VALIDATION");
         assertThat(failed.get("run").get("failureCode").asText()).isEqualTo("INPUT_INVALID");
         assertThat(failed.get("progress").get("stagesFailed").asInt()).isEqualTo(1);
-        boolean retryable = failed.get("run").get("retryable").asBoolean();
+        assertThat(failed.get("run").get("retryable").asBoolean()).as("a failure the server will re-queue").isTrue();
+        int left = failed.get("run").get("retriesRemaining").asInt();
+        assertThat(left).isPositive();
+        assertThat(failed.get("run").get("retryBlockedReason").isNull()).isTrue();
 
-        if (retryable) {
+        post(processingUrl(s) + "/retry", s.c().operator(), null).andExpect(status().is2xxSuccessful());
+        JsonNode retried = snapshot(s);
+        assertThat(retried.get("revision").asLong()).isGreaterThan(failed.get("revision").asLong());
+        assertThat(retried.get("run").get("status").asText()).isEqualTo("RUNNING");
+        assertThat(retried.get("progress").get("activeStageAttempt").asInt()).isEqualTo(2);
+        assertThat(retried.get("run").get("retryable").asBoolean()).as("a running run is not retried").isFalse();
+
+        // Every retry the stage is allowed, each failing again: then the status says it cannot be retried, and why,
+        // exactly when the retry endpoint starts refusing.
+        for (int i = 1; ; i++) {
+            send(claimExpecting("INPUT_VALIDATION"), report("FAILED", List.of(), "INPUT_INVALID", "still undecodable"), svc)
+                .andExpect(status().isOk());
+            JsonNode again = snapshot(s);
+            assertThat(again.get("run").get("retriesRemaining").asInt()).isEqualTo(left - i);
+            if (left - i == 0) {
+                assertThat(again.get("run").get("retryable").asBoolean()).isFalse();
+                assertThat(again.get("run").get("retryBlockedReason").asText()).isEqualTo("RETRIES_EXHAUSTED");
+                post(processingUrl(s) + "/retry", s.c().operator(), null).andExpect(status().isConflict());
+                break;
+            }
+            assertThat(again.get("run").get("retryable").asBoolean()).isTrue();
             post(processingUrl(s) + "/retry", s.c().operator(), null).andExpect(status().is2xxSuccessful());
-            JsonNode retried = snapshot(s);
-            assertThat(retried.get("revision").asLong()).isGreaterThan(failed.get("revision").asLong());
-            assertThat(retried.get("run").get("status").asText()).isEqualTo("RUNNING");
-            assertThat(retried.get("progress").get("activeStageAttempt").asInt()).isEqualTo(2);
         }
     }
 
@@ -141,11 +160,20 @@ class ProcessingLiveStatusTest extends PipelineTestSupport {
     void aCrashedWorkersExpiredLeaseIsShownThenTheStageFailsAsWorkerLostNeverSucceeded() throws Exception {
         var s = startRun();
         claimExpecting("INPUT_VALIDATION");
+        MvcResult stream = openStream(s, s.c().operator(), null);
+        long running = events(stream).get(0).get("revision").asLong();
         // The worker process dies: no report, no heartbeat. Its lease runs out.
         jdbc.sql("UPDATE processing_job SET lease_expires_at = now() - interval '5 seconds' WHERE scan_id = :s AND status = 'RUNNING'")
             .param("s", s.scan()).update();
         JsonNode silent = snapshot(s);
+        assertThat(silent.get("revision").asLong()).as("nothing the status shows was written: time ran out").isEqualTo(running);
         assertThat(silent.get("activeJobs")).singleElement().satisfies(j -> assertThat(j.get("leaseExpired").asBoolean()).isTrue());
+        // The stream still tells subscribers: the lease's expiry changes what the status shows.
+        broadcaster.tick();
+        assertThat(events(stream)).hasSize(2).last().satisfies(e -> {
+            assertThat(e.get("revision").asLong()).isEqualTo(running);
+            assertThat(e.get("activeJobs").get(0).get("leaseExpired").asBoolean()).isTrue();
+        });
         assertThat(stageState(silent, "INPUT_VALIDATION")).as("not failed until the enforcer settles it, never succeeded").isEqualTo("RUNNING");
 
         pipeline.enforceLeasesAndDeadlines();
@@ -156,6 +184,24 @@ class ProcessingLiveStatusTest extends PipelineTestSupport {
         assertThat(lost.get("run").get("retryable").asBoolean()).isTrue();
         assertThat(stageState(lost, "INPUT_VALIDATION")).isEqualTo("FAILED");
         assertThat(lost.get("activeJobs")).isEmpty();
+        broadcaster.tick();
+        assertThat(events(stream)).last().satisfies(e -> assertThat(e.get("run").get("failureCode").asText()).isEqualTo("WORKER_LOST"));
+    }
+
+    @Test
+    void aStageStillRunningAfterTheTimeBudgetIsInterruptedNotSucceeded() throws Exception {
+        var s = startRun();
+        claimExpecting("INPUT_VALIDATION");
+        long before = snapshot(s).get("revision").asLong();
+        jdbc.sql("UPDATE pipeline_run SET deadline_at = now() - interval '1 day' WHERE scan_id = :s").param("s", s.scan()).update();
+        pipeline.enforceLeasesAndDeadlines();
+        JsonNode over = snapshot(s);
+        assertThat(over.get("revision").asLong()).isGreaterThan(before);
+        assertThat(over.get("run").get("status").asText()).as("no reconstruction yet, so nothing partial to keep").isEqualTo("FAILED");
+        assertThat(over.get("run").get("failureCode").asText()).isEqualTo("TIME_LIMIT_EXCEEDED");
+        assertThat(stageState(over, "INPUT_VALIDATION")).isEqualTo("FAILED");
+        assertThat(over.get("progress").get("stagesSucceeded").asInt()).isZero();
+        assertThat(over.get("activeJobs")).isEmpty();
     }
 
     @Test
@@ -200,12 +246,20 @@ class ProcessingLiveStatusTest extends PipelineTestSupport {
     @Test
     void onlyAuthorizedCallersCanSubscribeAndAStreamEndsWhenItsTokenExpires() throws Exception {
         var s = startRun();
+        int open = broadcaster.subscriberCount();
         // Another organization's operator: the capture does not exist for them. A viewer may not read processing at all.
         String outsider = TestJwt.user(fx.organization(), "operator").token();
         mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(processingUrl(s) + "/stream").header("Authorization", "Bearer " + outsider)).andExpect(status().isNotFound());
         String viewer = TestJwt.user(s.c().org(), "viewer").venues(s.c().venue()).token();
         mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(processingUrl(s) + "/stream").header("Authorization", "Bearer " + viewer)).andExpect(status().isForbidden());
         mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(processingUrl(s) + "/stream")).andExpect(status().isUnauthorized());
+        // The same organization, but an operator of another venue only: through either venue, the capture is not there.
+        java.util.UUID venue2 = fx.venue(s.c().org());
+        String otherVenue = TestJwt.user(s.c().org(), "operator").venues(venue2).token();
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(processingUrl(s) + "/stream").header("Authorization", "Bearer " + otherVenue)).andExpect(status().isNotFound());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/v1/venues/" + venue2 + "/captures/" + s.capture() + "/processing/stream")
+            .header("Authorization", "Bearer " + otherVenue)).andExpect(status().isNotFound());
+        assertThat(broadcaster.subscriberCount()).as("no refused caller holds a stream").isEqualTo(open);
         String expired = TestJwt.user(s.c().org(), "operator").venues(s.c().venue()).lifetime(Duration.ofMinutes(-5)).token(); // beyond the 60 s clock skew JWT validation allows
         mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(processingUrl(s) + "/stream").header("Authorization", "Bearer " + expired)).andExpect(status().isUnauthorized());
 
@@ -215,6 +269,79 @@ class ProcessingLiveStatusTest extends PipelineTestSupport {
         Thread.sleep(2_500);
         broadcaster.tick();
         assertThat(stream.getResponse().getContentAsString()).contains("event:session-expired");
+    }
+
+    /**
+     * One real run, recorded as the API answered it, for the web panel's replay spec (apps/web/e2e/processing-live.spec.ts):
+     * the snapshot and capture the page loads, the exact bytes the stream wrote after each step, and the answers to retry
+     * and cancel. Nothing in it is hand-written. -Dchaya.processing.fixture=PATH writes it there; without the property the
+     * run is only checked.
+     */
+    @Test
+    void aRunRecordedAsTheApiStreamedItForTheWebReplay() throws Exception {
+        var s = startRun();
+        String op = s.c().operator();
+        var out = mapper.createObjectNode();
+        out.put("note", "Recorded by ProcessingLiveStatusTest#aRunRecordedAsTheApiStreamedItForTheWebReplay against real "
+            + "PostgreSQL and MinIO: the API's own answers and stream bytes. Regenerate it, do not edit it.");
+        out.put("venueId", s.c().venue().toString());
+        out.put("floorId", s.c().floor().toString());
+        out.put("captureId", s.capture().toString());
+        out.set("captureList", mapper.readTree(get("/api/v1/venues/" + s.c().venue() + "/captures", op).andReturn().getResponse().getContentAsString()));
+        out.set("capture", mapper.readTree(get(capUrl(s.c(), s.capture()), op).andReturn().getResponse().getContentAsString()));
+        out.set("snapshot", snapshot(s));
+
+        MvcResult stream = openStream(s, op, null);
+        var steps = mapper.createArrayNode();
+        int[] seen = {0};
+        java.util.function.Consumer<String> step = name -> {
+            try {
+                broadcaster.tick();
+                String all = stream.getResponse().getContentAsString();
+                steps.addObject().put("name", name).put("sse", all.substring(seen[0]));
+                seen[0] = all.length();
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        };
+        step.accept("queued");
+        JsonNode first = claimExpecting(PipelineDefinition.STAGES.get(0).name());
+        step.accept("first-stage-running");
+        succeed(first);
+        step.accept("first-stage-succeeded");
+        claimExpecting(PipelineDefinition.STAGES.get(1).name());
+        step.accept("second-stage-running");
+        jdbc.sql("UPDATE processing_job SET lease_expires_at = now() - interval '5 seconds' WHERE scan_id = :s AND status = 'RUNNING'")
+            .param("s", s.scan()).update();
+        step.accept("second-stage-lease-expired");
+        pipeline.enforceLeasesAndDeadlines();
+        step.accept("worker-lost");
+        out.set("retryAnswer", mapper.readTree(post(processingUrl(s) + "/retry", op, null).andExpect(status().is2xxSuccessful())
+            .andReturn().getResponse().getContentAsString()));
+        step.accept("retried");
+        claimExpecting(PipelineDefinition.STAGES.get(1).name());
+        step.accept("second-stage-attempt-2-running");
+        out.set("cancelAnswer", mapper.readTree(post(processingUrl(s) + "/cancel", op, null).andExpect(status().is2xxSuccessful())
+            .andReturn().getResponse().getContentAsString()));
+        out.set("captureAfterCancel", mapper.readTree(get(capUrl(s.c(), s.capture()), op).andReturn().getResponse().getContentAsString()));
+        step.accept("cancelled");
+        out.set("steps", steps);
+
+        // What the replay relies on: each step after the first pushed exactly one new status, and they are ordered.
+        long last = -1;
+        for (JsonNode st : steps) {
+            List<String> ids = st.get("sse").asText().lines().filter(l -> l.startsWith("id:")).toList();
+            assertThat(ids).as(st.get("name").asText()).hasSize(1);
+            long id = Long.parseLong(ids.get(0).substring(3));
+            assertThat(id).as(st.get("name").asText()).isGreaterThanOrEqualTo(last);
+            last = id;
+        }
+        assertThat(out.get("cancelAnswer").get("run").get("status").asText()).isEqualTo("CANCELLED");
+
+        String target = System.getProperty("chaya.processing.fixture");
+        if (target != null) {
+            java.nio.file.Files.writeString(java.nio.file.Path.of(target), mapper.writerWithDefaultPrettyPrinter().writeValueAsString(out));
+        }
     }
 
     @Test

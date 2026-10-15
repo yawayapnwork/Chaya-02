@@ -1,0 +1,537 @@
+{
+  "note" : "Recorded by ProcessingLiveStatusTest#aRunRecordedAsTheApiStreamedItForTheWebReplay against real PostgreSQL and MinIO: the API's own answers and stream bytes. Regenerate it, do not edit it.",
+  "venueId" : "a2699f50-d6f8-4df3-b694-068b999208b6",
+  "floorId" : "85c4116b-7d2b-4d0e-b3bc-eb39cf71603a",
+  "captureId" : "be3cbe57-e59a-4d94-a5c6-975a68a09bbe",
+  "captureList" : [ {
+    "id" : "be3cbe57-e59a-4d94-a5c6-975a68a09bbe",
+    "venueId" : "a2699f50-d6f8-4df3-b694-068b999208b6",
+    "floorId" : "85c4116b-7d2b-4d0e-b3bc-eb39cf71603a",
+    "operatorId" : "user-9864d3f9-c4a4-411e-b36e-b5885474bccc",
+    "status" : "PROCESSING",
+    "device" : {
+      "os" : "android 14",
+      "model" : "test-phone"
+    },
+    "startedAt" : "2026-10-15T12:27:26.934683Z",
+    "endedAt" : "2026-10-15T12:27:27.202891Z",
+    "durationSeconds" : 0.27,
+    "qualityState" : "NOT_ASSESSED",
+    "failureCode" : null,
+    "failureMessage" : null,
+    "mediaCount" : 1,
+    "acceptedMediaCount" : 1,
+    "createdAt" : "2026-10-15T12:27:26.936488Z"
+  } ],
+  "capture" : {
+    "id" : "be3cbe57-e59a-4d94-a5c6-975a68a09bbe",
+    "venueId" : "a2699f50-d6f8-4df3-b694-068b999208b6",
+    "floorId" : "85c4116b-7d2b-4d0e-b3bc-eb39cf71603a",
+    "operatorId" : "user-9864d3f9-c4a4-411e-b36e-b5885474bccc",
+    "status" : "PROCESSING",
+    "device" : {
+      "os" : "android 14",
+      "model" : "test-phone"
+    },
+    "startedAt" : "2026-10-15T12:27:26.934683Z",
+    "endedAt" : "2026-10-15T12:27:27.202891Z",
+    "durationSeconds" : 0.27,
+    "qualityState" : "NOT_ASSESSED",
+    "failureCode" : null,
+    "failureMessage" : null,
+    "mediaCount" : 1,
+    "acceptedMediaCount" : 1,
+    "createdAt" : "2026-10-15T12:27:26.936488Z"
+  },
+  "snapshot" : {
+    "captureId" : "be3cbe57-e59a-4d94-a5c6-975a68a09bbe",
+    "venueId" : "a2699f50-d6f8-4df3-b694-068b999208b6",
+    "captureStatus" : "PROCESSING",
+    "scanId" : "e62a9b5c-bd6e-4e80-90ec-4530863c2690",
+    "run" : {
+      "id" : "d6692337-6245-4e81-bc43-90ac6119dcda",
+      "status" : "RUNNING",
+      "quality" : null,
+      "privacyEnabled" : true,
+      "timeBudgetSeconds" : 3600,
+      "startedAt" : "2026-10-15T12:27:27.240978Z",
+      "deadlineAt" : "2026-10-15T13:27:27.240978Z",
+      "finishedAt" : null,
+      "failureStage" : null,
+      "failureCode" : null,
+      "failureMessage" : null,
+      "retryable" : false,
+      "retriesRemaining" : null,
+      "retryBlockedReason" : null,
+      "stages" : [ {
+        "stage" : "INPUT_VALIDATION",
+        "state" : "QUEUED",
+        "attempts" : 0,
+        "lastRun" : null
+      }, {
+        "stage" : "FFMPEG_PREPROCESS",
+        "state" : "PENDING",
+        "attempts" : 0,
+        "lastRun" : null
+      }, {
+        "stage" : "FRAME_QUALITY_FILTER",
+        "state" : "PENDING",
+        "attempts" : 0,
+        "lastRun" : null
+      }, {
+        "stage" : "PRIVACY_PREPROCESS",
+        "state" : "PENDING",
+        "attempts" : 0,
+        "lastRun" : null
+      }, {
+        "stage" : "POSE_ESTIMATION",
+        "state" : "PENDING",
+        "attempts" : 0,
+        "lastRun" : null
+      }, {
+        "stage" : "SPLAT_RECONSTRUCTION",
+        "state" : "PENDING",
+        "attempts" : 0,
+        "lastRun" : null
+      }, {
+        "stage" : "SEMANTIC_SEGMENTATION",
+        "state" : "PENDING",
+        "attempts" : 0,
+        "lastRun" : null
+      }, {
+        "stage" : "GEOMETRIC_CLEANUP",
+        "state" : "PENDING",
+        "attempts" : 0,
+        "lastRun" : null
+      }, {
+        "stage" : "PLANE_FITTING",
+        "state" : "PENDING",
+        "attempts" : 0,
+        "lastRun" : null
+      }, {
+        "stage" : "ARTIFACT_GENERATION",
+        "state" : "PENDING",
+        "attempts" : 0,
+        "lastRun" : null
+      }, {
+        "stage" : "SEMANTIC_INDEXING",
+        "state" : "PENDING",
+        "attempts" : 0,
+        "lastRun" : null
+      }, {
+        "stage" : "NAVIGATION_BAKING",
+        "state" : "PENDING",
+        "attempts" : 0,
+        "lastRun" : null
+      } ]
+    },
+    "jobs" : [ {
+      "id" : "88c4385e-2fae-44c7-8a21-ea9dd099948c",
+      "stage" : "INPUT_VALIDATION",
+      "status" : "QUEUED",
+      "retryCount" : 0,
+      "errorCode" : null,
+      "errorMessage" : null,
+      "queuedAt" : "2026-10-15T12:27:27.240978Z",
+      "startedAt" : null,
+      "finishedAt" : null
+    } ],
+    "revision" : 542,
+    "observedAt" : "2026-10-15T12:27:27.341327Z",
+    "progress" : {
+      "stagesTotal" : 12,
+      "stagesSucceeded" : 0,
+      "stagesFailed" : 0,
+      "stagesCancelled" : 0,
+      "stagesNotRun" : 0,
+      "activeStage" : "INPUT_VALIDATION",
+      "activeStageState" : "QUEUED",
+      "activeStageSince" : "2026-10-15T12:27:27.240978Z",
+      "activeStageAttempt" : 1,
+      "basis" : "COMPLETED_STAGES"
+    },
+    "activeJobs" : [ ]
+  },
+  "retryAnswer" : {
+    "captureId" : "be3cbe57-e59a-4d94-a5c6-975a68a09bbe",
+    "venueId" : "a2699f50-d6f8-4df3-b694-068b999208b6",
+    "captureStatus" : "PROCESSING",
+    "scanId" : "e62a9b5c-bd6e-4e80-90ec-4530863c2690",
+    "run" : {
+      "id" : "d6692337-6245-4e81-bc43-90ac6119dcda",
+      "status" : "RUNNING",
+      "quality" : null,
+      "privacyEnabled" : true,
+      "timeBudgetSeconds" : 3600,
+      "startedAt" : "2026-10-15T12:27:27.240978Z",
+      "deadlineAt" : "2026-10-15T13:27:28.052822Z",
+      "finishedAt" : null,
+      "failureStage" : null,
+      "failureCode" : null,
+      "failureMessage" : null,
+      "retryable" : false,
+      "retriesRemaining" : null,
+      "retryBlockedReason" : null,
+      "stages" : [ {
+        "stage" : "INPUT_VALIDATION",
+        "state" : "SUCCEEDED",
+        "attempts" : 1,
+        "lastRun" : {
+          "attempt" : 1,
+          "status" : "SUCCEEDED",
+          "startedAt" : "2026-10-15T12:27:25.652510Z",
+          "finishedAt" : "2026-10-15T12:27:27.652522Z",
+          "exitStatus" : 0,
+          "errorCode" : null,
+          "errorMessage" : null,
+          "errorDetails" : null,
+          "outputSha256" : "3f6492000738b8e920dce9c2adc8c33d6f7f1be5b43baeccaf81e40583a8ecd9",
+          "workerId" : "test-worker",
+          "command" : {
+            "argv" : [ "test-stage" ],
+            "config" : {
+              "fixture" : true
+            }
+          },
+          "stdout" : null,
+          "stderr" : null,
+          "artifacts" : [ {
+            "id" : "8c39c3bc-c787-4ed1-8c86-ec44b97a03d4",
+            "kind" : "INPUT_REPORT",
+            "bucket" : "chaya-derived-test",
+            "key" : "sealed/org/26789f37-2423-46c1-bfbb-78056b1402f6/venue/a2699f50-d6f8-4df3-b694-068b999208b6/scan/e62a9b5c-bd6e-4e80-90ec-4530863c2690/run/d6692337-6245-4e81-bc43-90ac6119dcda/INPUT_VALIDATION/attempt-1/a09839ca-c745-4398-8a6b-e1088301c41b/input-report.json",
+            "sizeBytes" : 11,
+            "sha256" : "4062edaf750fb8074e7e83e0c9028c94e32468a8b6f1614774328ef045150f93",
+            "contentType" : "application/json",
+            "partial" : false,
+            "containsPii" : false
+          } ]
+        }
+      }, {
+        "stage" : "FFMPEG_PREPROCESS",
+        "state" : "QUEUED",
+        "attempts" : 1,
+        "lastRun" : {
+          "attempt" : 1,
+          "status" : "FAILED",
+          "startedAt" : "2026-10-15T12:27:27.798040Z",
+          "finishedAt" : "2026-10-15T12:27:27.948943Z",
+          "exitStatus" : null,
+          "errorCode" : "WORKER_LOST",
+          "errorMessage" : "The worker stopped sending heartbeats; the stage was abandoned. It can be retried.",
+          "errorDetails" : { },
+          "outputSha256" : null,
+          "workerId" : "test-worker",
+          "command" : {
+            "reason" : "WORKER_LOST",
+            "synthetic" : "enforced-by-control-plane"
+          },
+          "stdout" : null,
+          "stderr" : null,
+          "artifacts" : [ ]
+        }
+      }, {
+        "stage" : "FRAME_QUALITY_FILTER",
+        "state" : "PENDING",
+        "attempts" : 0,
+        "lastRun" : null
+      }, {
+        "stage" : "PRIVACY_PREPROCESS",
+        "state" : "PENDING",
+        "attempts" : 0,
+        "lastRun" : null
+      }, {
+        "stage" : "POSE_ESTIMATION",
+        "state" : "PENDING",
+        "attempts" : 0,
+        "lastRun" : null
+      }, {
+        "stage" : "SPLAT_RECONSTRUCTION",
+        "state" : "PENDING",
+        "attempts" : 0,
+        "lastRun" : null
+      }, {
+        "stage" : "SEMANTIC_SEGMENTATION",
+        "state" : "PENDING",
+        "attempts" : 0,
+        "lastRun" : null
+      }, {
+        "stage" : "GEOMETRIC_CLEANUP",
+        "state" : "PENDING",
+        "attempts" : 0,
+        "lastRun" : null
+      }, {
+        "stage" : "PLANE_FITTING",
+        "state" : "PENDING",
+        "attempts" : 0,
+        "lastRun" : null
+      }, {
+        "stage" : "ARTIFACT_GENERATION",
+        "state" : "PENDING",
+        "attempts" : 0,
+        "lastRun" : null
+      }, {
+        "stage" : "SEMANTIC_INDEXING",
+        "state" : "PENDING",
+        "attempts" : 0,
+        "lastRun" : null
+      }, {
+        "stage" : "NAVIGATION_BAKING",
+        "state" : "PENDING",
+        "attempts" : 0,
+        "lastRun" : null
+      } ]
+    },
+    "jobs" : [ {
+      "id" : "88c4385e-2fae-44c7-8a21-ea9dd099948c",
+      "stage" : "INPUT_VALIDATION",
+      "status" : "SUCCEEDED",
+      "retryCount" : 0,
+      "errorCode" : null,
+      "errorMessage" : null,
+      "queuedAt" : "2026-10-15T12:27:27.240978Z",
+      "startedAt" : "2026-10-15T12:27:27.540851Z",
+      "finishedAt" : "2026-10-15T12:27:27.694637Z"
+    }, {
+      "id" : "b3a365db-02c0-4b85-a890-53c9d442bb77",
+      "stage" : "FFMPEG_PREPROCESS",
+      "status" : "QUEUED",
+      "retryCount" : 1,
+      "errorCode" : null,
+      "errorMessage" : null,
+      "queuedAt" : "2026-10-15T12:27:28.052822Z",
+      "startedAt" : null,
+      "finishedAt" : null
+    } ],
+    "revision" : 1119,
+    "observedAt" : "2026-10-15T12:27:28.121002Z",
+    "progress" : {
+      "stagesTotal" : 12,
+      "stagesSucceeded" : 1,
+      "stagesFailed" : 0,
+      "stagesCancelled" : 0,
+      "stagesNotRun" : 0,
+      "activeStage" : "FFMPEG_PREPROCESS",
+      "activeStageState" : "QUEUED",
+      "activeStageSince" : "2026-10-15T12:27:28.052822Z",
+      "activeStageAttempt" : 2,
+      "basis" : "COMPLETED_STAGES"
+    },
+    "activeJobs" : [ ]
+  },
+  "cancelAnswer" : {
+    "captureId" : "be3cbe57-e59a-4d94-a5c6-975a68a09bbe",
+    "venueId" : "a2699f50-d6f8-4df3-b694-068b999208b6",
+    "captureStatus" : "FAILED",
+    "scanId" : "e62a9b5c-bd6e-4e80-90ec-4530863c2690",
+    "run" : {
+      "id" : "d6692337-6245-4e81-bc43-90ac6119dcda",
+      "status" : "CANCELLED",
+      "quality" : null,
+      "privacyEnabled" : true,
+      "timeBudgetSeconds" : 3600,
+      "startedAt" : "2026-10-15T12:27:27.240978Z",
+      "deadlineAt" : "2026-10-15T13:27:28.052822Z",
+      "finishedAt" : "2026-10-15T12:27:28.351919Z",
+      "failureStage" : null,
+      "failureCode" : null,
+      "failureMessage" : null,
+      "retryable" : false,
+      "retriesRemaining" : null,
+      "retryBlockedReason" : null,
+      "stages" : [ {
+        "stage" : "INPUT_VALIDATION",
+        "state" : "SUCCEEDED",
+        "attempts" : 1,
+        "lastRun" : {
+          "attempt" : 1,
+          "status" : "SUCCEEDED",
+          "startedAt" : "2026-10-15T12:27:25.652510Z",
+          "finishedAt" : "2026-10-15T12:27:27.652522Z",
+          "exitStatus" : 0,
+          "errorCode" : null,
+          "errorMessage" : null,
+          "errorDetails" : null,
+          "outputSha256" : "3f6492000738b8e920dce9c2adc8c33d6f7f1be5b43baeccaf81e40583a8ecd9",
+          "workerId" : "test-worker",
+          "command" : {
+            "argv" : [ "test-stage" ],
+            "config" : {
+              "fixture" : true
+            }
+          },
+          "stdout" : null,
+          "stderr" : null,
+          "artifacts" : [ {
+            "id" : "8c39c3bc-c787-4ed1-8c86-ec44b97a03d4",
+            "kind" : "INPUT_REPORT",
+            "bucket" : "chaya-derived-test",
+            "key" : "sealed/org/26789f37-2423-46c1-bfbb-78056b1402f6/venue/a2699f50-d6f8-4df3-b694-068b999208b6/scan/e62a9b5c-bd6e-4e80-90ec-4530863c2690/run/d6692337-6245-4e81-bc43-90ac6119dcda/INPUT_VALIDATION/attempt-1/a09839ca-c745-4398-8a6b-e1088301c41b/input-report.json",
+            "sizeBytes" : 11,
+            "sha256" : "4062edaf750fb8074e7e83e0c9028c94e32468a8b6f1614774328ef045150f93",
+            "contentType" : "application/json",
+            "partial" : false,
+            "containsPii" : false
+          } ]
+        }
+      }, {
+        "stage" : "FFMPEG_PREPROCESS",
+        "state" : "CANCELLED",
+        "attempts" : 1,
+        "lastRun" : {
+          "attempt" : 1,
+          "status" : "FAILED",
+          "startedAt" : "2026-10-15T12:27:27.798040Z",
+          "finishedAt" : "2026-10-15T12:27:27.948943Z",
+          "exitStatus" : null,
+          "errorCode" : "WORKER_LOST",
+          "errorMessage" : "The worker stopped sending heartbeats; the stage was abandoned. It can be retried.",
+          "errorDetails" : { },
+          "outputSha256" : null,
+          "workerId" : "test-worker",
+          "command" : {
+            "reason" : "WORKER_LOST",
+            "synthetic" : "enforced-by-control-plane"
+          },
+          "stdout" : null,
+          "stderr" : null,
+          "artifacts" : [ ]
+        }
+      }, {
+        "stage" : "FRAME_QUALITY_FILTER",
+        "state" : "NOT_RUN",
+        "attempts" : 0,
+        "lastRun" : null
+      }, {
+        "stage" : "PRIVACY_PREPROCESS",
+        "state" : "NOT_RUN",
+        "attempts" : 0,
+        "lastRun" : null
+      }, {
+        "stage" : "POSE_ESTIMATION",
+        "state" : "NOT_RUN",
+        "attempts" : 0,
+        "lastRun" : null
+      }, {
+        "stage" : "SPLAT_RECONSTRUCTION",
+        "state" : "NOT_RUN",
+        "attempts" : 0,
+        "lastRun" : null
+      }, {
+        "stage" : "SEMANTIC_SEGMENTATION",
+        "state" : "NOT_RUN",
+        "attempts" : 0,
+        "lastRun" : null
+      }, {
+        "stage" : "GEOMETRIC_CLEANUP",
+        "state" : "NOT_RUN",
+        "attempts" : 0,
+        "lastRun" : null
+      }, {
+        "stage" : "PLANE_FITTING",
+        "state" : "NOT_RUN",
+        "attempts" : 0,
+        "lastRun" : null
+      }, {
+        "stage" : "ARTIFACT_GENERATION",
+        "state" : "NOT_RUN",
+        "attempts" : 0,
+        "lastRun" : null
+      }, {
+        "stage" : "SEMANTIC_INDEXING",
+        "state" : "NOT_RUN",
+        "attempts" : 0,
+        "lastRun" : null
+      }, {
+        "stage" : "NAVIGATION_BAKING",
+        "state" : "NOT_RUN",
+        "attempts" : 0,
+        "lastRun" : null
+      } ]
+    },
+    "jobs" : [ {
+      "id" : "88c4385e-2fae-44c7-8a21-ea9dd099948c",
+      "stage" : "INPUT_VALIDATION",
+      "status" : "SUCCEEDED",
+      "retryCount" : 0,
+      "errorCode" : null,
+      "errorMessage" : null,
+      "queuedAt" : "2026-10-15T12:27:27.240978Z",
+      "startedAt" : "2026-10-15T12:27:27.540851Z",
+      "finishedAt" : "2026-10-15T12:27:27.694637Z"
+    }, {
+      "id" : "b3a365db-02c0-4b85-a890-53c9d442bb77",
+      "stage" : "FFMPEG_PREPROCESS",
+      "status" : "CANCELLED",
+      "retryCount" : 1,
+      "errorCode" : null,
+      "errorMessage" : null,
+      "queuedAt" : "2026-10-15T12:27:28.052822Z",
+      "startedAt" : "2026-10-15T12:27:28.239649Z",
+      "finishedAt" : "2026-10-15T12:27:28.351919Z"
+    } ],
+    "revision" : 1142,
+    "observedAt" : "2026-10-15T12:27:28.434901Z",
+    "progress" : {
+      "stagesTotal" : 12,
+      "stagesSucceeded" : 1,
+      "stagesFailed" : 0,
+      "stagesCancelled" : 1,
+      "stagesNotRun" : 10,
+      "activeStage" : null,
+      "activeStageState" : null,
+      "activeStageSince" : null,
+      "activeStageAttempt" : null,
+      "basis" : "COMPLETED_STAGES"
+    },
+    "activeJobs" : [ ]
+  },
+  "captureAfterCancel" : {
+    "id" : "be3cbe57-e59a-4d94-a5c6-975a68a09bbe",
+    "venueId" : "a2699f50-d6f8-4df3-b694-068b999208b6",
+    "floorId" : "85c4116b-7d2b-4d0e-b3bc-eb39cf71603a",
+    "operatorId" : "user-9864d3f9-c4a4-411e-b36e-b5885474bccc",
+    "status" : "FAILED",
+    "device" : {
+      "os" : "android 14",
+      "model" : "test-phone"
+    },
+    "startedAt" : "2026-10-15T12:27:26.934683Z",
+    "endedAt" : "2026-10-15T12:27:27.202891Z",
+    "durationSeconds" : 0.27,
+    "qualityState" : "NOT_ASSESSED",
+    "failureCode" : "PROCESSING_CANCELLED",
+    "failureMessage" : "processing was cancelled by an operator",
+    "mediaCount" : 1,
+    "acceptedMediaCount" : 1,
+    "createdAt" : "2026-10-15T12:27:26.936488Z"
+  },
+  "steps" : [ {
+    "name" : "queued",
+    "sse" : "event:status\nid:542\nretry:2000\ndata:{\"captureId\":\"be3cbe57-e59a-4d94-a5c6-975a68a09bbe\",\"venueId\":\"a2699f50-d6f8-4df3-b694-068b999208b6\",\"captureStatus\":\"PROCESSING\",\"scanId\":\"e62a9b5c-bd6e-4e80-90ec-4530863c2690\",\"run\":{\"id\":\"d6692337-6245-4e81-bc43-90ac6119dcda\",\"status\":\"RUNNING\",\"quality\":null,\"privacyEnabled\":true,\"timeBudgetSeconds\":3600,\"startedAt\":\"2026-10-15T12:27:27.240978Z\",\"deadlineAt\":\"2026-10-15T13:27:27.240978Z\",\"finishedAt\":null,\"failureStage\":null,\"failureCode\":null,\"failureMessage\":null,\"retryable\":false,\"retriesRemaining\":null,\"retryBlockedReason\":null,\"stages\":[{\"stage\":\"INPUT_VALIDATION\",\"state\":\"QUEUED\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"FFMPEG_PREPROCESS\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"FRAME_QUALITY_FILTER\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"PRIVACY_PREPROCESS\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"POSE_ESTIMATION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"SPLAT_RECONSTRUCTION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"SEMANTIC_SEGMENTATION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"GEOMETRIC_CLEANUP\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"PLANE_FITTING\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"ARTIFACT_GENERATION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"SEMANTIC_INDEXING\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"NAVIGATION_BAKING\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null}]},\"jobs\":[{\"id\":\"88c4385e-2fae-44c7-8a21-ea9dd099948c\",\"stage\":\"INPUT_VALIDATION\",\"status\":\"QUEUED\",\"retryCount\":0,\"errorCode\":null,\"errorMessage\":null,\"queuedAt\":\"2026-10-15T12:27:27.240978Z\",\"startedAt\":null,\"finishedAt\":null}],\"revision\":542,\"observedAt\":\"2026-10-15T12:27:27.407821Z\",\"progress\":{\"stagesTotal\":12,\"stagesSucceeded\":0,\"stagesFailed\":0,\"stagesCancelled\":0,\"stagesNotRun\":0,\"activeStage\":\"INPUT_VALIDATION\",\"activeStageState\":\"QUEUED\",\"activeStageSince\":\"2026-10-15T12:27:27.240978Z\",\"activeStageAttempt\":1,\"basis\":\"COMPLETED_STAGES\"},\"activeJobs\":[]}\n\n"
+  }, {
+    "name" : "first-stage-running",
+    "sse" : "event:status\nid:543\nretry:2000\ndata:{\"captureId\":\"be3cbe57-e59a-4d94-a5c6-975a68a09bbe\",\"venueId\":\"a2699f50-d6f8-4df3-b694-068b999208b6\",\"captureStatus\":\"PROCESSING\",\"scanId\":\"e62a9b5c-bd6e-4e80-90ec-4530863c2690\",\"run\":{\"id\":\"d6692337-6245-4e81-bc43-90ac6119dcda\",\"status\":\"RUNNING\",\"quality\":null,\"privacyEnabled\":true,\"timeBudgetSeconds\":3600,\"startedAt\":\"2026-10-15T12:27:27.240978Z\",\"deadlineAt\":\"2026-10-15T13:27:27.240978Z\",\"finishedAt\":null,\"failureStage\":null,\"failureCode\":null,\"failureMessage\":null,\"retryable\":false,\"retriesRemaining\":null,\"retryBlockedReason\":null,\"stages\":[{\"stage\":\"INPUT_VALIDATION\",\"state\":\"RUNNING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"FFMPEG_PREPROCESS\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"FRAME_QUALITY_FILTER\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"PRIVACY_PREPROCESS\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"POSE_ESTIMATION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"SPLAT_RECONSTRUCTION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"SEMANTIC_SEGMENTATION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"GEOMETRIC_CLEANUP\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"PLANE_FITTING\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"ARTIFACT_GENERATION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"SEMANTIC_INDEXING\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"NAVIGATION_BAKING\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null}]},\"jobs\":[{\"id\":\"88c4385e-2fae-44c7-8a21-ea9dd099948c\",\"stage\":\"INPUT_VALIDATION\",\"status\":\"RUNNING\",\"retryCount\":0,\"errorCode\":null,\"errorMessage\":null,\"queuedAt\":\"2026-10-15T12:27:27.240978Z\",\"startedAt\":\"2026-10-15T12:27:27.540851Z\",\"finishedAt\":null}],\"revision\":543,\"observedAt\":\"2026-10-15T12:27:27.574263Z\",\"progress\":{\"stagesTotal\":12,\"stagesSucceeded\":0,\"stagesFailed\":0,\"stagesCancelled\":0,\"stagesNotRun\":0,\"activeStage\":\"INPUT_VALIDATION\",\"activeStageState\":\"RUNNING\",\"activeStageSince\":\"2026-10-15T12:27:27.540851Z\",\"activeStageAttempt\":1,\"basis\":\"COMPLETED_STAGES\"},\"activeJobs\":[{\"jobId\":\"88c4385e-2fae-44c7-8a21-ea9dd099948c\",\"stage\":\"INPUT_VALIDATION\",\"workerId\":\"test-worker\",\"startedAt\":\"2026-10-15T12:27:27.540851Z\",\"leaseExpiresAt\":\"2026-10-15T12:32:27.540851Z\",\"leaseExpired\":false}]}\n\n"
+  }, {
+    "name" : "first-stage-succeeded",
+    "sse" : "event:status\nid:915\nretry:2000\ndata:{\"captureId\":\"be3cbe57-e59a-4d94-a5c6-975a68a09bbe\",\"venueId\":\"a2699f50-d6f8-4df3-b694-068b999208b6\",\"captureStatus\":\"PROCESSING\",\"scanId\":\"e62a9b5c-bd6e-4e80-90ec-4530863c2690\",\"run\":{\"id\":\"d6692337-6245-4e81-bc43-90ac6119dcda\",\"status\":\"RUNNING\",\"quality\":null,\"privacyEnabled\":true,\"timeBudgetSeconds\":3600,\"startedAt\":\"2026-10-15T12:27:27.240978Z\",\"deadlineAt\":\"2026-10-15T13:27:27.240978Z\",\"finishedAt\":null,\"failureStage\":null,\"failureCode\":null,\"failureMessage\":null,\"retryable\":false,\"retriesRemaining\":null,\"retryBlockedReason\":null,\"stages\":[{\"stage\":\"INPUT_VALIDATION\",\"state\":\"SUCCEEDED\",\"attempts\":1,\"lastRun\":{\"attempt\":1,\"status\":\"SUCCEEDED\",\"startedAt\":\"2026-10-15T12:27:25.652510Z\",\"finishedAt\":\"2026-10-15T12:27:27.652522Z\",\"exitStatus\":0,\"errorCode\":null,\"errorMessage\":null,\"errorDetails\":null,\"outputSha256\":\"3f6492000738b8e920dce9c2adc8c33d6f7f1be5b43baeccaf81e40583a8ecd9\",\"workerId\":\"test-worker\",\"command\":{\"argv\":[\"test-stage\"],\"config\":{\"fixture\":true}},\"stdout\":null,\"stderr\":null,\"artifacts\":[{\"id\":\"8c39c3bc-c787-4ed1-8c86-ec44b97a03d4\",\"kind\":\"INPUT_REPORT\",\"bucket\":\"chaya-derived-test\",\"key\":\"sealed/org/26789f37-2423-46c1-bfbb-78056b1402f6/venue/a2699f50-d6f8-4df3-b694-068b999208b6/scan/e62a9b5c-bd6e-4e80-90ec-4530863c2690/run/d6692337-6245-4e81-bc43-90ac6119dcda/INPUT_VALIDATION/attempt-1/a09839ca-c745-4398-8a6b-e1088301c41b/input-report.json\",\"sizeBytes\":11,\"sha256\":\"4062edaf750fb8074e7e83e0c9028c94e32468a8b6f1614774328ef045150f93\",\"contentType\":\"application/json\",\"partial\":false,\"containsPii\":false}]}},{\"stage\":\"FFMPEG_PREPROCESS\",\"state\":\"QUEUED\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"FRAME_QUALITY_FILTER\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"PRIVACY_PREPROCESS\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"POSE_ESTIMATION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"SPLAT_RECONSTRUCTION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"SEMANTIC_SEGMENTATION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"GEOMETRIC_CLEANUP\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"PLANE_FITTING\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"ARTIFACT_GENERATION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"SEMANTIC_INDEXING\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"NAVIGATION_BAKING\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null}]},\"jobs\":[{\"id\":\"88c4385e-2fae-44c7-8a21-ea9dd099948c\",\"stage\":\"INPUT_VALIDATION\",\"status\":\"SUCCEEDED\",\"retryCount\":0,\"errorCode\":null,\"errorMessage\":null,\"queuedAt\":\"2026-10-15T12:27:27.240978Z\",\"startedAt\":\"2026-10-15T12:27:27.540851Z\",\"finishedAt\":\"2026-10-15T12:27:27.694637Z\"},{\"id\":\"b3a365db-02c0-4b85-a890-53c9d442bb77\",\"stage\":\"FFMPEG_PREPROCESS\",\"status\":\"QUEUED\",\"retryCount\":0,\"errorCode\":null,\"errorMessage\":null,\"queuedAt\":\"2026-10-15T12:27:27.694637Z\",\"startedAt\":null,\"finishedAt\":null}],\"revision\":915,\"observedAt\":\"2026-10-15T12:27:27.745721Z\",\"progress\":{\"stagesTotal\":12,\"stagesSucceeded\":1,\"stagesFailed\":0,\"stagesCancelled\":0,\"stagesNotRun\":0,\"activeStage\":\"FFMPEG_PREPROCESS\",\"activeStageState\":\"QUEUED\",\"activeStageSince\":\"2026-10-15T12:27:27.694637Z\",\"activeStageAttempt\":1,\"basis\":\"COMPLETED_STAGES\"},\"activeJobs\":[]}\n\n"
+  }, {
+    "name" : "second-stage-running",
+    "sse" : "event:status\nid:916\nretry:2000\ndata:{\"captureId\":\"be3cbe57-e59a-4d94-a5c6-975a68a09bbe\",\"venueId\":\"a2699f50-d6f8-4df3-b694-068b999208b6\",\"captureStatus\":\"PROCESSING\",\"scanId\":\"e62a9b5c-bd6e-4e80-90ec-4530863c2690\",\"run\":{\"id\":\"d6692337-6245-4e81-bc43-90ac6119dcda\",\"status\":\"RUNNING\",\"quality\":null,\"privacyEnabled\":true,\"timeBudgetSeconds\":3600,\"startedAt\":\"2026-10-15T12:27:27.240978Z\",\"deadlineAt\":\"2026-10-15T13:27:27.240978Z\",\"finishedAt\":null,\"failureStage\":null,\"failureCode\":null,\"failureMessage\":null,\"retryable\":false,\"retriesRemaining\":null,\"retryBlockedReason\":null,\"stages\":[{\"stage\":\"INPUT_VALIDATION\",\"state\":\"SUCCEEDED\",\"attempts\":1,\"lastRun\":{\"attempt\":1,\"status\":\"SUCCEEDED\",\"startedAt\":\"2026-10-15T12:27:25.652510Z\",\"finishedAt\":\"2026-10-15T12:27:27.652522Z\",\"exitStatus\":0,\"errorCode\":null,\"errorMessage\":null,\"errorDetails\":null,\"outputSha256\":\"3f6492000738b8e920dce9c2adc8c33d6f7f1be5b43baeccaf81e40583a8ecd9\",\"workerId\":\"test-worker\",\"command\":{\"argv\":[\"test-stage\"],\"config\":{\"fixture\":true}},\"stdout\":null,\"stderr\":null,\"artifacts\":[{\"id\":\"8c39c3bc-c787-4ed1-8c86-ec44b97a03d4\",\"kind\":\"INPUT_REPORT\",\"bucket\":\"chaya-derived-test\",\"key\":\"sealed/org/26789f37-2423-46c1-bfbb-78056b1402f6/venue/a2699f50-d6f8-4df3-b694-068b999208b6/scan/e62a9b5c-bd6e-4e80-90ec-4530863c2690/run/d6692337-6245-4e81-bc43-90ac6119dcda/INPUT_VALIDATION/attempt-1/a09839ca-c745-4398-8a6b-e1088301c41b/input-report.json\",\"sizeBytes\":11,\"sha256\":\"4062edaf750fb8074e7e83e0c9028c94e32468a8b6f1614774328ef045150f93\",\"contentType\":\"application/json\",\"partial\":false,\"containsPii\":false}]}},{\"stage\":\"FFMPEG_PREPROCESS\",\"state\":\"RUNNING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"FRAME_QUALITY_FILTER\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"PRIVACY_PREPROCESS\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"POSE_ESTIMATION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"SPLAT_RECONSTRUCTION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"SEMANTIC_SEGMENTATION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"GEOMETRIC_CLEANUP\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"PLANE_FITTING\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"ARTIFACT_GENERATION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"SEMANTIC_INDEXING\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"NAVIGATION_BAKING\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null}]},\"jobs\":[{\"id\":\"88c4385e-2fae-44c7-8a21-ea9dd099948c\",\"stage\":\"INPUT_VALIDATION\",\"status\":\"SUCCEEDED\",\"retryCount\":0,\"errorCode\":null,\"errorMessage\":null,\"queuedAt\":\"2026-10-15T12:27:27.240978Z\",\"startedAt\":\"2026-10-15T12:27:27.540851Z\",\"finishedAt\":\"2026-10-15T12:27:27.694637Z\"},{\"id\":\"b3a365db-02c0-4b85-a890-53c9d442bb77\",\"stage\":\"FFMPEG_PREPROCESS\",\"status\":\"RUNNING\",\"retryCount\":0,\"errorCode\":null,\"errorMessage\":null,\"queuedAt\":\"2026-10-15T12:27:27.694637Z\",\"startedAt\":\"2026-10-15T12:27:27.798040Z\",\"finishedAt\":null}],\"revision\":916,\"observedAt\":\"2026-10-15T12:27:27.833914Z\",\"progress\":{\"stagesTotal\":12,\"stagesSucceeded\":1,\"stagesFailed\":0,\"stagesCancelled\":0,\"stagesNotRun\":0,\"activeStage\":\"FFMPEG_PREPROCESS\",\"activeStageState\":\"RUNNING\",\"activeStageSince\":\"2026-10-15T12:27:27.798040Z\",\"activeStageAttempt\":1,\"basis\":\"COMPLETED_STAGES\"},\"activeJobs\":[{\"jobId\":\"b3a365db-02c0-4b85-a890-53c9d442bb77\",\"stage\":\"FFMPEG_PREPROCESS\",\"workerId\":\"test-worker\",\"startedAt\":\"2026-10-15T12:27:27.798040Z\",\"leaseExpiresAt\":\"2026-10-15T12:32:27.798040Z\",\"leaseExpired\":false}]}\n\n"
+  }, {
+    "name" : "second-stage-lease-expired",
+    "sse" : "event:status\nid:916\nretry:2000\ndata:{\"captureId\":\"be3cbe57-e59a-4d94-a5c6-975a68a09bbe\",\"venueId\":\"a2699f50-d6f8-4df3-b694-068b999208b6\",\"captureStatus\":\"PROCESSING\",\"scanId\":\"e62a9b5c-bd6e-4e80-90ec-4530863c2690\",\"run\":{\"id\":\"d6692337-6245-4e81-bc43-90ac6119dcda\",\"status\":\"RUNNING\",\"quality\":null,\"privacyEnabled\":true,\"timeBudgetSeconds\":3600,\"startedAt\":\"2026-10-15T12:27:27.240978Z\",\"deadlineAt\":\"2026-10-15T13:27:27.240978Z\",\"finishedAt\":null,\"failureStage\":null,\"failureCode\":null,\"failureMessage\":null,\"retryable\":false,\"retriesRemaining\":null,\"retryBlockedReason\":null,\"stages\":[{\"stage\":\"INPUT_VALIDATION\",\"state\":\"SUCCEEDED\",\"attempts\":1,\"lastRun\":{\"attempt\":1,\"status\":\"SUCCEEDED\",\"startedAt\":\"2026-10-15T12:27:25.652510Z\",\"finishedAt\":\"2026-10-15T12:27:27.652522Z\",\"exitStatus\":0,\"errorCode\":null,\"errorMessage\":null,\"errorDetails\":null,\"outputSha256\":\"3f6492000738b8e920dce9c2adc8c33d6f7f1be5b43baeccaf81e40583a8ecd9\",\"workerId\":\"test-worker\",\"command\":{\"argv\":[\"test-stage\"],\"config\":{\"fixture\":true}},\"stdout\":null,\"stderr\":null,\"artifacts\":[{\"id\":\"8c39c3bc-c787-4ed1-8c86-ec44b97a03d4\",\"kind\":\"INPUT_REPORT\",\"bucket\":\"chaya-derived-test\",\"key\":\"sealed/org/26789f37-2423-46c1-bfbb-78056b1402f6/venue/a2699f50-d6f8-4df3-b694-068b999208b6/scan/e62a9b5c-bd6e-4e80-90ec-4530863c2690/run/d6692337-6245-4e81-bc43-90ac6119dcda/INPUT_VALIDATION/attempt-1/a09839ca-c745-4398-8a6b-e1088301c41b/input-report.json\",\"sizeBytes\":11,\"sha256\":\"4062edaf750fb8074e7e83e0c9028c94e32468a8b6f1614774328ef045150f93\",\"contentType\":\"application/json\",\"partial\":false,\"containsPii\":false}]}},{\"stage\":\"FFMPEG_PREPROCESS\",\"state\":\"RUNNING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"FRAME_QUALITY_FILTER\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"PRIVACY_PREPROCESS\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"POSE_ESTIMATION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"SPLAT_RECONSTRUCTION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"SEMANTIC_SEGMENTATION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"GEOMETRIC_CLEANUP\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"PLANE_FITTING\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"ARTIFACT_GENERATION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"SEMANTIC_INDEXING\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"NAVIGATION_BAKING\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null}]},\"jobs\":[{\"id\":\"88c4385e-2fae-44c7-8a21-ea9dd099948c\",\"stage\":\"INPUT_VALIDATION\",\"status\":\"SUCCEEDED\",\"retryCount\":0,\"errorCode\":null,\"errorMessage\":null,\"queuedAt\":\"2026-10-15T12:27:27.240978Z\",\"startedAt\":\"2026-10-15T12:27:27.540851Z\",\"finishedAt\":\"2026-10-15T12:27:27.694637Z\"},{\"id\":\"b3a365db-02c0-4b85-a890-53c9d442bb77\",\"stage\":\"FFMPEG_PREPROCESS\",\"status\":\"RUNNING\",\"retryCount\":0,\"errorCode\":null,\"errorMessage\":null,\"queuedAt\":\"2026-10-15T12:27:27.694637Z\",\"startedAt\":\"2026-10-15T12:27:27.798040Z\",\"finishedAt\":null}],\"revision\":916,\"observedAt\":\"2026-10-15T12:27:27.899153Z\",\"progress\":{\"stagesTotal\":12,\"stagesSucceeded\":1,\"stagesFailed\":0,\"stagesCancelled\":0,\"stagesNotRun\":0,\"activeStage\":\"FFMPEG_PREPROCESS\",\"activeStageState\":\"RUNNING\",\"activeStageSince\":\"2026-10-15T12:27:27.798040Z\",\"activeStageAttempt\":1,\"basis\":\"COMPLETED_STAGES\"},\"activeJobs\":[{\"jobId\":\"b3a365db-02c0-4b85-a890-53c9d442bb77\",\"stage\":\"FFMPEG_PREPROCESS\",\"workerId\":\"test-worker\",\"startedAt\":\"2026-10-15T12:27:27.798040Z\",\"leaseExpiresAt\":\"2026-10-15T12:27:22.878897Z\",\"leaseExpired\":true}]}\n\n"
+  }, {
+    "name" : "worker-lost",
+    "sse" : "event:status\nid:1115\nretry:2000\ndata:{\"captureId\":\"be3cbe57-e59a-4d94-a5c6-975a68a09bbe\",\"venueId\":\"a2699f50-d6f8-4df3-b694-068b999208b6\",\"captureStatus\":\"PROCESSING\",\"scanId\":\"e62a9b5c-bd6e-4e80-90ec-4530863c2690\",\"run\":{\"id\":\"d6692337-6245-4e81-bc43-90ac6119dcda\",\"status\":\"FAILED\",\"quality\":null,\"privacyEnabled\":true,\"timeBudgetSeconds\":3600,\"startedAt\":\"2026-10-15T12:27:27.240978Z\",\"deadlineAt\":\"2026-10-15T13:27:27.240978Z\",\"finishedAt\":\"2026-10-15T12:27:27.945895Z\",\"failureStage\":\"FFMPEG_PREPROCESS\",\"failureCode\":\"WORKER_LOST\",\"failureMessage\":\"The worker stopped sending heartbeats; the stage was abandoned. It can be retried.\",\"retryable\":true,\"retriesRemaining\":3,\"retryBlockedReason\":null,\"stages\":[{\"stage\":\"INPUT_VALIDATION\",\"state\":\"SUCCEEDED\",\"attempts\":1,\"lastRun\":{\"attempt\":1,\"status\":\"SUCCEEDED\",\"startedAt\":\"2026-10-15T12:27:25.652510Z\",\"finishedAt\":\"2026-10-15T12:27:27.652522Z\",\"exitStatus\":0,\"errorCode\":null,\"errorMessage\":null,\"errorDetails\":null,\"outputSha256\":\"3f6492000738b8e920dce9c2adc8c33d6f7f1be5b43baeccaf81e40583a8ecd9\",\"workerId\":\"test-worker\",\"command\":{\"argv\":[\"test-stage\"],\"config\":{\"fixture\":true}},\"stdout\":null,\"stderr\":null,\"artifacts\":[{\"id\":\"8c39c3bc-c787-4ed1-8c86-ec44b97a03d4\",\"kind\":\"INPUT_REPORT\",\"bucket\":\"chaya-derived-test\",\"key\":\"sealed/org/26789f37-2423-46c1-bfbb-78056b1402f6/venue/a2699f50-d6f8-4df3-b694-068b999208b6/scan/e62a9b5c-bd6e-4e80-90ec-4530863c2690/run/d6692337-6245-4e81-bc43-90ac6119dcda/INPUT_VALIDATION/attempt-1/a09839ca-c745-4398-8a6b-e1088301c41b/input-report.json\",\"sizeBytes\":11,\"sha256\":\"4062edaf750fb8074e7e83e0c9028c94e32468a8b6f1614774328ef045150f93\",\"contentType\":\"application/json\",\"partial\":false,\"containsPii\":false}]}},{\"stage\":\"FFMPEG_PREPROCESS\",\"state\":\"FAILED\",\"attempts\":1,\"lastRun\":{\"attempt\":1,\"status\":\"FAILED\",\"startedAt\":\"2026-10-15T12:27:27.798040Z\",\"finishedAt\":\"2026-10-15T12:27:27.948943Z\",\"exitStatus\":null,\"errorCode\":\"WORKER_LOST\",\"errorMessage\":\"The worker stopped sending heartbeats; the stage was abandoned. It can be retried.\",\"errorDetails\":{},\"outputSha256\":null,\"workerId\":\"test-worker\",\"command\":{\"reason\":\"WORKER_LOST\",\"synthetic\":\"enforced-by-control-plane\"},\"stdout\":null,\"stderr\":null,\"artifacts\":[]}},{\"stage\":\"FRAME_QUALITY_FILTER\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"PRIVACY_PREPROCESS\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"POSE_ESTIMATION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"SPLAT_RECONSTRUCTION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"SEMANTIC_SEGMENTATION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"GEOMETRIC_CLEANUP\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"PLANE_FITTING\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"ARTIFACT_GENERATION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"SEMANTIC_INDEXING\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"NAVIGATION_BAKING\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null}]},\"jobs\":[{\"id\":\"88c4385e-2fae-44c7-8a21-ea9dd099948c\",\"stage\":\"INPUT_VALIDATION\",\"status\":\"SUCCEEDED\",\"retryCount\":0,\"errorCode\":null,\"errorMessage\":null,\"queuedAt\":\"2026-10-15T12:27:27.240978Z\",\"startedAt\":\"2026-10-15T12:27:27.540851Z\",\"finishedAt\":\"2026-10-15T12:27:27.694637Z\"},{\"id\":\"b3a365db-02c0-4b85-a890-53c9d442bb77\",\"stage\":\"FFMPEG_PREPROCESS\",\"status\":\"FAILED\",\"retryCount\":0,\"errorCode\":\"WORKER_LOST\",\"errorMessage\":\"The worker stopped sending heartbeats; the stage was abandoned. It can be retried.\",\"queuedAt\":\"2026-10-15T12:27:27.694637Z\",\"startedAt\":\"2026-10-15T12:27:27.798040Z\",\"finishedAt\":\"2026-10-15T12:27:27.945895Z\"}],\"revision\":1115,\"observedAt\":\"2026-10-15T12:27:27.992178Z\",\"progress\":{\"stagesTotal\":12,\"stagesSucceeded\":1,\"stagesFailed\":1,\"stagesCancelled\":0,\"stagesNotRun\":0,\"activeStage\":null,\"activeStageState\":null,\"activeStageSince\":null,\"activeStageAttempt\":null,\"basis\":\"COMPLETED_STAGES\"},\"activeJobs\":[]}\n\n"
+  }, {
+    "name" : "retried",
+    "sse" : "event:status\nid:1119\nretry:2000\ndata:{\"captureId\":\"be3cbe57-e59a-4d94-a5c6-975a68a09bbe\",\"venueId\":\"a2699f50-d6f8-4df3-b694-068b999208b6\",\"captureStatus\":\"PROCESSING\",\"scanId\":\"e62a9b5c-bd6e-4e80-90ec-4530863c2690\",\"run\":{\"id\":\"d6692337-6245-4e81-bc43-90ac6119dcda\",\"status\":\"RUNNING\",\"quality\":null,\"privacyEnabled\":true,\"timeBudgetSeconds\":3600,\"startedAt\":\"2026-10-15T12:27:27.240978Z\",\"deadlineAt\":\"2026-10-15T13:27:28.052822Z\",\"finishedAt\":null,\"failureStage\":null,\"failureCode\":null,\"failureMessage\":null,\"retryable\":false,\"retriesRemaining\":null,\"retryBlockedReason\":null,\"stages\":[{\"stage\":\"INPUT_VALIDATION\",\"state\":\"SUCCEEDED\",\"attempts\":1,\"lastRun\":{\"attempt\":1,\"status\":\"SUCCEEDED\",\"startedAt\":\"2026-10-15T12:27:25.652510Z\",\"finishedAt\":\"2026-10-15T12:27:27.652522Z\",\"exitStatus\":0,\"errorCode\":null,\"errorMessage\":null,\"errorDetails\":null,\"outputSha256\":\"3f6492000738b8e920dce9c2adc8c33d6f7f1be5b43baeccaf81e40583a8ecd9\",\"workerId\":\"test-worker\",\"command\":{\"argv\":[\"test-stage\"],\"config\":{\"fixture\":true}},\"stdout\":null,\"stderr\":null,\"artifacts\":[{\"id\":\"8c39c3bc-c787-4ed1-8c86-ec44b97a03d4\",\"kind\":\"INPUT_REPORT\",\"bucket\":\"chaya-derived-test\",\"key\":\"sealed/org/26789f37-2423-46c1-bfbb-78056b1402f6/venue/a2699f50-d6f8-4df3-b694-068b999208b6/scan/e62a9b5c-bd6e-4e80-90ec-4530863c2690/run/d6692337-6245-4e81-bc43-90ac6119dcda/INPUT_VALIDATION/attempt-1/a09839ca-c745-4398-8a6b-e1088301c41b/input-report.json\",\"sizeBytes\":11,\"sha256\":\"4062edaf750fb8074e7e83e0c9028c94e32468a8b6f1614774328ef045150f93\",\"contentType\":\"application/json\",\"partial\":false,\"containsPii\":false}]}},{\"stage\":\"FFMPEG_PREPROCESS\",\"state\":\"QUEUED\",\"attempts\":1,\"lastRun\":{\"attempt\":1,\"status\":\"FAILED\",\"startedAt\":\"2026-10-15T12:27:27.798040Z\",\"finishedAt\":\"2026-10-15T12:27:27.948943Z\",\"exitStatus\":null,\"errorCode\":\"WORKER_LOST\",\"errorMessage\":\"The worker stopped sending heartbeats; the stage was abandoned. It can be retried.\",\"errorDetails\":{},\"outputSha256\":null,\"workerId\":\"test-worker\",\"command\":{\"reason\":\"WORKER_LOST\",\"synthetic\":\"enforced-by-control-plane\"},\"stdout\":null,\"stderr\":null,\"artifacts\":[]}},{\"stage\":\"FRAME_QUALITY_FILTER\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"PRIVACY_PREPROCESS\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"POSE_ESTIMATION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"SPLAT_RECONSTRUCTION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"SEMANTIC_SEGMENTATION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"GEOMETRIC_CLEANUP\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"PLANE_FITTING\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"ARTIFACT_GENERATION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"SEMANTIC_INDEXING\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"NAVIGATION_BAKING\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null}]},\"jobs\":[{\"id\":\"88c4385e-2fae-44c7-8a21-ea9dd099948c\",\"stage\":\"INPUT_VALIDATION\",\"status\":\"SUCCEEDED\",\"retryCount\":0,\"errorCode\":null,\"errorMessage\":null,\"queuedAt\":\"2026-10-15T12:27:27.240978Z\",\"startedAt\":\"2026-10-15T12:27:27.540851Z\",\"finishedAt\":\"2026-10-15T12:27:27.694637Z\"},{\"id\":\"b3a365db-02c0-4b85-a890-53c9d442bb77\",\"stage\":\"FFMPEG_PREPROCESS\",\"status\":\"QUEUED\",\"retryCount\":1,\"errorCode\":null,\"errorMessage\":null,\"queuedAt\":\"2026-10-15T12:27:28.052822Z\",\"startedAt\":null,\"finishedAt\":null}],\"revision\":1119,\"observedAt\":\"2026-10-15T12:27:28.191433Z\",\"progress\":{\"stagesTotal\":12,\"stagesSucceeded\":1,\"stagesFailed\":0,\"stagesCancelled\":0,\"stagesNotRun\":0,\"activeStage\":\"FFMPEG_PREPROCESS\",\"activeStageState\":\"QUEUED\",\"activeStageSince\":\"2026-10-15T12:27:28.052822Z\",\"activeStageAttempt\":2,\"basis\":\"COMPLETED_STAGES\"},\"activeJobs\":[]}\n\n"
+  }, {
+    "name" : "second-stage-attempt-2-running",
+    "sse" : "event:status\nid:1121\nretry:2000\ndata:{\"captureId\":\"be3cbe57-e59a-4d94-a5c6-975a68a09bbe\",\"venueId\":\"a2699f50-d6f8-4df3-b694-068b999208b6\",\"captureStatus\":\"PROCESSING\",\"scanId\":\"e62a9b5c-bd6e-4e80-90ec-4530863c2690\",\"run\":{\"id\":\"d6692337-6245-4e81-bc43-90ac6119dcda\",\"status\":\"RUNNING\",\"quality\":null,\"privacyEnabled\":true,\"timeBudgetSeconds\":3600,\"startedAt\":\"2026-10-15T12:27:27.240978Z\",\"deadlineAt\":\"2026-10-15T13:27:28.052822Z\",\"finishedAt\":null,\"failureStage\":null,\"failureCode\":null,\"failureMessage\":null,\"retryable\":false,\"retriesRemaining\":null,\"retryBlockedReason\":null,\"stages\":[{\"stage\":\"INPUT_VALIDATION\",\"state\":\"SUCCEEDED\",\"attempts\":1,\"lastRun\":{\"attempt\":1,\"status\":\"SUCCEEDED\",\"startedAt\":\"2026-10-15T12:27:25.652510Z\",\"finishedAt\":\"2026-10-15T12:27:27.652522Z\",\"exitStatus\":0,\"errorCode\":null,\"errorMessage\":null,\"errorDetails\":null,\"outputSha256\":\"3f6492000738b8e920dce9c2adc8c33d6f7f1be5b43baeccaf81e40583a8ecd9\",\"workerId\":\"test-worker\",\"command\":{\"argv\":[\"test-stage\"],\"config\":{\"fixture\":true}},\"stdout\":null,\"stderr\":null,\"artifacts\":[{\"id\":\"8c39c3bc-c787-4ed1-8c86-ec44b97a03d4\",\"kind\":\"INPUT_REPORT\",\"bucket\":\"chaya-derived-test\",\"key\":\"sealed/org/26789f37-2423-46c1-bfbb-78056b1402f6/venue/a2699f50-d6f8-4df3-b694-068b999208b6/scan/e62a9b5c-bd6e-4e80-90ec-4530863c2690/run/d6692337-6245-4e81-bc43-90ac6119dcda/INPUT_VALIDATION/attempt-1/a09839ca-c745-4398-8a6b-e1088301c41b/input-report.json\",\"sizeBytes\":11,\"sha256\":\"4062edaf750fb8074e7e83e0c9028c94e32468a8b6f1614774328ef045150f93\",\"contentType\":\"application/json\",\"partial\":false,\"containsPii\":false}]}},{\"stage\":\"FFMPEG_PREPROCESS\",\"state\":\"RUNNING\",\"attempts\":1,\"lastRun\":{\"attempt\":1,\"status\":\"FAILED\",\"startedAt\":\"2026-10-15T12:27:27.798040Z\",\"finishedAt\":\"2026-10-15T12:27:27.948943Z\",\"exitStatus\":null,\"errorCode\":\"WORKER_LOST\",\"errorMessage\":\"The worker stopped sending heartbeats; the stage was abandoned. It can be retried.\",\"errorDetails\":{},\"outputSha256\":null,\"workerId\":\"test-worker\",\"command\":{\"reason\":\"WORKER_LOST\",\"synthetic\":\"enforced-by-control-plane\"},\"stdout\":null,\"stderr\":null,\"artifacts\":[]}},{\"stage\":\"FRAME_QUALITY_FILTER\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"PRIVACY_PREPROCESS\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"POSE_ESTIMATION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"SPLAT_RECONSTRUCTION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"SEMANTIC_SEGMENTATION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"GEOMETRIC_CLEANUP\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"PLANE_FITTING\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"ARTIFACT_GENERATION\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"SEMANTIC_INDEXING\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"NAVIGATION_BAKING\",\"state\":\"PENDING\",\"attempts\":0,\"lastRun\":null}]},\"jobs\":[{\"id\":\"88c4385e-2fae-44c7-8a21-ea9dd099948c\",\"stage\":\"INPUT_VALIDATION\",\"status\":\"SUCCEEDED\",\"retryCount\":0,\"errorCode\":null,\"errorMessage\":null,\"queuedAt\":\"2026-10-15T12:27:27.240978Z\",\"startedAt\":\"2026-10-15T12:27:27.540851Z\",\"finishedAt\":\"2026-10-15T12:27:27.694637Z\"},{\"id\":\"b3a365db-02c0-4b85-a890-53c9d442bb77\",\"stage\":\"FFMPEG_PREPROCESS\",\"status\":\"RUNNING\",\"retryCount\":1,\"errorCode\":null,\"errorMessage\":null,\"queuedAt\":\"2026-10-15T12:27:28.052822Z\",\"startedAt\":\"2026-10-15T12:27:28.239649Z\",\"finishedAt\":null}],\"revision\":1121,\"observedAt\":\"2026-10-15T12:27:28.282387Z\",\"progress\":{\"stagesTotal\":12,\"stagesSucceeded\":1,\"stagesFailed\":0,\"stagesCancelled\":0,\"stagesNotRun\":0,\"activeStage\":\"FFMPEG_PREPROCESS\",\"activeStageState\":\"RUNNING\",\"activeStageSince\":\"2026-10-15T12:27:28.239649Z\",\"activeStageAttempt\":2,\"basis\":\"COMPLETED_STAGES\"},\"activeJobs\":[{\"jobId\":\"b3a365db-02c0-4b85-a890-53c9d442bb77\",\"stage\":\"FFMPEG_PREPROCESS\",\"workerId\":\"test-worker\",\"startedAt\":\"2026-10-15T12:27:28.239649Z\",\"leaseExpiresAt\":\"2026-10-15T12:32:28.239649Z\",\"leaseExpired\":false}]}\n\n"
+  }, {
+    "name" : "cancelled",
+    "sse" : "event:status\nid:1142\nretry:2000\ndata:{\"captureId\":\"be3cbe57-e59a-4d94-a5c6-975a68a09bbe\",\"venueId\":\"a2699f50-d6f8-4df3-b694-068b999208b6\",\"captureStatus\":\"FAILED\",\"scanId\":\"e62a9b5c-bd6e-4e80-90ec-4530863c2690\",\"run\":{\"id\":\"d6692337-6245-4e81-bc43-90ac6119dcda\",\"status\":\"CANCELLED\",\"quality\":null,\"privacyEnabled\":true,\"timeBudgetSeconds\":3600,\"startedAt\":\"2026-10-15T12:27:27.240978Z\",\"deadlineAt\":\"2026-10-15T13:27:28.052822Z\",\"finishedAt\":\"2026-10-15T12:27:28.351919Z\",\"failureStage\":null,\"failureCode\":null,\"failureMessage\":null,\"retryable\":false,\"retriesRemaining\":null,\"retryBlockedReason\":null,\"stages\":[{\"stage\":\"INPUT_VALIDATION\",\"state\":\"SUCCEEDED\",\"attempts\":1,\"lastRun\":{\"attempt\":1,\"status\":\"SUCCEEDED\",\"startedAt\":\"2026-10-15T12:27:25.652510Z\",\"finishedAt\":\"2026-10-15T12:27:27.652522Z\",\"exitStatus\":0,\"errorCode\":null,\"errorMessage\":null,\"errorDetails\":null,\"outputSha256\":\"3f6492000738b8e920dce9c2adc8c33d6f7f1be5b43baeccaf81e40583a8ecd9\",\"workerId\":\"test-worker\",\"command\":{\"argv\":[\"test-stage\"],\"config\":{\"fixture\":true}},\"stdout\":null,\"stderr\":null,\"artifacts\":[{\"id\":\"8c39c3bc-c787-4ed1-8c86-ec44b97a03d4\",\"kind\":\"INPUT_REPORT\",\"bucket\":\"chaya-derived-test\",\"key\":\"sealed/org/26789f37-2423-46c1-bfbb-78056b1402f6/venue/a2699f50-d6f8-4df3-b694-068b999208b6/scan/e62a9b5c-bd6e-4e80-90ec-4530863c2690/run/d6692337-6245-4e81-bc43-90ac6119dcda/INPUT_VALIDATION/attempt-1/a09839ca-c745-4398-8a6b-e1088301c41b/input-report.json\",\"sizeBytes\":11,\"sha256\":\"4062edaf750fb8074e7e83e0c9028c94e32468a8b6f1614774328ef045150f93\",\"contentType\":\"application/json\",\"partial\":false,\"containsPii\":false}]}},{\"stage\":\"FFMPEG_PREPROCESS\",\"state\":\"CANCELLED\",\"attempts\":1,\"lastRun\":{\"attempt\":1,\"status\":\"FAILED\",\"startedAt\":\"2026-10-15T12:27:27.798040Z\",\"finishedAt\":\"2026-10-15T12:27:27.948943Z\",\"exitStatus\":null,\"errorCode\":\"WORKER_LOST\",\"errorMessage\":\"The worker stopped sending heartbeats; the stage was abandoned. It can be retried.\",\"errorDetails\":{},\"outputSha256\":null,\"workerId\":\"test-worker\",\"command\":{\"reason\":\"WORKER_LOST\",\"synthetic\":\"enforced-by-control-plane\"},\"stdout\":null,\"stderr\":null,\"artifacts\":[]}},{\"stage\":\"FRAME_QUALITY_FILTER\",\"state\":\"NOT_RUN\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"PRIVACY_PREPROCESS\",\"state\":\"NOT_RUN\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"POSE_ESTIMATION\",\"state\":\"NOT_RUN\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"SPLAT_RECONSTRUCTION\",\"state\":\"NOT_RUN\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"SEMANTIC_SEGMENTATION\",\"state\":\"NOT_RUN\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"GEOMETRIC_CLEANUP\",\"state\":\"NOT_RUN\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"PLANE_FITTING\",\"state\":\"NOT_RUN\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"ARTIFACT_GENERATION\",\"state\":\"NOT_RUN\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"SEMANTIC_INDEXING\",\"state\":\"NOT_RUN\",\"attempts\":0,\"lastRun\":null},{\"stage\":\"NAVIGATION_BAKING\",\"state\":\"NOT_RUN\",\"attempts\":0,\"lastRun\":null}]},\"jobs\":[{\"id\":\"88c4385e-2fae-44c7-8a21-ea9dd099948c\",\"stage\":\"INPUT_VALIDATION\",\"status\":\"SUCCEEDED\",\"retryCount\":0,\"errorCode\":null,\"errorMessage\":null,\"queuedAt\":\"2026-10-15T12:27:27.240978Z\",\"startedAt\":\"2026-10-15T12:27:27.540851Z\",\"finishedAt\":\"2026-10-15T12:27:27.694637Z\"},{\"id\":\"b3a365db-02c0-4b85-a890-53c9d442bb77\",\"stage\":\"FFMPEG_PREPROCESS\",\"status\":\"CANCELLED\",\"retryCount\":1,\"errorCode\":null,\"errorMessage\":null,\"queuedAt\":\"2026-10-15T12:27:28.052822Z\",\"startedAt\":\"2026-10-15T12:27:28.239649Z\",\"finishedAt\":\"2026-10-15T12:27:28.351919Z\"}],\"revision\":1142,\"observedAt\":\"2026-10-15T12:27:28.507660Z\",\"progress\":{\"stagesTotal\":12,\"stagesSucceeded\":1,\"stagesFailed\":0,\"stagesCancelled\":1,\"stagesNotRun\":10,\"activeStage\":null,\"activeStageState\":null,\"activeStageSince\":null,\"activeStageAttempt\":null,\"basis\":\"COMPLETED_STAGES\"},\"activeJobs\":[]}\n\n"
+  } ]
+}

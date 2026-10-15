@@ -8,7 +8,9 @@ import {
   explainStageError,
   failureKind,
   pipelineProgress,
+  retryBlockedText,
   shortSha,
+  stageAttempt,
   stageLabel,
   staleLeaseMessage,
   summarizeRun,
@@ -56,7 +58,7 @@ const LIVE_TEXT: Record<LiveState, string> = {
 
 const FAILURE_TEXT = {
   RETRYABLE: "This failure can be retried.",
-  TERMINAL: "Retrying cannot fix this: the input itself must change.",
+  TERMINAL: "This failure cannot be retried.",
   INTERRUPTED: "The stage was interrupted (the worker was lost or the time budget ran out), not failed by its input.",
   CANCELLED: "Processing was cancelled; nothing after the cancellation ran.",
 } as const;
@@ -83,6 +85,7 @@ export default function ProcessingPanel({
   const summary = summarizeRun(run);
   const progress = pipelineProgress(run);
   const kind = failureKind(run);
+  const blocked = retryBlockedText(run);
   const stale = staleLeaseMessage(status.activeJobs ?? []);
   const artifacts = availableArtifacts(run.stages);
   const since = status.progress?.activeStageSince;
@@ -111,6 +114,7 @@ export default function ProcessingPanel({
           </p>
         )}
         {kind && <p className="mt-1 text-sm font-medium" data-testid="failure-kind" data-kind={kind}>{FAILURE_TEXT[kind]}</p>}
+        {blocked && <p className="mt-1 text-sm" data-testid="retry-blocked" data-reason={run.retryBlockedReason ?? ""}>{blocked}</p>}
         <p className="mt-2 text-xs opacity-80">
           Time budget {Math.round(run.timeBudgetSeconds / 60)} min
           {run.privacyEnabled ? " · faces and screens are blurred before reconstruction" : " · privacy preprocessing is OFF for this run"}
@@ -140,6 +144,7 @@ export default function ProcessingPanel({
         {summary.canRetry && (
           <button className="rounded bg-black px-3 py-1.5 text-sm text-white disabled:opacity-50" disabled={busy} onClick={onRetry}>
             Retry {run.failureStage ? stageLabel(run.failureStage) : "failed stage"}
+            {typeof run.retriesRemaining === "number" && ` (${run.retriesRemaining} ${run.retriesRemaining === 1 ? "retry" : "retries"} left)`}
           </button>
         )}
         {summary.canCancel && (
@@ -153,6 +158,7 @@ export default function ProcessingPanel({
         {run.stages.map((s) => {
           const last = s.lastRun;
           const active = s.stage === progress.activeStage;
+          const attempt = active ? status.progress?.activeStageAttempt ?? stageAttempt(s, status.jobs) : stageAttempt(s, status.jobs);
           return (
             <li key={s.stage} className={`p-3 ${active ? "bg-blue-50 ring-2 ring-inset ring-blue-400" : ""}`} data-testid="pipeline-stage"
               data-stage={s.stage} data-state={s.state} aria-current={active ? "step" : undefined}>
@@ -160,13 +166,18 @@ export default function ProcessingPanel({
                 <span className="font-medium">{stageLabel(s.stage)}</span>
                 <span className={`font-mono text-xs ${STATE_STYLE[s.state]}`}>
                   {s.state}
-                  {s.attempts > 1 || (active && (status.progress?.activeStageAttempt ?? 1) > 1)
-                    ? ` · attempt ${active ? status.progress?.activeStageAttempt ?? s.attempts : s.attempts}` : ""}
+                  {attempt > 1 ? ` · attempt ${attempt}` : ""}
                 </span>
               </div>
-              {last?.status === "FAILED" && (
+              {last?.status === "FAILED" && s.state === "FAILED" && (
                 <p className="mt-1 text-red-800">
                   <span className="font-mono text-xs">{last.errorCode}</span> — {explainStageError(last.errorCode, last.errorMessage, last.errorDetails)}
+                </p>
+              )}
+              {/* The stage has moved on (re-queued, running again, cancelled): its last record is an earlier attempt's. */}
+              {last?.status === "FAILED" && s.state !== "FAILED" && (
+                <p className="mt-1 text-xs text-zinc-600" data-testid="earlier-attempt">
+                  Attempt {last.attempt} failed: <span className="font-mono">{last.errorCode}</span>
                 </p>
               )}
               {s.state === "SUCCEEDED" && last && last.artifacts.length > 0 && (

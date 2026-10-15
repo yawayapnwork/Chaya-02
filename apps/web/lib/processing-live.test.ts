@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ProcessingStatus } from "./capture-api.ts";
-import { availableArtifacts, failureKind, pipelineProgress, staleLeaseMessage } from "./pipeline-view.ts";
+import { availableArtifacts, failureKind, pipelineProgress, retryBlockedText, stageAttempt, staleLeaseMessage } from "./pipeline-view.ts";
 import { type LiveState, followProcessing, isNewer, parseEvents, reconnectDelayMs } from "./processing-live.ts";
 
 // Synthetic statuses and streams in the API's shapes: they exercise the rules, they are not a run.
@@ -40,6 +40,8 @@ function harness(connections: (string[] | number)[], snapshots: ProcessingStatus
   let tokenCalls = 0;
   const shown: number[] = [];
   const states: LiveState[] = [];
+  /** Every pause the client took, and how many connections it had opened by then. */
+  const sleeps: { ms: number; opened: number }[] = [];
   let done!: () => void;
   const finished = new Promise<void>((r) => (done = r));
   const handle = followProcessing({
@@ -61,12 +63,14 @@ function harness(connections: (string[] | number)[], snapshots: ProcessingStatus
         { status: 200, headers: { "content-type": "text/event-stream" } });
     },
     snapshot: async () => snapshots.shift() ?? Promise.reject(new Error("down")),
-    sleep: async () => {},
+    sleep: async (ms) => {
+      sleeps.push({ ms, opened: opened.length });
+    },
   }, (s) => shown.push(s.revision!), (s) => {
     states.push(s);
     if (s === "SESSION_EXPIRED" || s === "GONE") done();
   });
-  return { opened, shown, states, finished, handle, tokens: () => tokenCalls };
+  return { opened, shown, states, sleeps, finished, handle, tokens: () => tokenCalls };
 }
 
 const ev = (s: ProcessingStatus) => `event:status\nid:${s.revision}\ndata:${JSON.stringify(s)}\n\n`;
@@ -144,6 +148,37 @@ test("failures are told apart: retryable, terminal, interrupted, cancelled", () 
   assert.equal(failureKind(run("FAILED", "INPUT_INVALID", false)), "TERMINAL");
   assert.equal(failureKind(run("CANCELLED", null, false)), "CANCELLED");
   assert.equal(failureKind(run("RUNNING", null, false)), null);
+});
+
+test("a connection that went live resets the backoff: the next drop reconnects after the base delay", async () => {
+  // Two failed attempts (backoff 1 s, then 2 s), a live connection the server ends, then a third failure.
+  const h = harness([500, 500, [ev(status(3))], 500]);
+  await h.finished;
+  h.handle.close();
+  assert.deepEqual(h.shown, [3]);
+  const afterLive = h.sleeps.filter((s) => s.opened === 4);
+  assert.ok(afterLive.length > 0);
+  assert.ok(Math.max(...afterLive.map((s) => s.ms)) <= 1_000, `waited ${JSON.stringify(afterLive)} after one failure`);
+  assert.ok(h.sleeps.some((s) => s.opened === 2 && s.ms > 1_000), "two failures in a row do back off");
+});
+
+test("a failed run that cannot be retried says why, in the server's own terms", () => {
+  const run = (retryable: boolean, retryBlockedReason: string | null, status = "FAILED") =>
+    ({ status, quality: null, failureStage: "POSE_ESTIMATION", failureCode: "WORKER_LOST", failureMessage: null, retryable,
+      retryBlockedReason }) as never;
+  assert.equal(retryBlockedText(run(true, null)), null);
+  assert.equal(retryBlockedText(run(false, null, "CANCELLED")), null);
+  assert.match(retryBlockedText(run(false, "RETRIES_EXHAUSTED"))!, /used all its retries/);
+  assert.match(retryBlockedText(run(false, "PII_STAGING_PURGED"))!, /retention policy/);
+  assert.match(retryBlockedText(run(false, "VERSION_SUPERSEDED"))!, /newer version/);
+  assert.equal(failureKind(run(false, "RETRIES_EXHAUSTED")), "INTERRUPTED", "still interrupted; only the retry is gone");
+});
+
+test("a stage's attempt counts its job's retries, which a cancelled attempt has no record of", () => {
+  const jobs = [{ stage: "FFMPEG_PREPROCESS", retryCount: 0 }, { stage: "FFMPEG_PREPROCESS", retryCount: 1 }, { stage: "X", retryCount: 2 }];
+  assert.equal(stageAttempt({ stage: "FFMPEG_PREPROCESS", attempts: 1 }, jobs), 2);
+  assert.equal(stageAttempt({ stage: "INPUT_VALIDATION", attempts: 1 }, jobs), 1);
+  assert.equal(stageAttempt({ stage: "INPUT_VALIDATION", attempts: 0 }, []), 1);
 });
 
 test("available artifacts are those of succeeded stages; a quiet worker is called out", () => {

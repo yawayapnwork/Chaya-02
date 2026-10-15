@@ -299,6 +299,73 @@ plus event fields. The same lines are uploaded as the stage's stdout log. Status
 the job history. Every transition is audited (`pipeline.start|stage_succeeded|stage_failed|succeeded|partial|
 failed|retry|cancel|pii_purged`, `job.claim`).
 
+## Live progress
+The capture page follows a run as it happens. `CaptureService.ProcessingStatus`, `ProcessingBroadcaster`,
+`apps/web/lib/processing-live.ts`.
+
+**The snapshot.** `GET …/captures/{c}/processing` is the persisted state and the thing to recover from: capture, venue
+and scan ids, the run and every stage (state, attempts, last execution record with error and artifacts), the job
+history (id, stage, status, retry count, error, queued/started/finished), and:
+- `revision`: the sum of `change_seq` over the capture's session, run, stage records and jobs (V40). Every committed
+  change that the status shows gives a strictly larger revision, because values only grow, rows are only added and
+  stage records are insert-only. Two reads of the same state give the same revision, even when transactions commit out
+  of sequence order. A lease renewal (heartbeat) does not change it. The status is read in one REPEATABLE READ snapshot.
+- `observedAt`: when the server read it. Lease expiry is judged against it.
+- `progress`: `stagesSucceeded`/`stagesFailed`/`stagesCancelled`/`stagesNotRun` of `stagesTotal`, plus the active stage,
+  its state, since when and which attempt. `basis` is `COMPLETED_STAGES`: no stage reports how far along it is, so there
+  is no percentage of the running stage or of time, and none is estimated.
+- `activeJobs`: running jobs with worker id, start and lease expiry. `leaseExpired` means the worker stopped
+  heartbeating. The stage is still RUNNING until the enforcer fails it as `WORKER_LOST`. It is never shown done, since only
+  an accepted report with the stage's outputs makes a stage SUCCEEDED.
+- `run.retryable` is true exactly when `POST …/retry` would re-queue the run. Otherwise `run.retryBlockedReason` says why
+  not: a permanent code (`ALIGNMENT_REJECTED`, `PARENT_NOT_CURRENT`, `VERSION_SUPERSEDED`), `RETRIES_EXHAUSTED` or
+  `PII_STAGING_PURGED`. `run.retriesRemaining` counts the re-queues left for a failed job.
+
+**The stream.** `GET …/processing/stream` is Server-Sent Events. The HUD stream already used SSE, so no WebSocket was
+added.
+- Each `status` event is the full status, never a delta, with the revision as its id. A missed event loses nothing.
+- A reconnect sends the last id as `Last-Event-ID`. The current status is sent only if its revision differs, otherwise an
+  "up to date" comment.
+- The broadcaster ticks every second (`chaya.processing.stream.interval-ms`). It sends a subscriber the status when the
+  revision or the number of expired leases changed since what it last sent that subscriber, and a heartbeat comment
+  every 15 s otherwise. The same state is never sent twice.
+- Authorization happens when subscribing. The caller must be able to read the capture: ADMIN, VENUE_MANAGER or OPERATOR
+  of its venue, with 404 for anything else, including another venue of the same organization. Each tick reads only
+  that capture within the venue and organization the subscriber was authorized for. Viewers and public viewer links
+  cannot open it.
+- The stream ends at the bearer token's expiry with `session-expired`, and with `gone` when the capture no longer
+  exists.
+
+**The page.** `followProcessing` shows a status only if it is newer: a higher revision, or the same revision read later.
+So a duplicate, a late poll answer or an out-of-order event never moves the page backwards. Starting, retrying and
+cancelling go through the same rule.
+- Reconnects back off from 1 s to 30 s. A connection that went live resets the backoff.
+- While the stream is down, the page polls the snapshot every 5 s.
+- On `session-expired`, it reconnects with a silently renewed token. If none can be had, it stops and says the
+  sign-in expired.
+- A browser refresh simply subscribes again and gets the current status first.
+- The panel shows:
+  - one segment per stage, with the running one indeterminate
+  - the active stage highlighted, with its attempt (counted from the job's retries, because a cancelled or running
+    attempt has no stage record yet)
+  - failed stages with their actionable error. A stage that has moved on (re-queued, running again, cancelled) shows
+    an earlier attempt's failure only as history, never as advice to retry
+  - whether a failure is retryable, terminal, interrupted (`WORKER_LOST`, `TIME_LIMIT_EXCEEDED`) or cancelled, and why a
+    retry is blocked
+  - a quiet worker
+  - the outputs of succeeded stages
+  - retry (with retries left) and cancel when the server would accept them
+
+Tests: `ProcessingLiveStatusTest` covers success stage by stage, failure, retry to exhaustion, a crashed worker (stale
+lease pushed, then `WORKER_LOST`), the time budget, cancellation, reconnect and missed updates, unauthorized and
+expired subscriptions, and concurrent runs, all against real PostgreSQL. `processing-live.test.ts` covers ordering,
+duplicates, chunked frames, reconnect, polling fallback, session expiry and backoff. `e2e/processing-live.spec.ts`
+replays one real run into the real page in Chromium. The run was recorded from the API against real PostgreSQL by
+`ProcessingLiveStatusTest#aRunRecordedAsTheApiStreamedItForTheWebReplay`, which writes
+`apps/web/e2e/fixtures/processing-live-run.json` when run with `-Dchaya.processing.fixture=<path>` (2026-10-15). The replay
+has no live worker, database or identity provider: it checks the page against what the API persisted and streamed, not
+a deployed stack.
+
 ## Running it
 ```
 cd services/reconstruction
