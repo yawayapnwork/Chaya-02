@@ -49,6 +49,10 @@ cleanup() {
   exit $status
 }
 trap cleanup EXIT
+# An unexpected failure (set -e) names its line and command, as written (variables unexpanded, so no secret is shown).
+# Without it the drill -- and deploy.sh's rehearsal -- ended in a bare "RESULT: FAIL" with no reason.
+set -E
+trap 'log "  error at line $LINENO: $BASH_COMMAND"' ERR
 
 # The images the live stack runs, so the drill restores into the same PostgreSQL/pgvector and MinIO versions.
 image_of() { local cid; cid=$(compose ps -q "$1" 2>/dev/null | head -1 || true); [ -n "$cid" ] && docker inspect -f '{{.Config.Image}}' "$cid" 2>/dev/null || true; }
@@ -127,8 +131,15 @@ if [ -n "$DB_ONLY" ]; then log "  objects: not restored (DRILL_DB_ONLY)"; else l
 log "4/6 restored schema and data"
 failed_migrations=$(dq "SELECT count(*) FROM flyway_schema_history WHERE NOT success")
 schema=$(dq "SELECT version FROM flyway_schema_history WHERE success AND version IS NOT NULL ORDER BY installed_rank DESC LIMIT 1")
-code_schema=$(ls "$REPO_ROOT/services/api/src/main/resources/db/migration" 2>/dev/null | sed -n 's/^V\([0-9]*\)__.*/\1/p' | sort -n | tail -1)
-log "  flyway version $schema (this checkout's newest migration: ${code_schema:-unknown}); failed migrations: $failed_migrations"
+# Informational, and only in a source checkout. A deploy host has the bundle, not services/: there the API image itself
+# carries the migrations, and step 6 applies them. (Reading the directory unconditionally made every rehearsal on a real
+# host fail here, so deploy.sh refused every deploy after the first.)
+migrations="$REPO_ROOT/services/api/src/main/resources/db/migration"
+code_schema=""
+if [ -d "$migrations" ]; then
+  code_schema=$(find "$migrations" -maxdepth 1 -name 'V*__*.sql' -printf '%f\n' | sed -n 's/^V\([0-9]*\)__.*/\1/p' | sort -n | tail -1)
+fi
+log "  flyway version $schema (newest migration in this checkout: ${code_schema:-n/a, no source tree}); failed migrations: $failed_migrations"
 [ "$failed_migrations" = 0 ] || fail "the restored schema records a failed migration"
 for t in organization venue capture_session capture_media processing_job pipeline_run processing_artifact scan_version audit_log; do
   log "  $t: $(dq "SELECT count(*) FROM $t")"

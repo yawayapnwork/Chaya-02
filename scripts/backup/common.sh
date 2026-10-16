@@ -5,10 +5,10 @@
 REPO_ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 ENV_FILE=${ENV_FILE:-$REPO_ROOT/.env}
 [ -f "$ENV_FILE" ] || { echo "error: $ENV_FILE not found (copy .env.example)" >&2; exit 2; }
-set -a
-# shellcheck disable=SC1090
-. "$ENV_FILE"
-set +a
+# Parsed as Compose parses it, never executed.
+# shellcheck source=env-file.sh
+. "$(dirname "$0")/env-file.sh"
+load_env_file "$ENV_FILE" || exit 2
 
 export MSYS_NO_PATHCONV=1   # Git Bash on Windows: do not rewrite container paths like /backup
 # Development stack by default; the production host sets CHAYA_COMPOSE_FILE (infra/deploy) and COMPOSE_NETWORK

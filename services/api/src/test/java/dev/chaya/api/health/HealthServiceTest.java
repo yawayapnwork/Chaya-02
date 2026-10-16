@@ -19,10 +19,16 @@ class HealthServiceTest {
 
     private final DataSource downDb = mock(DataSource.class);
     private final ObjectStore storage = mock(ObjectStore.class);
+    private final ObjectStore derived = mock(ObjectStore.class);
+
+    @org.junit.jupiter.api.BeforeEach
+    void derivedBucketAnswersUnlessATestSaysOtherwise() {
+        when(derived.ping()).thenReturn(true);
+    }
     private final MalwareScanner scanner = mock(MalwareScanner.class);
 
     private HealthService service(IdentityProviderProbe idp, Duration cacheTtl) {
-        return new HealthService(downDb, storage, idp, scanner, () -> "UP", new HealthProperties(cacheTtl, Duration.ofMinutes(15), null));
+        return new HealthService(downDb, storage, derived, idp, scanner, () -> "UP", new HealthProperties(cacheTtl, Duration.ofMinutes(15), null));
     }
 
     static HealthService.Processing processing(String status, long liveWorkers) {
@@ -115,5 +121,16 @@ class HealthServiceTest {
         s.check();
         s.check();
         verify(storage, times(1)).ping();
+    }
+
+    @Test
+    void storageIsUpOnlyWhenBothBucketsAnswer() throws Exception {
+        when(downDb.getConnection()).thenThrow(new SQLException("down"));
+        when(scanner.health()).thenReturn("UP");
+        when(storage.ping()).thenReturn(true);
+        when(derived.ping()).thenReturn(false); // e.g. the derived bucket was never created
+        assertThat(service(() -> true, Duration.ZERO).check().storage()).isEqualTo("DOWN");
+        when(derived.ping()).thenReturn(true);
+        assertThat(service(() -> true, Duration.ZERO).check().storage()).isEqualTo("UP");
     }
 }

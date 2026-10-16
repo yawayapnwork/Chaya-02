@@ -103,7 +103,7 @@ public class ProcessingBroadcaster {
                 if (status.isEmpty()) {
                     end(captureId, sub, "gone");
                 } else if (lastEventId == null || lastEventId != status.get().revision()) {
-                    send(sub, status.get(), key);
+                    send(sub, status.get());
                 } else {
                     sub.emitter.send(SseEmitter.event().comment("up to date at revision " + lastEventId));
                     sub.lastKey = key;
@@ -116,9 +116,19 @@ public class ProcessingBroadcaster {
         return emitter;
     }
 
-    private static void send(Subscriber sub, ProcessingStatus status, String key) throws IOException {
+    /**
+     * The stream key (CaptureService.processingStreamKey) of a status. A subscriber remembers the key of the status it
+     * was sent, not the key read before it: a change committed between the two reads would otherwise leave it holding
+     * the older key, and the next tick would send the same status again. Revision and expired leases come from the
+     * status's one snapshot.
+     */
+    static String keyOf(ProcessingStatus status) {
+        return status.revision() + ":" + status.activeJobs().stream().filter(CaptureService.ActiveJob::leaseExpired).count();
+    }
+
+    private static void send(Subscriber sub, ProcessingStatus status) throws IOException {
         sub.emitter.send(SseEmitter.event().name("status").id(Long.toString(status.revision())).reconnectTime(2_000).data(status));
-        sub.lastKey = key;
+        sub.lastKey = keyOf(status);
         sub.lastSentAt = System.currentTimeMillis();
     }
 
@@ -174,7 +184,7 @@ public class ProcessingBroadcaster {
                             if (status.isEmpty()) {
                                 end(captureId, sub, "gone");
                             } else {
-                                send(sub, status.get(), key);
+                                send(sub, status.get());
                             }
                         } else if (now - sub.lastSentAt >= heartbeatIntervalMs) {
                             sub.emitter.send(SseEmitter.event().comment("keep-alive"));

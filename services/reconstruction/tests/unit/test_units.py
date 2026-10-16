@@ -45,6 +45,19 @@ def test_settings_come_from_the_environment_and_secrets_have_no_default():
         s.require_service_config()
 
 
+def test_malformed_urls_and_misspelt_stages_stop_the_worker_before_it_polls():
+    ok = {"CHAYA_API_URL": "http://api:8080", "CHAYA_TOKEN_URL": "http://keycloak:8080/realms/chaya/protocol/openid-connect/token",
+          "CHAYA_CLIENT_SECRET": "s3cr3t-value", "S3_ENDPOINT": "http://minio:9000", "S3_ACCESS_KEY": "w", "S3_SECRET_KEY": "x",
+          "WORKER_STAGES": "INPUT_VALIDATION,NAVIGATION_BAKING"}
+    Settings.from_env(ok).require_service_config()
+    with pytest.raises(SystemExit, match="S3_ENDPOINT") as bad_url:
+        Settings.from_env({**ok, "S3_ENDPOINT": "minio:9000"}).require_service_config()
+    assert "minio:9000" not in str(bad_url.value), "the value is not echoed"
+    with pytest.raises(SystemExit, match="NAVIGATION_BAKE") as typo:
+        Settings.from_env({**ok, "WORKER_STAGES": "INPUT_VALIDATION,NAVIGATION_BAKE"}).require_service_config()
+    assert "s3cr3t-value" not in str(typo.value)
+
+
 def test_the_registry_covers_every_planned_stage_in_order():
     assert list(STAGE_ORDER) == [
         "INPUT_VALIDATION", "FFMPEG_PREPROCESS", "FRAME_QUALITY_FILTER", "PRIVACY_PREPROCESS", "POSE_ESTIMATION", "SPLAT_RECONSTRUCTION",

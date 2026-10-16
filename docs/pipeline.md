@@ -357,7 +357,8 @@ cancelling go through the same rule.
   - retry (with retries left) and cancel when the server would accept them
 
 Tests: `ProcessingLiveStatusTest` covers success stage by stage, failure, retry to exhaustion, a crashed worker (stale
-lease pushed, then `WORKER_LOST`), the time budget, cancellation, reconnect and missed updates, unauthorized and
+lease pushed, then `WORKER_LOST`), the time budget, cancellation, reconnect and missed updates, a change committed while a status is being read (still
+sent once: a subscriber remembers the key of the status it was sent), unauthorized and
 expired subscriptions, and concurrent runs, all against real PostgreSQL. `processing-live.test.ts` covers ordering,
 duplicates, chunked frames, reconnect, polling fallback, session expiry and backoff. `e2e/processing-live.spec.ts`
 replays one real run into the real page in Chromium. The run was recorded from the API against real PostgreSQL by

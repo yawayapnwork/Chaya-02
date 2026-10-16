@@ -157,6 +157,37 @@ Set in `infra/deploy/docker-compose.yml`, so they are not needed in `.env`:
 - `SERVER_FORWARD_HEADERS_STRATEGY=native`, so rate limits key on the real client address.
 - `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs`, for JSON logs.
 
+**Local and hosted configuration are separate files.**
+
+| | Local development | Hosted (staging, production) |
+|---|---|---|
+| Template | `.env.example` (repo root, copied to `.env`) | `infra/deploy/.env.production.example` (copied to `/srv/chaya/.env`) |
+| Compose file | `infra/docker/docker-compose.yml`: infrastructure only. The API and web run on the host (README "Run locally"). The worker is under `--profile pipeline`. | `infra/deploy/docker-compose.yml`: everything, images from the registry |
+| Network addresses | The host's own processes use `localhost:<port>`. Every published port is bound to `127.0.0.1`. The worker container reaches the host API through `host.docker.internal`. | Containers use service names (`api:8080`, `minio:9000`, `keycloak:8080`). The browser uses the three public HTTPS names. Only Caddy publishes ports (80, 443). |
+| Keycloak | `start-dev`, embedded storage, issuer `http://localhost:8081/realms/chaya` | `start`, PostgreSQL storage, issuer `https://$CHAYA_AUTH_DOMAIN/realms/chaya`. The API fetches keys over the internal network (`KEYCLOAK_JWKS_URI`) and checks the public issuer and the `chaya-api` audience. |
+
+No container is configured with `localhost` for another service: inside a container, `localhost` is the container
+itself. The remaining `localhost` addresses are of two kinds:
+- health checks that probe their own container;
+- in development, Keycloak's public hostname (`KC_HOSTNAME`). That is the issuer the browser and the host-run API use,
+  not an address any container calls.
+
+**What is checked before anything serves:**
+
+| Check | Where | What happens |
+|---|---|---|
+| A required variable is missing or empty | Compose (`${VAR:?}`); `deploy.sh` step 1 | Refused, naming the variable, with its value never printed. Nothing starts. |
+| A malformed `.env` line | `scripts/backup/env-file.sh` | Refused with the line number |
+| `S3_ENDPOINT`, `KEYCLOAK_ISSUER_URI`, `KEYCLOAK_JWKS_URI` not absolute http(s) URLs; a `CHAYA_ALLOWED_ORIGINS` entry with a path, query or wildcard | API startup (`ConfigChecks`, `StorageProperties`, `SecurityProperties`, `CorsConfig`) | The API does not start, and the message names the variable. An origin with a path would otherwise match no browser request, and every call from the web app would fail CORS. |
+| Missing worker settings; `CHAYA_API_URL`, `CHAYA_TOKEN_URL` or `S3_ENDPOINT` not http(s) URLs; a misspelt `WORKER_STAGES` entry | Worker startup (`Settings.require_service_config`) | The worker exits. A misspelt stage would otherwise be claimed by no one, and its jobs would wait until their deadline. |
+| The browser configuration (`CHAYA_PUBLIC_*`) is incomplete | Web readiness (`/api/health`) | Not ready, naming the missing variables |
+| Database, both buckets, identity provider | API readiness | Not ready (section 6) |
+
+**Not used:** Chaya has no Redis or other cache or queue (the job queue is PostgreSQL). The only Redis-compatible
+service in the repository is GlitchTip's own Valkey in the optional monitoring stack. It also issues no presigned
+object-storage URLs: uploads and downloads go through the API after the venue and organization checks, so MinIO is
+never exposed to browsers and sits on the internal network only.
+
 **GitHub stores only the SSH access for each environment:** secrets `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`
 and `DEPLOY_KNOWN_HOSTS` (the host's pinned key: `ssh-keyscan -t ed25519 <host>`, verified out of band), and
 variables `DEPLOY_PATH`, `APP_URL` and `API_URL`. Registry pulls use the job's short-lived `GITHUB_TOKEN`, which is
@@ -249,6 +280,12 @@ DEGRADED (HTTP 200 on `/api/v1/health`) means the API works, but something it re
 | `vision` | no | DOWN: semantic search falls back and new POI embeddings wait. `NOT_CONFIGURED` does not degrade. |
 | `processing.staleRunningJobs` | — | informational: RUNNING jobs whose lease expired and that the lease enforcer has not failed yet |
 
+Object storage counts as UP only when **both** buckets (`S3_BUCKET_RAW`, `S3_BUCKET_DERIVED`) exist and the API's
+account can reach them (2026-10-15). `minio-init` creates them, and the API's least-privilege account has no
+`s3:CreateBucket`. Before this change, a missing bucket read as UP ("created on first upload"), and only the raw
+bucket was checked, so a stack whose `minio-init` had not run reported ready while every upload and pipeline write
+failed. A missing bucket is now storage DOWN, and the API logs which bucket once.
+
 DOWN (503) is decided by the database, object storage and identity provider only. The report is public, so it carries
 status words, counts and stage names, never worker ids. It is visible on `/status`, in Grafana, and in the
 `ChayaNoLiveWorker`, `ChayaJobsStranded` and `ChayaQueueStalled` alerts.
@@ -278,6 +315,41 @@ What `infra/deploy/deploy.sh <version>` does on the host:
 If any step after the switch fails, it **automatically rolls back** to the previous version in
 `.deployed-version`, waits for health again, and exits non-zero. History is kept in `.deploy-history`. If the schema
 version moved during the failed deploy, the log prints the exact `restore.sh` command for the pre-deploy dump.
+
+**A deploy is never left half done (2026-10-15).**
+- **It runs in its own session.** `deploy.sh` re-runs itself under `setsid`, writes everything to
+  `.deploy-logs/<time>-<version>.log`, and the calling process only streams that log. If the SSH connection drops, or
+  the workflow is cancelled or hits its 30-minute timeout, the deploy still finishes or rolls back, and the log says
+  which. Before this change, sshd's hang-up killed `deploy.sh` wherever it was, possibly between `compose up` and the
+  health wait, leaving an unverified version running and recorded nowhere. `test-deploy.sh` reproduces that: with the
+  old behaviour, its "session hung up mid-rollout" case fails.
+- **One deploy at a time.** `deploy.sh` holds `.deploy.lock` (`flock`), so a second deploy on the same host refuses to
+  start. The workflow checks the lock **before** uploading the bundle, so it never replaces the compose file and
+  scripts under a running deploy. Its `rsync --delete` keeps `.deploy.lock` and `.deploy-logs/`.
+- **Without util-linux.** On a host without `setsid`/`flock` (not a supported deploy host; Git Bash on Windows, for
+  example) the script runs inline and says that concurrent deploys are not prevented.
+
+**The host `.env` is read the way Compose reads it (2026-10-15).** The scripts (`deploy.sh`, `keycloak-configure.sh`,
+`scripts/backup/*`, the stack smoke) used to `source` it as shell. Two documented values broke that:
+- `KEYCLOAK_ADMIN_ALLOW=203.0.113.0/24 198.51.100.0/24` (space-separated, as the template says) ran the second range
+  as a command;
+- an unfilled `ghcr.io/<owner>` was read as a redirect.
+
+A password containing `$` or a backtick also meant something different to bash and to Compose.
+
+**Fixed 2026-10-15: the migration rehearsal could never pass on a deploy host.** `restore-drill.sh` read the newest
+migration number from `services/api/src/main/resources/db/migration`, a directory that exists only in a source
+checkout, not in the deploy bundle. On a host that read failed, and under `set -e` the drill died with a bare
+`RESULT: FAIL` and no reason. So `deploy.sh` stopped every deploy after the first ("REHEARSAL FAILED … Nothing live
+was changed"), and only `DEPLOY_SKIP_REHEARSAL=1` got past it. It went unnoticed because the drill had only run from a
+checkout (stack smoke), and `test-deploy.sh` stubs it out. The production-like run below hit it on its second deploy.
+
+The number is now read only when the directory exists; on a host, the API image applies its own migrations in step 6.
+An unexpected failure now logs its line and command. `test-restore-drill.sh` runs the drill from a real bundle,
+including the database-only rehearsal.
+`scripts/backup/env-file.sh` now parses the file with Compose's rules and executes nothing. Quotes are literal, a
+` #` starts a comment, and a variable already set in the environment wins. A malformed line is refused by line number,
+never by content. Unlike Compose, it does not expand `${VAR}` inside values, so don't use references in `.env`.
 
 **Fixed 2026-10-11:** until then a service that never became healthy did **not** trigger the rollback. `rollout` runs
 as an `if` condition, where bash suspends `set -e`, so a failed health wait fell through to the public checks, and the

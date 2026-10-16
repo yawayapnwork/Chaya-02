@@ -17,14 +17,16 @@ public class CorsConfig {
 
     @Bean
     CorsConfigurationSource corsConfigurationSource(CorsProperties props) {
+        List<String> origins = new java.util.ArrayList<>();
         for (String origin : props.allowedOrigins()) {
             // Explicit origins only: a wildcard would let any site drive a signed-in user's browser against the API.
             if (origin.contains("*")) {
                 throw new IllegalStateException("CHAYA_ALLOWED_ORIGINS must list explicit origins; '" + origin + "' is a wildcard");
             }
+            origins.add(dev.chaya.api.web.ConfigChecks.origin("CHAYA_ALLOWED_ORIGINS", origin));
         }
         CorsConfiguration c = new CorsConfiguration();
-        c.setAllowedOrigins(props.allowedOrigins());
+        c.setAllowedOrigins(origins);
         c.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         c.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Part-Sha256", "X-Chaya-Viewer-Token"));
         c.setMaxAge(3600L);

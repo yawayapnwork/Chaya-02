@@ -55,11 +55,12 @@ sha256sum "$DUMP" | cut -d' ' -f1 > "$DUMP.sha256"
 
 passed=0
 failed=0
+DRILL_SCRIPT="$ROOT/scripts/backup/restore-drill.sh"
 drill() { # expectation description
   local expect=$1 what=$2 rc
   set +e
   out=$(ENV_FILE=$(native "$WORK/.env") BACKUP_DIR=$(native "$B") COMPOSE_PROJECT_NAME="test-drill-none-$$" DRILL_API_IMAGE='' \
-    bash "$ROOT/scripts/backup/restore-drill.sh" "$(native "$DUMP")" 2>&1)
+    bash "$DRILL_SCRIPT" "$(native "$DUMP")" 2>&1)
   rc=$?
   set -e
   if { [ "$expect" = pass ] && [ $rc -eq 0 ]; } || { [ "$expect" = fail ] && [ $rc -ne 0 ]; }; then
@@ -74,6 +75,19 @@ drill pass "an intact backup restores and every referenced object matches"
 echo "$out" | grep -q "referenced objects: 2, checked: 2, missing or corrupt: 0" \
   && { passed=$((passed + 1)); echo "ok: exactly the accepted media and non-PII artifact were checked"; } \
   || { failed=$((failed + 1)); echo "FAIL: unexpected object count"; echo "$out" | tail -8; }
+
+# On a deploy host the drill runs from the bundle (scripts/deploy/bundle.sh), which has no services/ source tree. That
+# is how deploy.sh's migration rehearsal runs it.
+bundle=$(mktemp -d)
+bash "$ROOT/scripts/deploy/bundle.sh" "$bundle/host" > /dev/null
+DRILL_SCRIPT="$bundle/host/scripts/backup/restore-drill.sh"
+drill pass "the drill also passes from the deploy bundle (no source tree), as deploy.sh runs it"
+echo "$out" | grep -q "no source tree" \
+  && { passed=$((passed + 1)); echo "ok: it says it has no source tree instead of failing"; } \
+  || { failed=$((failed + 1)); echo "FAIL: no-source-tree path not taken"; echo "$out" | tail -8; }
+DRILL_DB_ONLY=1 drill pass "the database-only rehearsal passes from the bundle"
+DRILL_SCRIPT="$ROOT/scripts/backup/restore-drill.sh"
+rm -rf "$bundle"
 
 cp "$B/minio/chaya-derived/sealed/org/o1/venue/v1/run/a/scene.ksplat" "$WORK/keep"
 printf 'tampered' > "$B/minio/chaya-derived/sealed/org/o1/venue/v1/run/a/scene.ksplat"

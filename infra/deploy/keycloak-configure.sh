@@ -7,15 +7,15 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 ENV_FILE=${ENV_FILE:-./.env}
-set -a
-# The host's own .env, chosen at run time.
-# shellcheck disable=SC1090
-. "$ENV_FILE"
-set +a
-COMPOSE="docker compose --env-file $ENV_FILE -f docker-compose.yml"
+# Parsed as Compose parses it, never executed (scripts/backup/env-file.sh).
+# shellcheck source=../../scripts/backup/env-file.sh
+. ./scripts/backup/env-file.sh
+load_env_file "$ENV_FILE"
+# A function, not a command string, so an env-file path with spaces stays one argument (as in deploy.sh).
+compose() { docker compose --env-file "$ENV_FILE" -f docker-compose.yml "$@"; }
 APP="https://${CHAYA_APP_DOMAIN:?}"
 
-$COMPOSE exec -T -e APP="$APP" keycloak sh -s <<'IN_CONTAINER'
+compose exec -T -e APP="$APP" keycloak sh -s <<'IN_CONTAINER'
 set -eu
 K=/opt/keycloak/bin/kcadm.sh
 $K config credentials --server http://localhost:8080 --realm master \

@@ -1,0 +1,4 @@
+# Shell scripts run inside Linux containers (Postgres and MinIO init scripts are bind-mounted by the compose files) and on
+# the deploy host (scripts/deploy/bundle.sh copies them from the working tree). A Windows checkout with core.autocrlf=true
+# would otherwise give them CRLF line endings, and /bin/sh then fails on the first line ("set: -\r: invalid option").
+*.sh text eol=lf

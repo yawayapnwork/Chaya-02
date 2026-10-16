@@ -124,11 +124,23 @@ jobs:
             IdentitiesOnly yes
           EOF
 
+      - name: No deploy is already running on the host
+        env:
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+        run: |
+          # The upload below replaces the compose file and scripts; never under a deploy that is still using them
+          # (one started on the host by hand, or one this workflow lost the connection to).
+          # shellcheck disable=SC2029
+          ssh deploy "[ ! -e '$DEPLOY_PATH/.deploy.lock' ] || flock -n '$DEPLOY_PATH/.deploy.lock' true" \
+            || { echo "::error::a deploy is still running on the host (.deploy.lock); see $DEPLOY_PATH/.deploy-logs"; exit 1; }
+
       - name: Upload bundle (keeps the host's .env, backups and deploy history)
         env:
           DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
         run: |
+          # .deploy.lock must survive: deleting it while a deploy holds it would let a second deploy lock a new file.
           rsync -az --delete --exclude .env --exclude backups --exclude .deployed-version --exclude .deploy-history \
+            --exclude .deploy-logs --exclude .deploy.lock \
             "$RUNNER_TEMP/bundle/" "deploy:${DEPLOY_PATH:?set the DEPLOY_PATH variable}/"
 
       - name: Deploy (automatic rollback on failure)

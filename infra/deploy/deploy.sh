@@ -16,16 +16,41 @@
 #   6. wait until api, web, worker and keycloak report HEALTHY (readiness, not "process started")
 #   7. apply the environment's Keycloak settings; check the public endpoints through the proxy
 #   8. record the version
+#
+# A deploy is never left half done by the session that started it: the work runs in its own session (setsid) with its
+# output in .deploy-logs/<time>-<version>.log, and this process only streams that log. If the SSH connection drops or
+# the CI job is cancelled or times out, the deploy still finishes -- or rolls back -- and the log says how. Only one
+# deploy runs at a time on a host (.deploy.lock); a second one refuses to start.
 set -euo pipefail
 cd "$(dirname "$0")"
 VERSION=${1:?usage: deploy.sh <image tag, e.g. sha-abc1234>}
+if [ -z "${DEPLOY_DETACHED:-}" ] && command -v setsid > /dev/null; then
+  umask 077
+  mkdir -p .deploy-logs
+  logf=".deploy-logs/$(date -u +%Y%m%dT%H%M%SZ)-$VERSION.log"
+  : > "$logf"
+  DEPLOY_DETACHED=1 setsid "$PWD/$(basename "$0")" "$@" > "$logf" 2>&1 < /dev/null &
+  worker=$!
+  echo "deploy log: $PWD/$logf (the deploy continues if this session ends)"
+  tail -n +1 -f --pid="$worker" "$logf" || true
+  wait "$worker"
+  exit $?
+fi
+if command -v flock > /dev/null; then
+  exec 9>> .deploy.lock
+  if ! flock -n 9; then
+    echo "error: another deploy is running on this host (.deploy.lock); wait for it, see .deploy-logs/" >&2
+    exit 3
+  fi
+else
+  echo "warning: flock not found; concurrent deploys are not prevented" >&2
+fi
 ENV_FILE=${ENV_FILE:-./.env}
 [ -f "$ENV_FILE" ] || { echo "error: $ENV_FILE missing (see .env.production.example)" >&2; exit 2; }
-set -a
-# The host's own .env, chosen at run time.
-# shellcheck disable=SC1090
-. "$ENV_FILE"
-set +a
+# Parsed as Compose parses it, never executed (scripts/backup/env-file.sh).
+# shellcheck source=../../scripts/backup/env-file.sh
+. ./scripts/backup/env-file.sh
+load_env_file "$ENV_FILE"
 export CHAYA_VERSION=$VERSION
 # A function, not a command string, so an env-file path with spaces stays one argument.
 compose() { docker compose --env-file "$ENV_FILE" -f docker-compose.yml "$@"; }
@@ -87,13 +112,18 @@ if ! compose config --quiet; then
   exit 1
 fi
 
+# Container and network names follow the compose project: COMPOSE_PROJECT_NAME if set, else the file's `name:` (chaya).
+# A second stack on the same host (staging next to production) has its own; the backup and rehearsal must use it.
+PROJECT=$(compose config 2>/dev/null | sed -n 's/^name: //p' | head -1)
+NETWORK="${PROJECT:-chaya}_internal"
+
 log "2/8 pulling images"
 compose pull --quiet
 
 log "3/8 pre-deploy database backup"
 DUMP=""
 if [ -n "$(compose ps -q --status running postgres 2>/dev/null)" ]; then
-  CHAYA_COMPOSE_FILE="$PWD/docker-compose.yml" COMPOSE_NETWORK=chaya_internal ENV_FILE="$ENV_FILE" ./scripts/backup/backup.sh postgres
+  CHAYA_COMPOSE_FILE="$PWD/docker-compose.yml" COMPOSE_NETWORK="$NETWORK" ENV_FILE="$ENV_FILE" ./scripts/backup/backup.sh postgres
   DUMP=$(ls -1t "${BACKUP_DIR:-./backups}"/postgres/chaya-*.dump 2>/dev/null | head -1 || true)
   log "restore point: ${DUMP:-none}"
 else
@@ -109,7 +139,7 @@ elif [ -n "${DEPLOY_SKIP_REHEARSAL:-}" ]; then
 else
   API_IMAGE=$(compose config --images 2>/dev/null | grep '/chaya-api:' | head -1 || true)
   [ -n "$API_IMAGE" ] || { log "cannot resolve the api image of $VERSION"; exit 1; }
-  if ! DRILL_DB_ONLY=1 DRILL_API_IMAGE="$API_IMAGE" CHAYA_COMPOSE_FILE="$PWD/docker-compose.yml" COMPOSE_NETWORK=chaya_internal \
+  if ! DRILL_DB_ONLY=1 DRILL_API_IMAGE="$API_IMAGE" CHAYA_COMPOSE_FILE="$PWD/docker-compose.yml" COMPOSE_NETWORK="$NETWORK" \
        ENV_FILE="$ENV_FILE" ./scripts/backup/restore-drill.sh "$DUMP"; then
     log "REHEARSAL FAILED: $VERSION cannot start on a copy of the current data (see the drill output above). Nothing live was changed."
     echo "$(date -u +%FT%TZ) $VERSION rehearsal-failed" >> .deploy-history

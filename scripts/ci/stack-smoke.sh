@@ -57,11 +57,10 @@ POSTGRES_PORT=55432
 CLAMAV_PORT=53310
 MINIO_CONSOLE_PORT=59001
 EOF
-set -a
-# The host's own .env, chosen at run time.
-# shellcheck disable=SC1090
-. "$ENV_FILE"
-set +a
+# Parsed as Compose parses it, never executed (scripts/backup/env-file.sh).
+# shellcheck source=../backup/env-file.sh
+. scripts/backup/env-file.sh
+load_env_file "$ENV_FILE"
 
 # Git Bash on Windows: the docker CLI needs a native path for the env file.
 ENV_FILE_DOCKER=$(command -v cygpath > /dev/null && cygpath -w "$ENV_FILE" || echo "$ENV_FILE")

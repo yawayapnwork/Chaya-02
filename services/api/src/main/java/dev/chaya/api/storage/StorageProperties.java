@@ -13,5 +13,6 @@ public record StorageProperties(String endpoint, String region, String accessKey
                 throw new IllegalStateException("object storage is not configured: " + required[1] + " must be set");
             }
         }
+        dev.chaya.api.web.ConfigChecks.httpUrl("S3_ENDPOINT", endpoint);
     }
 }

@@ -156,15 +156,24 @@ public class S3ObjectStore implements ObjectStore {
         return uploads.size();
     }
 
+    private volatile boolean missingBucketReported;
+
     @Override
     public boolean ping() {
         try {
             // Bounded: an unreachable endpoint must read as DOWN quickly, not after the SDK's default retries.
             s3.headBucket(HeadBucketRequest.builder().bucket(bucket)
                 .overrideConfiguration(o -> o.apiCallTimeout(java.time.Duration.ofSeconds(3))).build());
+            missingBucketReported = false;
             return true;
         } catch (NoSuchBucketException e) {
-            return true; // the service answered; the bucket is created on first upload
+            // Not ready: deployed stacks create the buckets in minio-init, and the API's own account may not create one
+            // (no s3:CreateBucket), so every upload or pipeline write would fail. Said once, not on every health check.
+            if (!missingBucketReported) {
+                log.warn("object storage bucket {} does not exist; create it (minio-init) before serving traffic", bucket);
+                missingBucketReported = true;
+            }
+            return false;
         } catch (RuntimeException e) {
             return false;
         }

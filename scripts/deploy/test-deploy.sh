@@ -8,7 +8,8 @@
 #   scripts/deploy/test-deploy.sh        (exit 0 when every case passes)
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-SECRET="s3cr3t-$(date +%s)-never-print-me"
+# Characters a shell would act on if the .env file were sourced: $, backticks, a space.
+SECRET='s3cr3t-$HOME-`id`-'"$(date +%s)"'-never print-me'
 passed=0
 failed=0
 
@@ -17,11 +18,15 @@ new_host() { # creates a fake deploy directory with stubs; prints its path
   d=$(mktemp -d)
   cp "$ROOT/infra/deploy/deploy.sh" "$d/"
   mkdir -p "$d/bin" "$d/scripts/backup" "$d/backups/postgres"
+  cp "$ROOT/scripts/backup/env-file.sh" "$d/scripts/backup/"
   cat > "$d/.env" <<EOF
 POSTGRES_USER=postgres
 POSTGRES_DB=chaya
-POSTGRES_PASSWORD=$SECRET
+POSTGRES_PASSWORD='$SECRET'
 CHAYA_API_DOMAIN=api.example.invalid
+# Valid for Compose; sourcing the file as shell ran the second range as a command and read <owner> as a redirect.
+KEYCLOAK_ADMIN_ALLOW=203.0.113.0/24 198.51.100.0/24   # two ranges
+CHAYA_REGISTRY=ghcr.io/<owner>
 CHAYA_APP_DOMAIN=app.example.invalid
 EOF
   echo v1 > "$d/.deployed-version"
@@ -42,7 +47,7 @@ if [ "$1" = compose ]; then
     pull) exit 0 ;;
     ps) if [ "$2" = -q ] && [ "${3:-}" = --status ]; then echo pg-running; else echo "cid-${!#}"; fi; exit 0 ;;
     exec) cat "$d/schema"; exit 0 ;;
-    up) [ "${STUB_MIGRATE_ON:-}" = "$CHAYA_VERSION" ] && echo 34 > "$d/schema"; exit 0 ;;
+    up) [ "${STUB_MIGRATE_ON:-}" = "$CHAYA_VERSION" ] && echo 34 > "$d/schema"; sleep "${STUB_UP_SLEEP:-0}"; exit 0 ;;
     logs) echo "stub log line for ${!#}"; exit 0 ;;
   esac
   exit 0
@@ -87,7 +92,33 @@ check() { # description condition...
 }
 has() { grep -q -- "$2" "$1"; }
 says() { echo "$out" | grep -q -- "$1"; }
-no_secret() { ! echo "$out" | grep -q -- "$SECRET" && ! grep -q -- "$SECRET" "$d/calls" "$d/.deploy-history" 2>/dev/null; }
+no_secret() { ! echo "$out" | grep -qF -- "$SECRET" && ! grep -qF -- "$SECRET" "$d/calls" "$d/.deploy-history" 2>/dev/null; }
+
+# 0. the env file is parsed as Compose parses it, never executed
+envf=$(mktemp)
+cat > "$envf" <<'EOF'
+# comment
+export PLAIN=value
+SPACED=10.0.0.0/8 192.168.0.0/16   # inline comment
+HASH=a#b
+QUOTED='$HOME `id` <owner>'
+DQUOTED="two words # not a comment"
+EMPTY=
+EOF
+printf 'CRLF=yes
+' >> "$envf"
+out=$(env -i PATH="$PATH" PRESET=kept bash -c '. "$1"; load_env_file "$2" && printf "%s|" "$PLAIN" "$SPACED" "$HASH" "$QUOTED" "$DQUOTED" "[$EMPTY]" "$CRLF"' _ "$ROOT/scripts/backup/env-file.sh" "$envf")
+check "env file: values are literal, comments and CRLF stripped" [ "$out" = 'value|10.0.0.0/8 192.168.0.0/16|a#b|$HOME `id` <owner>|two words # not a comment|[]|yes|' ]
+printf 'GOOD=1
+this line is s3cret garbage
+' > "$envf"
+set +e; out=$(bash -c '. "$1"; load_env_file "$2"' _ "$ROOT/scripts/backup/env-file.sh" "$envf" 2>&1); rc=$?; set -e
+check "env file: a malformed line is refused by number" [ "$rc" -ne 0 ]
+check "env file: the malformed line's content is not echoed" bash -c "echo \"\$1\" | grep -q 'line 2' && ! echo \"\$1\" | grep -q s3cret" _ "$out"
+out=$(env -i PATH="$PATH" PLAIN=from-env bash -c '. "$1"; printf "PLAIN=from-file
+" > "$2"; load_env_file "$2"; printf %s "$PLAIN"' _ "$ROOT/scripts/backup/env-file.sh" "$envf")
+check "env file: like Compose, the environment wins over the file" [ "$out" = from-env ]
+rm -f "$envf"
 
 # 1. a healthy version is deployed, rehearsed first, and recorded
 d=$(new_host); run "$d" v2
@@ -132,6 +163,37 @@ d=$(new_host); run "$d" v2 STUB_UNHEALTHY="v1 v2"
 check "double failure exits non-zero" [ "$rc" -ne 0 ]
 check "double failure asks for manual recovery" says "ROLLBACK ALSO FAILED"
 check "no secret in output (double failure)" no_secret
+
+# 7. the session that started the deploy goes away (SSH dropped, CI job cancelled): the deploy still finishes.
+#    sshd sends SIGHUP to the session's process group; the deploy runs in its own session.
+if command -v setsid > /dev/null && command -v flock > /dev/null; then
+  d=$(new_host)
+  (cd "$d" && exec setsid env STUB_DIR="$d" PATH="$d/bin:$PATH" HEALTH_TIMEOUT=0 BACKUP_DIR="$d/backups" STUB_UP_SLEEP=3      ./deploy.sh v2 > "$d/session.out" 2>&1) &
+  starter=$!
+  for _ in $(seq 50); do grep -q "compose .* up " "$d/calls" 2>/dev/null && break; sleep 0.1; done
+  kill -HUP -- "-$starter" 2>/dev/null || true
+  wait "$starter" 2>/dev/null || true
+  for _ in $(seq 100); do [ -s "$d/.deploy-history" ] && break; sleep 0.1; done
+  out=$(cat "$d"/.deploy-logs/*.log 2>/dev/null || true)
+  check "a deploy whose session was hung up mid-rollout still completes" has "$d/.deploy-history" " v2 ok"
+  check "it is recorded as deployed" [ "$(cat "$d/.deployed-version")" = v2 ]
+  check "its log is kept on the host" says "8/8 deployed v2"
+  check "no secret in the kept log" no_secret
+
+  # 8. a second deploy while one runs refuses to start and changes nothing
+  d=$(new_host)
+  (cd "$d" && env STUB_DIR="$d" PATH="$d/bin:$PATH" HEALTH_TIMEOUT=0 BACKUP_DIR="$d/backups" STUB_UP_SLEEP=3 ./deploy.sh v2 > /dev/null 2>&1) &
+  first=$!
+  for _ in $(seq 50); do grep -q "compose .* up " "$d/calls" 2>/dev/null && break; sleep 0.1; done
+  run "$d" v3
+  check "a concurrent deploy is refused" [ "$rc" -ne 0 ]
+  check "it says another deploy is running" says "another deploy is running"
+  check "it never starts its own version" bash -c "! grep -q 'CHAYA_VERSION=v3' '$d/calls'"
+  wait "$first" || true
+  check "the first deploy is unaffected" [ "$(cat "$d/.deployed-version")" = v2 ]
+else
+  echo "skipped: session and lock cases need setsid and flock (util-linux)"
+fi
 
 echo "deploy.sh tests: $passed passed, $failed failed"
 [ "$failed" -eq 0 ]

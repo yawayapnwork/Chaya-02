@@ -1,20 +1,24 @@
 package dev.chaya.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.doAnswer;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import dev.chaya.api.capture.CaptureService;
 import dev.chaya.api.capture.ProcessingBroadcaster;
 import dev.chaya.api.pipeline.PipelineDefinition;
 import dev.chaya.api.pipeline.PipelineService;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MvcResult;
 
 /**
@@ -28,6 +32,7 @@ class ProcessingLiveStatusTest extends PipelineTestSupport {
 
     @Autowired PipelineService pipeline;
     @Autowired ProcessingBroadcaster broadcaster;
+    @MockitoSpyBean CaptureService captures;
 
     private String processingUrl(Started s) {
         return capUrl(s.c(), s.capture()) + "/processing";
@@ -241,6 +246,29 @@ class ProcessingLiveStatusTest extends PipelineTestSupport {
         MvcResult behind = openStream(s, s.c().operator(), Long.toString(r0));
         assertThat(events(behind)).singleElement().satisfies(e -> assertThat(e.get("revision").asLong()).isEqualTo(r1));
         succeed(order);
+    }
+
+    @Test
+    void aChangeCommittedWhileAStatusIsBeingReadIsStillSentOnlyOnce() throws Exception {
+        var s = startRun();
+        long r0 = snapshot(s).get("revision").asLong();
+        // The stream key is read, then a worker claims the first stage, then the status is read: it already shows the claim.
+        AtomicReference<JsonNode> order = new AtomicReference<>();
+        doAnswer(inv -> {
+            Object key = inv.callRealMethod();
+            if (order.get() == null) {
+                order.set(claimExpecting("INPUT_VALIDATION"));
+            }
+            return key;
+        }).when(captures).processingStreamKey(s.capture());
+        MvcResult stream = openStream(s, s.c().operator(), null);
+        assertThat(events(stream)).singleElement().satisfies(e -> assertThat(e.get("revision").asLong()).isGreaterThan(r0));
+
+        // Nothing changed since the status that was sent, so no tick sends it again.
+        broadcaster.tick();
+        broadcaster.tick();
+        assertThat(events(stream)).hasSize(1);
+        succeed(order.get());
     }
 
     @Test

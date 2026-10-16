@@ -21,8 +21,11 @@ public record SecurityProperties(
         if (audience == null || audience.isBlank()) {
             throw new IllegalStateException("chaya.security.audience (KEYCLOAK_AUDIENCE) must be set");
         }
+        dev.chaya.api.web.ConfigChecks.httpUrl("KEYCLOAK_ISSUER_URI", issuer);
         if (jwksUri == null || jwksUri.isBlank()) {
             jwksUri = issuer.replaceAll("/+$", "") + "/protocol/openid-connect/certs";
+        } else {
+            dev.chaya.api.web.ConfigChecks.httpUrl("KEYCLOAK_JWKS_URI", jwksUri);
         }
     }
 }

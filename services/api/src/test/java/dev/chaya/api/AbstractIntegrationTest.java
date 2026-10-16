@@ -64,6 +64,20 @@ abstract class AbstractIntegrationTest {
         if (DockerClientFactory.instance().isDockerAvailable()) {
             PG.start();
             MINIO.start();
+            // As minio-init does in every real stack: the buckets exist before the API serves (its health reports a
+            // missing bucket as storage DOWN).
+            try {
+                var r = MINIO.execInContainer("sh", "-c", "mc alias set t http://127.0.0.1:9000 testaccess testsecret123 > /dev/null "
+                    + "&& mc mb --ignore-existing t/chaya-raw-test t/chaya-derived-test");
+                if (r.getExitCode() != 0) {
+                    throw new IllegalStateException("creating the test buckets failed: " + r.getStderr());
+                }
+            } catch (java.io.IOException e) {
+                throw new IllegalStateException(e);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(e);
+            }
         }
     }
 

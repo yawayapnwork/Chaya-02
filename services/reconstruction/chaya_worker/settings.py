@@ -402,6 +402,20 @@ class Settings:
         }.items() if not v]
         if missing:
             raise SystemExit("worker is not configured; set: " + ", ".join(missing))
+        # Values are never echoed: they sit next to secrets in the same environment.
+        from urllib.parse import urlsplit
+        malformed = [n for n, v in {"CHAYA_API_URL": self.api_url, "CHAYA_TOKEN_URL": self.token_url,
+                                    "S3_ENDPOINT": self.s3_endpoint}.items()
+                     if urlsplit(v).scheme not in ("http", "https") or not urlsplit(v).hostname]
+        if malformed:
+            raise SystemExit("worker is misconfigured; not an absolute http(s) URL: " + ", ".join(malformed))
+        # A misspelt stage would never be claimed: the worker would run, report itself alive, and that stage's jobs
+        # would wait for another worker until their deadline. Refuse to start instead.
+        from .stages import STAGE_ORDER
+        unknown = [s for s in self.stages if s not in STAGE_ORDER]
+        if unknown:
+            raise SystemExit("worker is misconfigured; WORKER_STAGES names unknown stages: " + ", ".join(unknown)
+                             + " (known: " + ", ".join(STAGE_ORDER) + ")")
 
     def config_snapshot(self) -> dict[str, object]:
         """The tunables that influence stage output; recorded in the stage command for reproducibility."""

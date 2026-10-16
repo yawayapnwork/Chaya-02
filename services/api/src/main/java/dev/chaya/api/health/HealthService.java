@@ -87,6 +87,8 @@ public class HealthService {
 
     private final DataSource dataSource;
     private final ObjectStore storage;
+    /** Pipeline outputs: storage is UP only when both buckets exist and answer (uploads need one, processing the other). */
+    private final ObjectStore derivedStorage;
     private final IdentityProviderProbe identityProvider;
     private final MalwareScanner scanner;
     private final VisionProbe vision;
@@ -100,10 +102,12 @@ public class HealthService {
     private HealthReport cached;
     private Instant cachedAt = Instant.EPOCH;
 
-    public HealthService(DataSource dataSource, ObjectStore storage, IdentityProviderProbe identityProvider,
-                         MalwareScanner scanner, VisionProbe vision, HealthProperties props) {
+    public HealthService(DataSource dataSource, ObjectStore storage,
+                         @org.springframework.beans.factory.annotation.Qualifier("derived") ObjectStore derivedStorage,
+                         IdentityProviderProbe identityProvider, MalwareScanner scanner, VisionProbe vision, HealthProperties props) {
         this.dataSource = dataSource;
         this.storage = storage;
+        this.derivedStorage = derivedStorage;
         this.identityProvider = identityProvider;
         this.scanner = scanner;
         this.vision = vision;
@@ -122,7 +126,7 @@ public class HealthService {
             return cached;
         }
         CompletableFuture<Processing> db = async(this::databaseAndQueue, UNKNOWN_PROCESSING);
-        CompletableFuture<String> store = async(() -> storage.ping() ? UP : DOWN, DOWN);
+        CompletableFuture<String> store = async(() -> storage.ping() && derivedStorage.ping() ? UP : DOWN, DOWN);
         CompletableFuture<String> idp = async(() -> identityProvider.reachable() ? UP : DOWN, DOWN);
         CompletableFuture<String> av = async(scanner::health, DOWN);
         CompletableFuture<String> vis = async(vision::status, DOWN);
