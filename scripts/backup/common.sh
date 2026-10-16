@@ -40,9 +40,16 @@ mc_run() {
   envf="$PRIVATE_TMP/mc.env"
   umask 077
   printf 'MC_HOST_%s=http://%s:%s@minio:9000\n' "$alias_name" "$key" "$secret" > "$envf"
+  # The mc image runs as root, so on a Linux host everything it writes under /backup would be root-owned, and the user
+  # running the backups could not delete it: backup.sh's own removal of rejected and erased objects (an erasure would
+  # stay in the backup), pruning, or CI's cleanup. Ownership is handed back to the invoking user after every run; that
+  # also repairs a mirror written by an earlier version. mc's exit status is kept. (A no-op on Docker Desktop mounts.)
+  local rc=0
   docker run --rm --network "$NETWORK" --env-file "$(native_path "$envf")" -v "$(native_path "$BACKUP_DIR/minio"):/backup" \
-    "$MC_IMAGE" "$@"
+    -e "BACKUP_OWNER=$(id -u):$(id -g)" --entrypoint sh "$MC_IMAGE" \
+    -c 'mc "$@"; rc=$?; chown -R "$BACKUP_OWNER" /backup 2> /dev/null || true; exit $rc' mc "$@" || rc=$?
   rm -f "$envf"
+  return $rc
 }
 
 sha256_of() { sha256sum "$1" | cut -d' ' -f1; }

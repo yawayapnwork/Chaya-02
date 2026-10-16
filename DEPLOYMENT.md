@@ -286,6 +286,21 @@ account can reach them (2026-10-15). `minio-init` creates them, and the API's le
 bucket was checked, so a stack whose `minio-init` had not run reported ready while every upload and pipeline write
 failed. A missing bucket is now storage DOWN, and the API logs which bucket once.
 
+**Readiness answers within a probe's timeout during an outage (2026-10-16).** On the production compose, with
+postgres stopped, `/actuator/health/readiness` took 10 to 24 s to answer 503. Docker's and Caddy's probes give up
+after 5 s, so the API was still taken out of rotation, but by timeout rather than by an answer, and each probe held a
+request thread for that long. There were two causes:
+- The health check is serialized and cached for 5 s, but the cache counted from when a check *started*. A check against
+  a dead database takes about 5 s (the connection timeout), so every caller queued behind it found the result already
+  expired and ran another full check in turn.
+- Readiness also included Spring's own `db` indicator, which waited on the connection pool a second time before
+  `dependencies` (which checks the database itself) ran.
+
+Now callers that waited for a check share its result, the cache counts from the end of a check, and readiness is
+`readinessState,dependencies`. Measured on the same stack: 503 after 5.0 s for a fresh check and 0.1 s from the cache,
+including three concurrent callers. `HealthServiceTest` covers the queueing (the old code ran three checks where the
+new one runs one).
+
 DOWN (503) is decided by the database, object storage and identity provider only. The report is public, so it carries
 status words, counts and stage names, never worker ids. It is visible on `/status`, in Grafana, and in the
 `ChayaNoLiveWorker`, `ChayaJobsStranded` and `ChayaQueueStalled` alerts.
@@ -301,7 +316,10 @@ What `infra/deploy/deploy.sh <version>` does on the host:
 1. Validates the configuration (`compose config --quiet`). A missing variable is named, its value is never printed,
    and nothing has changed yet.
 2. Pulls every image of that version. A bad tag fails here, before anything changes.
-3. Takes a pre-deploy `pg_dump` (the restore point).
+3. Takes a pre-deploy `pg_dump` (the restore point). Whether this is a first deploy is decided by the database volume,
+   not by whether postgres is running: a stopped database with data is started and backed up. A host that has
+   deployed before but has no database volume is refused (`DEPLOY_ALLOW_EMPTY_DATABASE=1` overrides), since `up`
+   would otherwise create a new, empty database and report success on it.
 4. **Migration rehearsal:** restores that dump into an isolated throwaway database (an `--internal` Docker network,
    no ports, random credentials) and boots the **new** API image on it (`scripts/backup/restore-drill.sh` with
    `DRILL_DB_ONLY=1`). Flyway applies the new migrations to a copy of production data and Hibernate validates the
@@ -336,6 +354,12 @@ version moved during the failed deploy, the log prints the exact `restore.sh` co
 - an unfilled `ghcr.io/<owner>` was read as a redirect.
 
 A password containing `$` or a backtick also meant something different to bash and to Compose.
+
+**Fixed 2026-10-16: a stopped database skipped the backup and the rehearsal.** Step 3 used to check only whether the
+postgres container was running. On an existing host whose database had stopped (a reboot, an operator, an outage that
+left it down), the log said "postgres not running yet (first deploy): no backup to take", and the new version's
+migrations then ran on the live data with no restore point and no rehearsal. The production-like stack below was in
+exactly that state. `test-deploy.sh` covers it (10 of its checks fail on the old script).
 
 **Fixed 2026-10-15: the migration rehearsal could never pass on a deploy host.** `restore-drill.sh` read the newest
 migration number from `services/api/src/main/resources/db/migration`, a directory that exists only in a source
@@ -387,6 +411,13 @@ Schedule it daily with cron or a systemd timer, and alert if it fails.
 - **MinIO:** an additive mirror through the read-only account. Deletions in the live buckets do **not** propagate,
   so an accidental or malicious delete cannot also destroy the backup. PII staging objects are never copied, and
   rejected uploads are pruned from the mirror using the database (docs/backup-recovery.md).
+- **Ownership (fixed 2026-10-16).** The mirror is written by the `mc` container, which runs as root. On a Linux host
+  every mirrored file used to be root-owned, so the user running the backups could not delete from it. That broke
+  `backup.sh`'s own removal of rejected and **erased** objects (`rm: Permission denied`: an erasure stayed in the
+  backup), removing old backups, and `reconstruction-smoke`'s cleanup. `mc_run` now hands ownership back to the invoking
+  user after every run, which also repairs a mirror written before the fix. `scripts/backup/test-backup-ownership.sh`
+  (in the `ops` workflow) checks it as a non-root user; run as uid 1001 on Linux, the old `common.sh` fails 5 of its 6
+  checks.
 - **Verification:** `restore-drill.sh` is the check that counts: it restores the dump **and** the object mirror into
   a throwaway Postgres and MinIO on an isolated network, checks every referenced object by SHA-256, and boots the API
   image on the result (docs/backup-recovery.md, "Restore drill"). Schedule it after each backup:
@@ -513,13 +544,41 @@ stages through the real API, and the run stopped with a structured failure at th
 | `scripts/backup/test-restore-drill.sh` | 7 checks pass: an intact backup passes; a corrupted object, a missing object and a dump that does not match its `.sha256` each fail, and the bad object is named. |
 | shellcheck | clean (`-S warning`) on `infra/deploy/*.sh`, `scripts/backup/*.sh`, `scripts/deploy/*.sh`, `scripts/ci/*.sh` (the committed LF versions) |
 
+**Fourth pass, 2026-10-16 (deployment audit), on a production-like stack.** `infra/deploy/docker-compose.yml` from a
+real `bundle.sh` bundle, Caddy with its internal CA on `*.chaya.localhost`, Keycloak in production mode (`start`, its
+own Postgres database), the internal network, images built from this tree with the production Dockerfiles. Only
+`compose pull` was stubbed (local images, no registry). This is not a deployed environment: no public DNS, no ACME, no
+GHCR.
+
+| What | Result |
+|---|---|
+| Upgrade onto existing data (`deploy.sh`, real Docker) | The stack had been left with postgres stopped. The old script would have called that a first deploy; the fixed one started postgres, took the dump, rehearsed the migrations on a restored copy (2 organizations, 2 venues), rolled out, and passed every health and public check (133 to 139 s). |
+| Automatic rollback (real Docker, first time) | A release whose web container exits: rehearsal passed, web never became healthy, rolled back to the previous version, health and public checks passed, exit 1, `.deployed-version` unchanged, `badweb failed` then `prodcheck3 rollback-ok` in the history. The web app was unavailable for about 90 s; single-host compose replaces containers in place, there is no blue/green. |
+| Broken API release | Stopped at the rehearsal: `rehearsal-failed`, the running containers untouched, no drill container left behind. |
+| A missing image | Stopped at the rehearsal with "Nothing live was changed" (here `compose pull` was stubbed; on a host step 2 fails first). |
+| Post-deploy checks (27) | TLS against the CA, `/actuator` 404 through the proxy, HSTS, HTTP→HTTPS 308, only Caddy publishes ports, no token / forged token 401, API role not a superuser and owning the schema, pgvector present, all 40 migrations applied and none failed, Keycloak tokens through the proxy, tenant isolation (another organization's venue, capture and media: 404), an upload scanned by ClamAV and accepted, the stored object byte-identical (read with the backup account), the worker account unable to delete raw objects, a live worker recorded. 27/27, twice (before and after the failed deploys). |
+| Browser login | Chromium → web app → Keycloak login page (authorization code + PKCE) → back to the app, which lists the operator's venue from the API (three API calls, all 200). |
+| Worker registration | The worker's token comes from `http://keycloak:8080` (internal), the API accepts only the public issuer `https://auth…`; the worker is live (health `liveWorkers: 1`), so issuer and audience agree across both names. |
+| Restarts | API container restart: ready again in 21 s, routed by Caddy 7 s later, data intact, worker live again. Whole stack (`compose restart`): serving again in 50 s, data intact. |
+| Outages (each dependency stopped, then started) | Storage: DOWN within 7 s, 503, readiness 503, recovered in 13 s without an API restart. Database: DOWN within 9 s, 503, recovered in 12 s. Keycloak: `identityProvider` DOWN within 6 s; no token 401; a forged token 503 (it cannot be checked, never accepted); a genuine unexpired token still accepted (cached signing keys); recovered in 25 s. ClamAV: DEGRADED with `malwareScanner` DOWN within 4 s, an upload during the outage QUARANTINED, not accepted. |
+| Backup and full restore drill on the stack's data, with the `mc_run` change | Backup of the database and both buckets, then the drill: 2/2 referenced objects matched their SHA-256, the API booted on the restored data. |
+| Configuration | `compose config` passes for `infra/docker` (with the CI overlays), `infra/deploy` and `infra/monitoring`. A removed variable is refused with its name (`POSTGRES_APP_PASSWORD`, `CHAYA_VERSION`). The API started with a wrong or missing setting exits 1 without printing any secret value; the database is connected first, so with no database that is the error reported. |
+| Frontend | `next` 16.3.8 (from 16.3.6; six advisories, including the CVE that failed the `docker` image scan) and `npm audit fix` for `sharp` 0.35.5 and `source-map-js` 1.2.2 (lockfile only). `npm audit --omit=dev`: 0. Lint, 322 unit tests, typecheck and the production build with no environment: pass. What remains in a full `npm audit` is the lint toolchain (`eslint-config-next` → `braces`); npm's only offered fix is a downgrade to v14. |
+| Scripts | `test-deploy.sh` 50/50 (Linux), `test-restore-drill.sh` 10/10, `test-backup-ownership.sh` 6/6 (as uid 1001 on Linux), shellcheck clean, `ops.yml` passes actionlint. |
+| Backend | `HealthServiceTest`, `DependenciesHealthIndicatorTest`, `HealthControllerTest`, `AuthenticationTest`, `ConfigChecksTest`, `JobRecoveryTest`: 40/40. |
+
+The readiness fix was measured with a test image (the `prodcheck2` API image plus the recompiled `HealthService` class,
+and the readiness group set through the environment), not a full rebuild: the build host's disk was full.
+
 **Not verified:**
 
+- The `docker`, `security` and `reconstruction-smoke` workflows with the 2026-10-16 fixes. They address the recorded
+  causes (the `next` advisory; root-owned backup files at cleanup), but have not run in GitHub Actions.
 - The migration rehearsal (`deploy.sh` step 4) against a real host's dump and registry images. Its logic is tested with
   stubs, and the drill it runs is tested on real data in the stack smoke.
 - A real deploy: `deploy.yml` and `deploy.sh` have never run against a host with public DNS, ACME certificates
-  and GHCR images, and nor has the automatic rollback path. Do it on staging first, including one deliberate failed
-  deploy to watch the rollback.
+  and GHCR images. The automatic rollback has run only on the production-like stack above. Do it on staging first,
+  including one deliberate failed deploy to watch the rollback.
 - The GHCR push, SBOM and provenance attestation. These only run in GitHub Actions. (The Trivy scan was reproduced
   locally with the same Trivy version and flags, not in Actions.)
 - New advisories. The image scan gates on what is fixable **today**, so a green image can fail a week later with no

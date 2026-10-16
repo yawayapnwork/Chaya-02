@@ -45,12 +45,18 @@ if [ "$1" = compose ]; then
       if [ -n "${STUB_BAD_CONFIG:-}" ]; then echo 'error while interpolating services.api.environment.POSTGRES_APP_PASSWORD: required variable POSTGRES_APP_PASSWORD is missing a value' >&2; exit 1; fi
       exit 0 ;;
     pull) exit 0 ;;
-    ps) if [ "$2" = -q ] && [ "${3:-}" = --status ]; then echo pg-running; else echo "cid-${!#}"; fi; exit 0 ;;
+    ps) if [ "$2" = -q ] && [ "${3:-}" = --status ]; then
+          { [ -z "${STUB_PG_STOPPED:-}" ] || [ -e "$d/pg-started" ]; } && echo pg-running
+        else echo "cid-${!#}"; fi; exit 0 ;;
     exec) cat "$d/schema"; exit 0 ;;
-    up) [ "${STUB_MIGRATE_ON:-}" = "$CHAYA_VERSION" ] && echo 34 > "$d/schema"; sleep "${STUB_UP_SLEEP:-0}"; exit 0 ;;
+    up) if [ "${!#}" = postgres ]; then [ -n "${STUB_PG_START_FAILS:-}" ] && exit 1; touch "$d/pg-started"; exit 0; fi
+        [ "${STUB_MIGRATE_ON:-}" = "$CHAYA_VERSION" ] && echo 34 > "$d/schema"; sleep "${STUB_UP_SLEEP:-0}"; exit 0 ;;
     logs) echo "stub log line for ${!#}"; exit 0 ;;
   esac
   exit 0
+fi
+if [ "$1" = volume ] && [ "$2" = inspect ]; then
+  [ -z "${STUB_NO_PG_VOLUME:-}" ]; exit $?
 fi
 if [ "$1" = inspect ]; then
   if bad "$CHAYA_VERSION"; then echo unhealthy; else echo healthy; fi; exit 0
@@ -163,6 +169,26 @@ d=$(new_host); run "$d" v2 STUB_UNHEALTHY="v1 v2"
 check "double failure exits non-zero" [ "$rc" -ne 0 ]
 check "double failure asks for manual recovery" says "ROLLBACK ALSO FAILED"
 check "no secret in output (double failure)" no_secret
+
+# 6b. postgres is stopped on a host that has data: it is started and backed up, not treated as a first deploy
+d=$(new_host); run "$d" v2 STUB_PG_STOPPED=1
+check "stopped database: deploy exits 0" [ "$rc" -eq 0 ]
+check "stopped database: it is started before the backup" bash -c "grep -n '' '$d/calls' | grep -E 'compose .*up -d --wait postgres|backup postgres' | head -1 | grep -q 'up -d --wait postgres'"
+check "stopped database: the backup is taken" has "$d/calls" "backup postgres"
+check "stopped database: the rehearsal runs" has "$d/calls" "drill .*db_only=1"
+check "stopped database: never called a first deploy" bash -c "! echo \"\$1\" | grep -q 'first deploy'" _ "$out"
+d=$(new_host); run "$d" v2 STUB_PG_STOPPED=1 STUB_PG_START_FAILS=1
+check "database that cannot start: deploy stops" [ "$rc" -ne 0 ]
+check "database that cannot start: nothing is rolled out" bash -c "! grep -E 'compose .* up -d --remove-orphans' '$d/calls'"
+
+# 6c. a host that deployed before has no database volume: refused, never a new empty database
+d=$(new_host); run "$d" v2 STUB_NO_PG_VOLUME=1 STUB_PG_STOPPED=1
+check "missing database volume: refused" [ "$rc" -ne 0 ]
+check "missing database volume: says why" says "database volume chaya_postgres-data does not exist"
+check "missing database volume: nothing is started" bash -c "! grep -qE 'compose .* up ' '$d/calls'"
+check "missing database volume: the deployed version is kept" [ "$(cat "$d/.deployed-version")" = v1 ]
+d=$(new_host); rm "$d/.deployed-version"; run "$d" v2 STUB_NO_PG_VOLUME=1 STUB_PG_STOPPED=1
+check "true first deploy (no volume, nothing deployed) proceeds" [ "$rc" -eq 0 ]
 
 # 7. the session that started the deploy goes away (SSH dropped, CI job cancelled): the deploy still finishes.
 #    sshd sends SIGHUP to the session's process group; the deploy runs in its own session.

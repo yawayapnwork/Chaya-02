@@ -122,6 +122,21 @@ compose pull --quiet
 
 log "3/8 pre-deploy database backup"
 DUMP=""
+# "First deploy" is decided by the data, not by whether postgres happens to be running: a host whose database was
+# stopped (a reboot without restart, an operator, an outage) still has data, and must not skip the backup and the
+# rehearsal. A host that has deployed before but has no database volume is refused: up would create a new, empty
+# database, and the deploy would report success on it.
+PG_VOLUME="${PROJECT:-chaya}_postgres-data"
+if docker volume inspect "$PG_VOLUME" > /dev/null 2>&1; then
+  if [ -z "$(compose ps -q --status running postgres 2>/dev/null)" ]; then
+    log "postgres is not running but $PG_VOLUME holds data: starting it for the backup"
+    compose up -d --wait postgres || { log "postgres does not start: no backup can be taken. Nothing else was changed."; exit 1; }
+  fi
+elif [ -n "$PREVIOUS" ] && [ -z "${DEPLOY_ALLOW_EMPTY_DATABASE:-}" ]; then
+  log "$PREVIOUS was deployed here, but the database volume $PG_VOLUME does not exist. Deploying would start on a new,"
+  log "empty database. Restore it first (DEPLOYMENT.md \"Recovery\"), or set DEPLOY_ALLOW_EMPTY_DATABASE=1 if that is intended. Nothing was changed."
+  exit 1
+fi
 if [ -n "$(compose ps -q --status running postgres 2>/dev/null)" ]; then
   CHAYA_COMPOSE_FILE="$PWD/docker-compose.yml" COMPOSE_NETWORK="$NETWORK" ENV_FILE="$ENV_FILE" ./scripts/backup/backup.sh postgres
   DUMP=$(ls -1t "${BACKUP_DIR:-./backups}"/postgres/chaya-*.dump 2>/dev/null | head -1 || true)

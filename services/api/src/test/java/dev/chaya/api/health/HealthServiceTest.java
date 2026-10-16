@@ -124,6 +124,31 @@ class HealthServiceTest {
     }
 
     @Test
+    void callersWaitingForASlowCheckShareItInsteadOfEachRunningAnother() throws Exception {
+        // A dependency that takes longer to answer than the cache window, as a database outage does (connection timeout).
+        when(downDb.getConnection()).thenThrow(new SQLException("down"));
+        when(scanner.health()).thenReturn("UP");
+        when(storage.ping()).thenAnswer(inv -> {
+            Thread.sleep(800);
+            return true;
+        });
+        HealthService s = service(() -> true, Duration.ofMillis(100));
+        Thread first = new Thread(s::check);
+        first.start();
+        Thread.sleep(200); // the first check is in progress; these callers queue behind it
+        Thread second = new Thread(s::check);
+        Thread third = new Thread(s::check);
+        long start = System.nanoTime();
+        second.start();
+        third.start();
+        first.join();
+        second.join();
+        third.join();
+        verify(storage, times(1)).ping();
+        assertThat(Duration.ofNanos(System.nanoTime() - start)).isLessThan(Duration.ofMillis(1500));
+    }
+
+    @Test
     void storageIsUpOnlyWhenBothBucketsAnswer() throws Exception {
         when(downDb.getConnection()).thenThrow(new SQLException("down"));
         when(scanner.health()).thenReturn("UP");

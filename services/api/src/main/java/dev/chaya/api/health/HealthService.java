@@ -119,10 +119,22 @@ public class HealthService {
         executor.shutdownNow();
     }
 
-    /** One check at a time; callers within the cache window share the result. */
-    public synchronized HealthReport check() {
+    /**
+     * One check at a time; callers within the cache window share the result, and so do callers that were waiting for a
+     * check in progress. The window counts from when a check finished: while a dependency is down a check takes up to
+     * CHECK_TIMEOUT, longer than the window, and counting from its start made every caller queued behind it run another
+     * full check in turn (readiness took 10-24 s to answer during a database outage instead of one check's time).
+     */
+    public HealthReport check() {
+        Instant asked = Instant.now();
+        synchronized (this) {
+            return checkLocked(asked);
+        }
+    }
+
+    private HealthReport checkLocked(Instant asked) {
         Instant now = Instant.now();
-        if (cached != null && Duration.between(cachedAt, now).compareTo(props.cacheTtl()) < 0) {
+        if (cached != null && (cachedAt.isAfter(asked) || Duration.between(cachedAt, now).compareTo(props.cacheTtl()) < 0)) {
             return cached;
         }
         CompletableFuture<Processing> db = async(this::databaseAndQueue, UNKNOWN_PROCESSING);
@@ -133,7 +145,7 @@ public class HealthService {
         Processing processing = db.join();
         String database = processing == UNKNOWN_PROCESSING ? DOWN : UP;
         cached = assemble(database, store.join(), idp.join(), av.join(), vis.join(), processing, now);
-        cachedAt = now;
+        cachedAt = Instant.now();
         return cached;
     }
 

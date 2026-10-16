@@ -31,6 +31,9 @@ jobs:
         run: bash scripts/deploy/test-deploy.sh
       - name: restore drill fails on a bad backup (corrupted, missing, tampered) and passes on a good one
         run: bash scripts/backup/test-restore-drill.sh
+      - name: the object mirror belongs to the backup user, so erasures and cleanup can delete from it
+        # The runner is a non-root user, so root-owned files (the mc container runs as root) would fail here.
+        run: bash scripts/backup/test-backup-ownership.sh
       - name: deploy bundle contains the restore drill
         run: |
           bash scripts/deploy/bundle.sh "$RUNNER_TEMP/bundle"
