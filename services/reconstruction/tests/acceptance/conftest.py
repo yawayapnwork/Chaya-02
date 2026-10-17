@@ -6,7 +6,7 @@ dependency; it is never counted as a pass. With ACC_EVIDENCE set, every test's c
 The four pipeline runs are session fixtures, created when a test first needs them (test files run in order):
   floor0_v1  floor 0, full plan                       -> published version 1 (viewer, search, navigation)
   floor1_v1  floor 1, full plan, one claim abandoned  -> lost worker, retry, then version 1 of floor 1 (multi-floor)
-  failed_scan floor 0, inconsistent semantic labels   -> the REAL navmesh bake fails; version 1 stays published
+  failed_scan floor 0, inconsistent semantic labels   -> the REAL GEOMETRIC_CLEANUP refuses them; version 1 stays published
   rescan_v2  floor 0, incremental re-scan             -> real alignment, splice and re-bake: version 2
 """
 
@@ -247,9 +247,9 @@ def floor1_v1(world, stand_ins, capture_video, cfg) -> Run:
 
 @pytest.fixture(scope="session")
 def failed_scan(world, stand_ins, capture_video, floor0_v1) -> Run:
-    """A new full scan of floor 0 whose stand-in segmentation has 7 labels fewer than the cloud has Gaussians. The real
-    stages after it must refuse labels that do not describe their cloud (NAVIGATION_BAKING: NAVMESH_LABELS_UNAVAILABLE).
-    Nothing is reported as failed by the suite: a real stage fails on inconsistent upstream data."""
+    """A new full scan of floor 0 whose stand-in segmentation has 7 labels fewer than the cloud has Gaussians. The first real
+    stage that reads them must refuse labels that do not describe their cloud (GEOMETRIC_CLEANUP: INPUT_INVALID, measured on
+    2026-10-17). Nothing is reported as failed by the suite: a real stage fails on inconsistent upstream data."""
     sc = stack.full_scene()
     plan = RunPlan(sc, labels_override=sc.labels[:-7])
     return run_full(world, stand_ins, world.floor0, capture_video, plan)

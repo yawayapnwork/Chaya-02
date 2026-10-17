@@ -287,7 +287,8 @@ def _dense_scene(pillars, region: list[list[float]] | None = None):
                     lab.append("furniture")
     # A south wall (y = 0) and an east wall (x = 6), 2.5 m tall: the unchanged structure a re-scan region is registered on.
     # Without it the region is a flat floor and the moved pillar, and the real REGION_ALIGNMENT rightly rejects aligning
-    # the moved pillar onto the old one (ALIGNMENT_REJECTED).
+    # the moved pillar onto the old one (ALIGNMENT_REJECTED). The viewer's initial view looks from -Y, so this wall hides the
+    # pillars until the camera is turned (scripts/e2e/viewer_format_check.cjs orbits it; docs/ACCEPTANCE.md, findings).
     for k in range(0, round(WALL_HEIGHT / FLOOR_STEP) + 1):
         z = k * FLOOR_STEP
         for i in range(nx):
@@ -321,7 +322,12 @@ def full_scene() -> Scene:
     return Scene("viewer-scene fixture (dense floor)", ply_bytes(cloud), labels, objects)
 
 
-RESCAN_REGION = [[4.4, -0.1], [6.1, -0.1], [6.1, 2.7], [4.4, 2.7]]  # canonical metres: the blue pillar and the walls' corner
+# Canonical metres: the east half, holding the moved blue pillar, the unchanged green pillar and the walls' corner. A region of
+# only the blue pillar and the corner (x >= 4.4, y <= 2.7) was rightly rejected by the real REGION_ALIGNMENT: two walls and
+# the floor meeting at (6, 0) do not fix scale about that corner, and its coarse ICP (first correspondence distance 1.0 m)
+# paired the moved pillar with its old position and shrank the region by 0.62 (scale_correction 0.38 > 0.1). The unchanged
+# green pillar pins it: accepted at scale 0.99, 1.5 cm correction (docs/ACCEPTANCE.md, findings).
+RESCAN_REGION = [[3.0, -0.1], [6.1, -0.1], [6.1, 4.1], [3.0, 4.1]]
 MOVED_BLUE = (5.0, 2.0)
 
 
@@ -331,7 +337,12 @@ def region_scene() -> Scene:
     g = scene_module()
     pillars = [(n, MOVED_BLUE if n == "Blue pillar" else c, col) for n, c, col in g.PILLARS]
     cloud, labels = _dense_scene(pillars, RESCAN_REGION)
-    return Scene("re-scan region (blue pillar moved)", ply_bytes(cloud), labels, [("blue pillar", (MOVED_BLUE[0], MOVED_BLUE[1], 0.0))])
+    (x0, y0), (x1, y1) = RESCAN_REGION[0], RESCAN_REGION[2]
+    # What the region's detector would report: the moved blue pillar where it now stands, and the region's unchanged objects.
+    unchanged = [(p["label"].lower(), tuple(p["canonical"])) for p in FIXTURE["pois_by_construction"]
+                 if p["label"] != "Blue pillar" and x0 <= p["canonical"][0] <= x1 and y0 <= p["canonical"][1] <= y1]
+    return Scene("re-scan region (blue pillar moved)", ply_bytes(cloud), labels,
+                 [("blue pillar", (MOVED_BLUE[0], MOVED_BLUE[1], 0.0)), *unchanged])
 
 
 # ------------------------------------------------------------------------------------------------ the stand-in worker

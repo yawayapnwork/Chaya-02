@@ -30,7 +30,8 @@ function record(id, name, expected, ok, actual, evidence) {
 async function sampleCanvas(page) {
   return page.evaluate(() => new Promise((resolve, reject) => requestAnimationFrame(() => {
     const gl = document.querySelector('[data-testid="splat-canvas"] canvas');
-    if (!gl) return reject(new Error("no WebGL canvas"));
+    // No canvas (the scene never loaded): an empty sample, so this check FAILS and the later ones still run and record.
+    if (!gl) return resolve({ width: 0, height: 0, covered: 0, cells: new Array(8 * 8 * 3).fill(0), missing: true });
     const c = document.createElement("canvas");
     c.width = gl.width; c.height = gl.height;
     const ctx = c.getContext("2d");
@@ -75,6 +76,14 @@ async function poll(fn, until, timeout) {
   return v;
 }
 
+// A venue with several floors (the acceptance suite's has two, for the multi-floor route) opens with no floor chosen: the
+// viewer auto-selects only a venue's single floor. Choose the handoff's floor in the viewer's own floor selector, as a user does.
+async function pickFloor(page) {
+  const select = page.locator("select").filter({ has: page.locator(`option[value="${handoff.floorId}"]`) });
+  await select.first().waitFor({ timeout: SCENE_TIMEOUT }).catch(() => null);
+  if ((await select.count()) && (await select.first().inputValue()) !== handoff.floorId) await select.first().selectOption(handoff.floorId);
+}
+
 async function splatCount(page) {
   const dd = page.locator("dt", { hasText: /^Splats$/ }).locator("xpath=following-sibling::dd[1]");
   await dd.waitFor({ timeout: SCENE_TIMEOUT });
@@ -84,10 +93,13 @@ async function splatCount(page) {
 // Everything checked on one loaded viewer page. prefix: "A" (public link) or "B" (signed-in manager).
 async function checkScene(page, prefix, artifact, auth, consoleErrors) {
   const received = artifact.body ? crypto.createHash("sha256").update(artifact.body).digest("hex") : null;
+  const pageText = artifact.status === null ? (await page.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ").slice(0, 400) : undefined;
   record(`${prefix}1`, "HTTP artifact retrieval by the viewer (real API)", `200 application/octet-stream; ${auth}; bytes == stored fixture`,
     artifact.status === 200 && artifact.contentType === "application/octet-stream" && received === handoff.ksplatSha256 && artifact.authOk,
-    `HTTP ${artifact.status} ${artifact.contentType} ${artifact.length} B; request auth: ${artifact.authSeen}; sha256=${received}`,
-    { url: (artifact.url || "(no model request seen)").replace(/^https?:\/\/[^/]+/, ""), expectedSha256: handoff.ksplatSha256 });
+    `HTTP ${artifact.status} ${artifact.contentType} ${artifact.length} B; request auth: ${artifact.authSeen}; sha256=${received}` +
+      (artifact.status === null ? `; page shows: '${pageText}'; failed requests: ${JSON.stringify(artifact.failures.slice(0, 8))}` : ""),
+    { url: (artifact.url || "(no model request seen)").replace(/^https?:\/\/[^/]+/, ""), expectedSha256: handoff.ksplatSha256,
+      failedRequests: artifact.failures });
 
   const count = await splatCount(page).catch(() => null);
   const error = await page.getByText("Could not load the reconstruction").count();
@@ -99,24 +111,63 @@ async function checkScene(page, prefix, artifact, auth, consoleErrors) {
   record(`${prefix}3`, "Rendered scene (pixels read back from the WebGL canvas)", "> 5 % of sampled pixels differ from the clear colour",
     first.covered > 0.05, `${(first.covered * 100).toFixed(1)} % covered on a ${first.width}x${first.height} canvas`);
 
-  const frame = await page.getByTestId("coordinate-frame-status").innerText();
+  const frame = await page.getByTestId("coordinate-frame-status").innerText({ timeout: 10_000 }).catch(() => "(not shown)");
   const markers = await page.locator(".chaya-poi-marker").count();
   const red = page.locator('.chaya-poi-marker[title="Red pillar"]');
-  let colour = null;
-  if (await red.count()) {
+  const isRed = (c) => Boolean(c) && c[0] > c[1] + 40 && c[0] > c[2] + 40;
+  const redColour = async () => {
+    if (!(await red.count())) return null;
     const b = await red.boundingBox();
-    colour = await colourAbove(page, b.x + b.width / 2, b.y + b.height / 2);
+    return b ? colourAbove(page, b.x + b.width / 2, b.y + b.height / 2) : null;
+  };
+  let colour = await redColour();
+  let view = "initial view";
+  if (!isRed(colour) && (await red.count())) {
+    // The initial view looks from -Y; a wall on that side (the acceptance suite's scene has one) hides the pillar. Turn the
+    // camera 180 degrees with the viewer's own orbit controls, as a user would, and look again. Both readings are recorded.
+    const first = colour;
+    const box = await page.getByTestId("splat-canvas").boundingBox();
+    if (box) {
+      const cy = box.y + box.height * 0.5;
+      await page.mouse.move(box.x + box.width * 0.25, cy);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width * 0.25 + box.height / 2, cy, { steps: 20 });  // OrbitControls: 2*pi per element height
+      await page.mouse.up();
+      await page.waitForTimeout(1500);
+      colour = await redColour();
+      view = `after orbiting 180 degrees (initial view: rgb(${first}), the pillar hidden)`;
+    }
   }
-  record(`${prefix}4`, "POI overlay on the calibrated scene", "3 markers; the Red pillar marker sits under red rendered splats",
-    markers === handoff.pois.length && colour && colour[0] > colour[1] + 40 && colour[0] > colour[2] + 40,
-    `frame: '${frame}'; markers=${markers}; mean colour above the Red pillar marker rgb(${colour})`);
+  record(`${prefix}4`, "POI overlay on the calibrated scene", "one marker per POI; the Red pillar marker sits under red rendered splats",
+    markers === handoff.pois.length && isRed(colour),
+    `frame: '${frame}'; markers=${markers} of ${handoff.pois.length}; mean colour above the Red pillar marker rgb(${colour}), ${view}`);
   if (await red.count()) {
-    await red.click();
-    const details = await page.getByTestId("poi-details").innerText().catch(() => "");
-    record(`${prefix}4.1`, "Clicking a POI marker selects it", "POI details show 'Red pillar'", /Red pillar/.test(details), details.replace(/\s+/g, " ").slice(0, 80));
+    // Markers are re-projected every frame; after an orbit the controls ease the camera for a while. Wait until the marker
+    // stops moving (same box twice, 300 ms apart), then click it as a user would.
+    let prev = null;
+    for (let i = 0; i < 40; i++) {
+      const b = await red.boundingBox();
+      if (b && prev && Math.abs(b.x - prev.x) < 0.5 && Math.abs(b.y - prev.y) < 0.5) break;
+      prev = b;
+      await page.waitForTimeout(300);
+    }
+    // Click the point on screen, as a user does: the detected "red pillar" POI stands exactly where the manual "Red pillar"
+    // does, so one marker covers the other (docs/ACCEPTANCE.md, findings). Either one being selected is a correct selection.
+    const b = await red.boundingBox();
+    const clicked = b ? await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2).then(() => null, (e) => String(e.message).split("\n")[0])
+      : "marker not on screen";
+    const details = clicked ? "" : await page.getByTestId("poi-details").innerText({ timeout: 10_000 }).catch(() => "");
+    record(`${prefix}4.1`, "Clicking a POI marker selects it", "POI details show the red pillar", !clicked && /red pillar/i.test(details),
+      clicked ? `click failed: ${clicked}` : details.replace(/\s+/g, " ").slice(0, 80));
   }
 
-  const box = await page.getByTestId("splat-canvas").boundingBox();
+  const box = await page.getByTestId("splat-canvas").boundingBox().catch(() => null);
+  if (!box) {
+    record(`${prefix}5`, "Camera interaction (drag orbits the built-in controls)", "the next frames differ", false, "no viewer canvas on the page");
+    record(`${prefix}6`, "No unexpected browser console errors", "none (a logged route 404/409 is expected)",
+      consoleErrors.filter((e) => !/status of 40[49]/.test(e)).length === 0, `${consoleErrors.length} console errors`, consoleErrors);
+    return;
+  }
   const before = await sampleCanvas(page);
   const cx = box.x + box.width / 2, cy = box.y + box.height * 0.75;
   await page.mouse.move(cx, cy);
@@ -132,7 +183,10 @@ async function checkScene(page, prefix, artifact, auth, consoleErrors) {
 }
 
 function watchArtifact(page, expectAuth) {
-  const artifact = { status: null };
+  const artifact = { status: null, failures: [] };
+  // Why a model never arrived: every failed request and error response of the page, for the evidence.
+  page.on("requestfailed", (r) => artifact.failures.push(`${r.method()} ${r.url().replace(/[?#].*$/, "")} failed: ${r.failure() && r.failure().errorText}`));
+  page.on("response", (r) => { if (r.status() >= 400) artifact.failures.push(`${r.request().method()} ${r.url().replace(/[?#].*$/, "")} -> ${r.status()}`); });
   page.on("response", async (r) => {
     // The viewer fetches a run's model, or (a floor with versions) the scan version's: either is the model it shows.
     if (!/\/(reconstructions|scan-versions)\/[^/]+\/artifacts\/KSPLAT$/.test(r.url())) return;
@@ -162,17 +216,16 @@ function recordModels(page) {
 }
 
 // C. Switching versions (acceptance suite: version 1 and the re-scan's version 2 of the same floor), in the viewer's own
-// version selector. Each model must be the bytes recorded for that version.
-async function checkVersionSwitch(page) {
+// version selector, on the signed-in page as it is (a reload would drop the session: tokens are held in memory only). Each
+// model must be the bytes recorded for that version. `shown` is the model the page already loaded (B1).
+async function checkVersionSwitch(page, shown) {
   const [v1, v2] = handoff.versions;
   const seen = recordModels(page);
-  await page.goto(`${web}/viewer?venue=${handoff.venueId}&floor=${handoff.floorId}&run=${v2.runId}`);
-  const got2 = await poll(async () => seen.find((s) => s.sha256 === v2.ksplatSha256), Boolean, SCENE_TIMEOUT);
   const count2 = await splatCount(page).catch(() => null);
-  record("C1", "Open version 2 (the re-scan)", "its model, by SHA-256; scene initialised", Boolean(got2) && Boolean(count2),
-    `models fetched: ${JSON.stringify(seen.map((s) => [s.status, s.sha256 && s.sha256.slice(0, 12)]))}; splats ${count2}`);
+  record("C1", "The floor opens on version 2 (the re-scan, now current)", "the shown model is version 2's, by SHA-256; scene initialised",
+    shown === v2.ksplatSha256 && Boolean(count2), `shown sha256=${shown && shown.slice(0, 12)}; version 2=${v2.ksplatSha256.slice(0, 12)}; splats ${count2}`);
   const select = page.locator("select").filter({ has: page.locator(`option[value="${v1.runId}"]`) });
-  await select.selectOption(v1.runId);
+  await select.selectOption(v1.runId, { timeout: 30_000 });
   const got1 = await poll(async () => seen.find((s) => s.sha256 === v1.ksplatSha256), Boolean, SCENE_TIMEOUT);
   const drawn = await poll(() => sampleCanvas(page), (s) => s.covered > 0.05, SCENE_TIMEOUT).catch(() => ({ covered: 0 }));
   record("C2", "Switch to version 1 in the viewer's version selector", "version 1's model, by SHA-256, and drawn",
@@ -183,7 +236,8 @@ async function checkVersionSwitch(page) {
 async function checkCorruptModel(page) {
   const c = handoff.corrupt;
   const seen = recordModels(page);
-  await page.goto(`${web}/viewer?venue=${handoff.venueId}&floor=${c.floorId}&run=${c.runId}`);
+  // Floor 1 (whose model the suite corrupted) in the viewer's own floor selector, on the same signed-in page.
+  await page.locator("select").filter({ has: page.locator(`option[value="${c.floorId}"]`) }).first().selectOption(c.floorId, { timeout: 30_000 });
   const alert = page.locator('[role="alert"]');
   await poll(async () => (await alert.count()) > 0 || seen.length > 0, Boolean, SCENE_TIMEOUT);
   await page.waitForTimeout(5000);
@@ -203,22 +257,27 @@ async function checkCorruptModel(page) {
     page.on("console", (m) => { if (m.type() === "error") errorsA.push(m.text()); });
     const artA = watchArtifact(page, "viewer-token");
     await page.goto(`${web}/viewer?link=${encodeURIComponent(handoff.viewerLink)}`);
+    await pickFloor(page);
     await splatCount(page).catch(() => null);
     await checkScene(page, "A", artA, "X-Chaya-Viewer-Token only", errorsA);
 
     // Route overlay: only a real, navmesh-backed route may be drawn. None exists for the fixture (no NAVIGATION_BAKING).
-    const routeResponse = page.waitForResponse((r) => r.url().endsWith("/navigation/routes"), { timeout: 30_000 }).catch(() => null);
-    const selects = page.locator("select");
-    const n = await selects.count();
-    await selects.nth(n - 2).selectOption({ label: "Red pillar" });
-    await selects.nth(n - 1).selectOption({ label: "Blue pillar" });
-    const rr = await routeResponse;
-    // The refusal is rendered after the response is handled; wait for it rather than reading the panel mid-update.
-    await page.locator('[role="alert"]', { hasText: /No route available/ }).first().waitFor({ timeout: 15_000 }).catch(() => null);
-    const panel = (await page.locator('[role="alert"]').allInnerTexts()).join(" ");
-    record("A7", "Route overlay", "drawn only for a real route; otherwise the API's refusal is shown and nothing is drawn",
-      rr && rr.status() === 200 ? true : rr && /No route available/.test(panel) ? "NAVIGATION_BAKING (no navmesh-backed graph for the fixture run)" : false,
-      `route HTTP ${rr && rr.status()}; panel: ${panel.slice(0, 220)}`);
+    try {
+      const routeResponse = page.waitForResponse((r) => r.url().endsWith("/navigation/routes"), { timeout: 30_000 }).catch(() => null);
+      const selects = page.locator("select");
+      const n = await selects.count();
+      await selects.nth(n - 2).selectOption({ label: "Red pillar" }, { timeout: 15_000 });
+      await selects.nth(n - 1).selectOption({ label: "Blue pillar" }, { timeout: 15_000 });
+      const rr = await routeResponse;
+      // The refusal is rendered after the response is handled; wait for it rather than reading the panel mid-update.
+      await page.locator('[role="alert"]', { hasText: /No route available/ }).first().waitFor({ timeout: 15_000 }).catch(() => null);
+      const panel = (await page.locator('[role="alert"]').allInnerTexts()).join(" ");
+      record("A7", "Route overlay", "drawn only for a real route; otherwise the API's refusal is shown and nothing is drawn",
+        rr && rr.status() === 200 ? true : rr && /No route available/.test(panel) ? "NAVIGATION_BAKING (no navmesh-backed graph for the fixture run)" : false,
+        `route HTTP ${rr && rr.status()}; panel: ${panel.slice(0, 220)}`);
+    } catch (e) {
+      record("A7", "Route overlay", "drawn only for a real route", false, `could not drive the route selector: ${String(e.message).split("\n")[0]}`);
+    }
     await ctxA.close();
 
     // ---------------------------------------------------------------- B. signed-in venue manager (Keycloak PKCE)
@@ -227,20 +286,54 @@ async function checkCorruptModel(page) {
     const errorsB = [];
     pageB.on("console", (m) => { if (m.type() === "error") errorsB.push(m.text()); });
     const artB = watchArtifact(pageB, "bearer");
-    await pageB.goto(`${web}/viewer`);
-    await pageB.getByRole("button", { name: "Sign in" }).click();
-    await pageB.waitForSelector("#username", { timeout: 30_000 });
-    await pageB.fill("#username", handoff.managerUsername);
-    await pageB.fill("#password", handoff.managerPassword);
-    await pageB.click("#kc-login");
-    await pageB.waitForURL(/\/viewer/, { timeout: 30_000 });
+    try {
+      await pageB.goto(`${web}/viewer`);
+      await pageB.getByRole("button", { name: "Sign in" }).click({ timeout: 30_000 });
+      await pageB.waitForSelector("#username", { timeout: 30_000 });
+      await pageB.fill("#username", handoff.managerUsername);
+      await pageB.fill("#password", handoff.managerPassword);
+      await pageB.click("#kc-login");
+      await pageB.waitForURL(/\/viewer/, { timeout: 30_000 });
+      record("B0", "Operator sign-in through Keycloak (authorization code + PKCE) returns to the viewer", "back on /viewer", true, pageB.url().replace(/[?#].*$/, ""));
+    } catch (e) {
+      record("B0", "Operator sign-in through Keycloak (authorization code + PKCE) returns to the viewer", "back on /viewer", false,
+        `${String(e.message).split("\n")[0]}; at ${pageB.url().replace(/[?#].*$/, "")}`);
+    }
+    await pickFloor(pageB);
     await splatCount(pageB).catch(() => null);
     await checkScene(pageB, "B", artB, "Authorization: Bearer <Keycloak JWT> only", errorsB);
-    if (handoff.versions && handoff.versions.length >= 2) await checkVersionSwitch(pageB);
-    if (handoff.corrupt) await checkCorruptModel(pageB);
+    for (const [id, check, wanted] of [["C", checkVersionSwitch, handoff.versions && handoff.versions.length >= 2]]) {
+      if (!wanted) continue;
+      const shown = artB.body ? crypto.createHash("sha256").update(artB.body).digest("hex") : null;
+      try { await check(pageB, shown); } catch (e) { record(id, check.name, "completes", false, String(e.message).split("\n")[0]); }
+    }
     await ctxB.close();
+
+    // ---------------------------------------------------------------- D. corrupted model, on a fresh signed-in page
+    // Fresh, because floor 1's model has the same bytes as floor 0's version 1 (the same synthetic scene), and a page that
+    // already showed those bytes switched to floor 1 without requesting the model again (docs/ACCEPTANCE.md, findings).
+    if (handoff.corrupt) {
+      const ctxD = await browser.newContext({ viewport: { width: 1400, height: 900 }, ignoreHTTPSErrors });
+      const pageD = await ctxD.newPage();
+      try {
+        await pageD.goto(`${web}/viewer`);
+        await pageD.getByRole("button", { name: "Sign in" }).click({ timeout: 30_000 });
+        await pageD.waitForSelector("#username", { timeout: 30_000 });
+        await pageD.fill("#username", handoff.managerUsername);
+        await pageD.fill("#password", handoff.managerPassword);
+        await pageD.click("#kc-login");
+        await pageD.waitForURL(/\/viewer/, { timeout: 30_000 });
+        await checkCorruptModel(pageD);
+      } catch (e) {
+        record("D1", "A corrupted model is not displayed", "completes", false, String(e.message).split("\n")[0]);
+      }
+      await ctxD.close();
+    }
   } finally {
     await browser.close();
     fs.writeFileSync(process.env.OUT, JSON.stringify({ kind: "FORMAT VALIDATION (synthetic fixture; not a venue reconstruction)", results }, null, 2));
   }
+  // A recorded FAIL fails the process: the runner reads this exit status (before 2026-10-17 it exited 0 with failures recorded,
+  // and the acceptance run counted as passed).
+  if (results.some((r) => r.status === "FAIL")) process.exitCode = 1;
 })().catch((e) => { console.error(e); process.exit(1); });

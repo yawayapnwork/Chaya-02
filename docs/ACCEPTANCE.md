@@ -79,6 +79,9 @@ means nothing failed but something was BLOCKED.
   sparse outliers. Both are the real stages behaving correctly on bad input.
 - The lost-worker test waits for a real lease expiry: 40 s in the CI stack (`CHAYA_PIPELINE_LEASESECONDS`), 300 s on a
   production configuration.
+- The scene has a 2.5 m south wall and an east wall (registration structure for the re-scan). The viewer's initial view
+  looks from −Y, so the browser check orbits the camera 180° before reading the POI overlay's colour, and records both views.
+- The re-scan covers the east half (x 3.0–6.1 m): the moved blue pillar, the unchanged green pillar and the walls' corner.
 
 ## Classes D to G: how to run them, and the evidence a result needs
 
@@ -92,6 +95,102 @@ the dependency runs them and files the evidence below. A run without its evidenc
 | F. Real venue | docs/REAL_VENUE_ACCEPTANCE.md: `scripts/acceptance/real_venue.py` against a deployed stack with a GPU worker | `report.json` from the script (every step's status, artifact checksums, calibration RMS); the measured control distances and their tape/laser readings; screenshots of the viewer at stated positions; routes walked on site with their measured lengths |
 | G. Device AR | docs/ar-ios-validation.md, docs/ar-android-validation.md | device model and OS; the filled-in validation record in those documents (tracking states, relocalization, marker consistency, route drift at stated checkpoints); a screen recording |
 
-## Results
+## Results, 2026-10-17
 
-See "Results, 2026-10-17" below: one table per classification, never one total.
+One table per classification, never one total. Host: Windows 11, Docker Desktop (7.5 GiB VM), no GPU, no device.
+
+| Class | What ran | Command | Result |
+|---|---|---|---|
+| **A. Unit** | worker `tests/unit` + liveness + model loading | `pytest tests/unit tests/test_liveness.py tests/test_model_loading.py -m "not gpu and not integration and not acceptance"` (.venv, Python 3.12) | **350 passed** |
+| A. Unit | web unit tests; lint; typecheck | `npm test`, `npm run lint`, `npx tsc --noEmit` (apps/web) | **322 passed**; lint and typecheck clean |
+| A. Unit | vision service | `pytest` inside the vision image | **8 passed** |
+| A. Unit | backend untagged tests; iOS `ChayaARCore`; web Playwright specs (stubbed backend) | — | **NOT RUN this session** (C: had too little free disk for the Maven and Swift containers; no Java, Swift or web-UI change was made). Last recorded: backend 584 tests / 4 skips (2026-10-14), iOS core 72 (2026-10-15) |
+| **B. Service integration** | Java `@Tag("integration")` (Testcontainers) | `mvn verify -Dgroups=integration` (CI `backend`, step B) | **NOT RUN this session** (same reason); runs in CI |
+| **C. Synthetic fixture (component)** | worker `tests/orchestration` | as above, `tests/orchestration` | **67 passed, 1 skipped** (the allowed empty parameter set) |
+| C | worker `tests/smoke`, `tests/splat`, `tests/navmesh` (real `chaya-navmesh`, MinGW build) | as above | **14**, **91**, **46 passed** |
+| **C. Cross-service acceptance** | the suite above, throwaway stack, real services | `scripts/acceptance/run-acceptance.sh ci` | **40 / 40 PASS** (final run, 2026-10-17, 21 min including image builds); every scenario 1–8 |
+| C. Cross-service acceptance (browser) | real web app in Chromium against the same stack | (same command) | **21 / 21 PASS**: public link A1–A7, Keycloak PKCE sign-in B0–B6, version switch C1–C2, corrupt model D1 |
+| **D. Real media** | — | docs/E2E_VALIDATION.md | **NOT RUN** (no licensed dataset on this host) |
+| **E. GPU** | — | `CHAYA_REQUIRE_GPU=1 pytest -m gpu` on a CUDA host | **NOT RUN** (Intel integrated graphics only) |
+| **F. Real venue** | — | `scripts/acceptance/real_venue.py` | **NOT RUN** (no venue, no GPU worker) |
+| **G. Device AR** | — | docs/ar-ios-validation.md, docs/ar-android-validation.md | **NOT RUN** (no device) |
+
+The cross-service suite took four runs to reach that result. Runs 1–3 failed on defects in the suite (below), run 4 passed
+40/40 but its browser half was broken and still exited 0 (S1). Evidence of the final run: `acceptance-c.json`,
+`acceptance-c-viewer.json`, `pytest.log` in `$ACC_OUT` (CI uploads them as `acceptance-c-evidence`).
+
+## Findings, 2026-10-17
+
+What running the suite for real found. Product behaviour first, then defects in the suite itself (all fixed).
+
+**Product (recorded, not changed here):**
+
+| # | Finding | Evidence | Status |
+|---|---|---|---|
+| P1 | **A re-scan region dominated by a moved object is rejected in DIRECT_CANONICAL mode.** Region = the blue pillar (moved 1 m) plus two walls and the floor meeting in a corner. Scaling about that corner leaves all three planes in place, and ICP's first correspondence distance (1.0 m, `ALIGNMENT_ICP_SCHEDULE_M`) is larger than the 0.5 m correction DIRECT mode may make, so the moved pillar was paired with its old position and the region shrank by 0.62 about the corner. | `scale_correction 0.38`, `direct_translation_correction 0.60 m`, `ALIGNMENT_REJECTED`; reproduced offline with `align_region` (scale 0.617). | **Fails safe** (nothing spliced, the venue unchanged, verified). A fix was tried and **not** kept: capping DIRECT mode's ICP distances at the allowed correction accepted this case, but also **accepted a calibration 25 % off in scale** at a wrong scale of 1.06–1.09 with every gate passing, which is worse. A robust choice needs a design and the B5 alignment benchmark. Open. |
+| P2 | The same alignment's confidence is sensitive to exact grid geometry: with the long wall moved from y = 0 to y = 4 m, a near-perfect solution (scale 1.0001, 0.3 mm) was rejected at confidence 0.55; at y = 3.99 m it was accepted at 0.67. The overlap count changed from 44,721 to 12,696 points. | offline `align_region`, production gates | Unexplained; synthetic, exactly gridded points (not seen on real scans, which have not been measured either). Needs a look before trusting confidence near the 0.6 gate. |
+| P3 | A 0.5 m move in the same east-half region is rejected on confidence (0.59 < 0.6) while the 1 m move is accepted (0.81). | offline `align_region` | Gate is conservative; recorded for the rescan design. |
+| P4 | The viewer's initial and focus views stand outside the scene on its −Y side. In an enclosed venue (a wall on that side) the first view shows the outside of a wall. | browser A4: rgb(152,140,127) (the wall) above the Red pillar marker until the camera is orbited | UX question, not changed. |
+| P5 | A detected POI and a manual POI at the same place draw two markers on top of each other; only the top one can be clicked. | browser A4.1 (`.chaya-poi-marker[title="Red pillar"]` never clickable) | UX question. |
+| P6 | Switching floors to a run whose model has the same SHA-256 as the one already shown displayed it without requesting it again, so an object that is now corrupted in storage was not re-checked on that page. A fresh page requests it, the API ends the stream (`ERR_CONTENT_LENGTH_MISMATCH`) and the viewer shows "Could not load the reconstruction". | browser network log, floor 0 v1 → floor 1 | The bytes shown are the bytes the record names (verified when first loaded), so nothing wrong is displayed; recorded because it skips the storage re-check. Not investigated further. |
+| P7 | The failure-propagation run fails at GEOMETRIC_CLEANUP (`INPUT_INVALID: SEMANTIC_LABELS has 95615 entries but the splat has 95622 Gaussians`), the first real stage that reads the labels, not at NAVIGATION_BAKING as the suite's docstring said. | 3.17/3.18 | Correct behaviour; docstring fixed. |
+
+**The suite (fixed):**
+
+| # | Defect | Effect | Fix |
+|---|---|---|---|
+| S1 | The browser check exited 0 with FAILs recorded, and the runner trusted the exit status | **browser failures could never fail the run** (run 4 exited 0 with 19 browser FAILs) | the check exits 1 on any FAIL; the runner also fails on any `"FAIL"` in either results file |
+| S2 | The browser check opened `/viewer` without choosing a floor; the viewer auto-selects only a venue's single floor, and this venue has two | no model was ever requested (A1/B1 "no model request seen") | `pickFloor` uses the viewer's own floor selector |
+| S3 | The version-switch and corrupt-model checks navigated with `page.goto`, which drops the sign-in (tokens are in memory only) | C/D always failed | driven through the page's selectors; D on its own fresh signed-in page (P6) |
+| S4 | Any exception aborted the browser script | every later check unrecorded | each section records its failure and the next runs; diagnostics (page text, failed requests) on a missing model |
+| S5 | `CHAYA_ALLOWED_ORIGINS` (smoke overlay) and chaya-web's redirect URI (realm file) are fixed to port 3000 | with `ACC_WEB_PORT` ≠ 3000, CORS failed and sign-in would fail | origin from `WEB_PORT`; the runner sets chaya-web's redirect and origin to the web URL (as `keycloak-configure.sh` does) |
+| S6 | On Windows, `node` received the POSIX handoff path | browser check never ran (`ENOENT C:\tmp\...`) | native paths; a missing result file is recorded as FAIL |
+| S7 | 5.7 queried right after creating POIs; embeddings are back-filled every 5 s | `UNFILTERED` instead of `FILTERED` (race) | waits for the product's own `awaitingEmbedding == 0` (ops search-analytics) and records it (5.7a) |
+| S8 | 5.4 took the first auto-detected red pillar; floor 1 has one at the same (x, y) | flaky floor check | selects floor 0's detection |
+| S9 | 7.4 read splice keys that do not exist; 7.5 read `rebuild` from the command record (it is in the NAVMESH_MANIFEST) | false failures | real keys, plus `merged == venue − removed + added` and the seam limit; 7.5 reads the published manifest (SHA-256 checked) |
+| S10 | 7.10 routed version 1 to a POI placed on version 2 | `404 destination POI is not part of scan version` (correct API behaviour) | routes to a waypoint version 1 holds |
+| S11 | The re-scan region (x ≥ 4.4, y ≤ 2.7) held only the moved pillar and a corner | rejected by the real alignment (P1) | region = east half, with the unchanged green pillar; the re-scan's detector stand-in also reports the green pillar |
+
+## Capability matrix
+
+C = the cross-service suite (`run-acceptance.sh ci`, a Docker host; in CI the `acceptance` workflow on `ubuntu-latest`).
+Result = the final run of 2026-10-17. "Stand-in" = one of the four labelled stages (above).
+
+| Capability | Test | Environment | Result | Remaining limitation |
+|---|---|---|---|---|
+| Operator login (Keycloak) | 1.1–1.6; browser B0 | C | PASS | password grant via a test client; PKCE via the real web app |
+| Venue authorization | 1.7–1.10 | C | PASS | — |
+| Expired token | 1.11–1.14 | C | PASS | accepted until exp + 60 s (Spring's clock skew), measured |
+| Cross-tenant rejection | 1.15–1.18, 4.5, 5.6, 8.9 | C | PASS | — |
+| Venue + capture session | 2.1 | C | PASS | organizations are seeded in SQL (no API exists) |
+| Valid media upload | 2.2–2.3 | C | PASS | synthetic face video, not a venue capture |
+| Resume interrupted upload | 2.4–2.6 | C | PASS | — |
+| Reject invalid files | 2.7–2.9 | C | PASS | real ClamAV (EICAR) |
+| Calibration evidence | 2.10–2.13 | C | PASS | control points by construction, not surveyed |
+| Submit job, stage transitions | 3.1–3.6 | C | PASS | 4 stages stand-ins (labelled, checked by 3.4) |
+| Worker lease handling | 3.11–3.16 | C | PASS | lease 40 s in the CI stack (300 s in production) |
+| Artifact manifests | 3.7–3.10 | C | PASS | — |
+| Failure propagation | 3.17–3.20 | C | PASS | failure induced through stand-in labels; the refusing stage is real |
+| Scan-version publication | 3.21–3.22, 7.6 | C | PASS | — |
+| Retrieve generated artifact | 4.1–4.6; browser A1, B1 | C | PASS | — |
+| Load in the real viewer | browser A2–A5, B2–B5 | C (Chromium, software WebGL) | PASS | camera orbited first (P4) |
+| Switch versions | browser C1–C2; 7.7–7.8 | C | PASS | — |
+| Missing / corrupt models | 4.7–4.9; browser D1 | C | PASS | fresh page needed (P6) |
+| Search indexed objects | 5.1–5.4 | C | PASS | detections are stand-ins (CLIP **text** vectors of labels) |
+| Search venue isolation | 5.5–5.6 | C | PASS | — |
+| Result coordinates | 5.4 | C | PASS | positions by construction |
+| Empty results | 5.7a–5.7 | C | PASS | needs ≥ 8 embedded POI texts (product rule) |
+| Route on the run's navmesh | 6.1–6.4 | C | PASS | real Recast bake of a synthetic scene |
+| Accessible routing | 6.5–6.6, 6.11–6.12 | C | PASS | — |
+| Unreachable destinations | 6.7–6.8 | C | PASS | — |
+| Multi-floor transitions | 6.9–6.12 | C | PASS | connections registered by hand |
+| Changed-region re-scan | 7.1–7.5 | C (real Open3D worker, test-only image) | PASS | P1–P3: a region dominated by a moved object is rejected |
+| Historical versions | 7.6–7.10 | C | PASS | — |
+| Persisted status | 8.1–8.3 | C | PASS | — |
+| Failed worker detection | 8.4–8.5 | C | PASS | — |
+| Retry | 8.6–8.8 | C | PASS | — |
+| Dashboard access | 8.9–8.11 | C | PASS | — |
+| Unit logic (worker, web, vision) | class A | host .venv / node / vision image | PASS (350 / 322 / 8) | backend, iOS, Playwright not re-run (disk) |
+| Reconstruction quality (COLMAP, gsplat, models) | classes D, E | CUDA host, dataset | NOT RUN | evidence requirements above |
+| Real venue end to end | class F | deployed stack + GPU worker + venue | NOT RUN | — |
+| Device AR | class G | phone at the venue | NOT RUN | — |

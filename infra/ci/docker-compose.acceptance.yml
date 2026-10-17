@@ -9,6 +9,9 @@ services:
   api:
     environment:
       VISION_SERVICE_URL: http://vision:8090
+      # The web app below, on whichever port it is published (the smoke overlay assumes 3000): with another WEB_PORT every
+      # browser call to the API failed CORS and the viewer never requested its model.
+      CHAYA_ALLOWED_ORIGINS: http://localhost:${WEB_PORT:-3000}
       # A lost worker is detected when its lease expires; 300 s in production. Short here so the suite observes it quickly.
       CHAYA_PIPELINE_LEASESECONDS: "40"
 

@@ -3,6 +3,8 @@ NAVIGATION_BAKING (with its outside-the-region consistency proof); version 1 is 
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from . import stack
@@ -20,7 +22,7 @@ def _versions(world) -> list[dict]:
     return vs if isinstance(vs, list) else vs.get("versions", vs.get("items", []))
 
 
-def test_a_changed_region_is_aligned_and_spliced_by_the_real_stages(rescan_v2, ev):
+def test_a_changed_region_is_aligned_and_spliced_by_the_real_stages(rescan_v2, cfg, ev):
     st = rescan_v2.status
     names = [s["stage"] for s in st["run"]["stages"]]
     ev.check("7.1", "The re-scan ran the incremental plan to success", "SUCCEEDED; plan includes REGION_ALIGNMENT and REGION_SPLICE",
@@ -34,15 +36,30 @@ def test_a_changed_region_is_aligned_and_spliced_by_the_real_stages(rescan_v2, e
     ev.check("7.3", "The alignment passed its own gates with a real method", "gates_passed; method in the real set",
              al.get("gates_passed") is True and al.get("method") in REAL_ALIGNMENT_METHODS,
              f"method={al.get('method')} confidence={al.get('confidence')} failed_gates={al.get('failed_gates')} rmse={al.get('inlier_rmse_m')}")
-    sp = _config(st, "REGION_SPLICE")
-    ev.check("7.4", "The splice replaced the region and added the re-scan", "removed > 0 and added == the region's Gaussians",
-             str(sp).count("added") > 0 and (sp.get("added") or sp.get("added_gaussians") or (sp.get("counts") or {}).get("added")) == len(rescan_v2.plan.scene.labels),
-             f"{ {k: v for k, v in sp.items() if 'count' in k or k in ('added', 'removed', 'kept', 'seam')} or str(sp)[:300]}")
-    nav = _config(st, "NAVIGATION_BAKING")
-    outside = ((nav.get("rebuild") or {}).get("outside_region") or {})
-    ev.check("7.5", "The whole floor was re-baked and is identical outside the region", "rebuild FULL_FLOOR; outside_region consistent",
-             (nav.get("rebuild") or {}).get("scope") == "FULL_FLOOR" and outside.get("consistent") is True,
-             f"rebuild={ {k: v for k, v in (nav.get('rebuild') or {}).items() if k != 'region_polygon_xy'} }")
+    sp = _config(st, "REGION_SPLICE").get("splice") or {}
+    removed, added = sp.get("removed_from_global"), sp.get("added_from_region")
+    venue_n = ((sp.get("inputs") or {}).get("global_cloud") or {}).get("gaussians")
+    region_n = ((sp.get("inputs") or {}).get("aligned_region") or {}).get("gaussians")
+    merged_n = (sp.get("output") or {}).get("gaussians")
+    seam = sp.get("seam") or {}
+    ev.check("7.4", "The splice replaced the region with the re-scan, and the counts add up",
+             "removed > 0; 0 < added <= aligned region; merged == venue - removed + added; seam measured within its limit",
+             all(isinstance(v, int) for v in (removed, added, venue_n, region_n, merged_n)) and removed > 0 and 0 < added <= region_n
+             and merged_n == venue_n - removed + added and seam.get("measured") is True and seam.get("step_m", 1) <= seam.get("max_step_m", 0),
+             f"venue={venue_n} removed={removed} region={region_n} added={added} merged={merged_n} "
+             f"seam step={seam.get('step_m')} (max {seam.get('max_step_m')})")
+    # The rebuild proof is in the published NAVMESH_MANIFEST (not the command record): read it as stored, with the worker's
+    # own object-storage account, and check it is the manifest the run recorded (SHA-256).
+    ref = stack.artifacts_of(st, "NAVIGATION_BAKING")["NAVMESH_MANIFEST"]
+    key, want = ref.get("key") or ref.get("objectKey"), ref.get("sha256") or ref.get("checksumSha256")
+    body = stack.s3_client(cfg, cfg.s3_worker_key, cfg.s3_worker_secret).get_object(Bucket=cfg.bucket_derived, Key=key)["Body"].read()
+    rebuild = json.loads(body).get("rebuild") or {}
+    outside = rebuild.get("outside_region") or {}
+    ev.check("7.5", "The whole floor was re-baked and is identical outside the region",
+             "manifest sha256 as recorded; rebuild FULL_FLOOR; outside_region consistent",
+             stack.sha(body) == want and rebuild.get("scope") == "FULL_FLOOR" and outside.get("consistent") is True,
+             f"sha256 ok={stack.sha(body) == want} rebuild={ {k: v for k, v in rebuild.items() if k not in ('region_polygon_xy', 'outside_region')} } "
+             f"outside_region={ {k: v for k, v in outside.items() if not isinstance(v, list)} }")
 
 
 def test_historical_versions_are_preserved_and_the_new_one_is_published_safely(rescan_v2, floor0_v1, world, cfg, ev):
@@ -69,12 +86,17 @@ def test_historical_versions_are_preserved_and_the_new_one_is_published_safely(r
     ev.check("7.9", "Routing now uses the re-scan's navmesh", "200; navmeshSha256 == version 2's NAVMESH",
              now_route.status_code == 200 and src.get("navmeshSha256") == (nav2.get("sha256") or nav2.get("checksumSha256")),
              f"HTTP {now_route.status_code} navmesh={src.get('navmeshSha256')} {now_route.text[:200] if not now_route.ok else ''}")
-    old = world.u("operator")("POST", "/api/v1/navigation/routes", json={**body, "scanVersionId": parent_id})
+    # POIs belong to scan versions: the target above was placed on version 2 and is rightly "not part of" version 1. Route on
+    # version 1 to a waypoint version 1 holds (test_06's east end, placed while it was current).
+    v1_pois = mgr.ok("GET", f"/api/v1/venues/{world.venue_a}/pois", params={"scanVersionId": parent_id})
+    v1_target = next((p["id"] for p in v1_pois if p.get("label") == "Acceptance east end"), None)
+    old = world.u("operator")("POST", "/api/v1/navigation/routes",
+                              json={**body, "destinationPoiId": v1_target or pt, "scanVersionId": parent_id})
     nav1 = stack.artifacts_of(floor0_v1.status, "NAVIGATION_BAKING")["NAVMESH"]
     src1 = (old.json().get("routingSources") or [{}])[0] if old.ok else {}
     ev.check("7.10", "Version 1 can still be routed on, on its own navmesh", "200 with scanVersionId=v1; navmeshSha256 == version 1's",
-             old.status_code == 200 and src1.get("navmeshSha256") == (nav1.get("sha256") or nav1.get("checksumSha256")),
-             f"HTTP {old.status_code} navmesh={src1.get('navmeshSha256')} {old.text[:200] if not old.ok else ''}")
+             v1_target is not None and old.status_code == 200 and src1.get("navmeshSha256") == (nav1.get("sha256") or nav1.get("checksumSha256")),
+             f"v1 waypoint={v1_target} HTTP {old.status_code} navmesh={src1.get('navmeshSha256')} {old.text[:200] if not old.ok else ''}")
     # The browser check runs after the suite, when version 2 is the floor's current one: it is what the viewer opens.
     gaussians = ((stack.stage(rescan_v2.status, "ARTIFACT_GENERATION").get("lastRun") or {}).get("command") or {}).get("config", {}).get("gaussian_count")
     pois = [p["label"] for p in mgr.ok("GET", f"/api/v1/venues/{world.venue_a}/pois") if p.get("floorId") == world.floor0]

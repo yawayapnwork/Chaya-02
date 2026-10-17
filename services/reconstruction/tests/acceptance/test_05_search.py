@@ -7,6 +7,7 @@ and positions are the real product."""
 from __future__ import annotations
 
 import math
+import time
 
 import pytest
 
@@ -52,7 +53,8 @@ def test_a_query_finds_the_indexed_objects_at_their_positions(floor0_v1, world, 
     top = results[0] if results else {}
     ev.check("5.3", "The red pillar ranks first", "first result labelled 'red pillar' (auto or manual)",
              (top.get("label") or "").lower() == "red pillar", f"{[(x.get('label'), x.get('matchedBy'), x.get('source')) for x in results[:6]]}")
-    detected = next((x for x in results if _auto(x) and x["label"].lower() == "red pillar"), None)
+    # Floor 1's run indexed a red pillar at the same (x, y): select floor 0's detection, not whichever ranks first.
+    detected = next((x for x in results if _auto(x) and x["label"].lower() == "red pillar" and x.get("floorId") == world.floor0), None)
     pos = _pos(detected or {})
     ev.check("5.4", "The detected object's position is its canonical position on floor 0", "(1.0, 1.0) within 0.01 m; floor 0",
              detected is not None and pos is not None and math.dist(pos[:2], [1.0, 1.0]) < 0.01 and detected.get("floorId") in (None, world.floor0),
@@ -89,6 +91,17 @@ def test_a_query_with_no_match_returns_an_empty_result(floor0_v1, world, cfg, ev
         if label not in existing:
             mgr.ok("POST", f"/api/v1/venues/{world.venue_a}/pois", json={"floorId": world.floor0, "label": label, "category": cat,
                                                                          "tags": [], "description": "", "x": x, "y": y, "z": 0.0})
+    # New POIs are invisible to vector search until PoiEmbeddingBackfill (every 5 s, real vision service) embeds them
+    # (docs/search.md). Querying before that judged a scope of only the pillars (UNFILTERED): wait for the product's own
+    # backlog count, as an operator would on the dashboard, instead of a fixed sleep.
+    backlog = None
+    for _ in range(60):
+        backlog = mgr.ok("GET", f"/api/v1/venues/{world.venue_a}/ops/search-analytics")["pois"]["awaitingEmbedding"]
+        if backlog == 0:
+            break
+        time.sleep(2)
+    ev.check("5.7a", "Every POI in the venue has been embedded by the real vision service", "ops search-analytics awaitingEmbedding 0",
+             backlog == 0, f"awaitingEmbedding={backlog}")
     r = _search(mgr, world.venue_a, "submarine periscope")
     j = r.json() if r.ok else {}
     ev.check("5.7", "No relevant result in a venue large enough to judge", "200, relevance FILTERED, empty results (closest offered separately)",
