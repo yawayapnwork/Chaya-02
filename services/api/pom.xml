@@ -82,7 +82,7 @@
       <groupId>org.springdoc</groupId>
       <artifactId>springdoc-openapi-starter-webmvc-api</artifactId>
       <!-- 3.0.x is the line built against Boot 4.0 (3.1.x targets Boot 4.1). -->
-      <version>3.0.3</version>
+      <version>3.1.1</version>
     </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
