@@ -244,6 +244,19 @@ export const completeUpload = (venueId: string, captureId: string, endedAt: stri
 export const startProcessing = (venueId: string, captureId: string, options: { timeBudgetSeconds?: number } = {}) =>
   api<ProcessingStatus>(`/venues/${venueId}/captures/${captureId}/processing`, { method: "POST", body: JSON.stringify(options) });
 
+/** POST /floors/{f}/rescan (docs/rescan.md): a region-scoped capture of the floor's published version. Media is then
+ * uploaded to `captureId` through the ordinary capture endpoints, and processing started as for any capture. */
+export interface RescanInitiated {
+  captureId: string;
+  scanVersionId: string | null;
+  parentVersionId: string;
+  navigationRebuildRequired: boolean;
+  regionAreaSquareMeters: number;
+}
+export const initiateRescan = (venueId: string, floorId: string, body: {
+  parentVersionId: string; region: { points: [number, number][] }; device: Record<string, unknown>;
+}) => api<RescanInitiated>(`/venues/${venueId}/floors/${floorId}/rescan`, { method: "POST", body: JSON.stringify(body) });
+
 export const retryProcessing = (venueId: string, captureId: string) =>
   api<ProcessingStatus>(`/venues/${venueId}/captures/${captureId}/processing/retry`, { method: "POST" });
 

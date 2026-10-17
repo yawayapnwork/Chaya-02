@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type { CaptureQueue, ConflictKind, FileState, LocalFile, SessionSummary } from "@/lib/capture-queue";
 import type { StorageStatus } from "@/lib/capture-queue-idb";
 import { explainCode, formatBytes } from "@/lib/upload-plan";
@@ -91,7 +92,12 @@ export default function CaptureQueuePanel({ queue, summaries, online, storage, o
   const pendingFiles = summaries.reduce((n, s) => n + s.pending, 0);
   const failedFiles = summaries.reduce((n, s) => n + s.failed, 0);
   const authRequired = summaries.some((s) => s.session.authRequired);
-  const act = (p: Promise<unknown>) => void p.then(onSync, (e) => window.alert(e instanceof Error ? e.message : String(e)));
+  // A failed action is reported in the panel, announced to screen readers (it used to be a blocking window.alert).
+  const [actionError, setActionError] = useState<string | null>(null);
+  const act = (p: Promise<unknown>) => {
+    setActionError(null);
+    void p.then(onSync, (e) => setActionError(e instanceof Error ? e.message : String(e)));
+  };
 
   return (
     <section aria-labelledby="queue" className="space-y-3 rounded border p-3" data-testid="capture-queue">
@@ -115,6 +121,11 @@ export default function CaptureQueuePanel({ queue, summaries, online, storage, o
           {storage.persisted === true
             ? "Kept even when the device runs low on space."
             : "The browser may clear it when the device runs low on space; upload as soon as you can."}
+        </p>
+      )}
+      {actionError && (
+        <p role="alert" className="whitespace-pre-line rounded border border-red-300 bg-red-50 p-2 text-sm text-red-800" data-testid="queue-action-error">
+          {actionError}
         </p>
       )}
       {authRequired && (

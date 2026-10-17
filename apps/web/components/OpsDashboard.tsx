@@ -3,7 +3,7 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { NotSignedInError, signIn, userManager } from "@/lib/auth";
+import { NotSignedInError, currentUser, signIn } from "@/lib/auth";
 import { ApiError, type Venue, listVenues } from "@/lib/capture-api";
 import {
   type Audit,
@@ -159,7 +159,7 @@ function Section<T>({
     body = (
       <p role="alert" className="text-sm text-red-800">
         Your session has ended.{" "}
-        <button className="underline" onClick={() => signIn("/ops")}>Sign in again</button>
+        <button className="underline" onClick={() => signIn()}>Sign in again</button>
       </p>
     );
   } else if (load.state === "failed") {
@@ -331,7 +331,8 @@ const NAV: { id: string; label: string }[] = [
 
 export default function OpsDashboard() {
   const searchParams = useSearchParams();
-  const prefillVenueId = searchParams.get("venue");
+  // Read once: the page writes ?venue= itself (below), which must not re-run the venue load.
+  const [prefillVenueId] = useState(() => searchParams.get("venue"));
 
   const [phase, setPhase] = useState<Phase>("checking");
   const [pageError, setPageError] = useState<string | null>(null);
@@ -346,6 +347,9 @@ export default function OpsDashboard() {
   const [actionBusy, setActionBusy] = useState(false);
   const [actionMessage, setActionMessage] = useState<{ ok: boolean; text: string } | null>(null);
 
+  // Re-runs the venue load after a failure, in place: a page reload would also drop the in-memory sign-in.
+  const [bootAttempt, setBootAttempt] = useState(0);
+
   const reload = useCallback(() => {
     setRefresh((r) => r + 1);
     setRefreshedAt(new Date());
@@ -356,7 +360,7 @@ export default function OpsDashboard() {
     let cancelled = false;
     (async () => {
       try {
-        const user = await userManager().getUser();
+        const user = await currentUser();
         if (cancelled) return;
         if (!user || user.expired) return setPhase("signed-out");
         const vs = await listVenues();
@@ -377,7 +381,16 @@ export default function OpsDashboard() {
     return () => {
       cancelled = true;
     };
-  }, [prefillVenueId]);
+  }, [prefillVenueId, bootAttempt]);
+
+  // The chosen venue in the URL (?venue=), so a refresh or a shared link opens the same venue's dashboard.
+  useEffect(() => {
+    if (phase !== "ready" || !venueId) return;
+    const q = new URLSearchParams(window.location.search);
+    if (q.get("venue") === venueId) return;
+    q.set("venue", venueId);
+    window.history.replaceState(null, "", `${window.location.pathname}?${q.toString()}${window.location.hash}`);
+  }, [phase, venueId]);
 
   useEffect(() => {
     if (!autoRefresh || !venueId) return;
@@ -432,7 +445,7 @@ export default function OpsDashboard() {
       <main className="mx-auto max-w-2xl p-8">
         <h1 className="text-2xl font-semibold">Operations dashboard</h1>
         <p className="mt-2 text-zinc-600">Sign in with a venue staff account to see operations data.</p>
-        <button className="mt-4 rounded bg-black px-3 py-1.5 text-white" onClick={() => signIn("/ops")}>Sign in</button>
+        <button className="mt-4 rounded bg-black px-3 py-1.5 text-white" onClick={() => signIn()}>Sign in</button>
       </main>
     );
   }
@@ -451,7 +464,9 @@ export default function OpsDashboard() {
       <main className="mx-auto max-w-2xl p-8">
         <h1 className="text-2xl font-semibold">Operations dashboard</h1>
         <p role="alert" className="mt-2 text-red-800">Could not load your venues: {pageError}</p>
-        <button className="mt-3 underline" onClick={() => window.location.reload()}>Reload</button>
+        <button className="mt-3 underline" onClick={() => { setPageError(null); setPhase("checking"); setBootAttempt((n) => n + 1); }}>
+          Try again
+        </button>
       </main>
     );
   }
@@ -501,7 +516,7 @@ export default function OpsDashboard() {
                 ? "Your session has ended; sign in again."
                 : `Could not check your access: ${access.message}`}{" "}
           {access.kind === "signed-out" ? (
-            <button className="underline" onClick={() => signIn("/ops")}>Sign in</button>
+            <button className="underline" onClick={() => signIn()}>Sign in</button>
           ) : (
             <button className="underline" onClick={reload}>Try again</button>
           )}

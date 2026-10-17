@@ -12,11 +12,10 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* Light only: no component has dark variants (bg-white panels, bg-black buttons), so the starter template's dark-mode
+   background made those buttons nearly invisible on a device set to dark mode. Form controls follow suit. */
+:root {
+  color-scheme: light;
 }
 
 body {
@@ -38,4 +37,16 @@ body {
 }
 @media (prefers-reduced-motion: reduce) {
   .chaya-indeterminate { animation: none; }
+}
+
+/* Touch screens: controls at least 44 px tall (WCAG 2.5.5 / platform guidance), checkboxes and radios large enough to hit.
+   Mouse-driven layouts are unchanged. POI markers are excluded: the viewer positions them by their size. */
+@media (pointer: coarse) {
+  button:not(.chaya-poi-marker), select, summary, [role="button"]:not(.chaya-poi-marker) {
+    min-height: 2.75rem;
+  }
+  input[type="checkbox"], input[type="radio"] {
+    width: 1.25rem;
+    height: 1.25rem;
+  }
 }

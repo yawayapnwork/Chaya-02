@@ -171,7 +171,7 @@ test("a venue the session may not see is rejected as unauthorized, and nothing i
 });
 
 test("a floor still processing shows its pipeline progress, not just 'no reconstruction'", async ({ page }) => {
-  await mockOidc(page);
+  await mockOidc(page, { session: false }); // the explicit sign-in; silent restore: ui-audit.spec.ts
   await mockJson(page, "**/mock-api/api/v1/venues", [{ id: VENUE_ID, name: "Test Hall", slug: "test-hall" }]);
   await mockJson(page, `**/mock-api/api/v1/venues/${VENUE_ID}/floors`, [{ id: FLOOR_ID, level: 0, name: "Ground Floor" }]);
   await mockJson(page, `**/mock-api/api/v1/venues/${VENUE_ID}/floors/${FLOOR_ID}/reconstructions`, []);

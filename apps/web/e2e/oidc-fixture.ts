@@ -8,8 +8,12 @@ function b64url(o: unknown): string {
   return Buffer.from(JSON.stringify(o)).toString("base64url");
 }
 
-/** A minimal OIDC provider for oidc-client-ts: discovery, an authorize endpoint that approves at once, and a token endpoint. */
-export async function mockOidc(page: Page) {
+/**
+ * A minimal OIDC provider for oidc-client-ts: discovery, an authorize endpoint that approves at once, and a token endpoint.
+ * `session: false` is a provider where nobody is signed in yet: a silent request (prompt=none, lib/auth.ts currentUser)
+ * gets `login_required`, as Keycloak answers it, while an interactive sign-in still succeeds.
+ */
+export async function mockOidc(page: Page, { session = true }: { session?: boolean } = {}) {
   const issuer = "http://localhost:3100/mock-oidc";
   await mockJson(page, "**/mock-oidc/.well-known/openid-configuration", {
     issuer,
@@ -20,6 +24,10 @@ export async function mockOidc(page: Page) {
   });
   await page.route("**/mock-oidc/auth?**", (route) => {
     const u = new URL(route.request().url());
+    if (!session && u.searchParams.get("prompt") === "none") {
+      const refused = `${u.searchParams.get("redirect_uri")}?error=login_required&state=${u.searchParams.get("state")}`;
+      return route.fulfill({ status: 302, headers: { location: refused } });
+    }
     const back = `${u.searchParams.get("redirect_uri")}?code=test-code&state=${u.searchParams.get("state")}`;
     return route.fulfill({ status: 302, headers: { location: back } });
   });

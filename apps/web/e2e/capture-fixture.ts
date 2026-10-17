@@ -37,6 +37,9 @@ export class MockCaptureServer {
   log: string[] = [];
   /** Every Authorization header the server saw. */
   tokens = new Set<string>();
+  /** Bodies of POST /floors/{f}/rescan and POST /floors, as sent. */
+  rescanRequests: unknown[] = [];
+  floorCreates: unknown[] = [];
 
   mediaCount(): number {
     return [...this.captures.values()].reduce((n, c) => n + c.media.size, 0);
@@ -102,8 +105,20 @@ export class MockCaptureServer {
       return answer(200, this.venueVisible ? [{ id: VENUE, name: "Test Hall", slug: "test-hall" }] : []);
     }
     if (!this.venueVisible && path.startsWith(`/venues/${VENUE}`)) return this.problem(route, 404, "NOT_FOUND", "venue not found");
+    if (path === `/venues/${VENUE}/floors` && method === "POST") {
+      this.floorCreates.push(req.postDataJSON());
+      return answer(201, { id: `cccccccc-0000-0000-0000-${String(this.floorCreates.length).padStart(12, "0")}`, ...(req.postDataJSON() as object) });
+    }
     if (path === `/venues/${VENUE}/floors`) {
       return answer(200, [{ id: FLOOR, level: 0, name: "Ground", currentScanVersionId: this.floorVersion }]);
+    }
+    if (path === `/venues/${VENUE}/floors/${FLOOR}/rescan` && method === "POST") {
+      const body = req.postDataJSON() as { parentVersionId: string };
+      this.rescanRequests.push(body);
+      if (body.parentVersionId !== this.floorVersion) return this.problem(route, 409, "PARENT_NOT_CURRENT");
+      const id = `aaaaaaaa-0000-0000-0000-${String(this.captures.size + 1).padStart(12, "0")}`;
+      this.captures.set(id, { id, clientSessionId: null, status: "CREATED", floorId: FLOOR, media: new Map(), startedAt: new Date().toISOString() });
+      return answer(201, { captureId: id, scanVersionId: null, parentVersionId: body.parentVersionId, navigationRebuildRequired: true, regionAreaSquareMeters: 4.76 });
     }
     const base = `/venues/${VENUE}/captures`;
     if (path === base && method === "GET") return answer(200, [...this.captures.values()].map((c) => this.view(c)));

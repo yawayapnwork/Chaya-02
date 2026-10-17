@@ -104,7 +104,7 @@ const stage = (page: Page, name: string) => page.locator(`[data-testid="pipeline
 
 test("the panel follows a recorded run: stages, a lost worker, retry, cancellation, reconnects and duplicates", async ({ page }) => {
   const api = new Replay();
-  await mockOidc(page);
+  await mockOidc(page, { session: false }); // the explicit sign-in; silent restore: ui-audit.spec.ts
   await api.install(page);
   await page.goto("/capture");
   await page.getByRole("button", { name: "Sign in" }).click();
@@ -172,7 +172,7 @@ test("after a browser refresh the page subscribes again and shows the persisted 
   const api = new Replay();
   api.processing = REC.cancelAnswer;
   api.capture = REC.captureAfterCancel;
-  await mockOidc(page);
+  await mockOidc(page, { session: false }); // the explicit sign-in; silent restore: ui-audit.spec.ts
   await api.install(page);
   await page.goto("/capture");
   await page.getByRole("button", { name: "Sign in" }).click();

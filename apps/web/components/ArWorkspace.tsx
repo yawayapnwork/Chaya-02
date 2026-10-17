@@ -39,6 +39,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { ApiError, type Floor, type Venue, listFloors, listVenues } from "@/lib/capture-api";
+import { NotSignedInError, signIn } from "@/lib/auth";
 import { type Anchor, fetchTargetImage, listAnchors, relocalize } from "@/lib/ar-api";
 import { type Poi, listPois } from "@/lib/poi-api";
 import { type RouteResponse, type RouteWaypoint, planRoute } from "@/lib/navigation-api";
@@ -150,6 +151,7 @@ export default function ArWorkspace() {
   const [destinationId, setDestinationId] = useState("");
   const [stepFree, setStepFree] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [signedOut, setSignedOut] = useState(false);
   /** The last failed request's meaning (lib/ar-errors.ts), shown in the overlay. */
   const [failure, setFailure] = useState<ClassifiedFailure | null>(null);
   const [online, setOnline] = useState(true);
@@ -227,7 +229,9 @@ export default function ArWorkspace() {
       window.removeEventListener("offline", update);
     };
   }, []);
-  useEffect(() => { listVenues().then(setVenues).catch((e) => setError(message(e))); }, []);
+  useEffect(() => {
+    listVenues().then(setVenues).catch((e) => (e instanceof NotSignedInError ? setSignedOut(true) : setError(message(e))));
+  }, []);
   useEffect(() => {
     if (!venueId) return;
     listFloors(venueId).then(setFloors).catch((e) => setError(message(e)));
@@ -667,8 +671,14 @@ export default function ArWorkspace() {
   const floorNameOf = (id: string | null) => (id ? floors.find((f) => f.id === id)?.name ?? id : "an unknown floor");
   const detectedFloorId = s.floorCheck?.status === "UNEXPECTED" ? s.floorCheck.detectedFloorId : null;
   return (
-    <div className="p-6 space-y-4 max-w-2xl">
+    <main className="p-6 space-y-4 max-w-2xl">
       <h1 className="text-xl font-semibold">AR navigation (Android, WebXR)</h1>
+      {signedOut && (
+        <div className="space-y-2" data-testid="ar-signed-out">
+          <p className="text-zinc-600">Sign in to choose a venue and a destination.</p>
+          <button className="rounded bg-black px-4 py-2 text-white" onClick={() => void signIn()}>Sign in</button>
+        </div>
+      )}
       {blocking && (
         <div className="border border-amber-500 rounded p-4 space-y-2" data-testid="ar-unavailable">
           <p className="font-medium">AR unavailable: {blocking}</p>
@@ -682,20 +692,20 @@ export default function ArWorkspace() {
           <p className="text-sm">{sessionProblem.detail}</p>
         </div>
       )}
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
 
       {!blocking && (
         <>
           <div className="flex flex-wrap gap-3">
-            <select className="border p-2" value={venueId} onChange={(e) => { setVenueId(e.target.value); setFloorId(""); setAnchors([]); setDestinationId(""); }}>
+            <select className="border p-2" aria-label="Venue" value={venueId} onChange={(e) => { setVenueId(e.target.value); setFloorId(""); setAnchors([]); setDestinationId(""); }}>
               <option value="">Select venue…</option>
               {venues.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
             </select>
-            <select className="border p-2" value={floorId} onChange={(e) => { setFloorId(e.target.value); setAnchors([]); setDestinationId(""); }} disabled={!venueId}>
+            <select className="border p-2" aria-label="Floor" value={floorId} onChange={(e) => { setFloorId(e.target.value); setAnchors([]); setDestinationId(""); }} disabled={!venueId}>
               <option value="">Select floor…</option>
               {floors.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
             </select>
-            <select className="border p-2" value={destinationId} onChange={(e) => setDestinationId(e.target.value)} disabled={!floorId}>
+            <select className="border p-2" aria-label="Destination" value={destinationId} onChange={(e) => setDestinationId(e.target.value)} disabled={!floorId}>
               <option value="">Select destination…</option>
               {destinations.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
             </select>
@@ -823,6 +833,6 @@ export default function ArWorkspace() {
         )}
         {inSession && <button className="border px-3 py-1 rounded" onClick={() => sessionRef.current?.end()}>End AR</button>}
       </div>
-    </div>
+    </main>
   );
 }

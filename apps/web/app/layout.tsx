@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { connection } from "next/server";
 import { configScript } from "@/lib/public-config";
 import { runtimePublicConfig } from "@/lib/runtime-config";
+import AppNav from "@/components/AppNav";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -33,7 +34,10 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
       <head>
         {config && <script dangerouslySetInnerHTML={{ __html: configScript(config) }} />}
       </head>
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        <AppNav />
+        {children}
+      </body>
     </html>
   );
 }

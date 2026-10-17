@@ -9,7 +9,8 @@ import { mockOidc } from "./oidc-fixture";
 // profile (IndexedDB persists; the in-memory sign-in does not).
 
 async function signIn(page: Page, server: MockCaptureServer) {
-  await mockOidc(page);
+  // No provider session yet: the explicit sign-in (the silent restore is covered by ui-audit.spec.ts).
+  await mockOidc(page, { session: false });
   await server.install(page);
   await page.goto("/capture");
   await page.getByRole("button", { name: "Sign in" }).click();
@@ -80,7 +81,8 @@ test("offline: the session and file are saved on the device, survive a browser r
   await page.close();
   await goOnline(context, server);
   const again = await context.newPage();
-  await mockOidc(again);
+  // No identity-provider session any more (the browser was closed): the silent restore is refused, the page says so.
+  await mockOidc(again, { session: false });
   await server.install(again);
   await again.goto("/capture");
   await expect(again.getByTestId("queue-signed-out")).toContainText("1 capture session(s) are saved on this device");

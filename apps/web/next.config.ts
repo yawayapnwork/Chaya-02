@@ -26,6 +26,11 @@ const idp = origin(process.env.CHAYA_PUBLIC_OIDC_ISSUER ?? process.env.NEXT_PUBL
 
 const enforced = ["frame-ancestors 'none'", "object-src 'none'", "base-uri 'self'", "form-action 'self'"].join("; ");
 
+// The sign-in callback alone may be framed, and only by this app: the silent sign-in after a page load (lib/auth.ts
+// currentUser) loads it in a hidden iframe. With frame-ancestors 'none' the browser blocked it, and every reload signed the
+// user out. Everything else stays unframeable.
+const enforcedCallback = enforced.replace("frame-ancestors 'none'", "frame-ancestors 'self'");
+
 const reportOnly = [
   "default-src 'self'",
   `script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'${isDev ? " 'unsafe-eval'" : ""}`,
@@ -35,7 +40,7 @@ const reportOnly = [
   "font-src 'self'",
   "worker-src 'self' blob:",
   `connect-src 'self' ${api} ${idp}`.trim(),
-  `frame-src ${idp || "'none'"}`,
+  `frame-src 'self' ${idp}`.trim(), // the silent sign-in iframe: the identity provider, then this app's callback
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",
@@ -60,6 +65,15 @@ const nextConfig: NextConfig = {
             // camera + microphone: capture and voice search; motion sensors: capture HUD heading; XR: AR page.
             value: "camera=(self), microphone=(self), accelerometer=(self), gyroscope=(self), magnetometer=(self), xr-spatial-tracking=(self), geolocation=(), payment=(), usb=()",
           },
+        ],
+      },
+      {
+        // Later rules override earlier ones for the same key (Next.js headers): framing by this app only, for this route.
+        source: "/auth/callback",
+        headers: [
+          { key: "Content-Security-Policy", value: enforcedCallback },
+          { key: "Content-Security-Policy-Report-Only", value: reportOnly.replace("frame-ancestors 'none'", "frame-ancestors 'self'") },
+          { key: "X-Frame-Options", value: "SAMEORIGIN" },
         ],
       },
     ];

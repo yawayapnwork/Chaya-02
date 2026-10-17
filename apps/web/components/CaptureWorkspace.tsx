@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { NotSignedInError, signIn, userManager } from "@/lib/auth";
+import { NotSignedInError, currentUser, signIn } from "@/lib/auth";
 import {
   ApiError,
   type Capture,
@@ -48,6 +48,7 @@ import { captureQueue, currentOwnerKey, queueStore, setQueueOwner, syncNow } fro
 import { type StorageStatus, requestPersistentStorage, storageStatus } from "@/lib/capture-queue-idb";
 import CaptureQueuePanel, { FileRowView } from "@/components/CaptureQueuePanel";
 import FloorManager from "@/components/FloorManager";
+import RescanStart from "@/components/RescanStart";
 import { followCaptureProcessing } from "@/lib/processing-stream";
 import { type LiveState, isNewer } from "@/lib/processing-live";
 import { floorLabel } from "@/lib/floor-transitions";
@@ -109,7 +110,10 @@ export default function CaptureWorkspace() {
   const [processing, setProcessing] = useState<ProcessingStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [timeBudgetMinutes, setTimeBudgetMinutes] = useState(60);
+  // The field's text as typed; validated, not clamped while typing (clamping turned "90" into 1, 19, 190 keystroke by keystroke).
+  const [timeBudgetText, setTimeBudgetText] = useState("60");
+  const timeBudgetMinutes = /^\d+$/.test(timeBudgetText.trim()) ? Number(timeBudgetText.trim()) : NaN;
+  const timeBudgetValid = Number.isInteger(timeBudgetMinutes) && timeBudgetMinutes >= 1 && timeBudgetMinutes <= 1440;
   const [openCaptures, setOpenCaptures] = useState<Capture[]>([]);
   const [serverMedia, setServerMedia] = useState<MediaItem[]>([]);
   const [publishedVersions, setPublishedVersions] = useState<ReconstructionVersion[]>([]);
@@ -134,7 +138,7 @@ export default function CaptureWorkspace() {
     let cancelled = false;
     (async () => {
       try {
-        const user = await userManager().getUser();
+        const user = await currentUser();
         if (cancelled) return;
         if (!user || user.expired) {
           // Nobody is signed in: say that sessions are waiting on this device, but nothing about whose or what.
@@ -374,7 +378,7 @@ export default function CaptureWorkspace() {
   }
 
   async function onProcess() {
-    if (!capture) return;
+    if (!capture || !timeBudgetValid) return;
     setError(null);
     setBusy(true);
     try {
@@ -429,7 +433,7 @@ export default function CaptureWorkspace() {
             account that recorded them signs in (signing in needs a connection).
           </p>
         )}
-        <button className="mt-6 rounded bg-black px-4 py-2 text-white" onClick={() => signIn("/capture")}>
+        <button className="mt-6 rounded bg-black px-4 py-2 text-white" onClick={() => signIn()}>
           Sign in
         </button>
       </main>
@@ -459,7 +463,7 @@ export default function CaptureWorkspace() {
         online={online}
         storage={storage}
         onSync={() => void syncNow()}
-        onSignIn={() => void signIn("/capture")}
+        onSignIn={() => void signIn()}
         activeSessionId={activeSessionId}
         onOpen={(s) => {
           setCapture(null);
@@ -490,6 +494,10 @@ export default function CaptureWorkspace() {
             </select>
           </label>
           {venueId && <FloorManager venueId={venueId} floors={floors} onChanged={() => listFloors(venueId).then(setFloors, fail)} />}
+          {floorId && floors.find((f) => f.id === floorId)?.currentScanVersionId !== undefined && (
+            <RescanStart venueId={venueId} floor={floors.find((f) => f.id === floorId)!} online={online} device={deviceMetadata}
+              onStarted={async (r) => onResumeCapture(await getCapture(venueId, r.captureId))} />
+          )}
           {floorId === "" && venueId && (
             <p className="text-sm text-amber-800">Without a floor, no calibration measurements can be recorded for this capture.</p>
           )}
@@ -605,18 +613,27 @@ export default function CaptureWorkspace() {
                 Time budget (minutes)
                 <input
                   type="number"
+                  inputMode="numeric"
                   min={1}
                   max={1440}
-                  value={timeBudgetMinutes}
-                  onChange={(e) => setTimeBudgetMinutes(Math.max(1, Math.min(1440, Number(e.target.value) || 1)))}
+                  step={1}
+                  value={timeBudgetText}
+                  onChange={(e) => setTimeBudgetText(e.target.value)}
+                  aria-invalid={!timeBudgetValid}
+                  aria-describedby="time-budget-help"
                   className="ml-2 w-24 rounded border p-1"
                 />
               </label>
-              <p className="text-xs text-zinc-600">
+              {!timeBudgetValid && (
+                <p className="text-sm text-red-700" role="alert" data-testid="time-budget-error">
+                  Enter a whole number of minutes from 1 to 1440.
+                </p>
+              )}
+              <p id="time-budget-help" className="text-xs text-zinc-600">
                 If the budget runs out after a reconstruction exists, the result is kept but clearly marked partial quality, never finalized.
               </p>
-              <button className="rounded bg-black px-4 py-2 text-white disabled:opacity-50" disabled={busy} onClick={onProcess}>
-                Start processing
+              <button className="rounded bg-black px-4 py-2 text-white disabled:opacity-50" disabled={busy || !timeBudgetValid} onClick={onProcess}>
+                {busy ? "Starting…" : "Start processing"}
               </button>
             </div>
           )}

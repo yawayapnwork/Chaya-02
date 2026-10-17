@@ -2,7 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { NotSignedInError, signIn, userManager } from "@/lib/auth";
+import { NotSignedInError, currentUser, signIn } from "@/lib/auth";
+import { arHref, viewerQuery } from "@/lib/viewer-url";
+import Link from "next/link";
 import { clearPublicViewerSession, publicViewerVenueId, setPublicViewerSession } from "@/lib/session";
 import { ApiError, type Capture, type Floor, type ProcessingStatus, type Venue, getProcessing, listCaptures, listFloors, listVenues } from "@/lib/capture-api";
 import { type Poi, listPois } from "@/lib/poi-api";
@@ -75,11 +77,11 @@ export default function ViewerWorkspace() {
   // Optional deep-link from elsewhere in the app (e.g. "View reconstruction" after a capture finishes
   // processing). Only used to prefill the pickers below; the normal venue/floor fetches still run and
   // validate them, so an unknown or inaccessible id just leaves the picker on "Select...".
-  const prefillVenueId = searchParams.get("venue");
-  const prefillFloorId = searchParams.get("floor");
+  const [prefillVenueId] = useState(() => searchParams.get("venue")); // read once: the page writes the URL itself
+  const [prefillFloorId] = useState(() => searchParams.get("floor")); // read once: the page writes the URL itself
   // A capture links to exactly its own reconstruction (?run=); used once, and only if that run is a listed (published)
   // version of the floor -- the list never holds a draft, failed or uncalibrated run.
-  const prefillRunId = searchParams.get("run");
+  const [prefillRunId] = useState(() => searchParams.get("run")); // read once: the page writes the URL itself
   const runPrefillConsumedRef = useRef(false);
 
   const [phase, setPhase] = useState<Phase>("checking");
@@ -163,7 +165,7 @@ export default function ViewerWorkspace() {
       }
       clearPublicViewerSession();
       try {
-        const user = await userManager().getUser();
+        const user = await currentUser();
         if (cancelled) return;
         if (!user || user.expired) return setPhase("signed-out");
         setPhase("ready");
@@ -190,6 +192,17 @@ export default function ViewerWorkspace() {
 
   // A public link is venue-scoped only; its own venue never needs (or is allowed) a picker.
   const publicVenueId = publicViewerVenueId();
+
+  // The selection in the URL, so a refresh, a sign-in round trip or a copied link opens the same model (lib/viewer-url.ts).
+  // Not before the deep link's own prefills are consumed: rewriting the URL first would erase what they are about to apply.
+  useEffect(() => {
+    if (phase !== "ready") return;
+    if (prefillVenueId && !venueId) return;
+    if (prefillFloorId && !floorPrefillConsumedRef.current) return;
+    if (prefillRunId && !runPrefillConsumedRef.current) return;
+    const next = viewerQuery(window.location.search, { venueId, floorId, runId, publicLink: isPublicLink });
+    if (next !== window.location.search) window.history.replaceState(null, "", `${window.location.pathname}${next}`);
+  }, [phase, venueId, floorId, runId, isPublicLink, prefillVenueId, prefillFloorId, prefillRunId]);
 
   useEffect(() => {
     if (!venueId) return;
@@ -635,7 +648,7 @@ export default function ViewerWorkspace() {
         ) : (
           <p className="mt-2 text-zinc-600">Sign in to view a venue&apos;s reconstructions, or open a public viewing link.</p>
         )}
-        <button className="mt-6 rounded bg-black px-4 py-2 text-white" onClick={() => signIn("/viewer")}>
+        <button className="mt-6 rounded bg-black px-4 py-2 text-white" onClick={() => signIn()}>
           Sign in
         </button>
       </main>
@@ -643,7 +656,7 @@ export default function ViewerWorkspace() {
   }
 
   return (
-    <main className="flex h-dvh flex-col">
+    <main className="flex h-[calc(100dvh-2.75rem)] flex-col">
       <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b bg-white p-3">
         <h1 className="text-lg font-semibold">Digital twin viewer</h1>
         {isPublicLink && (
@@ -690,6 +703,13 @@ export default function ViewerWorkspace() {
             ))}
           </select>
         </label>
+
+        {/* AR needs a signed-in account (its marker, POI and route calls are authenticated): not offered on a public link. */}
+        {!isPublicLink && arHref(venueId, floorId) && (
+          <Link className="min-h-9 content-center rounded border px-3 text-sm" href={arHref(venueId, floorId)!} data-testid="open-ar">
+            Open in AR
+          </Link>
+        )}
       </header>
 
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden md:flex-row">

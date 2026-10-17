@@ -52,7 +52,7 @@ function jobs(withQueue: boolean) {
 }
 
 async function signedInDashboard(page: Page, sections: Partial<Record<string, boolean>>) {
-  await mockOidc(page);
+  await mockOidc(page, { session: false }); // the explicit sign-in; silent restore: ui-audit.spec.ts
   await mockJson(page, "**/mock-api/api/v1/venues", [{ id: VENUE, name: "Test Hall", slug: "test-hall", timezone: "UTC" }]);
   await mockJson(page, `${OPS}/access`, access(sections));
   await mockJson(page, `${OPS}/overview`, overview());
