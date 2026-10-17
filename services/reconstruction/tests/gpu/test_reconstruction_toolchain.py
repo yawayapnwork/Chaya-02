@@ -136,6 +136,7 @@ def test_splat_reconstruction_trains_a_real_gaussian_splat_from_a_posed_dataset(
         assert cam["undistorted"] == (cam["source_camera"]["distortion_coefficients"]["k"] != 0.0)
 
 
+@pytest.mark.open3d  # CPU-only despite this file's gpu marker: also run, required, in the python workflow's open3d job
 @needs_open3d
 def test_geometric_cleanup_and_plane_fitting_run_on_a_real_synthetic_room(tmp_path):
     """No GPU needed (Open3D-only): a synthetic point cloud shaped like a floor + wall + a scattering of

@@ -1,0 +1,73 @@
+# GPU tests (docs/ACCEPTANCE.md, class E): the worker's `gpu`-marked tests in the production GPU image, on a CUDA host.
+#
+# Never runs on GitHub's CPU-only runners: it needs a self-hosted runner labelled `gpu` (an NVIDIA GPU with compute
+# capability >= 7.0, a CUDA 12.6 driver, Docker with the NVIDIA Container Toolkit; DEPLOYMENT.md "GPU workers"). Started by
+# hand. Until such a runner is registered the run waits in the queue: that is "not executed", never "passed".
+#
+# CHAYA_REQUIRE_GPU=1 makes the splat acceptance test FAIL (with its preflight report) instead of skipping when the image
+# cannot train. Every skip is unexpected, except the real-media and real-dataset tests when their input is left empty.
+name: gpu
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_sequence:
+        description: "Folder on the GPU runner holding real overlapping photos (real-media tests). Empty: those tests are not executed."
+        required: false
+        default: ""
+      splat_dataset:
+        description: "COLMAP project folder on the GPU runner (images/, sparse/0) for the splat acceptance. Empty: the synthetic scene."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gpu
+  cancel-in-progress: false
+
+jobs:
+  gpu-tests:
+    runs-on: [self-hosted, linux, x64, gpu]
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: A CUDA device is present
+        run: nvidia-smi
+      - name: Build the GPU worker image (services/reconstruction/Dockerfile.gpu)
+        run: docker build -f services/reconstruction/Dockerfile.gpu -t "chaya-worker-gpu:${GITHUB_SHA}" services/reconstruction
+      - name: Model weights at their pinned revisions (persistent volume chaya-models)
+        run: docker run --rm -v chaya-models:/models "chaya-worker-gpu:${GITHUB_SHA}" python /opt/chaya/fetch_models.py
+      - name: Splat preflight (exit 0 = this image can train)
+        run: docker run --rm --gpus all -v chaya-models:/models "chaya-worker-gpu:${GITHUB_SHA}" python -m chaya_worker.splat_preflight
+      - name: GPU tests (pytest -m gpu, CHAYA_REQUIRE_GPU=1)
+        env:
+          IMAGE_SEQUENCE: ${{ github.event.inputs.image_sequence }}
+          SPLAT_DATASET: ${{ github.event.inputs.splat_dataset }}
+        run: |
+          mkdir -p gpu-out
+          extra=()
+          [ -n "$IMAGE_SEQUENCE" ] && extra+=(-v "$IMAGE_SEQUENCE:/data/images:ro" -e CHAYA_TEST_IMAGE_SEQUENCE=/data/images)
+          [ -n "$SPLAT_DATASET" ] && extra+=(-v "$SPLAT_DATASET:/data/splat:ro" -e CHAYA_SPLAT_DATASET=/data/splat)
+          set +e
+          # --user 0 only so pip can add pytest to the image's root-owned venv for the test run (as the test's docstring says).
+          docker run --rm --gpus all --user 0 -e CHAYA_REQUIRE_GPU=1 -e CHAYA_GPU_ACCEPTANCE_REPORT=/out/gpu-acceptance.json \
+            -v chaya-models:/models -v "$PWD/services/reconstruction/tests:/src/tests:ro" -v "$PWD/gpu-out:/out" "${extra[@]}" \
+            -w /src "chaya-worker-gpu:${GITHUB_SHA}" \
+            sh -c "pip install -q pytest==8.4.1 && python -m pytest -p no:cacheprovider -m gpu tests/gpu -rfEs --junitxml=/out/gpu.xml"
+          echo "pytest exit status: $?"
+      - name: Summary (passed / failed / expected skip / unexpected skip)
+        env:
+          IMAGE_SEQUENCE: ${{ github.event.inputs.image_sequence }}
+        run: |
+          expected=()
+          [ -z "$IMAGE_SEQUENCE" ] && expected+=(--expected-skip "CHAYA_TEST_IMAGE_SEQUENCE is not set")
+          python3 scripts/ci/pytest-summary.py gpu-out/gpu.xml --label "GPU tests (required)" --mode required "${expected[@]}" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: gpu-evidence
+          path: gpu-out/
+          retention-days: 90

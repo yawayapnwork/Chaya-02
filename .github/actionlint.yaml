@@ -1,0 +1,5 @@
+# actionlint (used in CI review and by maintainers): custom labels of the project's self-hosted runners.
+self-hosted-runner:
+  # The CUDA host the gpu workflow runs on (.github/workflows/gpu.yml; DEPLOYMENT.md "GPU workers").
+  labels:
+    - gpu

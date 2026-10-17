@@ -18,6 +18,25 @@ missing dependency and is never counted as a pass.
 | **F. Real-venue acceptance** | The whole workflow on a real, measured indoor capture | everything | nothing | `scripts/acceptance/real_venue.py` (docs/REAL_VENUE_ACCEPTANCE.md) | no: needs a venue and a GPU worker |
 | **G. Physical-device AR** | ARKit/WebXR on a phone at the venue | the device, its sensors, the printed markers | — | docs/ar-ios-validation.md, docs/ar-android-validation.md | no: needs a device |
 
+## Python tests: where each one runs (2026-10-17)
+
+`services/reconstruction` (and `services/vision`), by marker. Every CI step reports passed / failed / expected skip / unexpected
+skip or not executed from pytest's JUnit XML (`scripts/ci/pytest-summary.py`); a required step fails on any skip outside its
+allowlist (today one reason: "got empty parameter set").
+
+| Class | Tests | Selection | Runs in | Needs (installed, pinned, in that job) |
+|---|---|---|---|---|
+| CPU unit | `tests/unit`, `tests/test_*.py`, `tests/ml` (training harness on tiny random models), vision `tests` | `not gpu and not open3d and not integration and not acceptance` | `python` workflow, `test` job (required) | CPU torch 2.7.1, transformers 4.57.1, the pinned Grounding DINO processor files (cached; tests run with `HF_HUB_OFFLINE=1`) |
+| Synthetic reconstruction (CPU) | `tests/orchestration`, `tests/smoke` (incl. the pinned viewer library check), `tests/splat` (CPU trainer), `tests/navmesh` (real Recast/Detour) | same, plus the `navmesh` and splat steps | `python`, `test` job (required) | FFmpeg, the built `chaya-navmesh`, Node 22 + `npm ci` in `apps/web` |
+| Synthetic reconstruction (Open3D, CPU) | `tests/gpu/test_region_alignment.py` (real FPFH), the cleanup/plane-fitting test in `tests/gpu/test_reconstruction_toolchain.py` | `open3d` | `python`, `open3d` job (required) | `open3d-cpu` 0.19.0. Kept out of the `test` job: its "toolchain missing" contract tests need an environment without Open3D. These were marked `gpu` before and ran nowhere. |
+| Python service integration | `tests/integration/test_minio_storage.py` | `integration` | `python`, `minio-integration` job (required) | A throwaway MinIO (pinned mirror digest, random root credentials) |
+| External infrastructure | `tests/integration/test_stack_e2e.py`; `tests/acceptance` | `integration`; `acceptance` | `reconstruction-smoke` (stack smoke); `acceptance` workflow | The stack (API, Keycloak, MinIO, ClamAV, ...) |
+| GPU-dependent | `tests/gpu` (gsplat/CUDA, COLMAP/GLOMAP, splat acceptance) | `gpu` | `gpu` workflow, self-hosted runner labelled `gpu`, started by hand (`CHAYA_REQUIRE_GPU=1`) | A CUDA host, `Dockerfile.gpu`, model weights at pinned revisions |
+| Real-media validation | the `tests/gpu` tests gated on `CHAYA_TEST_IMAGE_SEQUENCE` (real photos) and `CHAYA_SPLAT_DATASET` (a real COLMAP project) | `gpu` + input | `gpu` workflow inputs `image_sequence` / `splat_dataset` | The dataset on the GPU runner. Left empty, those tests are reported as not executed. |
+
+On a CPU runner the `test` job lists the `gpu`, stack and acceptance tests as **not executed**, with each reason; they are never
+counted as passed.
+
 ## The cross-service acceptance suite (classification C)
 
 `services/reconstruction/tests/acceptance`, run by `scripts/acceptance/run-acceptance.sh`, in CI by the `acceptance`

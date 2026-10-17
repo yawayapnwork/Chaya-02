@@ -1,6 +1,6 @@
 """The re-scan alignment's FEATURE_SIMILARITY mode with real FPFH feature matching (Open3D), on the SYNTHETIC room of
-tests/rescan_scene.py, with KNOWN similarity transforms. It is SKIPPED, with the reason printed by `pytest -rs`, when
-Open3D is not installed. Nothing here can pass without running the registration.
+tests/rescan_scene.py, with KNOWN similarity transforms. Marked `open3d` (CPU; required in the python workflow's open3d job). It is
+SKIPPED, with the reason printed by `pytest -rs`, when Open3D is not installed. Nothing here can pass without running the registration.
 
 Everything after feature matching (RANSAC similarity, ICP, metrics, gates) is also covered without Open3D in
 tests/unit/test_region_alignment.py. This file checks that real FPFH matches are good enough to feed it.
@@ -20,7 +20,8 @@ from tests.rescan_scene import room, rotation, rotation_error_deg
 
 _tc = Toolchain()
 needs_open3d = pytest.mark.skipif(not _tc.module("open3d").available, reason="Open3D is not installed")
-pytestmark = [pytest.mark.gpu, needs_open3d]
+# Open3D on the CPU, no GPU (it was marked gpu, so no CPU job ran it): the python workflow's open3d job runs it, required.
+pytestmark = [pytest.mark.open3d, needs_open3d]
 
 VENUE = room(1, density=800)
 RESCAN = room(2, density=800)
