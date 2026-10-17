@@ -4,7 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Instant;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.actuate.health.Status;
+import org.springframework.boot.health.contributor.Status;
 
 /** Readiness follows the real dependency report: DOWN is not ready; DEGRADED is still ready (the API works). */
 class DependenciesHealthIndicatorTest {

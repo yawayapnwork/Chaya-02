@@ -6,7 +6,7 @@ import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
@@ -18,7 +18,7 @@ import org.testcontainers.utility.DockerImageName;
 class MigrationTest {
 
     @Container
-    static final PostgreSQLContainer<?> PG = new PostgreSQLContainer<>(
+    static final PostgreSQLContainer PG = new PostgreSQLContainer(
         DockerImageName.parse("pgvector/pgvector:pg17").asCompatibleSubstituteFor("postgres"));
 
     @Test

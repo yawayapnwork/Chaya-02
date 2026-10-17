@@ -1,7 +1,7 @@
 package dev.chaya.api;
 
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -9,7 +9,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
@@ -49,7 +49,7 @@ abstract class AbstractIntegrationTest {
 
     // One container of each for the whole test JVM: Spring caches the application context across
     // test classes, so per-class containers would leave cached contexts pointing at stopped services.
-    static final PostgreSQLContainer<?> PG = new PostgreSQLContainer<>(
+    static final PostgreSQLContainer PG = new PostgreSQLContainer(
         DockerImageName.parse("pgvector/pgvector:pg17").asCompatibleSubstituteFor("postgres"));
 
     // The project's GHCR mirror of quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z (linux/amd64), byte-identical and

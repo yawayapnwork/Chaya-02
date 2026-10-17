@@ -9,6 +9,11 @@ server:
 spring:
   application:
     name: chaya-api
+  http:
+    converters:
+      # Boot 4 defaults to Jackson 3; request and response JSON stay on Jackson 2 (spring-boot-jackson2, pom.xml), as
+      # under Boot 3.5, so the wire format and the API contract are unchanged by the upgrade.
+      preferred-json-mapper: jackson2
   datasource:
     url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB}
     # Runtime role: owns the schema, is NOT a superuser (infra/docker/postgres/initdb). See docs/security-hardening.md.
