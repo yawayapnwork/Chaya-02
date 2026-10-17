@@ -71,4 +71,27 @@ class TenantKeysTest {
         assertThatThrownBy(() -> new VerifyingInputStream(new ByteArrayInputStream(genuine), null, "k"))
             .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void aTamperedObjectOfTheRegisteredSizeNeverReachesTheClientInFull() throws Exception {
+        byte[] genuine = new byte[50_000];
+        new java.util.Random(7).nextBytes(genuine);
+        byte[] forged = genuine.clone();
+        forged[25_000] ^= 0x01; // same size, one bit flipped: only the hash can tell
+        // As the API streams it (ReconstructionController: in.transferTo(response)): the last byte is held until verified.
+        java.io.ByteArrayOutputStream client = new java.io.ByteArrayOutputStream();
+        InputStream bad = new VerifyingInputStream(new ByteArrayInputStream(forged), sha(genuine), "k");
+        assertThatThrownBy(() -> bad.transferTo(client)).isInstanceOf(VerifyingInputStream.IntegrityException.class);
+        assertThat(client.size()).isLessThan(genuine.length); // never Content-Length bytes: every client sees a failed download
+        java.io.ByteArrayOutputStream good = new java.io.ByteArrayOutputStream();
+        new VerifyingInputStream(new ByteArrayInputStream(genuine), sha(genuine), "k").transferTo(good);
+        assertThat(good.toByteArray()).isEqualTo(genuine);
+        // An object store that hands out one byte per read still yields every byte, in order.
+        InputStream trickle = new java.io.FilterInputStream(new ByteArrayInputStream(genuine)) {
+            @Override public int read(byte[] b, int off, int len) throws java.io.IOException {
+                return super.read(b, off, Math.min(len, 1));
+            }
+        };
+        assertThat(new VerifyingInputStream(trickle, sha(genuine), "k").readAllBytes()).isEqualTo(genuine);
+    }
 }

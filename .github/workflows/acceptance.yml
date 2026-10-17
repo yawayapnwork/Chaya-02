@@ -1,0 +1,68 @@
+# Cross-service acceptance suite (docs/ACCEPTANCE.md, classification C): the real product workflow across the real API,
+# Keycloak, PostgreSQL, MinIO, ClamAV, vision service, web app and workers, with labelled stand-ins only for the four stages
+# that need a GPU or models over real frames. Results are PASS / FAIL / BLOCKED and are reported for C alone.
+name: acceptance
+
+on:
+  push:
+    branches: [main]
+    paths: ["services/**", "apps/web/**", "infra/docker/**", "infra/ci/**", "packages/contracts/**", "scripts/acceptance/**",
+            "scripts/e2e/viewer_format_check.cjs", "benchmarks/docker/open3d.Dockerfile", ".github/workflows/acceptance.yml"]
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: acceptance-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  c-cross-service:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Browser for the viewer check (the real web app in Chromium)
+        working-directory: apps/web
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+      - name: "C. Cross-service acceptance (throwaway stack, real services)"
+        env:
+          ACC_OUT: ${{ runner.temp }}/acceptance
+        run: |
+          set +e
+          bash scripts/acceptance/run-acceptance.sh ci
+          status=$?
+          python3 - "$ACC_OUT" >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import json, sys, pathlib
+          d = pathlib.Path(sys.argv[1])
+          for name in ("acceptance-c.json", "acceptance-c-viewer.json"):
+              p = d / name
+              if not p.exists():
+                  print(f"**{name}:** not produced"); continue
+              rs = json.loads(p.read_text())["results"]
+              counts = {}
+              for r in rs:
+                  counts[r["status"]] = counts.get(r["status"], 0) + 1
+              print(f"**C. {name}:** " + ", ".join(f"{v} {k}" for k, v in sorted(counts.items())))
+              for r in rs:
+                  if r["status"] != "PASS":
+                      print(f"- {r['status']} {r.get('test') or r.get('id')}: {(r.get('detail') or r.get('blocked_dependency') or r.get('actual') or '')[:200]}")
+          PY
+          # 3 = nothing failed but something was BLOCKED: shown above, and the job fails so it is never read as a pass.
+          exit $status
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: acceptance-c-evidence
+          path: ${{ runner.temp }}/acceptance/
+          retention-days: 30

@@ -16,6 +16,9 @@ const web = process.env.WEB_URL || "http://localhost:3000";
 const handoff = JSON.parse(fs.readFileSync(process.env.HANDOFF, "utf8"));
 const results = [];
 const SCENE_TIMEOUT = 90_000;
+// IGNORE_HTTPS_ERRORS=1 only for a stack behind a local CA the browser does not trust (Caddy on *.localhost); TLS itself is
+// then checked separately. Off by default.
+const ignoreHTTPSErrors = Boolean(process.env.IGNORE_HTTPS_ERRORS);
 
 function record(id, name, expected, ok, actual, evidence) {
   const status = typeof ok === "string" ? "BLOCKED" : ok ? "PASS" : "FAIL";
@@ -84,7 +87,7 @@ async function checkScene(page, prefix, artifact, auth, consoleErrors) {
   record(`${prefix}1`, "HTTP artifact retrieval by the viewer (real API)", `200 application/octet-stream; ${auth}; bytes == stored fixture`,
     artifact.status === 200 && artifact.contentType === "application/octet-stream" && received === handoff.ksplatSha256 && artifact.authOk,
     `HTTP ${artifact.status} ${artifact.contentType} ${artifact.length} B; request auth: ${artifact.authSeen}; sha256=${received}`,
-    { url: artifact.url.replace(/^https?:\/\/[^/]+/, ""), expectedSha256: handoff.ksplatSha256 });
+    { url: (artifact.url || "(no model request seen)").replace(/^https?:\/\/[^/]+/, ""), expectedSha256: handoff.ksplatSha256 });
 
   const count = await splatCount(page).catch(() => null);
   const error = await page.getByText("Could not load the reconstruction").count();
@@ -131,7 +134,8 @@ async function checkScene(page, prefix, artifact, auth, consoleErrors) {
 function watchArtifact(page, expectAuth) {
   const artifact = { status: null };
   page.on("response", async (r) => {
-    if (!/\/reconstructions\/[^/]+\/artifacts\/KSPLAT$/.test(r.url())) return;
+    // The viewer fetches a run's model, or (a floor with versions) the scan version's: either is the model it shows.
+    if (!/\/(reconstructions|scan-versions)\/[^/]+\/artifacts\/KSPLAT$/.test(r.url())) return;
     const h = r.request().headers();
     artifact.url = r.url();
     artifact.status = r.status();
@@ -145,11 +149,55 @@ function watchArtifact(page, expectAuth) {
   return artifact;
 }
 
+// Every .ksplat the page downloads, with the SHA-256 of the bytes the browser received.
+function recordModels(page) {
+  const seen = [];
+  page.on("response", async (r) => {
+    if (!/\/artifacts\/KSPLAT$/.test(r.url())) return;
+    const b = await r.body().catch(() => null);
+    seen.push({ path: r.url().replace(/^https?:\/\/[^/]+/, ""), status: r.status(),
+      sha256: b ? crypto.createHash("sha256").update(b).digest("hex") : null, bytes: b ? b.length : null });
+  });
+  return seen;
+}
+
+// C. Switching versions (acceptance suite: version 1 and the re-scan's version 2 of the same floor), in the viewer's own
+// version selector. Each model must be the bytes recorded for that version.
+async function checkVersionSwitch(page) {
+  const [v1, v2] = handoff.versions;
+  const seen = recordModels(page);
+  await page.goto(`${web}/viewer?venue=${handoff.venueId}&floor=${handoff.floorId}&run=${v2.runId}`);
+  const got2 = await poll(async () => seen.find((s) => s.sha256 === v2.ksplatSha256), Boolean, SCENE_TIMEOUT);
+  const count2 = await splatCount(page).catch(() => null);
+  record("C1", "Open version 2 (the re-scan)", "its model, by SHA-256; scene initialised", Boolean(got2) && Boolean(count2),
+    `models fetched: ${JSON.stringify(seen.map((s) => [s.status, s.sha256 && s.sha256.slice(0, 12)]))}; splats ${count2}`);
+  const select = page.locator("select").filter({ has: page.locator(`option[value="${v1.runId}"]`) });
+  await select.selectOption(v1.runId);
+  const got1 = await poll(async () => seen.find((s) => s.sha256 === v1.ksplatSha256), Boolean, SCENE_TIMEOUT);
+  const drawn = await poll(() => sampleCanvas(page), (s) => s.covered > 0.05, SCENE_TIMEOUT).catch(() => ({ covered: 0 }));
+  record("C2", "Switch to version 1 in the viewer's version selector", "version 1's model, by SHA-256, and drawn",
+    Boolean(got1) && drawn.covered > 0.05, `selected ${v1.runId.slice(0, 8)}; version 1 bytes received: ${Boolean(got1)}; ${(drawn.covered * 100).toFixed(1)} % covered`);
+}
+
+// D. A stored model whose bytes no longer match its record (the acceptance suite corrupted it): never shown as a scene.
+async function checkCorruptModel(page) {
+  const c = handoff.corrupt;
+  const seen = recordModels(page);
+  await page.goto(`${web}/viewer?venue=${handoff.venueId}&floor=${c.floorId}&run=${c.runId}`);
+  const alert = page.locator('[role="alert"]');
+  await poll(async () => (await alert.count()) > 0 || seen.length > 0, Boolean, SCENE_TIMEOUT);
+  await page.waitForTimeout(5000);
+  const shown = await page.locator("dt", { hasText: /^Splats$/ }).count();
+  const text = (await alert.allInnerTexts().catch(() => [])).join(" ").replace(/\s+/g, " ").slice(0, 240);
+  record("D1", "A corrupted model is not displayed", "no scene loaded; the page says the model could not be loaded",
+    shown === 0 && text.length > 0, `splat count shown: ${shown > 0}; model responses: ${JSON.stringify(seen.map((s) => [s.status, s.bytes]))}; alert: '${text}'`);
+}
+
 (async () => {
   const browser = await chromium.launch();
   try {
     // ---------------------------------------------------------------- A. public viewing link
-    const ctxA = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+    const ctxA = await browser.newContext({ viewport: { width: 1400, height: 900 }, ignoreHTTPSErrors });
     const page = await ctxA.newPage();
     const errorsA = [];
     page.on("console", (m) => { if (m.type() === "error") errorsA.push(m.text()); });
@@ -174,7 +222,7 @@ function watchArtifact(page, expectAuth) {
     await ctxA.close();
 
     // ---------------------------------------------------------------- B. signed-in venue manager (Keycloak PKCE)
-    const ctxB = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+    const ctxB = await browser.newContext({ viewport: { width: 1400, height: 900 }, ignoreHTTPSErrors });
     const pageB = await ctxB.newPage();
     const errorsB = [];
     pageB.on("console", (m) => { if (m.type() === "error") errorsB.push(m.text()); });
@@ -188,6 +236,8 @@ function watchArtifact(page, expectAuth) {
     await pageB.waitForURL(/\/viewer/, { timeout: 30_000 });
     await splatCount(pageB).catch(() => null);
     await checkScene(pageB, "B", artB, "Authorization: Bearer <Keycloak JWT> only", errorsB);
+    if (handoff.versions && handoff.versions.length >= 2) await checkVersionSwitch(pageB);
+    if (handoff.corrupt) await checkCorruptModel(pageB);
     await ctxB.close();
   } finally {
     await browser.close();

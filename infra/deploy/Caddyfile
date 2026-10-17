@@ -42,11 +42,13 @@
 	}
 }
 
-# Identity provider. The admin console is reachable only from KEYCLOAK_ADMIN_ALLOW (a CIDR list).
+# Identity provider. The admin console is reachable only from KEYCLOAK_ADMIN_ALLOW (a CIDR list), and so is the master
+# realm it signs in to: users never use it, and leaving its login and token endpoints public would let anyone try
+# administrator passwords. Deploy automation and health checks reach Keycloak on the internal network, not through here.
 {$CHAYA_AUTH_DOMAIN} {
 	import common
 	@admin {
-		path /admin /admin/*
+		path /admin /admin/* /realms/master /realms/master/*
 		not remote_ip {$KEYCLOAK_ADMIN_ALLOW}
 	}
 	respond @admin 403

@@ -221,6 +221,9 @@ services:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:?set KEYCLOAK_ADMIN}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD}
       CHAYA_WORKER_CLIENT_SECRET: ${CHAYA_WORKER_CLIENT_SECRET}
+      # Read only by keycloak-configure.sh (run inside this container on every deploy): the chaya-deploy service
+      # account it signs in with, so deploys keep working after the bootstrap admin is deleted.
+      CHAYA_DEPLOY_CLIENT_SECRET: ${CHAYA_DEPLOY_CLIENT_SECRET:?set CHAYA_DEPLOY_CLIENT_SECRET}
     volumes:
       - ./keycloak/chaya-realm.json:/opt/keycloak/data/import/chaya-realm.json:ro
     networks: [edge, internal]

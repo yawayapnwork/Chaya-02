@@ -11,6 +11,10 @@ import java.util.HexFormat;
  * Passes an object's bytes through while hashing them, and fails with {@link IntegrityException} at end of stream unless
  * they hash to the SHA-256 recorded when the artifact was registered (review S-2). A streamed HTTP response is then cut
  * short: with a Content-Length set, every client sees a failed download, never a complete-looking tampered one.
+ *
+ * <p>The object's last byte is held back until the whole object has been verified. Without that, a tampered object of the
+ * registered size reached the client in full before the hash was checked at end of stream: exactly Content-Length bytes and
+ * a 200, indistinguishable from a good download (found by the cross-service acceptance suite, docs/ACCEPTANCE.md).
  */
 public final class VerifyingInputStream extends FilterInputStream {
 
@@ -18,6 +22,9 @@ public final class VerifyingInputStream extends FilterInputStream {
     private final String expectedSha256;
     private final String key;
     private boolean checked;
+    /** The last byte read from the object and not yet passed on, or -1. */
+    private int held = -1;
+    private byte[] scratch = new byte[0];
 
     public VerifyingInputStream(InputStream in, String expectedSha256, String key) {
         super(in);
@@ -35,24 +42,50 @@ public final class VerifyingInputStream extends FilterInputStream {
 
     @Override
     public int read() throws IOException {
-        int b = super.read();
-        if (b < 0) {
-            verify();
-        } else {
-            digest.update((byte) b);
-        }
-        return b;
+        byte[] one = new byte[1];
+        int n = read(one, 0, 1);
+        return n < 0 ? -1 : one[0] & 0xff;
     }
 
     @Override
     public int read(byte[] buf, int off, int len) throws IOException {
-        int n = super.read(buf, off, len);
-        if (n < 0) {
-            verify();
-        } else {
-            digest.update(buf, off, n);
+        if (len == 0) {
+            return 0;
         }
-        return n;
+        while (true) {
+            if (scratch.length < len) {
+                scratch = new byte[len];
+            }
+            int n = in.read(scratch, 0, len);
+            if (n < 0) {
+                verify(); // a mismatch throws here, and the held byte is never passed on
+                if (held < 0) {
+                    return -1;
+                }
+                buf[off] = (byte) held;
+                held = -1;
+                return 1;
+            }
+            digest.update(scratch, 0, n);
+            // Pass on the held byte and all but the last of the new ones; hold that last one back.
+            int out = 0;
+            if (held >= 0) {
+                buf[off] = (byte) held;
+                out = 1;
+            }
+            System.arraycopy(scratch, 0, buf, off + out, n - 1);
+            out += n - 1;
+            held = scratch[n - 1] & 0xff;
+            if (out > 0) {
+                return out;
+            }
+            // Only one byte arrived and it is now held: read on rather than return 0 for a non-empty request.
+        }
+    }
+
+    @Override
+    public int available() throws IOException {
+        return 0;
     }
 
     @Override

@@ -15,6 +15,8 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
  *   docker run -d -p 3310:3310 clamav/clamav:1.4   (wait until clamd answers)
  *   CLAMAV_LIVE_PORT=3310 mvn test -Dtest=ClamAvLiveTest
  */
+// Classification B (docs/ACCEPTANCE.md): a running ClamAV daemon; opt-in, skipped (never passed) without one.
+@org.junit.jupiter.api.Tag("live")
 @EnabledIfEnvironmentVariable(named = "CLAMAV_LIVE_PORT", matches = "\\d+")
 class ClamAvLiveTest {
 

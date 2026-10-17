@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -233,6 +234,33 @@ def test_plane_fitting_in_a_rescan_fits_the_merged_cloud_with_the_merged_labels(
                                          "sha256": inputs["SPLAT_MERGED"]["sha256"]}
     assert planes["source"]["labels"]["kind"] == "SEMANTIC_LABELS_MERGED"
     assert planes["source"]["scan_version_id"] == "scan-version-2" and planes["source"]["coordinate_frame_id"] == "parent"
+    _assert_required_outputs(report, "PLANE_FITTING")
+    gravity = json.loads(_download(harness, report, "GRAVITY_ESTIMATE", tmp_path).read_text())
+    assert gravity["status"] == "NOT_ESTIMATED" and "calibrated" in gravity["reason"]
+
+
+def _assert_required_outputs(report: dict, stage: str) -> None:
+    """Every output the control plane requires of the stage (packages/contracts/pipeline/stage-artifacts.json). A success
+    without one is failed STAGE_OUTPUT_MISSING by the API, which these worker-only tests cannot see on their own."""
+    contract = json.loads((Path(__file__).resolve().parents[4] / "packages/contracts/pipeline/stage-artifacts.json").read_text())
+    published = {a["kind"] for a in report["artifacts"]}
+    missing = [k for k in contract["stages"][stage]["requiredOutputs"] if k not in published]
+    assert not missing, f"{stage} succeeded without {missing}; published {sorted(published)}"
+
+
+def test_plane_fitting_publishes_every_required_output_without_a_calibrated_parent_frame(harness, tmp_path, monkeypatch):
+    """The other branch that skipped GRAVITY_ESTIMATE: an incremental re-scan whose parent frame is not canonical. Found by
+    the cross-service acceptance suite (docs/ACCEPTANCE.md): since GRAVITY_ESTIMATE became required (2026-10-10), the
+    control plane failed both branches with STAGE_OUTPUT_MISSING."""
+    from chaya_worker.stages import plane_fitting
+
+    monkeypatch.setattr(plane_fitting, "frame_from_order", lambda order: None)
+    report, _, _, _ = _plane_fitting(
+        harness, tmp_path, monkeypatch, ["SPLAT_CLEAN", "SEMANTIC_LABELS_CLEAN", "SPLAT_MERGED", "SEMANTIC_LABELS_MERGED"])
+    assert report["status"] == "SUCCEEDED", report.get("errorMessage")
+    _assert_required_outputs(report, "PLANE_FITTING")
+    gravity = json.loads(_download(harness, report, "GRAVITY_ESTIMATE", tmp_path).read_text())
+    assert gravity["status"] == "NOT_ESTIMATED" and "re-scan" in gravity["reason"]
 
 
 def test_plane_fitting_in_a_rescan_refuses_the_region_alone(harness, tmp_path, monkeypatch):

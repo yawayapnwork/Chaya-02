@@ -18,6 +18,8 @@ import org.testcontainers.utility.DockerImageName;
  * Boots the application against real PostgreSQL (pgvector) and real MinIO; Flyway applies the real
  * migrations. Skipped (not failed) when Docker is unavailable.
  */
+// Classification B (docs/ACCEPTANCE.md): service integration against real PostgreSQL and MinIO. @Tag is inherited by every subclass.
+@org.junit.jupiter.api.Tag("integration")
 @SpringBootTest(properties = {
     "chaya.security.issuer=" + TestJwt.ISSUER,
     "chaya.security.audience=" + TestJwt.AUDIENCE,

@@ -19,6 +19,8 @@ import org.testcontainers.utility.DockerImageName;
  * reconstruction frame backfilled (the terminal-run guard must allow exactly that), and anchors that claimed to be
  * CALIBRATED without any known frame become STALE. Skipped when Docker is unavailable.
  */
+// Classification B (docs/ACCEPTANCE.md): real PostgreSQL (Testcontainers).
+@org.junit.jupiter.api.Tag("integration")
 @Testcontainers(disabledWithoutDocker = true)
 class CoordinateFrameMigrationTest {
 

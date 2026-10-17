@@ -12,6 +12,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 /** Runs the real migrations against real pgvector. Skipped when Docker is unavailable. */
+// Classification B (docs/ACCEPTANCE.md): real PostgreSQL (Testcontainers).
+@org.junit.jupiter.api.Tag("integration")
 @Testcontainers(disabledWithoutDocker = true)
 class MigrationTest {
 

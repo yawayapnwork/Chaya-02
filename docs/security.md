@@ -186,7 +186,13 @@ a registered artifact cannot be replaced by any worker credential. Every read ve
 registered SHA-256 (`ObjectStore.openVerified`): the next stage's inputs (the worker checks the hash too), the API's own
 parsing of detections, navigation graphs and gravity estimates, and the viewer. A mismatch while streaming ends the
 response before its Content-Length, so the client sees a failed download, and is audited as
-`artifact.integrity_violation` (outcome `FAILURE`). The PII purge deletes both the sealed key and the worker key.
+`artifact.integrity_violation` (outcome `FAILURE`). The object's last byte is held back until the whole object has been
+verified (`VerifyingInputStream`). Until 2026-10-17 the hash was only checked at end of stream, after every byte had been
+sent: a tampered object of the registered size reached the client as a complete 200 of exactly Content-Length bytes. The
+cross-service acceptance suite found it (docs/ACCEPTANCE.md, `test_04_viewer`); `TenantKeysTest` and
+`ArtifactIntegrityTest` now assert that the client receives fewer bytes than Content-Length. The web viewer also checks
+what it downloads (`lib/artifact-integrity`); other clients rely on the server. The PII purge deletes both the sealed key
+and the worker key.
 
 ### Storage accounts
 | Account | Raw bucket | Derived bucket |

@@ -34,8 +34,17 @@ jobs:
         # The Testcontainers MinIO below is this image. A pull failure here is the real cause, stated once, instead of
         # hundreds of integration-test errors (infra/mirror/README.md).
         run: bash "$GITHUB_WORKSPACE/scripts/ci/minio-preflight.sh"
-      - name: Test and package
-        run: mvn -B -ntp verify
+      # Two classifications, two counts (docs/ACCEPTANCE.md): never one total that mixes them.
+      - name: "A. Unit tests (no containers, no services)"
+        run: |
+          mvn -B -ntp test -DexcludedGroups=integration,live
+          # surefire's report directory has no command-line property: move A's reports aside before B writes its own.
+          rm -rf target/surefire-unit && mv target/surefire-reports target/surefire-unit
+          bash "$GITHUB_WORKSPACE/scripts/ci/surefire-summary.sh" target/surefire-unit "A. unit" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: "B. Service integration tests (real PostgreSQL/pgvector and MinIO) and package"
+        run: |
+          mvn -B -ntp verify -Dgroups=integration
+          bash "$GITHUB_WORKSPACE/scripts/ci/surefire-summary.sh" target/surefire-reports "B. service integration" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Integration tests actually ran
         # Testcontainers suites skip (not fail) without Docker. A green build must mean they RAN, so check that these
         # Testcontainers-backed classes executed with zero skips. (ClamAvLiveTest/KeycloakLiveTest are opt-in via

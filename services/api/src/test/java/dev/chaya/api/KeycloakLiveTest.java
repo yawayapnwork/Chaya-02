@@ -28,6 +28,8 @@ import org.springframework.security.oauth2.jwt.JwtException;
  *
  *   KEYCLOAK_LIVE_ISSUER=http://localhost:8081/realms/chaya KEYCLOAK_LIVE_WORKER_SECRET=... mvn test -Dtest=KeycloakLiveTest
  */
+// Classification B (docs/ACCEPTANCE.md): a running Keycloak; opt-in, skipped (never passed) without one.
+@org.junit.jupiter.api.Tag("live")
 @EnabledIfEnvironmentVariable(named = "KEYCLOAK_LIVE_ISSUER", matches = ".+")
 class KeycloakLiveTest {
 

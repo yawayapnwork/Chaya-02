@@ -114,6 +114,8 @@ class ArtifactIntegrityTest extends PipelineTestSupport {
         MvcResult started = get(url, s.c().operator()).andExpect(request().asyncStarted()).andReturn();
         Object outcome = started.getAsyncResult(30_000);
         assertThat(outcome).isInstanceOf(dev.chaya.api.storage.VerifyingInputStream.IntegrityException.class);
+        // What the client received is short of the Content-Length: a failed download, not a complete-looking forged one.
+        assertThat(started.getResponse().getContentAsByteArray().length).isLessThan(genuine.length);
         assertThat(auditCount(s.c().org(), "artifact.integrity_violation", "FAILURE")).isEqualTo(1);
 
         put(key, genuine); // restored: served again

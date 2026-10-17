@@ -16,7 +16,7 @@ How Chaya 02 is built, shipped, started, checked, rolled back, backed up and rec
                  Internet
                     │ 80/443
               ┌─────▼─────┐   edge network
-              │   Caddy   │── TLS (ACME), security headers, /actuator blocked, Keycloak /admin IP-allowlisted
+              │   Caddy   │── TLS (ACME), security headers, /actuator blocked, Keycloak /admin + master realm IP-allowlisted
               └─┬───┬───┬─┘
        app.*    │   │   │  auth.*
           ┌─────▼┐ ┌▼───┴──┐ ┌──────────┐
@@ -125,7 +125,7 @@ missing.
 | `CHAYA_VERSION` | compose | | Set by `deploy.sh`, not in `.env` |
 | `CHAYA_APP_DOMAIN`, `CHAYA_API_DOMAIN`, `CHAYA_AUTH_DOMAIN` | caddy, web, api, keycloak | | DNS must point at the host before the first deploy |
 | `CHAYA_ACME_EMAIL` | caddy | | Let's Encrypt contact |
-| `KEYCLOAK_ADMIN_ALLOW` | caddy | | CIDRs allowed to reach `/admin` on the auth domain |
+| `KEYCLOAK_ADMIN_ALLOW` | caddy | | CIDRs allowed to reach `/admin` and `/realms/master` (the admin console's realm) on the auth domain |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` | postgres, backups | ✔ | Bootstrap superuser. Not used by any application. |
 | `POSTGRES_APP_USER` / `POSTGRES_APP_PASSWORD` | api | ✔ | Owns the schema; not a superuser |
 | `KEYCLOAK_DB_PASSWORD` | postgres, keycloak | ✔ | Keycloak's own database and role |
@@ -134,8 +134,9 @@ missing.
 | `S3_WORKER_ACCESS_KEY` / `S3_WORKER_SECRET_KEY` | worker | ✔ | Raw: read only. Derived: read and write. No delete. For the CPU worker on this host only. |
 | `S3_RECON_ACCESS_KEY` / `S3_RECON_SECRET_KEY` | GPU workers | | Derived: read and write, except `pii/` staging. No raw bucket. No delete. Created only when set. |
 | `S3_BACKUP_ACCESS_KEY` / `S3_BACKUP_SECRET_KEY` | backups | ✔ | Read only |
-| `KEYCLOAK_ADMIN` / `KEYCLOAK_ADMIN_PASSWORD` | keycloak | ✔ | Temporary bootstrap admin. Create a named admin, then remove the bootstrap one. |
+| `KEYCLOAK_ADMIN` / `KEYCLOAK_ADMIN_PASSWORD` | keycloak | ✔ | Temporary bootstrap admin. After the first deploy, create a named admin and delete the bootstrap one. |
 | `CHAYA_WORKER_CLIENT_SECRET` | keycloak (realm import), worker | ✔ | The worker service account |
+| `CHAYA_DEPLOY_CLIENT_SECRET` | keycloak, `keycloak-configure.sh` | ✔ | The `chaya-deploy` service account every deploy uses to apply this environment's Keycloak settings. Letters and digits. |
 | `METRICS_SCRAPE_PASSWORD` | api, Prometheus | ✔ | Empty means `/actuator/prometheus` is closed |
 | `BACKUP_DIR`, `BACKUP_KEEP_DAYS` | backups | | Keep `BACKUP_DIR` outside the deploy directory, on encrypted storage |
 
@@ -202,6 +203,9 @@ a secret scan on every image.
   - Then redeploy the same version.
 - **`CHAYA_WORKER_CLIENT_SECRET`:** change it in the Keycloak admin console (client `chaya-worker`, Credentials) and
   in `.env`, then restart the worker.
+- **`CHAYA_DEPLOY_CLIENT_SECRET`:** change it in the Keycloak admin console (realm `chaya`, client `chaya-deploy`,
+  Credentials) and in `.env`, then deploy. While the bootstrap admin still exists, changing `.env` alone is enough: the
+  next deploy signs in as the bootstrap admin and updates the client.
 
 ## 3. First-time host setup
 
@@ -214,7 +218,10 @@ a secret scan on every image.
    roll back to, and no database to back up.
 5. **Keycloak:**
    - Log in to the admin console from an allowed address.
-   - Create a named administrator and delete the bootstrap admin.
+   - Create a named administrator and delete the bootstrap admin. Do this **after** the first successful deploy: that
+     deploy uses the bootstrap admin once to create the `chaya-deploy` service account (realm `chaya`; it can manage
+     only that realm's clients and settings, not the master realm, users or credentials), and every later deploy
+     signs in with that account. The deploy log says `created the chaya-deploy service account`.
    - Create users, with their `org_id` and `venue_id` attributes (docs/security.md).
    - Organizations (and their venues, if not created through the API by an admin) are created in SQL; there is no
      organization API. `scripts/ci/stack-smoke.sh` ("seed") shows the statements and the Keycloak user setup.
@@ -234,8 +241,9 @@ Compose enforces this order with `depends_on` conditions, not with sleeps:
    readiness probe passes.
 5. **web** and **worker** start after the API is healthy.
 6. **caddy** starts after web, api and keycloak are healthy, so no traffic reaches a service that isn't ready.
-7. `deploy.sh` then runs `keycloak-configure.sh` (sets this environment's redirect URIs and web origins) and checks
-   the public endpoints.
+7. `deploy.sh` then runs `keycloak-configure.sh` (sets this environment's redirect URIs and web origins, signed in as
+   `chaya-deploy`) and checks the public endpoints. The step is part of the rollout, so it also runs during an
+   automatic rollback.
 
 ## 5. Migrations
 
@@ -439,6 +447,7 @@ Schedule it daily with cron or a systemd timer, and alert if it fails.
 | Database lost | Provision a host (section 3) with the **same** `.env`. Start only postgres, then restore the latest verified dump. Deploy the recorded version. |
 | Objects lost | `scripts/backup/restore.sh minio --yes-replace-live-data`. Then run `verify.sh` against the current dump. |
 | Keycloak unavailable | The API answers `503 AUTHENTICATION_UNAVAILABLE` and readiness goes DOWN. Recover Keycloak or restore its dump. User sessions resume when it is back. |
+| A deploy fails with `keycloak: cannot sign in, neither as chaya-deploy … nor as the bootstrap admin` | `CHAYA_DEPLOY_CLIENT_SECRET` in `.env` does not match the `chaya-deploy` client and the bootstrap admin is gone, or (a host set up before 2026-10-17) the bootstrap admin was deleted before `chaya-deploy` existed. Either set the client's secret to the `.env` value in the admin console, or recreate a temporary bootstrap admin from `.env` and deploy again: `docker compose --env-file .env -f docker-compose.yml exec keycloak /opt/keycloak/bin/kc.sh bootstrap-admin user --username:env KC_BOOTSTRAP_ADMIN_USERNAME --password:env KC_BOOTSTRAP_ADMIN_PASSWORD --http-management-port 9001` (works while Keycloak runs; delete that admin again afterwards). |
 | Worker unavailable | Health shows DEGRADED with `worker` DOWN (or processing `NO_WORKER` naming the stage nobody serves), and the operations dashboard lists each worker with its last contact. Restart the worker, then check `docker compose logs worker` and its health status. Jobs a worker was running when it died are failed as `WORKER_LOST` within the lease (5 min) plus one enforcer tick (30 s), and can be retried from the operations dashboard. The failed attempt stays on record. |
 | A run fails or waits at a stage | Follow [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md): find the first failed or unserved stage, read its error code, fix the prerequisite, then retry the run. |
 | Host lost | Rebuild it (section 3), restore Postgres (both databases) and MinIO from off-site backups, then deploy the recorded version. |
@@ -569,6 +578,30 @@ GHCR.
 
 The readiness fix was measured with a test image (the `prodcheck2` API image plus the recompiled `HealthService` class,
 and the readiness group set through the environment), not a full rebuild: the build host's disk was full.
+
+**Fifth pass, 2026-10-17 (deployment audit).** Same kind of production-like stack as the fourth pass: a real
+`bundle.sh` bundle, real Docker, Caddy's internal CA on `*.chaya.localhost`, Keycloak 26.0 in production mode, compose
+project `chaya-audit`. Images: api, web and worker built from `c6cf9de` (`git archive HEAD`, so uncommitted changes
+are excluded) with the production Dockerfiles; vision is the 2026-10-15 image (no vision change since). `compose pull`
+was a no-op shim (local images), and the public checks verified TLS against Caddy's root certificate. This is still not
+a deployed environment.
+
+| What | Result |
+|---|---|
+| **Found and fixed: deploys broke once the bootstrap admin was deleted.** Section 3 told operators to delete it; `keycloak-configure.sh` signed in as it on every deploy and during every rollback | Reproduced on real Keycloak 26.0: after the deletion and a restart (Keycloak does not recreate it), the script exits 1 with `Invalid user credentials`, so every later deploy would have failed and its rollback with it. Now it signs in as the `chaya-deploy` service account (above). Tested: fresh host (created, then reused), bootstrap admin deleted (still works), secret rotation (updated), a damaged account (repaired), a host where the admin was deleted first (clear error; the `kc.sh bootstrap-admin user` recovery in section 9 works on the running container). `chaya-deploy` reads chaya clients but is refused on master realm users, master realm settings and chaya users. |
+| **Found and fixed: the master realm was public.** Caddy blocked `/admin` only; `/realms/master/...` (login and token endpoints, so administrator password guessing) was proxied for everyone | Now behind `KEYCLOAK_ADMIN_ALLOW` too. Through Caddy from a non-allowed address: `/realms/chaya/...` 200, `/realms/master/...` and `/admin/...` 403; from an allowed range both reach Keycloak. |
+| Missing `CHAYA_DEPLOY_CLIENT_SECRET` | `deploy.sh` step 1 refuses, naming the variable; no container created |
+| Deploy sequence | First deploy on empty volumes; redeploy onto data (pre-deploy dump, rehearsal `RESULT: PASS`, API booted on the restored copy at Flyway 40); the bootstrap admin deleted; deploy of a new version (signed in as `chaya-deploy`, 128 s); a release whose web container exits: rolled back to the previous version (Keycloak step included, no bootstrap admin), exit 1, `.deployed-version` unchanged, `rollback-ok` in the history |
+| Production builds | All three images build from `HEAD` (API `mvn package`, web `npm run build` with no environment, worker including `chaya-navmesh`); all four run as non-root and declare a HEALTHCHECK |
+| Outages, on a full build of the 2026-10-16 readiness fix | Postgres, MinIO, Keycloak stopped: readiness not ready in 5.0 s (4.0 s for Keycloak) for a fresh check and about 10 ms from the cache, public `/api/v1/health` 503 (Caddy takes the API out of rotation); ready again 4 to 22 s after the dependency returned, without an API restart. ClamAV stopped: readiness stays ready, `/api/v1/health` 200 DEGRADED with `malwareScanner` DOWN. |
+| Restart, auth, worker | API restart: public health 200 after 36 s, worker live again (`liveWorkers: 1`). No token and a forged token: 401. |
+| Secrets in logs | No value from `.env` appears in any container log of the stack or in the deploy logs |
+| Static checks | `compose config` passes for `infra/docker` (alone, `--profile pipeline`, with the smoke and e2e overlays), `infra/monitoring` and `infra/deploy`. Published ports: production only Caddy 80/443; development everything on 127.0.0.1. No container environment points at `localhost` in production; in development only browser-facing values (issuer, origins, public URLs) do. shellcheck clean; `test-deploy.sh` 50/50 (Linux container); actionlint: one info-level SC2016 in `python.yml` (literal Markdown backticks, intended). |
+
+**Hazard to know about:** this compose file is named `chaya`, the same project name as the development stack
+(`infra/docker`). On a machine that has run the development stack, `deploy.sh` without `COMPOSE_PROJECT_NAME` would
+find the development `chaya_postgres-data` volume and treat it as production data. Deploy hosts never run the
+development stack; when trying a deploy on a workstation, always set `COMPOSE_PROJECT_NAME`.
 
 **Not verified:**
 

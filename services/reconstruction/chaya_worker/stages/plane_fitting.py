@@ -78,9 +78,18 @@ class PlaneFitting:
             reference = np.median(cloud.positions.astype(np.float64), axis=0)
             planes = reclassify_planes(planes, cloud.positions, up, reference, labels)
             up_source = f"CALIBRATED_FRAME:{frame.id}"
+            # GRAVITY_ESTIMATE is a required output on every path (packages/contracts/pipeline/stage-artifacts.json): without
+            # it the control plane fails the stage STAGE_OUTPUT_MISSING, which every re-scan of a calibrated floor and every
+            # run calibrated before this stage hit. Nothing is estimated here, and the document says why.
+            gravity_path = write_json(ctx.workdir / "gravity-estimate.json", not_estimated(
+                f"the reconstruction is calibrated (coordinate frame {frame.id}): up is that frame's +Z, not estimated from cameras"))
+            artifacts.append(ArtifactSpec("GRAVITY_ESTIMATE", gravity_path, "gravity-estimate.json", "application/json"))
         elif merged:
             # Merged geometry lives in the parent's frame; this run's own poses are the region's and cannot be used.
             up_source = "PROVISIONAL_PLANE_NORMAL_CLUSTER (incremental re-scan without a calibrated parent frame)"
+            gravity_path = write_json(ctx.workdir / "gravity-estimate.json", not_estimated(
+                "incremental re-scan: the merged geometry is in the parent's frame, and this run's poses are the region's"))
+            artifacts.append(ArtifactSpec("GRAVITY_ESTIMATE", gravity_path, "gravity-estimate.json", "application/json"))
         elif poses_inputs:
             poses = json.loads(poses_inputs[0].path.read_text(encoding="utf-8")).get("poses", [])
             centres, ups = cameras_from_poses(poses)

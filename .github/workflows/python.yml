@@ -58,7 +58,7 @@ jobs:
         # The one allowed skip is pytest's "got empty parameter set": test_unwritten_stages_never_succeed... is
         # parametrized over the stages still marked planned, of which there are none today.
         run: |
-          python -m pytest -q -rs -m "not gpu and not integration" | tee tests.txt
+          python -m pytest -q -rs -m "not gpu and not integration and not acceptance" | tee tests.txt
           if grep "^SKIPPED" tests.txt | grep -v "got empty parameter set"; then
             echo "::error::tests skipped in the CPU suite (see above)"; exit 1
           fi
@@ -68,7 +68,7 @@ jobs:
         # stack in reconstruction-smoke's stack-smoke job (test_stack_e2e.py); test_minio_storage.py needs CHAYA_IT_S3_*.
         if: matrix.service == 'reconstruction'
         run: |
-          python -m pytest -q -rs -m "gpu or integration" | tee not-run.txt
+          python -m pytest -q -rs -m "gpu or integration or acceptance" | tee not-run.txt
           {
             echo "### Worker tests NOT executed in this job"
             echo "| test | reason |"

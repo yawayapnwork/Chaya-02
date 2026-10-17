@@ -1,0 +1,81 @@
+# Overlay for the cross-service acceptance suite (docs/ACCEPTANCE.md, scripts/acceptance/run-acceptance.sh ci):
+#   docker compose -p chaya-acceptance --env-file <env> -f infra/docker/docker-compose.yml -f infra/ci/docker-compose.smoke.yml \
+#     -f infra/ci/docker-compose.acceptance.yml --profile pipeline up -d --build
+# On top of the development infrastructure and the real API container (smoke overlay): the production CPU worker with the
+# production stage list (infra/deploy), a TEST-ONLY Open3D worker for the three Open3D stages, the vision service and the web
+# app. No worker claims POSE_ESTIMATION, SPLAT_RECONSTRUCTION, SEMANTIC_SEGMENTATION or SEMANTIC_INDEXING: the suite stands in
+# for exactly those (labelled), so nothing races it.
+services:
+  api:
+    environment:
+      VISION_SERVICE_URL: http://vision:8090
+      # A lost worker is detected when its lease expires; 300 s in production. Short here so the suite observes it quickly.
+      CHAYA_PIPELINE_LEASESECONDS: "40"
+
+  reconstruction-worker:
+    environment:
+      CHAYA_API_URL: http://api:8080
+      WORKER_ID: acceptance-cpu-worker
+      WORKER_STAGES: INPUT_VALIDATION,FFMPEG_PREPROCESS,FRAME_QUALITY_FILTER,PRIVACY_PREPROCESS,REGION_SPLICE,ARTIFACT_GENERATION,NAVIGATION_BAKING
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # TEST-ONLY: benchmarks/docker/open3d.Dockerfile (Open3D 0.19 CPU), running the worker code of this checkout. Production runs
+  # these stages on GPU hosts (DEPLOYMENT.md "GPU workers"); the stage code is the same.
+  open3d-worker:
+    profiles: ["pipeline"]
+    build:
+      context: ../..
+      dockerfile: benchmarks/docker/open3d.Dockerfile
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+    mem_limit: 2g
+    command: ["python", "-m", "chaya_worker"]
+    environment:
+      CHAYA_API_URL: http://api:8080
+      CHAYA_TOKEN_URL: http://keycloak:8080/realms/chaya/protocol/openid-connect/token
+      CHAYA_CLIENT_ID: chaya-worker
+      CHAYA_CLIENT_SECRET: ${CHAYA_WORKER_CLIENT_SECRET:?set CHAYA_WORKER_CLIENT_SECRET}
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${S3_WORKER_ACCESS_KEY:?set S3_WORKER_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_WORKER_SECRET_KEY:?set S3_WORKER_SECRET_KEY}
+      WORKER_ID: acceptance-open3d-worker
+      WORKER_WORKDIR: /tmp/work
+      WORKER_STAGES: GEOMETRIC_CLEANUP,PLANE_FITTING,REGION_ALIGNMENT
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  vision:
+    build:
+      context: ../../services/vision
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+    mem_limit: 2g
+    volumes:
+      - vision-cache:/home/vision/.cache
+
+  web:
+    build:
+      context: ../../apps/web
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs: ["/tmp", "/app/.next/cache"]
+    environment:
+      CHAYA_API_BASE_URL: http://api:8080
+      CHAYA_PUBLIC_API_BASE_URL: http://localhost:${API_PORT:-8080}
+      CHAYA_PUBLIC_OIDC_ISSUER: http://localhost:${KEYCLOAK_PORT:-8081}/realms/chaya
+      CHAYA_PUBLIC_OIDC_CLIENT_ID: chaya-web
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  vision-cache:

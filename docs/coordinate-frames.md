@@ -87,6 +87,11 @@ Scale comes from one of two sources:
     toward the cameras, is "up".
   - The estimate records the camera-up consistency and the agreement angle.
   - When the evidence is missing or inconsistent it says `NOT_ESTIMATED` and why, and the stage still succeeds.
+  - It is published on every path, also `NOT_ESTIMATED` when the run is already calibrated (up is the frame's +Z) and for
+    an incremental re-scan without a calibrated parent frame. Until 2026-10-17 those two paths published no
+    `GRAVITY_ESTIMATE`, which became a required output on 2026-10-10, so the control plane failed `PLANE_FITTING` with
+    `STAGE_OUTPUT_MISSING`: every re-scan of a calibrated floor, and every run calibrated before plane fitting. Found by the
+    cross-service acceptance suite (docs/ACCEPTANCE.md); `tests/orchestration/test_rescan_stages.py` checks the contract.
 - **Operator floor points** (`gravity.source = OPERATOR_FLOOR_POINTS`).
   - At least three reconstruction points on the floor, plus one point above it to orient the normal.
   - Refused if the points are not coplanar within `max-floor-points-rms-m` (5 cm, measured after scaling).
