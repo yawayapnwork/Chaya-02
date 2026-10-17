@@ -7,10 +7,10 @@ name: ios
 
 on:
   pull_request:
-    paths: ["apps/ios-ar/**", ".github/workflows/ios.yml"]
+    paths: ["apps/ios-ar/**", "packages/contracts/fixtures/ar/**", ".github/workflows/ios.yml"]
   push:
     branches: [main]
-    paths: ["apps/ios-ar/**", ".github/workflows/ios.yml"]
+    paths: ["apps/ios-ar/**", "packages/contracts/fixtures/ar/**", ".github/workflows/ios.yml"]
   workflow_dispatch:
 
 permissions:
@@ -41,6 +41,9 @@ jobs:
         working-directory: apps/ios-ar/App
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Committed fixtures
+        # The app-level tests load the server's target image from packages/contracts/fixtures/ar (project.yml).
+        run: bash "$GITHUB_WORKSPACE/scripts/ci/check-fixtures.sh"
       - name: Generate the Xcode project
         # project.yml pins projectFormat, so the (unpinned) Homebrew XcodeGen cannot write a newer format than this Xcode.
         run: |

@@ -20,10 +20,11 @@ loads is missing from the index; the `frontend` and `python` workflows run it be
 | `synthetic-calibration.json` | A hand-chosen similarity and points | The same frame maths is checked in Python, Java and TypeScript | `test_frames.py`, `SimilarityTest`, `coordinate-frame.test.ts`, … | `generate_synthetic_calibration.py` |
 | `search/clip-vit-b32-openai.json` | Real CLIP ViT-B/32 vectors (see its `provenance`) | Ranking tests with real embeddings without running CLIP | `SemanticSearchRankingTest` | its `provenance` field |
 | `search/b3-clip-vit-b32-openai.json` | Real CLIP ViT-B/32 text vectors of every text B3 embeds (POI texts, queries, phrasing.json's derived queries) | B3 run in process, without a running vision service (docs/BENCHMARKS.md) | `SearchBenchmarkTest` | `benchmarks/b3_semantic_search/inprocess_texts.py` + `clip_vectors.py` |
+| `ar/image-target-5f0c1d2e-3a4b-4c5d-8e6f-7a8b9c0d1e2f.png` (166 KB) | The server's printable target image for anchor `5f0c1d2e-…` (`ImageTarget.png`, what `GET …/anchors/{a}/target.png` serves): 1024 x 1024 RGB, no EXIF orientation | The iOS app-level tests build their ARKit reference image from the real artwork, not an ad-hoc picture | `apps/ios-ar/App/ChayaARTests` (`ReferenceImageTests`, copied into the test bundle by `project.yml`) | `services/api` `ImageTargetFixtureTest` (pixel equality with `ImageTarget.render`) |
 
 `*.ksplat` and `*.ply` are git-ignored repository-wide (captures and reconstructions must never be committed); the root
-`.gitignore` re-includes exactly the four files above by path, and the `.gitattributes` in `ksplat/` and `viewer-scene/`
-mark them binary so line-ending conversion never touches them.
+`.gitignore` re-includes exactly the four files above by path, and the `.gitattributes` in `ksplat/`, `viewer-scene/`
+and `ar/` mark them (and the PNG) binary so line-ending conversion never touches them.
 
 ## Regenerating
 
@@ -31,6 +32,8 @@ If a "pinned to production code" test fails, the production code changed. Regene
 
     services/reconstruction/.venv/Scripts/python packages/contracts/fixtures/ksplat/generate_ksplat_fixture.py
     services/reconstruction/.venv/Scripts/python packages/contracts/fixtures/viewer-scene/generate_viewer_scene.py
+
+    cd services/api && mvn test -Dtest=ImageTargetFixtureTest -Dchaya.regenerateArFixture=true
 
 (`python` instead of the venv path on Linux/macOS.) Both generators are deterministic: run from scratch on 2026-09-30
 they reproduced the committed bytes exactly.

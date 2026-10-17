@@ -65,9 +65,18 @@ public enum ReferenceImages {
     /// One reference image per registered marker: the exact printed artwork, at its registered printed width, named
     /// with the marker's anchor id so a detection identifies the backend anchor.
     public static func make(png: Data, marker: RegisteredMarker) throws -> ARReferenceImage {
+        func invalid(_ reason: String) -> InvalidImage { InvalidImage(markerIdentifier: marker.anchor.markerIdentifier, reason: reason) }
         guard let source = CGImageSourceCreateWithData(png as CFData, nil),
               let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
-            throw InvalidImage(markerIdentifier: marker.anchor.markerIdentifier, reason: "the target image is not a decodable image")
+            throw invalid("the target image is not a decodable image")
+        }
+        // ImageIO decodes what it can of a truncated file (the missing rows come out blank): that is not the printed
+        // artwork, and ARKit would look for the wrong picture. Only a completely decoded image is a reference image.
+        guard CGImageSourceGetStatusAtIndex(source, 0) == .statusComplete else {
+            throw invalid("the target image is incomplete (truncated or corrupt)")
+        }
+        guard marker.physicalWidthMeters.isFinite, marker.physicalWidthMeters > 0 else {
+            throw invalid("the printed width must be a positive length")
         }
         let reference = ARReferenceImage(image, orientation: .up, physicalWidth: CGFloat(marker.physicalWidthMeters))
         reference.name = marker.referenceImageName

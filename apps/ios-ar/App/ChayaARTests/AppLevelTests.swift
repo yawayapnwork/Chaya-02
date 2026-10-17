@@ -2,6 +2,7 @@ import ARKit
 import AVFoundation
 import ChayaARCore
 import ChayaARKitSession
+import ImageIO
 import SceneKit
 import UIKit
 import XCTest
@@ -75,32 +76,124 @@ final class ARKitMappingTests: XCTestCase {
 
 final class ReferenceImageTests: XCTestCase {
 
-    /// A textured PNG, like the server's generated target image.
-    static func targetPNG() -> Data {
-        let size = CGSize(width: 512, height: 512)
-        let renderer = UIGraphicsImageRenderer(size: size)
-        return renderer.pngData { ctx in
-            var seed: UInt64 = 42
-            func next() -> CGFloat { seed = seed &* 6364136223846793005 &+ 1442695040888963407; return CGFloat(seed >> 33) / CGFloat(1 << 31) }
-            UIColor.gray.setFill(); ctx.fill(CGRect(origin: .zero, size: size))
-            for _ in 0..<600 {
-                UIColor(white: next() > 0.5 ? 0.05 : 0.95, alpha: 1).setFill()
-                ctx.fill(CGRect(x: next() * 512, y: next() * 512, width: 4 + next() * 60, height: 4 + next() * 60))
-            }
-        }
+    /// The anchor the committed fixture was rendered for. The image is the server's own target artwork for this id
+    /// (ImageTarget.png, GET .../anchors/{a}/target.png): packages/contracts/fixtures/ar, kept pixel-identical to the
+    /// generator by services/api ImageTargetFixtureTest, and copied into this test bundle by project.yml.
+    static let fixtureAnchorId = UUID(uuidString: "5f0c1d2e-3a4b-4c5d-8e6f-7a8b9c0d1e2f")!
+    static let fixturePixels = 1024
+
+    static func targetPNG(file: StaticString = #filePath, line: UInt = #line) throws -> Data {
+        let name = "image-target-\(fixtureAnchorId.apiString)"
+        let url = try XCTUnwrap(Bundle(for: ReferenceImageTests.self).url(forResource: name, withExtension: "png"),
+                                "\(name).png is not in the test bundle: see the ChayaARTests resources in project.yml",
+                                file: file, line: line)
+        return try Data(contentsOf: url)
+    }
+
+    /// An anchor the registry accepts: a calibrated image target with a printed size, placed in a pinned scan version
+    /// (AnchorSupport.of: an unversioned anchor is not trackable).
+    static func anchor(id: UUID = fixtureAnchorId, sizeMeters: Double = 0.3, versioned: Bool = true) -> Anchor {
+        Anchor(id: id, venueId: UUID(), floorId: UUID(), markerType: .imageTarget, markerIdentifier: "entrance",
+               markerSizeMeters: sizeMeters, physicalPose: .identity, digitalPose: .identity, calibrationStatus: .calibrated,
+               lastCalibratedAt: nil, coordinateFrameId: UUID(),
+               scanVersionId: versioned ? UUID() : nil, poseId: versioned ? UUID() : nil, poseRevision: versioned ? 1 : nil)
+    }
+
+    static func marker() throws -> RegisteredMarker {
+        try XCTUnwrap(MarkerRegistry(anchors: [anchor()]).markers.first)
+    }
+
+    func testTheFixtureIsTheServersSquareTargetImage() throws {
+        let png = try Self.targetPNG()
+        XCTAssertEqual(Array(png.prefix(8)), [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A], "PNG signature")
+        let source = try XCTUnwrap(CGImageSourceCreateWithData(png as CFData, nil))
+        XCTAssertEqual(CGImageSourceGetStatusAtIndex(source, 0), .statusComplete)
+        let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        XCTAssertEqual(image.width, Self.fixturePixels)
+        XCTAssertEqual(image.height, Self.fixturePixels)
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+        XCTAssertEqual((properties?[kCGImagePropertyOrientation] as? Int) ?? 1, 1,
+                       "no EXIF rotation: the pixels are the printed artwork as it hangs (ARKit orientation .up)")
     }
 
     func testAReferenceImageIsTheTargetImageAtItsPrintedWidthNamedWithTheAnchorId() throws {
-        let anchor = Anchor(id: UUID(), venueId: UUID(), floorId: UUID(), markerType: .imageTarget, markerIdentifier: "entrance",
-                            markerSizeMeters: 0.3, physicalPose: .identity, digitalPose: .identity, calibrationStatus: .calibrated,
-                            lastCalibratedAt: nil, coordinateFrameId: UUID())
+        let anchor = Self.anchor()
         let marker = try XCTUnwrap(MarkerRegistry(anchors: [anchor]).markers.first)
         let image = try ReferenceImages.make(png: Self.targetPNG(), marker: marker)
         XCTAssertEqual(image.name, anchor.id.apiString)
         XCTAssertEqual(image.physicalSize.width, 0.3, accuracy: 1e-6)
+        XCTAssertEqual(image.physicalSize.height, 0.3, accuracy: 1e-6, "a square target prints square")
         XCTAssertEqual(MarkerRegistry(anchors: [anchor]).marker(forReferenceImageName: image.name)?.anchor.id, anchor.id,
                        "a detection of this image resolves to its backend anchor")
         XCTAssertThrowsError(try ReferenceImages.make(png: Data("not a png".utf8), marker: marker))
+    }
+
+    /// ARKit's own check (the one NavigationViewModel.loadMarkers applies before registering an image). On a device a
+    /// rejection fails the test. The Simulator has no ARKit tracking stack; if it cannot run the check the test says so
+    /// rather than pass. Neither proves the image is detected by a camera: that is docs/ar-ios-validation.md.
+    func testARKitAcceptsTheFixtureAsADetectionImage() async throws {
+        let image = try ReferenceImages.make(png: Self.targetPNG(), marker: Self.marker())
+        let problem = await ReferenceImages.validate(image)
+        #if targetEnvironment(simulator)
+        if let problem { throw XCTSkip("ARReferenceImage.validate is unavailable in this Simulator: \(problem)") }
+        #else
+        XCTAssertNil(problem, "ARKit rejected the server's target image")
+        #endif
+    }
+
+    /// physicalWidth is the printed width; ARKit derives the height from the pixel aspect ratio of the image as given
+    /// (orientation .up: no rotation). A landscape image therefore keeps its width and gets a proportional height.
+    func testTheHeightFollowsThePixelAspectRatioWithoutRotation() throws {
+        let png = UIGraphicsImageRenderer(size: CGSize(width: 400, height: 200)).pngData { ctx in
+            UIColor.white.setFill(); ctx.fill(CGRect(x: 0, y: 0, width: 400, height: 200))
+            UIColor.black.setFill(); ctx.fill(CGRect(x: 20, y: 20, width: 120, height: 60))
+        }
+        let image = try ReferenceImages.make(png: png, marker: Self.marker())
+        let size = try XCTUnwrap(CGImageSourceCreateWithData(png as CFData, nil).flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) })
+        let aspect = CGFloat(size.height) / CGFloat(size.width)
+        XCTAssertEqual(image.physicalSize.width, 0.3, accuracy: 1e-6)
+        XCTAssertEqual(image.physicalSize.height, 0.3 * aspect, accuracy: 1e-6)
+        XCTAssertLessThan(image.physicalSize.height, image.physicalSize.width, "not rotated a quarter turn")
+    }
+
+    func testMissingAndMalformedImagesAreRejected() throws {
+        let marker = try Self.marker()
+        let fixture = try Self.targetPNG()
+        var seed: UInt64 = 7
+        let noise = Data((0..<4096).map { _ in seed = seed &* 6364136223846793005 &+ 1442695040888963407; return UInt8(seed >> 56) })
+        let cases: [(String, Data)] = [
+            ("an empty body (no image at all)", Data()),
+            ("text", Data("not a png".utf8)),
+            ("random bytes", noise),
+            ("a PNG signature with no image after it", Data(fixture.prefix(8)) + noise),
+            ("the fixture truncated to its header", Data(fixture.prefix(64))),
+            ("the fixture truncated halfway", Data(fixture.prefix(fixture.count / 2))),
+        ]
+        for (label, data) in cases {
+            XCTAssertThrowsError(try ReferenceImages.make(png: data, marker: marker), label) { error in
+                let invalid = error as? ReferenceImages.InvalidImage
+                XCTAssertNotNil(invalid, "\(label): \(error)")
+                XCTAssertEqual(invalid?.markerIdentifier, "entrance", label)
+            }
+        }
+        XCTAssertNoThrow(try ReferenceImages.make(png: fixture, marker: marker), "the intact fixture is accepted")
+    }
+
+    /// A marker whose image could not be loaded is dropped from the registry the session uses
+    /// (NavigationViewModel.loadMarkers: restricted to the images ARKit accepted), so nothing resolves to it.
+    func testAMarkerWithoutAnImageIsNotResolvable() throws {
+        let registry = MarkerRegistry(anchors: [Self.anchor()])
+        let name = try XCTUnwrap(registry.markers.first?.referenceImageName)
+        XCTAssertNil(registry.restricted(to: []).marker(forReferenceImageName: name))
+        XCTAssertNotNil(registry.restricted(to: [name]).marker(forReferenceImageName: name))
+    }
+
+    /// The test anchor of the original failure (docs/FINAL_AUDIT_2026-10-17.md P1-1): no pinned scan version, so the
+    /// registry excludes it and no reference image is made for it, however good its artwork.
+    func testAnUnversionedAnchorGetsNoReferenceImage() {
+        let anchor = Self.anchor(versioned: false)
+        XCTAssertEqual(AnchorSupport.of(anchor), .unversioned)
+        XCTAssertTrue(MarkerRegistry(anchors: [anchor]).markers.isEmpty)
     }
 }
 

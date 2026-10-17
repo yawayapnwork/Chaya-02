@@ -25,6 +25,7 @@ REQUIRED=(
   packages/contracts/fixtures/navmesh/navmesh-manifest.json
   packages/contracts/fixtures/synthetic-calibration.json
   packages/contracts/fixtures/search/clip-vit-b32-openai.json
+  packages/contracts/fixtures/ar/image-target-5f0c1d2e-3a4b-4c5d-8e6f-7a8b9c0d1e2f.png
   services/reconstruction/tests/fixtures/navmesh/room_with_doorway.obj
 )
 fail=0
