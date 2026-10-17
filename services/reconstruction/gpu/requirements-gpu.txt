@@ -36,5 +36,5 @@ timm==1.0.15
 pillow==11.2.1
 
 # building the gsplat sdist (setup.py imports torch, so it is built without build isolation)
-setuptools==80.9.0
+setuptools==84.0.0
 wheel==0.45.1
