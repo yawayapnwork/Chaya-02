@@ -93,6 +93,34 @@ Also fixed:
 - **Health endpoint:** `/health` is public, and every hit fanned out to the database, S3, Keycloak and clamd. Results
   are now cached for 5 s and every check is time-bounded.
 
+## Maven dependency scanning and the NVD database (2026-10-17)
+
+`security` / `maven` runs `scripts/ci/dependency-check.sh` (OWASP Dependency-Check 12.2.2; the local
+`scripts/security-scan.sh` calls the same script). It used to fail without scanning anything: no `NVD_API_KEY` secret
+and no cached database, so every run started downloading all ~409,000 NVD records unauthenticated from a shared runner
+IP, was rate limited (HTTP 429), and stopped with "No documents exist" (run 39030707022).
+
+| Concern | How it is handled |
+|---|---|
+| Database between runs | `actions/cache` restores the newest database (key `dependency-check-12.2.2-nvd-<UTC day>`; about 240 MB); the update then fetches only the records changed since. Saved once per day, only after a successful update. |
+| Update vs scan | `update-only` first, with up to 3 attempts (60 s, then 120 s) on rate limits, 5xx and network errors, on top of the plugin's own per-request retries. The scan then runs with `autoUpdate=false`, so it never touches the NVD. |
+| API key | `NVD_API_KEY` secret, handed to the plugin by variable **name** (`nvdApiKeyEnvironmentVariable`), never on a command line. A rejected key is not retried. All Maven output is redacted before it reaches the console, a log or an artifact: the NVD client prints part of a rejected key (`c0ffe-*****-89abc`), and GitHub masks only the whole secret. |
+| Outcome | `result` = `clean`, `findings` (CVSS ≥ 7, the unchanged policy), `db-unavailable` or `error`. An update failure is never a clean scan: with a cached database the scan still runs, so real findings are reported as findings, but otherwise the job fails as "database unavailable". |
+| Reports | HTML, JSON and SARIF, a Markdown summary (also the job summary), and the redacted logs, uploaded as `maven-reports` even when the job fails. License steps run even if the vulnerability step failed. |
+
+Tested locally on 2026-10-17 (Maven 3.9.16, Temurin 21.0.12, live NVD, no API key):
+- **Fresh cache:** database built from nothing in 22.7 min.
+- **Warm cache:** 18 s with no NVD request; 26 s when forced to check (1 changed record).
+- **Rejected key:** one attempt, `db-unavailable`, no key fragment anywhere.
+- **Simulated outages:** rate limit (429), outage (503) and no network each end in bounded retries and `db-unavailable`. A 503 outage that recovers succeeds on the 2nd attempt.
+- **Update failure with a cached database:** findings are still reported as findings; with no findings the result is `db-unavailable`.
+- **Real finding:** `tika-core` 3.2.2, CVE-2026-66755 (CVSS v3 7.5, fixed in 3.3.2), fails the scan as `findings`.
+
+Not verified: a run on GitHub's runners, and an authenticated update (no NVD key was available).
+
+Residual: the Sonatype OSS Index analyzer is disabled ("missing credentials"; OSS Index now requires a token), so the
+scan matches by NVD CPE only. Adding OSS Index credentials would add a second advisory source.
+
 ## Upload security (verified in code; existing tests in `UploadValidationTest`, `CaptureIngestionTest`)
 
 | Check | Where | Behaviour |

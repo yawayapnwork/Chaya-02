@@ -75,9 +75,12 @@ jobs:
 
   maven:
     runs-on: ubuntu-latest
+    timeout-minutes: 90 # a database built from nothing without an API key is slow; with one, or from the cache, minutes
     defaults:
       run:
         working-directory: services/api
+    env:
+      DC_DATA_DIR: /home/runner/.cache/dependency-check-data
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
@@ -85,19 +88,41 @@ jobs:
           distribution: temurin
           java-version: "21"
           cache: maven
+      # The NVD database is cached between runs (one entry per UTC day, keyed by the Dependency-Check version because
+      # the database schema follows it). A run restores the newest entry and only fetches what changed since; without
+      # it every run downloaded all ~409,000 NVD records and was rate limited (HTTP 429, run 39030707022).
+      - name: Vulnerability database cache key
+        id: nvd-key
+        run: echo "day=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+      - name: Restore the vulnerability database
+        id: nvd-cache
+        uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: ${{ env.DC_DATA_DIR }}
+          key: dependency-check-12.2.2-nvd-${{ steps.nvd-key.outputs.day }}
+          restore-keys: dependency-check-12.2.2-nvd-
       - name: Vulnerabilities (OWASP Dependency-Check, CVSS >= 7 fails)
-        # >= 12.2.2: earlier releases crash while building their NVD database ("Value too long for column URL
-        # CHARACTER VARYING(1000)" on long Mozilla CVE reference URLs); 12.2.2 widened the column (upstream #8467).
+        # scripts/ci/dependency-check.sh: updates the database (bounded retries, no retry on a rejected key), then scans
+        # without touching the network. Its result tells an infrastructure failure from a finding: "db-unavailable"
+        # (NOT a clean scan; the job fails) vs "findings" vs "clean". The key reaches the plugin only as an environment
+        # variable name, and logs are redacted.
+        id: dc
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
-        run: >
-          mvn -B -ntp org.owasp:dependency-check-maven:12.2.2:check
-          -DfailBuildOnCVSS=7 -Dformats=HTML,JSON -DnvdApiKey="$NVD_API_KEY"
+        run: bash ../../scripts/ci/dependency-check.sh
+      - name: Save the vulnerability database
+        if: always() && steps.dc.outputs.updated == 'true' && steps.nvd-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: ${{ env.DC_DATA_DIR }}
+          key: dependency-check-12.2.2-nvd-${{ steps.nvd-key.outputs.day }}
       - name: Licenses (third-party report; missing license metadata fails)
+        if: ${{ !cancelled() }} # independent of the vulnerability database: an NVD outage must not hide license results
         run: >
           mvn -B -ntp org.codehaus.mojo:license-maven-plugin:2.4.0:add-third-party
           -Dlicense.failOnMissing=true -Dlicense.includedScopes=compile,runtime
       - name: Licenses (policy check against scripts/licenses/policy.json)
+        if: ${{ !cancelled() }}
         run: |
           set -o pipefail
           python3 ../../scripts/licenses/maven-licenses.py target/generated-sources/license/THIRD-PARTY.txt | tee target/maven-licenses.txt
@@ -105,7 +130,10 @@ jobs:
         if: always()
         with:
           name: maven-reports
+          # HTML (people), JSON and SARIF (machines), the Markdown summary, and the redacted update/scan logs.
           path: |
             services/api/target/dependency-check-report.*
+            services/api/target/dependency-check-summary.md
+            services/api/target/dependency-check-logs/
             services/api/target/generated-sources/license/THIRD-PARTY.txt
             services/api/target/maven-licenses.txt

@@ -43,7 +43,16 @@ for svc in reconstruction vision; do
 done
 
 if command -v mvn > /dev/null; then
-  run maven-dependency-check bash -c "cd '$ROOT/services/api' && mvn -B -q -ntp org.owasp:dependency-check-maven:12.1.0:check -DfailBuildOnCVSS=7"
+  # Same script as CI: database update (NVD_API_KEY from the environment, if set), then the scan. Its exit status names
+  # the outcome; a database that could not be updated is reported as such, never as findings or as a clean scan.
+  echo "== maven-dependency-check"
+  bash "$ROOT/scripts/ci/dependency-check.sh" > "$OUT/maven-dependency-check.txt" 2>&1
+  case $? in
+    0) echo "   ok" ;;
+    1) echo "   FINDINGS (see reports/security/maven-dependency-check.txt)"; status=1 ;;
+    3) echo "   NOT SCANNED: vulnerability database unavailable (see reports/security/maven-dependency-check.txt)"; status=1 ;;
+    *) echo "   ERROR: the analysis failed (see reports/security/maven-dependency-check.txt)"; status=1 ;;
+  esac
   run maven-licenses bash -c "cd '$ROOT/services/api' && mvn -B -q -ntp org.codehaus.mojo:license-maven-plugin:2.4.0:add-third-party -Dlicense.failOnMissing=true -Dlicense.includedScopes=compile,runtime && python '$ROOT/scripts/licenses/maven-licenses.py' target/generated-sources/license/THIRD-PARTY.txt"
 else
   skipped+=("maven (no mvn on PATH; the CI workflow runs it)")
