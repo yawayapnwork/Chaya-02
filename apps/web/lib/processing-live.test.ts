@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
+import { getEventListeners } from "node:events";
 import { test } from "node:test";
 import type { ProcessingStatus } from "./capture-api.ts";
 import { availableArtifacts, failureKind, pipelineProgress, retryBlockedText, stageAttempt, staleLeaseMessage } from "./pipeline-view.ts";
-import { type LiveState, followProcessing, isNewer, parseEvents, reconnectDelayMs } from "./processing-live.ts";
+import { type LiveState, RECONNECT_BASE_MS, abortableSleep, followProcessing, isNewer, parseEvents, reconnectDelayMs } from "./processing-live.ts";
 
 // Synthetic statuses and streams in the API's shapes: they exercise the rules, they are not a run.
 
@@ -34,10 +35,22 @@ test("reconnect backoff is bounded", () => {
   assert.deepEqual([1, 2, 3, 6, 7, 20].map(reconnectDelayMs), [1000, 2000, 4000, 30000, 30000, 30000]);
 });
 
-/** A fake server: each open() answers with the next scripted connection. */
-function harness(connections: (string[] | number)[], snapshots: ProcessingStatus[] = []) {
+/** One scripted connection: an HTTP status, a stream that delivers these chunks and closes, or one that stays open. */
+type Connection = number | string[] | { chunks: string[]; keepOpen: true; cancelled?: { value: boolean } };
+/** A snapshot answer: a status, or an error carrying an HTTP status (snapshot failures are retried unless 401/403/404). */
+type Snapshot = ProcessingStatus | { fail: number };
+
+/**
+ * A fake server: each open() answers with the next scripted connection. Time is virtual: sleep() advances the clock it
+ * hands to followProcessing as `now`, so a backoff takes no real time and the poll loop cannot spin. (The harness used to
+ * return from sleep at once while followProcessing measured its poll window on the real clock: the loop ran ~290,000
+ * times in 4 s, and spreading those records into Math.max overflowed the stack on a fast CI runner.)
+ */
+function harness(connections: Connection[], snapshots: Snapshot[] = [],
+                 opts: { token?: (call: number) => string; onSleep?: (ms: number) => void } = {}) {
   const opened: { token: string; lastEventId: string | null }[] = [];
   let tokenCalls = 0;
+  let clock = 0;
   const shown: number[] = [];
   const states: LiveState[] = [];
   /** Every pause the client took, and how many connections it had opened by then. */
@@ -47,31 +60,54 @@ function harness(connections: (string[] | number)[], snapshots: ProcessingStatus
   const handle = followProcessing({
     token: async () => {
       tokenCalls++;
+      if (opts.token) return opts.token(tokenCalls);
       if (tokenCalls > 10) throw new Error("not signed in");
       return `t${tokenCalls}`;
     },
-    open: async (token, lastEventId) => {
+    open: async (token, lastEventId, signal) => {
       opened.push({ token, lastEventId });
       const next = connections.shift();
       if (next === undefined) {
         done();
-        return new Promise<Response>(() => {}); // hang: the test is over
+        // No more scripted connections: hang like a server that never answers, until the client closes.
+        return new Promise<Response>((_, reject) => signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))));
       }
       if (typeof next === "number") return new Response(null, { status: next });
       const enc = new TextEncoder();
-      return new Response(new ReadableStream({ start(c) { next.forEach((chunk) => c.enqueue(enc.encode(chunk))); c.close(); } }),
-        { status: 200, headers: { "content-type": "text/event-stream" } });
+      const chunks = Array.isArray(next) ? next : next.chunks;
+      const keepOpen = !Array.isArray(next);
+      return new Response(new ReadableStream({
+        start(c) {
+          chunks.forEach((chunk) => c.enqueue(enc.encode(chunk)));
+          if (!keepOpen) c.close();
+        },
+        cancel() {
+          if (!Array.isArray(next) && next.cancelled) next.cancelled.value = true;
+        },
+      }), { status: 200, headers: { "content-type": "text/event-stream" } });
     },
-    snapshot: async () => snapshots.shift() ?? Promise.reject(new Error("down")),
-    sleep: async (ms) => {
+    snapshot: async () => {
+      const next = snapshots.shift();
+      if (next === undefined) throw new Error("down");
+      if ("fail" in next) throw Object.assign(new Error(`HTTP ${next.fail}`), { status: next.fail });
+      return next;
+    },
+    sleep: async (ms, signal) => {
       sleeps.push({ ms, opened: opened.length });
+      opts.onSleep?.(ms);
+      if (signal.aborted) throw new DOMException("aborted", "AbortError");
+      clock += ms;
     },
+    now: () => clock,
   }, (s) => shown.push(s.revision!), (s) => {
     states.push(s);
-    if (s === "SESSION_EXPIRED" || s === "GONE") done();
+    if (s === "SESSION_EXPIRED" || s === "GONE" || s === "STOPPED") done();
   });
-  return { opened, shown, states, sleeps, finished, handle, tokens: () => tokenCalls };
+  return { opened, shown, states, sleeps, finished, handle, tokens: () => tokenCalls, clock: () => clock };
 }
+
+/** Lets every pending promise and timer callback run. */
+const settle = () => new Promise((r) => setTimeout(r, 20));
 
 const ev = (s: ProcessingStatus) => `event:status\nid:${s.revision}\ndata:${JSON.stringify(s)}\n\n`;
 
@@ -158,8 +194,140 @@ test("a connection that went live resets the backoff: the next drop reconnects a
   assert.deepEqual(h.shown, [3]);
   const afterLive = h.sleeps.filter((s) => s.opened === 4);
   assert.ok(afterLive.length > 0);
-  assert.ok(Math.max(...afterLive.map((s) => s.ms)) <= 1_000, `waited ${JSON.stringify(afterLive)} after one failure`);
+  // Every value checked directly: no spread of a list whose length the client controls.
+  assert.ok(afterLive.every((s) => s.ms <= 1_000), `waited ${JSON.stringify(afterLive)} after one failure`);
+  assert.ok(h.sleeps.length < 20, `${h.sleeps.length} pauses: the poll loop must wait, not spin`);
   assert.ok(h.sleeps.some((s) => s.opened === 2 && s.ms > 1_000), "two failures in a row do back off");
+});
+
+// ---- reconnection: regression tests for the frontend CI stack overflow (2026-10-17) and the behaviour around it ----
+
+test("repeated connection failures back off 1 s doubling to 30 s, poll at most every 5 s, and never spin", async () => {
+  const failures = 9;
+  const h = harness(Array(failures).fill(500));
+  await h.finished;
+  h.handle.close();
+  for (let n = 1; n <= failures; n++) {
+    const waited = h.sleeps.filter((s) => s.opened === n).reduce((sum, s) => sum + s.ms, 0);
+    assert.equal(waited, reconnectDelayMs(n), `after failure ${n}`);
+  }
+  assert.ok(h.sleeps.every((s) => s.ms <= 5_000), "polling while down at most every 5 s");
+  // 1+2+4+8+16+30+30+30+30 s of backoff in 5 s polls: a bounded number of waits, each one real.
+  assert.ok(h.sleeps.length <= 40, `${h.sleeps.length} pauses`);
+  assert.equal(h.clock(), [1, 2, 3, 4, 5, 6, 7, 8, 9].reduce((t, n) => t + reconnectDelayMs(n), 0));
+  assert.ok(h.states.includes("POLLING"));
+});
+
+test("closing during the backoff stops everything: no new connection, no callback after CLOSED", async () => {
+  let atClose: { shown: number[]; states: LiveState[] } | null = null;
+  // The poll loop asks for a snapshot, then pauses: the page is "unmounted" during that first pause.
+  // h is read only inside onSleep, after harness() has returned (the client's loop starts with an await).
+  const h: ReturnType<typeof harness> = harness([500, [ev(status(2))]], [status(1), status(3)], {
+    onSleep: () => {
+      h.handle.close();
+      atClose = { shown: [...h.shown], states: [...h.states] };
+    },
+  });
+  await settle();
+  assert.equal(h.opened.length, 1, "nothing opened after close");
+  assert.equal(h.states.at(-1), "CLOSED");
+  assert.deepEqual(h.shown, atClose!.shown, "no status after close (the snapshot before it was shown, rightly)");
+  assert.deepEqual(h.states, atClose!.states, "no state after CLOSED");
+});
+
+test("closing while a connection is being opened cancels it and reports nothing more", async () => {
+  const h = harness([]); // the first open hangs until aborted
+  await settle();
+  h.handle.close();
+  await settle();
+  assert.equal(h.opened.length, 1);
+  assert.deepEqual(h.states, ["CLOSED"]);
+});
+
+test("rapid disconnects: a server that accepts and closes at once is backed off, not hammered", async () => {
+  const h = harness([[], [], [], [], []]);
+  await h.finished;
+  h.handle.close();
+  for (let n = 1; n <= 5; n++) {
+    const waited = h.sleeps.filter((s) => s.opened === n).reduce((sum, s) => sum + s.ms, 0);
+    assert.equal(waited, reconnectDelayMs(n), `empty connection ${n} counts as a failure`);
+  }
+});
+
+test("rapid reconnect cycles with data: duplicates dropped, the last id resumed, base delay each time", async () => {
+  const h = harness([[ev(status(1))], [ev(status(1))], [ev(status(2)), ev(status(1))], [ev(status(3))]]);
+  await h.finished;
+  h.handle.close();
+  assert.deepEqual(h.shown, [1, 2, 3]);
+  // The fifth open is the harness's last, hanging connection: it resumes from 3.
+  assert.deepEqual(h.opened.map((o) => o.lastEventId), [null, "1", "1", "1", "3"]);
+  assert.ok(h.sleeps.every((s) => s.ms === 1_000), `${JSON.stringify(h.sleeps)}`);
+});
+
+test("server recovery: after an outage the stream goes live, the outage's snapshot is kept, and the backoff resets", async () => {
+  const h = harness([503, 503, 503, [ev(status(7))], 500], [status(6)]);
+  await h.finished;
+  h.handle.close();
+  assert.deepEqual(h.shown, [6, 7], "the snapshot polled during the outage, then the live status");
+  const live = h.states.indexOf("LIVE");
+  assert.ok(live > h.states.indexOf("POLLING"), `${h.states.join(" > ")}`);
+  const afterRecovery = h.sleeps.filter((s) => s.opened === 5).reduce((sum, s) => sum + s.ms, 0);
+  assert.equal(afterRecovery, RECONNECT_BASE_MS, "one failure after recovery: the base delay");
+});
+
+test("expired sign-in: a renewal that returns the rejected token stops instead of reconnecting in a loop", async () => {
+  const expired = "event:session-expired\ndata:{}\n\n";
+  const h = harness([[ev(status(1)), expired], [expired], [expired]], [], { token: () => "same-token" });
+  await h.finished;
+  h.handle.close();
+  assert.equal(h.opened.length, 1, "the same token is never sent again after the server rejected it");
+  assert.ok(h.states.includes("SESSION_EXPIRED"));
+});
+
+test("expired sign-in: no token at all, or a 401 on the snapshot while polling, stops live updates", async () => {
+  const noToken = harness([[ev(status(1))]], [], { token: () => { throw new Error("not signed in"); } });
+  await noToken.finished;
+  assert.deepEqual(noToken.opened, []);
+  assert.ok(noToken.states.includes("SESSION_EXPIRED"));
+  const pollingExpired = harness([500], [{ fail: 401 }]);
+  await pollingExpired.finished;
+  assert.ok(pollingExpired.states.includes("SESSION_EXPIRED"));
+  assert.equal(pollingExpired.opened.length, 1, "no reconnect after the sign-in expired");
+});
+
+test("a terminal refusal (400, 410) is not retried; 408 and 429 are", async () => {
+  for (const code of [400, 410]) {
+    const h = harness([code, [ev(status(1))]]);
+    await h.finished;
+    h.handle.close();
+    assert.equal(h.opened.length, 1, `HTTP ${code}: one attempt`);
+    assert.ok(h.states.includes("STOPPED"));
+  }
+  const busy = harness([429, [ev(status(1))]]);
+  await busy.finished;
+  busy.handle.close();
+  assert.deepEqual(busy.shown, [1], "429 is retried and the stream recovers");
+});
+
+test("a stream left early (gone) is cancelled, releasing the connection", async () => {
+  const cancelled = { value: false };
+  const h = harness([{ chunks: [ev(status(1)), "event:gone\ndata:{}\n\n"], keepOpen: true, cancelled }]);
+  await h.finished;
+  await settle();
+  assert.ok(h.states.includes("GONE"));
+  assert.equal(cancelled.value, true);
+});
+
+test("abortableSleep waits, ends early on abort, and leaves no listener behind", async () => {
+  const c = new AbortController();
+  const t0 = Date.now();
+  await abortableSleep(30, c.signal);
+  assert.ok(Date.now() - t0 >= 25);
+  assert.equal(getEventListeners(c.signal, "abort").length, 0, "the abort listener is removed when the time passes");
+  const pending = abortableSleep(10_000, c.signal);
+  c.abort();
+  await assert.rejects(pending, { name: "AbortError" });
+  await assert.rejects(abortableSleep(10, c.signal), { name: "AbortError" }, "an already aborted signal rejects at once");
 });
 
 test("a failed run that cannot be retried says why, in the server's own terms", () => {

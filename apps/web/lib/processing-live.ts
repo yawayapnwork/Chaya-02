@@ -13,11 +13,16 @@
 //               taken (silent renewal) and the stream reopened; if none can be had, live updates stop and the page says
 //               the sign-in expired.
 //   gone        the capture no longer exists: updates stop.
+//   refused     any other client error from the stream (400, 410, ...) is not retried: retrying cannot change it.
+//   time        the poll window is measured on deps.now, the same clock deps.sleep advances. It used to be Date.now while
+//               sleeping went through deps.sleep, so a sleep that returned at once (the unit tests') turned the poll loop
+//               into a busy loop for the whole real backoff: ~290,000 iterations in 4 s, which overflowed the stack of a
+//               test that spread them into Math.max on a fast CI runner (frontend workflow, 2026-10-17).
 
 import type { ProcessingStatus } from "./capture-api.ts";
 import { sseFrameData, sseFrameField, splitSseFrames } from "./sse.ts";
 
-export type LiveState = "CONNECTING" | "LIVE" | "RECONNECTING" | "POLLING" | "SESSION_EXPIRED" | "GONE" | "CLOSED";
+export type LiveState = "CONNECTING" | "LIVE" | "RECONNECTING" | "POLLING" | "SESSION_EXPIRED" | "GONE" | "STOPPED" | "CLOSED";
 
 /** Whether `incoming` should replace `current`. */
 export function isNewer(current: Pick<ProcessingStatus, "revision" | "observedAt"> | null,
@@ -67,80 +72,137 @@ export interface LiveDeps {
   open: (token: string, lastEventId: string | null, signal: AbortSignal) => Promise<Response>;
   /** The snapshot (GET .../processing). */
   snapshot: () => Promise<ProcessingStatus>;
+  /** Waits `ms`; rejects or returns early when `signal` aborts (abortableSleep). */
   sleep: (ms: number, signal: AbortSignal) => Promise<void>;
+  /** The clock `sleep` advances (milliseconds). Default Date.now; a test with a virtual sleep passes its virtual clock. */
+  now?: () => number;
 }
 
 export interface LiveHandle { close(): void }
 
 /**
+ * setTimeout that ends early when `signal` aborts, and leaves nothing behind either way: the abort listener is removed
+ * when the time passes. (Before, every pause added a listener that only an abort removed, so a page polling for hours
+ * accumulated thousands of them on one signal.) Already aborted: rejects at once.
+ */
+export function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(new DOMException("aborted", "AbortError"));
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException("aborted", "AbortError"));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+const isTransientClientError = (status: number) => status === 408 || status === 429;
+
+/**
  * Follows a capture's processing status: calls onStatus with each status newer than the last one given, and onState
- * when the connection's state changes.
+ * when the connection's state changes. One connection at a time; after close() nothing more is opened, and neither
+ * callback is called again (an attempt still in flight is cancelled and its result dropped).
  */
 export function followProcessing(deps: LiveDeps, onStatus: (s: ProcessingStatus) => void, onState: (s: LiveState) => void): LiveHandle {
   const controller = new AbortController();
+  const aborted = () => controller.signal.aborted;
+  const now = deps.now ?? Date.now;
   let shown: ProcessingStatus | null = null;
   let lastEventId: string | null = null;
   let state: LiveState = "CONNECTING";
   const setState = (s: LiveState) => {
+    if (aborted() && s !== "CLOSED") return; // a closed handle reports nothing (a remounted page has a new one)
     if (s !== state) {
       state = s;
       onState(s);
     }
   };
   const offer = (s: ProcessingStatus) => {
+    if (aborted()) return;
     if (isNewer(shown, s)) {
       shown = s;
       onStatus(s);
     }
   };
-  const stopped = () => controller.signal.aborted || state === "SESSION_EXPIRED" || state === "GONE";
-  /** Consecutive connection attempts that never went live. Reset by a live connection, so a page open for hours that loses
-   * its stream now and then reconnects after the base delay, not after the backoff of all the drops it ever had. */
+  const pause = (ms: number) => deps.sleep(ms, controller.signal).catch(() => {});
+  const stopped = () => aborted() || state === "SESSION_EXPIRED" || state === "GONE" || state === "STOPPED";
+  /** Consecutive attempts that delivered nothing: refused, failed, or ended before a single byte arrived. Reset by data,
+   * so a page open for hours that loses its stream now and then reconnects after the base delay, while a server that
+   * accepts and closes at once is backed off like one that refuses. */
   let failures = 0;
+  /** The token the server last reported expired: renewal must produce a different one, or nobody can be signed in (a
+   * renewal that keeps returning the rejected token used to reconnect in a tight loop). */
+  let expiredToken: string | null = null;
+  let tokenInUse: string | null = null;
+
+  type Outcome = "ended" | "empty" | "expired" | "gone" | "unauthorized" | "refused";
 
   /** One connection; returns how it ended. */
-  async function connectOnce(): Promise<"ended" | "expired" | "gone" | "unauthorized"> {
+  async function connectOnce(): Promise<Outcome> {
     let token: string;
     try {
       token = await deps.token();
     } catch {
       return "unauthorized";
     }
+    if (token === expiredToken) return "unauthorized";
+    tokenInUse = token;
+    if (aborted()) return "ended";
     const res = await deps.open(token, lastEventId, controller.signal);
     if (res.status === 401) return "unauthorized";
     if (res.status === 404 || res.status === 403) return "gone";
+    if (res.status >= 400 && res.status < 500 && !isTransientClientError(res.status)) return "refused";
     if (!res.ok || !res.body) throw new Error(`processing stream: HTTP ${res.status}`);
     setState("LIVE");
-    failures = 0;
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) return "ended";
-      buffer += decoder.decode(value, { stream: true });
-      const { events, rest } = parseEvents(buffer);
-      buffer = rest;
-      for (const e of events) {
-        if (e.event === "session-expired") return "expired";
-        if (e.event === "gone") return "gone";
-        if (e.event === "status" && e.data) {
-          if (e.id) lastEventId = e.id;
-          offer(JSON.parse(e.data) as ProcessingStatus);
+    let received = false;
+    let finished = false;
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) {
+          finished = true;
+          return received ? "ended" : "empty";
+        }
+        if (aborted()) return "ended";
+        if (value && value.byteLength > 0 && !received) {
+          received = true;
+          failures = 0;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        const { events, rest } = parseEvents(buffer);
+        buffer = rest;
+        for (const e of events) {
+          if (e.event === "session-expired") return "expired";
+          if (e.event === "gone") return "gone";
+          if (e.event === "status" && e.data) {
+            if (e.id) lastEventId = e.id;
+            expiredToken = null; // this token was accepted
+            offer(JSON.parse(e.data) as ProcessingStatus);
+          }
         }
       }
+    } finally {
+      // Leaving early (session-expired, gone, a parse error, close): release the connection now, not when it is collected.
+      if (!finished) reader.cancel().catch(() => {});
     }
   }
 
   (async () => {
     while (!stopped()) {
-      let outcome: Awaited<ReturnType<typeof connectOnce>> | "error";
+      let outcome: Outcome | "error";
       try {
         outcome = await connectOnce();
       } catch {
         outcome = "error";
       }
-      if (controller.signal.aborted) return;
+      if (aborted()) return;
       if (outcome === "gone") {
         setState("GONE");
         return;
@@ -149,28 +211,42 @@ export function followProcessing(deps: LiveDeps, onStatus: (s: ProcessingStatus)
         setState("SESSION_EXPIRED");
         return;
       }
-      if (outcome === "expired" || outcome === "ended") {
-        // A clean end (the server's stream timeout, or the token expired): reconnect with a fresh token, after a short
-        // pause for an ended stream so a server that keeps closing at once is not hammered.
-        failures = 0;
+      if (outcome === "refused") {
+        setState("STOPPED");
+        return;
+      }
+      if (outcome === "expired") {
+        // The server's token check: reconnect at once with a fresh token (connectOnce refuses the same one again).
+        expiredToken = tokenInUse;
         setState("RECONNECTING");
-        if (outcome === "ended") await deps.sleep(RECONNECT_BASE_MS, controller.signal).catch(() => {});
         continue;
       }
+      if (outcome === "ended") {
+        // A clean end after data (the server's stream timeout): reconnect after a short pause.
+        setState("RECONNECTING");
+        await pause(RECONNECT_BASE_MS);
+        continue;
+      }
+      // "error" or "empty": nothing arrived. Back off, polling the snapshot meanwhile so the page keeps up.
       failures++;
       setState(failures > 1 ? "POLLING" : "RECONNECTING");
-      // While the stream is down, poll the snapshot so the page keeps up.
-      const until = Date.now() + reconnectDelayMs(failures);
-      while (!controller.signal.aborted && Date.now() < until) {
+      const until = now() + reconnectDelayMs(failures);
+      while (!aborted() && now() < until) {
         try {
           offer(await deps.snapshot());
         } catch (e) {
-          if ((e as { status?: number }).status === 401) {
+          const code = (e as { status?: number }).status;
+          if (code === 401) {
             setState("SESSION_EXPIRED");
             return;
           }
+          if (code === 404 || code === 403) {
+            setState("GONE");
+            return;
+          }
         }
-        await deps.sleep(Math.min(POLL_WHILE_DOWN_MS, Math.max(0, until - Date.now())), controller.signal).catch(() => {});
+        if (aborted()) return;
+        await pause(Math.min(POLL_WHILE_DOWN_MS, Math.max(0, until - now())));
       }
     }
   })();

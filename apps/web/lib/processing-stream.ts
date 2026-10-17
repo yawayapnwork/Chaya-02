@@ -7,7 +7,7 @@
 import { accessToken } from "./auth";
 import { type ProcessingStatus, getProcessing } from "./capture-api";
 import { publicConfig } from "./env";
-import { type LiveHandle, type LiveState, followProcessing } from "./processing-live";
+import { type LiveHandle, type LiveState, abortableSleep, followProcessing } from "./processing-live";
 
 export function followCaptureProcessing(venueId: string, captureId: string, onStatus: (s: ProcessingStatus) => void,
                                         onState: (s: LiveState) => void): LiveHandle {
@@ -21,12 +21,7 @@ export function followCaptureProcessing(venueId: string, captureId: string, onSt
         cache: "no-store",
       }),
     snapshot: () => getProcessing(venueId, captureId),
-    sleep: (ms, signal) => new Promise((resolve, reject) => {
-      const t = setTimeout(resolve, ms);
-      signal.addEventListener("abort", () => {
-        clearTimeout(t);
-        reject(new DOMException("aborted", "AbortError"));
-      }, { once: true });
-    }),
+    sleep: abortableSleep,
+    now: () => Date.now(),
   }, onStatus, onState);
 }

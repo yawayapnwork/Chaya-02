@@ -53,6 +53,7 @@ const LIVE_TEXT: Record<LiveState, string> = {
   POLLING: "Live updates interrupted: refreshing every few seconds until they return",
   SESSION_EXPIRED: "Your sign-in expired: updates stopped. Sign in again to follow processing.",
   GONE: "This capture no longer exists.",
+  STOPPED: "Live updates stopped: the server refused the update stream. Refresh the page to try again.",
   CLOSED: "",
 };
 
@@ -93,7 +94,7 @@ export default function ProcessingPanel({
   return (
     <div className="space-y-4">
       {live && live !== "CLOSED" && (
-        <p className={`text-xs ${live === "LIVE" ? "text-green-800" : live === "SESSION_EXPIRED" || live === "GONE" ? "text-red-800" : "text-amber-800"}`}
+        <p className={`text-xs ${live === "LIVE" ? "text-green-800" : live === "SESSION_EXPIRED" || live === "GONE" || live === "STOPPED" ? "text-red-800" : "text-amber-800"}`}
           data-testid="processing-live" data-state={live}>
           {LIVE_TEXT[live]}
           {status.observedAt && <> · as of {new Date(status.observedAt).toLocaleTimeString()}</>}
