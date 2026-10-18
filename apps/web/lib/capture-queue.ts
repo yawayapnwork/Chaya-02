@@ -58,6 +58,9 @@ export interface LocalSession {
   venueName: string;
   floorId: string | null;
   floorName: string | null;
+  /** The room of the floor this session captures on its own (docs/multi-room.md); absent in sessions recorded before. */
+  roomId?: string | null;
+  roomName?: string | null;
   /** The floor's published scan version when the session was recorded: null none, undefined not known. */
   expectedScanVersionId: string | null | undefined;
   /** The user confirmed continuing although the floor published another version. */
@@ -151,7 +154,7 @@ export interface ServerMedia {
  * sign-in is an error named NotSignedInError. */
 export interface QueueApi {
   createCapture(venueId: string, body: {
-    floorId?: string; device: Record<string, unknown>; startedAt: string; clientSessionId: string;
+    floorId?: string; roomId?: string; device: Record<string, unknown>; startedAt: string; clientSessionId: string;
     expectedScanVersion?: { versionId: string | null };
   }): Promise<ServerCapture>;
   getCapture(venueId: string, captureId: string): Promise<ServerCapture>;
@@ -300,6 +303,7 @@ export class CaptureQueue {
   /** Records a session on the device. It is created on the server by the next synchronisation. */
   async createSession(args: {
     venueId: string; venueName: string; floorId: string | null; floorName: string | null;
+    roomId?: string | null; roomName?: string | null;
     expectedScanVersionId: string | null | undefined; device: Record<string, unknown>; serverCaptureId?: string;
   }): Promise<LocalSession> {
     const owner = this.requireOwner();
@@ -307,6 +311,7 @@ export class CaptureQueue {
     const s: LocalSession = {
       localId: crypto.randomUUID(), clientSessionId: crypto.randomUUID(), ownerKey: owner,
       venueId: args.venueId, venueName: args.venueName, floorId: args.floorId, floorName: args.floorName,
+      roomId: args.floorId ? args.roomId ?? null : null, roomName: args.floorId ? args.roomName ?? null : null,
       expectedScanVersionId: args.expectedScanVersionId, scanVersionChangeAccepted: false, device: args.device,
       startedAt: new Date(now).toISOString(), createdAtMs: now, serverCaptureId: args.serverCaptureId ?? null, conflict: null,
       authRequired: false, attempts: 0, nextAttemptAtMs: 0, lastError: null,
@@ -490,7 +495,8 @@ export class CaptureQueue {
       const expect = s.expectedScanVersionId !== undefined && s.floorId && !s.scanVersionChangeAccepted
         ? { expectedScanVersion: { versionId: s.expectedScanVersionId } } : {};
       const c = await this.d.api.createCapture(s.venueId, {
-        ...(s.floorId ? { floorId: s.floorId } : {}), device: s.device, startedAt: s.startedAt, clientSessionId: s.clientSessionId,
+        ...(s.floorId ? { floorId: s.floorId } : {}), ...(s.floorId && s.roomId ? { roomId: s.roomId } : {}),
+        device: s.device, startedAt: s.startedAt, clientSessionId: s.clientSessionId,
         ...expect,
       });
       const next = { ...s, serverCaptureId: c.id, attempts: 0, nextAttemptAtMs: 0, lastError: null };

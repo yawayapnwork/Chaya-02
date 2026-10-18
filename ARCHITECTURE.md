@@ -98,6 +98,8 @@ first (`chaya_worker.toolchain`) and fails with a structured, retryable `DEPENDE
 | 12 | NAVIGATION_BAKING | chaya-navmesh (Recast/Detour, recastnavigation 1.6.0); metric | CPU |
 | R1 | REGION_ALIGNMENT (re-scan only) | Open3D FPFH + ICP, robust similarity, quality gates; metric | GPU |
 | R2 | REGION_SPLICE (re-scan only) | numpy; metric | CPU |
+| S1 | ROOM_REGISTRATION (stitch only) | Open3D FPFH, gravity-yaw RANSAC, point-to-plane ICP, free-space gate, pose graph with loop closure; metric | GPU |
+| S2 | ROOM_STITCH (stitch only) | numpy/scipy: Gaussian transform, voxel ownership, misalignment and seam checks; metric | CPU |
 
 The CPU image has FFmpeg, OpenCV and chaya-navmesh and deliberately **no** COLMAP, GLOMAP, CUDA, gsplat or Open3D. The
 GPU image has **never been built** (no GPU host was available); see DEPLOYMENT.md §10. `infra/ci/worker-colmap.Dockerfile`
@@ -237,6 +239,13 @@ A re-scan (`POST …/floors/{f}/rescan`) runs the first seven stages on the new 
 REGION_SPLICE against the parent version, then re-derives PLANE_FITTING, ARTIFACT_GENERATION, SEMANTIC_INDEXING and
 NAVIGATION_BAKING for the whole floor (§15, docs/rescan.md).
 
+A multi-room floor is captured one room at a time. A room capture (`roomId`) runs the plan up to ARTIFACT_GENERATION,
+and its version is a room version that is never published as the floor's. A stitch (`POST …/floors/{f}/stitches`)
+is a run with no media. ROOM_REGISTRATION places the rooms' finalized clouds in the anchor room's frame, with pairwise
+registration and loop closure. ROOM_STITCH merges their Gaussians without doubled surfaces. PLANE_FITTING,
+ARTIFACT_GENERATION and NAVIGATION_BAKING then run on the merged floor, and NAVIGATION_BAKING refuses a floor whose
+rooms are disconnected (docs/multi-room.md).
+
 ## 13. API contracts
 All HTTP is under `/api/v1`. Breaking changes require `/api/v2` and `openapi/v2.yaml`. The contract is
 `packages/contracts/openapi/v1.yaml`, **generated** from the controllers by springdoc and checked both ways by
@@ -255,6 +264,7 @@ and must publish), tested on both sides.
 | Processing | `POST/GET …/captures/{c}/processing`, `…/processing/retry`, `…/processing/cancel`; worker `POST /internal/jobs/claim`, `/{j}/heartbeat`, `/{j}/report` |
 | Frames | `POST/GET /venues/{v}/reconstructions/{run}/coordinate-frames`, `GET …/floors/{f}/coordinate-frame` |
 | Versions | `POST …/floors/{f}/rescan`, `GET …/scan-versions`, `POST …/scan-versions/finalize-current` |
+| Rooms, stitching | `GET/POST …/floors/{f}/rooms`, `POST …/rooms/{r}/versions/finalize-current`, `GET/POST …/floors/{f}/stitches`, `GET …/stitches/{s}` |
 | Viewer | `GET …/floors/{f}/reconstructions[/latest]`, `…/reconstructions/{run}`, `…/scan-versions/{sv}/reconstruction`, `…/artifacts/{kind}`; public links `…/public-links`, `POST /public/viewer-token` |
 | POIs, search | `GET/POST/PUT/DELETE …/pois`, `GET …/search` |
 | Navigation | `POST /navigation/routes`, `…/floor-connections` |
@@ -295,6 +305,11 @@ only FINALIZED versions and opens the floor's current one; POIs, search, routes 
 finalized version and refuse a DRAFT one (`VERSION_NOT_FINALIZED`). Full rules: [docs/rescan.md](docs/rescan.md),
 "VERSIONING".
 
+Since V41, a version can also be a **room version** (`space_id`; a trigger keeps it from ever being the floor's
+current version) or a **stitch version**. A stitch version records the room versions, clouds, labels and calibrations
+it combines (`scan_version_stitch_source`, write-once), plus its registration, stitch and connectivity reports. It is
+published like any version, and only when every stage has succeeded (docs/multi-room.md, "Version management").
+
 ## 16. Current vs planned behaviour
 
 The "winning solution blueprint" that this project was built against is **not in the repository**, so its text cannot
@@ -304,6 +319,7 @@ earlier versions of this document described, and the promises quoted in docs/ML_
 | Promise | Current behaviour | Planned / missing |
 |---|---|---|
 | Capture guided on the phone, with live coverage and an automatic scan plan | Implemented in the web app (HUD, reconnaissance-lap bounds estimation, planned path, WebXR tracking on ARCore). The `/capture` page uploads a video recorded elsewhere; there is no in-browser recording. | Field validation on a phone; in-browser recording; iOS capture (the iOS app does navigation only) |
+| Multi-room reconstruction: rooms scanned separately, aligned through shared doorway and hallway features with loop closure | Implemented (docs/multi-room.md): room captures, ROOM_REGISTRATION (FPFH, verified placements, free-space gate, pose graph with loop closure), ROOM_STITCH, connectivity-checked navigation. Tested on a synthetic floor only; with real FPFH there it refuses rather than misplaces rooms (Benchmark 7) | Any run on real rooms (needs a GPU host); thresholds tuned on real captures |
 | Pose estimation with GLOMAP, COLMAP as fallback | COLMAP feature extraction and mapper; GLOMAP is used only if a binary is present, and no image contains one | GLOMAP in the GPU image; any run on a real venue |
 | Gaussian splat training on GPU, exported to `.ksplat` | Implemented (gsplat 1.5.3, pinned CUDA image, preflight, acceptance test); `.ksplat` export verified against the pinned viewer | **Never executed**: the GPU image has never been built and no CUDA host was available |
 | Metric digital twin | Calibration from measured references, versioned frames, `NOT_CALIBRATED` everywhere metres matter | Automatic triangulation of marked points; any real calibration (no measured capture exists) |

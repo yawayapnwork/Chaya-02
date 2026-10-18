@@ -77,6 +77,11 @@ public class RescanService {
             throw new ApiException(HttpStatus.CONFLICT, "VERSION_WRONG_FLOOR",
                 "the selected version belongs to a different floor than " + floorId);
         }
+        if (versions.roomOf(parent.id()).isPresent()) {
+            throw new ApiException(HttpStatus.CONFLICT, ScanVersionService.ROOM_VERSION_NOT_PUBLISHABLE, "the selected version "
+                + "reconstructs one room; a re-scan replaces a region of what the floor publishes. Re-capture the room, or re-scan "
+                + "the floor's stitched version (docs/multi-room.md)");
+        }
         requireParentCurrent(floorId, parent.id());
         FrameView parentFrame = requireCanonicalParentFrame(parent.id());
         double area = requireValidRegion(request.region());
@@ -165,7 +170,8 @@ public class RescanService {
                 SELECT id, floor_id, scan_id, version_number, parent_version_id, status, region_geometry,
                        alignment_method, alignment_confidence, alignment_residual_m, changed_artifact_kinds,
                        processing_config, finalized_at, created_at, alignment_report, splice_report, created_by, rejected_at,
-                       pipeline_run_id, coordinate_frame_id,
+                       pipeline_run_id, coordinate_frame_id, space_id,
+                       EXISTS (SELECT 1 FROM scan_version_stitch_source s WHERE s.stitch_version_id = scan_version.id) AS stitched,
                        id = (SELECT current_scan_version_id FROM floor WHERE id = :f) IS TRUE AS current
                   FROM scan_version WHERE venue_id = :v AND floor_id = :f ORDER BY version_number DESC
                 """)
@@ -188,7 +194,9 @@ public class RescanService {
             rejectedAt == null ? null : rejectedAt.toInstant(), rs.getObject("pipeline_run_id", UUID.class),
             rs.getObject("coordinate_frame_id", UUID.class),
             versions.pins(id).stream().map(p -> new RescanDtos.PinnedArtifact(p.artifactId(), p.kind(), p.ownerVersionId())).toList(),
-            rs.getBoolean("current"));
+            rs.getBoolean("current"), rs.getObject("space_id", UUID.class),
+            rs.getObject("space_id") != null ? "ROOM" : rs.getBoolean("stitched") ? "STITCHED"
+                : rs.getObject("parent_version_id") != null ? "RESCAN" : "FLOOR");
     }
 
     @SuppressWarnings("unchecked")
@@ -221,6 +229,7 @@ public class RescanService {
         LatestRun latest = jdbc.sql("""
                 SELECT r.scan_id, r.id AS run_id FROM pipeline_run r JOIN capture_session c ON c.id = r.capture_session_id
                  WHERE c.venue_id = :v AND c.floor_id = :f AND r.status = 'SUCCEEDED' AND NOT ('REGION_SPLICE' = ANY (r.stages))
+                   AND c.space_id IS NULL -- a room capture reconstructs one room, never the floor (docs/multi-room.md)
                  ORDER BY r.finished_at DESC LIMIT 1
                 """)
             .param("v", venueId).param("f", floorId)

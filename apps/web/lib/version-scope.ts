@@ -29,14 +29,18 @@ export function forScene<T>(loaded: Scoped<T> | null, currentKey: string | null)
   return loaded && currentKey !== null && loaded.key === currentKey ? loaded.value : null;
 }
 
-/** How a reconstruction is named in the version picker. `current`: the version the floor publishes. */
-export function versionLabel(v: { versionNumber?: number | null; generatedAt: string }, formattedDate: string, current: boolean): string {
+/** How a reconstruction is named in the version picker. `current`: the version the floor publishes. A room version (one
+ * room of the floor, docs/multi-room.md) is named by its room; a stitched floor says so. */
+export function versionLabel(v: { versionNumber?: number | null; generatedAt: string; kind?: string; roomName?: string | null },
+                             formattedDate: string, current: boolean): string {
   const name = v.versionNumber != null ? `v${v.versionNumber} · ${formattedDate}` : `${formattedDate} (not a finalized version)`;
-  return current ? `${name} (current)` : name;
+  const described = v.kind === "ROOM" ? `Room ${v.roomName ?? "?"} · ${name}` : v.kind === "STITCHED" ? `${name} · stitched rooms` : name;
+  return current ? `${described} (current)` : described;
 }
 
 /** Which listed version the viewer opens on: the one the floor publishes (its current scan version), never merely the
- * newest. When the floor publishes none, the newest listed version (every listed one is a finalized version). */
-export function initialVersion<T extends { current?: boolean }>(versions: T[]): T | null {
-  return versions.find((v) => v.current) ?? versions[0] ?? null;
+ * newest. When the floor publishes none, the newest listed version of the whole floor (every listed one is a finalized
+ * version); a single room's version only when there is nothing else. */
+export function initialVersion<T extends { current?: boolean; kind?: string }>(versions: T[]): T | null {
+  return versions.find((v) => v.current) ?? versions.find((v) => v.kind !== "ROOM") ?? versions[0] ?? null;
 }

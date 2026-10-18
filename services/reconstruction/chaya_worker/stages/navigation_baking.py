@@ -43,8 +43,15 @@ topology at its border. Instead the stage proves that the full re-bake preserved
 Any failure is NAVMESH_REGION_INCONSISTENT and nothing is published. The manifest's `rebuild` block records the scope
 (FULL_FLOOR) and these measurements.
 
+**Stitched floors** (the run holds a STITCH_REPORT; docs/multi-room.md) are baked whole like any floor, and then checked
+room by room: the SPLAT_MERGED being baked must be the one ROOM_STITCH produced; each room's floor footprint is taken from
+its block of that cloud (its floor-labelled Gaussians); and every room must be reachable from every other over the STANDARD
+graph (chaya_worker.navmesh.room_connectivity). The connections the navmesh makes between rooms, with their measured
+clearances and whether they are step-free, are recorded in the manifest's `rebuild.rooms`. A room that cannot be reached is
+NAVMESH_ROOMS_DISCONNECTED and nothing is published (stitch_require_connected_rooms).
+
 Failure states: NAVMESH_TOOL_UNAVAILABLE (no chaya-navmesh on this worker), INVALID_GEOMETRY, NO_WALKABLE_SURFACE,
-NAVMESH_LABELS_UNAVAILABLE, NAVMESH_REGION_INCONSISTENT, NAVMESH_BUILD_FAILED -- each a structured stage failure with
+NAVMESH_LABELS_UNAVAILABLE, NAVMESH_REGION_INCONSISTENT, NAVMESH_ROOMS_DISCONNECTED, NAVMESH_BUILD_FAILED -- each a structured stage failure with
 nothing published.
 
 Elevators are not detected from geometry -- a hallway scan generally cannot see inside one reliably. Floor-to-floor
@@ -64,6 +71,7 @@ from ..navmesh import (
     GROUND_LABELS,
     INVALID_GEOMETRY,
     NAVMESH_REGION_INCONSISTENT,
+    NAVMESH_ROOMS_DISCONNECTED,
     NO_WALKABLE_SURFACE,
     OBSTACLE_LABELS,
     RESCAN_INFLUENCE_CELLS,
@@ -76,6 +84,7 @@ from ..navmesh import (
     compare_outside_region,
     geometry_from_surface,
     obstacle_cells_under_navmesh,
+    room_connectivity,
     select_floor_plane,
     write_obj,
 )
@@ -242,10 +251,21 @@ class NavigationBaking:
             raise NavmeshError(f"{len(walked_through)} obstacle cells outside the re-scanned region lie under navmesh polygons",
                                code=NAVMESH_REGION_INCONSISTENT, details=rebuild["obstacle_cells_under_navmesh"])
 
-        # ---- 4. navmesh artifact + manifest ----
+        # ---- 4. navmesh artifact, routing graphs, manifest ----
         navmesh_ref = navmesh_reference(build)
         navmesh_sha = navmesh_ref["sha256"]
         geometry_sha = sha256_file(geometry_path)
+        graph_doc = navigation_graph_document(build, navmesh_ref, tool, config, provenance, max_ramp_slope_deg=s.navmesh_max_ramp_slope_deg,
+                                              surface=surface, source=run_provenance(ctx, frame.id))
+        graphs = graph_doc["graphs"]
+        rooms = _stitched_rooms(ctx, s, splat_sha, positions, labels, graphs, surface)
+        if rooms is not None:
+            rebuild["rooms"] = rooms
+            if not rooms["connected"] and s.stitch_require_connected_rooms:
+                raise NavmeshError(f"the stitched floor's navmesh does not join its rooms: {', '.join(rooms['unreachable_rooms'])} "
+                                   "cannot be reached from the others. A doorway the stitch closed, a room registered in the "
+                                   "wrong place or a door that is really closed; nothing was published",
+                                   code=NAVMESH_ROOMS_DISCONNECTED, details=rooms)
         manifest = {
             "status": NAVMESH_STATUS_READY,
             "navmesh": navmesh_ref,
@@ -269,9 +289,6 @@ class NavigationBaking:
         manifest_path = write_json(ctx.workdir / "navmesh-manifest.json", manifest)
 
         # ---- 5. routing graphs from the Detour polygon links ----
-        graph_doc = navigation_graph_document(build, navmesh_ref, tool, config, provenance, max_ramp_slope_deg=s.navmesh_max_ramp_slope_deg,
-                                              surface=surface, source=run_provenance(ctx, frame.id))
-        graphs = graph_doc["graphs"]
         graph_path = write_json(ctx.workdir / "navigation-graph.json", graph_doc)
         baking_report = write_json(ctx.workdir / "navigation-baking-report.json", {
             "coordinate_frame": provenance, "source": run_provenance(ctx, frame.id), "rebuild": rebuild,
@@ -290,7 +307,8 @@ class NavigationBaking:
                                                           "step_free_edges": len(graphs["STEP_FREE"]["edges"])})
         return StageResult(
             "SUCCEEDED", command_record(ctx, {"polygon_count": len(build.polygons), "navmesh_sha256": navmesh_sha,
-                                              "coordinate_frame_id": frame.id, **tool}),
+                                              "coordinate_frame_id": frame.id, **tool,
+                                              **({"rooms": rooms} if rooms is not None else {})}),
             ctx.runner.last_exit_status(),
             [ArtifactSpec("NAVMESH", build.navmesh_path, "navmesh.bin", "application/octet-stream"),
              ArtifactSpec("NAVMESH_MANIFEST", manifest_path, "navmesh-manifest.json", "application/json"),
@@ -329,3 +347,49 @@ def _parent_surface(ctx: StageContext, s, to_canonical, splat_sha: str, referenc
                                agent_max_climb_m=s.navmesh_agent_max_climb_m, agent_height_m=s.navmesh_agent_height_m,
                                step_min_rise_m=s.navmesh_step_min_rise_m, max_level_above_reference_m=s.navmesh_max_level_above_floor_m,
                                accessible_width_m=s.navmesh_accessible_width_m, width_cap_m=s.navmesh_width_cap_m)
+
+
+def _stitched_rooms(ctx: StageContext, s, splat_sha: str, positions: np.ndarray, labels: np.ndarray, graphs: dict,
+                    surface: SurfaceModel) -> dict | None:
+    """On a stitched floor (a STITCH_REPORT among the inputs), how the routing graph joins its rooms; None otherwise. The
+    report must describe exactly the cloud being baked, and its blocks must cover it: each room's footprint is the floor
+    cells of its own block."""
+    reports = ctx.inputs_of("STITCH_REPORT")
+    if not reports:
+        return None
+    doc = json.loads(reports[0].path.read_text(encoding="utf-8"))
+    produced = (doc.get("output") or {}).get("sha256")
+    if produced != splat_sha:
+        raise NavmeshError(f"STITCH_REPORT describes cloud {produced}, not the SPLAT_MERGED being baked ({splat_sha})",
+                           code=INVALID_GEOMETRY, details={"stitch_report_sha256": produced, "splat_sha256": splat_sha})
+    blocks = doc.get("blocks") or []
+    if sum(int(b["count"]) for b in blocks) != len(positions):
+        raise NavmeshError(f"STITCH_REPORT's blocks cover {sum(int(b['count']) for b in blocks)} Gaussians of {len(positions)}",
+                           code=INVALID_GEOMETRY)
+    cell = s.stitch_footprint_cell_m
+    # A cell belongs to the room with the most floor Gaussians in it: near a doorway the stitch keeps whichever room
+    # observed each voxel more densely, so both rooms' floors reach into it, and a room's raw footprint holds stray cells
+    # of its neighbour. Partitioned, a node is placed in the room it really is in.
+    rooms, per_room = [str(b["piece"]) for b in blocks], []
+    for b in blocks:
+        start, count = int(b["start"]), int(b["count"])
+        p, lab = positions[start:start + count], labels[start:start + count]
+        cells = np.floor(p[np.isin(lab, GROUND_LABELS), :2] / cell).astype(np.int64)
+        per_room.append(np.unique(cells, axis=0, return_counts=True) if len(cells) else (np.zeros((0, 2), np.int64), np.zeros(0, np.int64)))
+    all_cells = np.unique(np.vstack([c for c, _ in per_room]), axis=0) if any(len(c) for c, _ in per_room) else np.zeros((0, 2), np.int64)
+    counts = np.zeros((len(rooms), len(all_cells)), dtype=np.int64)
+    for i, (c, n) in enumerate(per_room):
+        if len(c):
+            counts[i, _rows(all_cells, c)] = n
+    owner = np.argmax(counts, axis=0) if len(all_cells) else np.zeros(0, dtype=int)
+    footprints = {r: all_cells[owner == i] for i, r in enumerate(rooms)}
+    result = room_connectivity(graphs, footprints, cell, accessible_width_m=s.navmesh_accessible_width_m, surface=surface)
+    result["footprint_cells"] = {k: int(len(v)) for k, v in footprints.items()}
+    result["stitch_report"] = _input_ref(reports[0])
+    return result
+
+
+def _rows(table: np.ndarray, rows: np.ndarray) -> np.ndarray:
+    """The index in `table` (sorted unique (i, j) rows, np.unique order) of each of `rows`, all present in it."""
+    keys = table[:, 0].astype(np.int64) * (1 << 32) + table[:, 1]
+    return np.searchsorted(keys, rows[:, 0].astype(np.int64) * (1 << 32) + rows[:, 1])

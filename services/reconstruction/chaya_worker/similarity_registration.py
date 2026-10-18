@@ -139,6 +139,128 @@ def ransac_similarity(src: np.ndarray, dst: np.ndarray, *, inlier_threshold_m: f
 
 
 @dataclass
+class Hypothesis:
+    """One placement robust estimation found: the transform, the correspondences it explains, and the scale those
+    correspondences support (a Umeyama fit with scale to them: evidence about two metric calibrations, never applied)."""
+
+    transform: Similarity
+    inliers: np.ndarray  # (N,) bool over the putative correspondences
+    scale_estimate: float
+
+    @property
+    def inlier_count(self) -> int:
+        return int(self.inliers.sum())
+
+
+def _yaw_fit(p: np.ndarray, q: np.ndarray) -> Similarity:
+    """Least-squares rotation about +Z and translation (scale 1) taking p onto q: 2-D Procrustes on (x, y), mean offset in z."""
+    pc, qc = p.mean(axis=0), q.mean(axis=0)
+    a, b = p[:, :2] - pc[:2], q[:, :2] - qc[:2]
+    h = a.T @ b
+    yaw = np.arctan2(h[0, 1] - h[1, 0], h[0, 0] + h[1, 1])
+    c, s = np.cos(yaw), np.sin(yaw)
+    R = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
+    return Similarity(1.0, R, qc - R @ pc)
+
+
+def ransac_yaw_hypotheses(src: np.ndarray, dst: np.ndarray, *, inlier_threshold_m: float, max_hypotheses: int = 4,
+                          min_support: int = 20, iterations: int = 300000, confidence: float = 0.999, min_baseline_m: float = 0.3,
+                          distinct_rotation_deg: float = 5.0, distinct_translation_m: float = 0.25, at: np.ndarray | None = None,
+                          seed: int = 0, chunk: int = 400) -> tuple[list[Hypothesis], int]:
+    """The strongest distinct placements of `src` onto `dst` (putative correspondences src[i] <-> dst[i], most of them
+    wrong) when both are gravity-aligned: a rotation about +Z and a translation, scale 1. Returns them strongest first, and
+    the number of hypotheses tested.
+
+    Each hypothesis comes from TWO correspondences (yaw from the horizontal direction between them, translation from their
+    midpoint), so with a fraction w of right matches a right sample needs ~1/w^2 tries instead of a similarity's 1/w^3: at
+    the 1-5 % FPFH gives on a doorway overlap that is the difference between hundreds and tens of thousands. A pair whose
+    horizontal lengths or height differences disagree by more than twice the threshold cannot be a right pair and is not
+    scored.
+
+    It samples until a placement supported by only `min_support` of the matches would have been drawn from two of its own
+    with probability `confidence` (capped at `iterations`). Not until the BEST placement is found, as a single-answer RANSAC
+    stops: here the best is often wrong (below), and stopping on it missed the weaker right one (measured: the corridor's
+    true placement onto room A, 22 of 2,763 matches, was not sampled; the corridor was placed through room B alone, 5 m
+    off).
+
+    Several placements are kept, not one, because the strongest is not necessarily right: two box-shaped rooms explain more
+    matches laid over each other (wall on wall) than joined through their doorway. The caller verifies each one. Two
+    placements are distinct when their rotations differ by more than `distinct_rotation_deg` or they move `at` (default: the
+    source centroid) more than `distinct_translation_m` apart."""
+    src = np.asarray(src, dtype=np.float64)
+    dst = np.asarray(dst, dtype=np.float64)
+    n = len(src)
+    if n < 2:
+        raise RegistrationError(f"{n} putative correspondences; at least 2 are needed")
+    rng = np.random.default_rng(seed)
+    thr2 = inlier_threshold_m**2
+    yaws, trans, counts = [], [], []
+    w_min = min(1.0, max(min_support, 2) / n)
+    needed = 1 if w_min >= 1 else int(np.ceil(np.log(1 - confidence) / np.log(1 - w_min * w_min)))
+    tested, best = 0, 0
+    while tested < min(iterations, needed):
+        k = min(chunk, iterations - tested)
+        tested += k
+        i, j = rng.integers(0, n, k), rng.integers(0, n, k)
+        dp, dq = src[j] - src[i], dst[j] - dst[i]
+        lp, lq = np.linalg.norm(dp[:, :2], axis=1), np.linalg.norm(dq[:, :2], axis=1)
+        ok = (i != j) & (lp > min_baseline_m) & (np.abs(lp - lq) < 2 * inlier_threshold_m) & (np.abs(dp[:, 2] - dq[:, 2]) < 2 * inlier_threshold_m)
+        if not ok.any():
+            continue
+        i, j, dp, dq = i[ok], j[ok], dp[ok], dq[ok]
+        yaw = np.arctan2(dq[:, 1], dq[:, 0]) - np.arctan2(dp[:, 1], dp[:, 0])
+        c, s = np.cos(yaw), np.sin(yaw)
+        pm, qm = (src[i] + src[j]) / 2, (dst[i] + dst[j]) / 2
+        t = qm - np.stack([c * pm[:, 0] - s * pm[:, 1], s * pm[:, 0] + c * pm[:, 1], pm[:, 2]], axis=1)
+        rx = c[:, None] * src[None, :, 0] - s[:, None] * src[None, :, 1] + t[:, 0, None] - dst[None, :, 0]
+        ry = s[:, None] * src[None, :, 0] + c[:, None] * src[None, :, 1] + t[:, 1, None] - dst[None, :, 1]
+        rz = src[None, :, 2] + t[:, 2, None] - dst[None, :, 2]
+        cnt = (rx * rx + ry * ry + rz * rz < thr2).sum(axis=1)
+        yaws.append(yaw)
+        trans.append(t)
+        counts.append(cnt)
+        best = max(best, int(cnt.max()))
+    if not counts or best < 2:
+        raise RegistrationError(f"no pair of correspondences agrees on a placement ({tested} hypotheses tested)")
+    yaw_all, t_all, cnt_all = np.concatenate(yaws), np.concatenate(trans), np.concatenate(counts)
+    at = src.mean(axis=0) if at is None else np.asarray(at, dtype=np.float64)
+    # Non-maximum suppression over every sampled hypothesis with any support: the strongest, then the strongest not within
+    # the distinct thresholds of one taken, and so on. Not the top N by support: the strongest placement's near-duplicates
+    # fill any top N, and the weaker right placement would never be looked at.
+    keep = cnt_all >= 2
+    yaw_all, t_all, cnt_all = yaw_all[keep], t_all[keep], cnt_all[keep]
+    c_all, s_all = np.cos(yaw_all), np.sin(yaw_all)
+    moved_at = np.stack([c_all * at[0] - s_all * at[1], s_all * at[0] + c_all * at[1], np.full_like(c_all, at[2])], axis=1) + t_all
+    alive = np.ones(len(cnt_all), dtype=bool)
+    chosen: list[Hypothesis] = []
+    while alive.any() and len(chosen) < max_hypotheses:
+        idx = int(np.flatnonzero(alive)[np.argmax(cnt_all[alive])])
+        dyaw = np.degrees(np.abs(np.angle(np.exp(1j * (yaw_all - yaw_all[idx])))))
+        alive &= ~((dyaw <= distinct_rotation_deg) & (np.linalg.norm(moved_at - moved_at[idx], axis=1) <= distinct_translation_m))
+        T = Similarity(1.0, np.array([[c_all[idx], -s_all[idx], 0.0], [s_all[idx], c_all[idx], 0.0], [0.0, 0.0, 1.0]]), t_all[idx])
+        inliers = np.linalg.norm(T.apply(src) - dst, axis=1) < inlier_threshold_m
+        for _ in range(10):  # refit on the inliers until they stop changing
+            if inliers.sum() < 2:
+                break
+            refit = _yaw_fit(src[inliers], dst[inliers])
+            again = np.linalg.norm(refit.apply(src) - dst, axis=1) < inlier_threshold_m
+            T = refit
+            if np.array_equal(again, inliers):
+                break
+            inliers = again
+        if any(rotation_angle_degrees(T.rotation @ h.transform.rotation.T) <= distinct_rotation_deg
+               and np.linalg.norm(T.apply(at) - h.transform.apply(at)) <= distinct_translation_m for h in chosen):
+            continue  # the refit converged onto a placement already taken
+        try:
+            scale = umeyama(src[inliers], dst[inliers]).scale if inliers.sum() >= 3 else 1.0
+        except RegistrationError:
+            scale = 1.0
+        chosen.append(Hypothesis(T, inliers, float(scale)))
+    chosen.sort(key=lambda h: -h.inlier_count)
+    return chosen, tested
+
+
+@dataclass
 class IcpResult:
     transform: Similarity
     iterations: int
@@ -266,6 +388,48 @@ def constraint_ratio(p: np.ndarray, normals: np.ndarray) -> float:
     a = np.hstack([np.cross(pc, normals) / lever, normals])
     eig = np.linalg.eigvalsh(a.T @ a / len(a))
     return float(np.sqrt(max(eig[0], 0.0) / eig[-1])) if eig[-1] > 0 else 0.0
+
+
+def icp_point_to_plane(src: np.ndarray, dst: np.ndarray, init: Similarity, *, schedule_m: list[float], dst_tree: cKDTree | None = None,
+                       dst_normals: np.ndarray | None = None, max_iterations_per_stage: int = 50, tolerance: float = 1e-7) -> IcpResult:
+    """Rigid point-to-plane ICP, coarse to fine: for each correspondence distance in `schedule_m` (largest first), match
+    within that distance and apply the rigid motion residual_rigid_motion solves (Gauss-Newton on the linearised
+    point-to-plane distances, Huber-weighted), until it is smaller than `tolerance`. The scale stays as `init` has it.
+
+    Unlike point-to-point ICP it exerts no force along a surface. Where one capture saw only part of a surface the other
+    saw whole (a floor glimpsed through a door), point-to-point pulls the larger set's points beyond the patch's edge onto
+    the edge, a drag along the floor that the walls cannot hold back where the floor outnumbers them (measured: a correct
+    corridor overlap read 10 cm off); point-to-plane leaves a direction no surface constrains where it is."""
+    src = np.asarray(src, dtype=np.float64)
+    dst = np.asarray(dst, dtype=np.float64)
+    tree = dst_tree or cKDTree(dst)
+    normals = surface_normals(dst, 12, tree) if dst_normals is None else dst_normals
+    T = init
+    total = 0
+    for max_d in schedule_m:
+        for _ in range(max_iterations_per_stage):
+            total += 1
+            moved = T.apply(src)
+            d, j = tree.query(moved, distance_upper_bound=max_d)
+            m = np.isfinite(d)
+            if m.sum() < 6:
+                raise RegistrationError(f"ICP found {int(m.sum())} correspondences within {max_d} m; the clouds do not overlap")
+            omega, delta, _ = residual_rigid_motion(moved[m], dst[j[m]], normals[j[m]])
+            c = moved[m].mean(axis=0)
+            R = _rotvec_matrix(omega)
+            T = Similarity(1.0, R, c - R @ c + delta).compose(T)
+            if np.linalg.norm(omega) + np.linalg.norm(delta) / max(max_d, 1e-9) < tolerance:
+                break
+    return IcpResult(T, total, list(schedule_m))
+
+
+def _rotvec_matrix(omega: np.ndarray) -> np.ndarray:
+    theta = float(np.linalg.norm(omega))
+    if theta < 1e-15:
+        return np.eye(3)
+    k = omega / theta
+    K = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+    return np.eye(3) + np.sin(theta) * K + (1 - np.cos(theta)) * K @ K
 
 
 def residual_rigid_motion(p: np.ndarray, q: np.ndarray, normals: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:

@@ -1,6 +1,6 @@
 # Chaya 02 technical benchmark suite
 
-Five benchmarks, each asking whether a part of Chaya 02 does better than the obvious alternative. The results,
+Seven benchmarks, each asking whether a part of Chaya 02 does better than the obvious alternative. The results,
 and what they do and do not show, are in [docs/BENCHMARKS.md](../docs/BENCHMARKS.md).
 
 ## Rules
@@ -32,6 +32,7 @@ exact command to run once it does.
 | `b3_semantic_search/phrasing.json`, `inprocess_texts.py` | B3's queries in sentence templates and misspelt (derived mechanically), and the CLIP-vector request for running B3 in process (`services/api` `SearchBenchmarkTest`) |
 | `b4_navigation/run.py` | STANDARD vs STEP_FREE routes through the real router |
 | `b5_incremental_rescan/run.py` | alignment accuracy under a known misalignment, and rescan scope |
+| `b7_multiroom/run.py` | multi-room registration, loop closure, stitching, seams and cross-room routes on the synthetic floor (`--fpfh-only` in `chaya-bench-open3d` for real FPFH) |
 | `docker/open3d.Dockerfile` | worker package + Open3D (CPU), for B2 and B5 |
 | `tests/` | tests of the framework itself: `python -m pytest benchmarks/tests` |
 | `results/<benchmark>/<timestamp>.json` | one file per run; `latest.json` is the newest |
@@ -56,6 +57,9 @@ docker run --rm -v "$PWD:/repo" -v <data>:/data:ro -w /repo chaya-bench-open3d \
   python benchmarks/b2_geometry_cleanup/run.py --ply /data/playroom/point_cloud.ply --sfm-points /data/castle-sfm/points3D.txt
 docker run --rm -v "$PWD:/repo" -v <data>:/data:ro -w /repo chaya-bench-open3d \
   python benchmarks/b5_incremental_rescan/run.py --sfm-points /data/castle-sfm/points3D.txt
+# B7: the venv, with the chaya-navmesh build for route connectivity; then real FPFH in the Open3D image
+services/reconstruction/.venv/Scripts/python benchmarks/b7_multiroom/run.py --trials 5
+docker run --rm -v "$PWD:/repo" -w /repo chaya-bench-open3d sh -c "pip install -q pytest && python benchmarks/b7_multiroom/run.py --fpfh-only"
 ```
 
 **Data, downloaded at run time and never committed:**

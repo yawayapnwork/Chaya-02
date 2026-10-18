@@ -14,6 +14,7 @@ import dev.chaya.api.pipeline.PipelineDtos.RunView;
 import dev.chaya.api.pipeline.PipelineDtos.StageReport;
 import dev.chaya.api.pipeline.PipelineDtos.StageRunView;
 import dev.chaya.api.pipeline.PipelineDtos.StageView;
+import dev.chaya.api.pipeline.PipelineDtos.WorkOrderRoom;
 import dev.chaya.api.pipeline.PipelineDtos.WorkOrder;
 import dev.chaya.api.processing.JobLease;
 import dev.chaya.api.processing.JobStage;
@@ -92,12 +93,17 @@ public class PipelineService {
     private static final TypeReference<Map<String, Object>> MAP = new TypeReference<>() {};
 
     /** scanVersionId: the DRAFT version the run will be (every run since V28; null for a run started before, or for a
-     * capture with no floor). incremental(): a re-scan, whose version has a parent and a region. */
+     * capture with no floor). incremental(): a re-scan, whose version has a parent and a region. stitch(): a multi-room
+     * stitch, whose version records the room versions it combines (docs/multi-room.md). */
     private record RunRow(UUID id, UUID orgId, UUID venueId, UUID scanId, UUID scanVersionId, UUID captureId, String status,
                           List<JobStage> stages, boolean privacy, int budgetSeconds, Instant deadline,
                           String failureStage, UUID reconstructionFrameRunId) {
         boolean incremental() {
             return scanVersionId != null && stages.contains(JobStage.REGION_SPLICE);
+        }
+
+        boolean stitch() {
+            return scanVersionId != null && stages.contains(JobStage.ROOM_STITCH);
         }
     }
 
@@ -169,17 +175,21 @@ public class PipelineService {
                 "timeBudgetSeconds must be between 1 and " + props.maxTimeBudgetSeconds());
         }
         derived.ensureBucket();
-        List<JobStage> resolvedPlan = plan != null ? plan : PipelineDefinition.plan(privacy);
+        // A capture of one room (docs/multi-room.md) is reconstructed with the room plan, and its version is a room version.
+        record Scope(UUID floorId, UUID spaceId) {}
+        Scope scope = jdbc.sql("SELECT floor_id, space_id FROM capture_session WHERE id = :c").param("c", captureId)
+            .query((rs, i) -> new Scope(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class))).optional()
+            .orElse(new Scope(null, null));
+        List<JobStage> resolvedPlan = plan != null ? plan
+            : scope.spaceId() != null ? PipelineDefinition.roomPlan(privacy) : PipelineDefinition.plan(privacy);
         boolean incremental = resolvedPlan.contains(JobStage.REGION_SPLICE);
-        if (scanVersionId == null) {
+        boolean stitch = resolvedPlan.contains(JobStage.ROOM_STITCH);
+        if (scanVersionId == null && scope.floorId() != null) {
             // Every full-venue run is a DRAFT version from the start (review N-4): what it produces names its version, and
             // none of it is current until the version is promoted. A capture with no floor produces no floor's twin, so
             // there is nothing it could ever publish.
-            UUID floorId = jdbc.sql("SELECT floor_id FROM capture_session WHERE id = :c").param("c", captureId)
-                .query((rs, i) -> Optional.ofNullable(rs.getObject(1, UUID.class))).optional().flatMap(o -> o).orElse(null);
-            if (floorId != null) {
-                scanVersionId = versions.createFullRunDraft(actor, venueId, scanId, floorId, Map.of("privacyEnabled", privacy));
-            }
+            scanVersionId = versions.createFullRunDraft(actor, venueId, scanId, scope.floorId(), Map.of("privacyEnabled", privacy),
+                scope.spaceId());
         }
         UUID runId = jdbc.sql("INSERT INTO pipeline_run (organization_id, venue_id, scan_id, scan_version_id, capture_session_id, "
                 + "stages, privacy_enabled, time_budget_seconds, deadline_at, requested_by) "
@@ -189,17 +199,31 @@ public class PipelineService {
             .param("stages", json(resolvedPlan.stream().map(Enum::name).toList())).param("p", privacy).param("b", budget)
             .param("by", actor.subject()).query(UUID.class).single();
         // Full reconstruction: its own SfM frame. Incremental re-scan: the frame its merged output is spliced into -- the
-        // parent version's run's reconstruction frame (docs/coordinate-frames.md, "Incremental re-scans").
+        // parent version's run's reconstruction frame (docs/coordinate-frames.md, "Incremental re-scans"). Stitch: the
+        // anchor room's reconstruction frame, which the stitched floor is written in (docs/multi-room.md).
         if (scanVersionId != null && !incremental) {
             versions.attachRun(scanVersionId, runId);
         }
-        UUID frameRoot = !incremental ? runId : jdbc.sql("""
-                SELECT coalesce(p.reconstruction_frame_run_id, p.id)
-                  FROM scan_version v
-                  JOIN scan_version parent ON parent.id = v.parent_version_id
-                  JOIN pipeline_run p ON p.id = parent.pipeline_run_id
-                 WHERE v.id = :sv
-                """).param("sv", scanVersionId).query(UUID.class).optional().orElse(null);
+        UUID frameRoot;
+        if (incremental) {
+            frameRoot = jdbc.sql("""
+                    SELECT coalesce(p.reconstruction_frame_run_id, p.id)
+                      FROM scan_version v
+                      JOIN scan_version parent ON parent.id = v.parent_version_id
+                      JOIN pipeline_run p ON p.id = parent.pipeline_run_id
+                     WHERE v.id = :sv
+                    """).param("sv", scanVersionId).query(UUID.class).optional().orElse(null);
+        } else if (stitch) {
+            frameRoot = jdbc.sql("""
+                    SELECT coalesce(p.reconstruction_frame_run_id, p.id)
+                      FROM scan_version_stitch_source s
+                      JOIN scan_version room ON room.id = s.room_version_id
+                      JOIN pipeline_run p ON p.id = room.pipeline_run_id
+                     WHERE s.stitch_version_id = :sv AND s.anchor
+                    """).param("sv", scanVersionId).query(UUID.class).single();
+        } else {
+            frameRoot = runId;
+        }
         jdbc.sql("UPDATE pipeline_run SET reconstruction_frame_run_id = :root WHERE id = :r")
             .param("root", frameRoot).param("r", runId).update();
         UUID first = jobs.enqueueForRun(actor.organizationId(), venueId, scanId, scanVersionId, runId, resolvedPlan.get(0));
@@ -226,10 +250,16 @@ public class PipelineService {
                 throw new ApiException(HttpStatus.CONFLICT, "RUN_NOT_RETRYABLE", "this re-scan's alignment was rejected and its "
                     + "version is final; start a new re-scan (and re-capture or re-calibrate the region) instead");
             }
-            if (ScanVersionService.VERSION_SUPERSEDED.equals(jdbc.sql("SELECT failure_code FROM pipeline_run WHERE id = :r")
-                    .param("r", run.id()).query(String.class).single())) {
+            String failureCode = jdbc.sql("SELECT failure_code FROM pipeline_run WHERE id = :r").param("r", run.id())
+                .query(String.class).single();
+            if (ScanVersionService.VERSION_SUPERSEDED.equals(failureCode)) {
                 throw new ApiException(HttpStatus.CONFLICT, "RUN_NOT_RETRYABLE", "this run's version was created before the one its "
                     + "floor now publishes and can never be published; reconstruct or re-scan again instead");
+            }
+            if (STITCH_REJECTIONS.contains(failureCode)) {
+                throw new ApiException(HttpStatus.CONFLICT, "RUN_NOT_RETRYABLE", "this stitch was rejected (" + failureCode + "): "
+                    + "its rooms and calibrations are fixed, so running it again gives the same answer. Re-capture or re-calibrate "
+                    + "the rooms it names, or leave one out, and start a new stitch (docs/multi-room.md)");
             }
             if (run.incremental()) {
                 requireRescanParentCurrent(run);
@@ -339,7 +369,7 @@ public class PipelineService {
     private WorkOrder workOrder(ClaimedJob j, String leaseToken) {
         if (j.runId() == null) { // legacy job: no run, no inputs
             return new WorkOrder(j.id(), j.organizationId(), j.venueId(), j.scanId(), j.scanVersionId(), j.stage().name(),
-                null, j.retryCount() + 1, null, false, null, null, List.of(), null, null, null, leaseToken);
+                null, j.retryCount() + 1, null, false, null, null, List.of(), null, null, null, null, null, leaseToken);
         }
         RunRow run = loadRun(j.runId());
         int attempt = j.retryCount() + 1;
@@ -353,9 +383,14 @@ public class PipelineService {
         for (InputRef in : inputs) {
             TenantKeys.require(in.key(), j.organizationId(), j.venueId());
         }
+        boolean stitchStage = run.stitch() && STITCH_INPUT_STAGES.contains(j.stage());
+        List<WorkOrderRoom> rooms = stitchStage ? stitchRooms(run.scanVersionId()) : null;
+        Map<String, Object> stitchOptions = stitchStage ? Map.of("allowUnconfirmedRooms", jdbc.sql(
+                "SELECT coalesce((processing_config ->> 'allowUnconfirmedRooms')::boolean, false) FROM scan_version WHERE id = :v")
+            .param("v", run.scanVersionId()).query(Boolean.class).single()) : null;
         return new WorkOrder(j.id(), j.organizationId(), j.venueId(), j.scanId(), j.scanVersionId(), j.stage().name(),
             run.id(), attempt, run.deadline(), run.privacy(), derivedBucketName, prefix(run, j.stage(), attempt),
-            inputs, regionGeometry, frame, parentFrame, leaseToken);
+            inputs, regionGeometry, frame, parentFrame, rooms, stitchOptions, leaseToken);
     }
 
     /**
@@ -370,6 +405,44 @@ public class PipelineService {
             return run.id();
         }
         return root;
+    }
+
+    /** The stitch stages that read the rooms' clouds (ROOM_CLOUD / ROOM_LABELS) and get the work order's `rooms`. */
+    static final Set<JobStage> STITCH_INPUT_STAGES = Set.of(JobStage.ROOM_REGISTRATION, JobStage.ROOM_STITCH);
+
+    /** The rooms of a stitch, as its work orders carry them: in the order they were selected (the anchor first among
+     * equals is not implied; `anchor` says which), each with the calibration it was selected with. */
+    private List<WorkOrderRoom> stitchRooms(UUID stitchVersionId) {
+        record Row(UUID spaceId, String name, UUID versionId, UUID runId, boolean anchor, UUID frameId, UUID cloud, UUID labels) {}
+        return jdbc.sql("""
+                SELECT s.space_id, sp.name, s.room_version_id, room.pipeline_run_id, s.anchor, s.coordinate_frame_id,
+                       s.cloud_artifact_id, s.labels_artifact_id
+                  FROM scan_version_stitch_source s
+                  JOIN space sp ON sp.id = s.space_id
+                  JOIN scan_version room ON room.id = s.room_version_id
+                 WHERE s.stitch_version_id = :v ORDER BY s.position
+                """).param("v", stitchVersionId)
+            .query((rs, i) -> new Row(rs.getObject(1, UUID.class), rs.getString(2), rs.getObject(3, UUID.class), rs.getObject(4, UUID.class),
+                rs.getBoolean(5), rs.getObject(6, UUID.class), rs.getObject(7, UUID.class), rs.getObject(8, UUID.class))).list()
+            .stream().map(r -> new WorkOrderRoom(r.spaceId(), r.name(), r.versionId(), r.runId(), r.anchor(),
+                frames.load(r.frameId()).map(FrameView::wire).orElse(null), r.cloud(), r.labels())).toList();
+    }
+
+    /** The rooms' clouds and labels, exactly the artifacts recorded on the stitch (scan_version_stitch_source), as kinds
+     * ROOM_CLOUD and ROOM_LABELS. They belong to the rooms' runs and are only ever read: the stitch writes a new
+     * SPLAT_MERGED under its own run. */
+    private List<InputRef> stitchInputs(UUID stitchVersionId) {
+        return jdbc.sql("""
+                SELECT a.id, CASE WHEN a.id = s.cloud_artifact_id THEN 'ROOM_CLOUD' ELSE 'ROOM_LABELS' END AS kind, a.bucket,
+                       a.object_key, a.checksum_sha256, a.content_type, a.size_bytes
+                  FROM scan_version_stitch_source s
+                  JOIN processing_artifact a ON a.id IN (s.cloud_artifact_id, s.labels_artifact_id)
+                 WHERE s.stitch_version_id = :v AND NOT a.contains_pii
+                 ORDER BY s.position, kind
+                """).param("v", stitchVersionId)
+            .query((rs, i) -> new InputRef(rs.getObject("id", UUID.class), rs.getString("kind"), null, rs.getString("bucket"),
+                rs.getString("object_key"), rs.getString("checksum_sha256"), rs.getString("content_type"), rs.getLong("size_bytes"), false))
+            .list();
     }
 
     private Map<String, Object> regionGeometryOf(UUID scanVersionId) {
@@ -415,6 +488,9 @@ public class PipelineService {
         }
         if (run.scanVersionId() != null && stage == JobStage.REGION_SPLICE) {
             globalLabelsInput(run.scanVersionId()).ifPresent(inputs::add);
+        }
+        if (run.stitch() && STITCH_INPUT_STAGES.contains(stage)) {
+            inputs.addAll(stitchInputs(run.scanVersionId()));
         }
         // A re-scan's NAVIGATION_BAKING re-bakes the whole floor from the merged scene and proves it against the parent
         // scene outside the region (chaya_worker.stages.navigation_baking), so it gets the parent's cloud and labels too.
@@ -639,6 +715,14 @@ public class PipelineService {
             }
             appendChangedArtifactKind(run.scanVersionId(), "SPLAT_MERGED");
         }
+        if (run.stitch()) {
+            String rejection = recordStitchStage(run, job.stage(), ok, failCode, r);
+            if (rejection != null) {
+                ok = false;
+                failCode = REGISTRATION_REJECTED;
+                failMessage = rejection;
+            }
+        }
         if (ok && job.stage() == JobStage.SEMANTIC_INDEXING) {
             ingestDetectedObjects(job, run, stored);
         }
@@ -672,9 +756,66 @@ public class PipelineService {
     }
 
     static final String ALIGNMENT_REJECTED = "ALIGNMENT_REJECTED";
+    static final String REGISTRATION_REJECTED = "REGISTRATION_REJECTED";
+    static final String STITCH_REJECTED = "STITCH_REJECTED";
+    static final String STITCH_FRAME_CHANGED = "STITCH_FRAME_CHANGED";
+    /** A stitch whose rooms could not be placed or combined, or whose anchor was recalibrated while it ran: its inputs are
+     * fixed, so running it again gives the same answer. */
+    static final Set<String> STITCH_REJECTIONS = Set.of(REGISTRATION_REJECTED, STITCH_REJECTED, STITCH_FRAME_CHANGED);
     /** Failures a retry cannot fix: the version was rejected, or it can no longer be published over what its floor publishes. */
     static final Set<String> PERMANENT_FAILURES = Set.of(ALIGNMENT_REJECTED, ScanVersionService.PARENT_NOT_CURRENT,
-        ScanVersionService.VERSION_SUPERSEDED);
+        ScanVersionService.VERSION_SUPERSEDED, REGISTRATION_REJECTED, STITCH_REJECTED, STITCH_FRAME_CHANGED);
+
+    /**
+     * What a stitch's stages measured, recorded on its DRAFT version whatever the outcome (docs/multi-room.md, "Version
+     * management"): ROOM_REGISTRATION's poses, pairwise results and loop closures (registration_report), ROOM_STITCH's
+     * misalignment, seam and duplicate measurements (stitch_report), NAVIGATION_BAKING's room connectivity
+     * (room_connectivity). On success from the command's config, on a rejection from the error details.
+     *
+     * <p>A successful ROOM_REGISTRATION is checked here too, not taken on trust: it must have placed every room the stitch
+     * names and left none unregistered. Returns the rejection reason when it did not, else null.
+     */
+    private String recordStitchStage(RunRow run, JobStage stage, boolean ok, String failCode, StageReport r) {
+        Map<String, Object> config = asMap(r.command() == null ? null : r.command().get("config"));
+        String column;
+        Map<String, Object> doc;
+        switch (stage) {
+            case ROOM_REGISTRATION -> {
+                column = "registration_report";
+                doc = ok ? asMap(config == null ? null : config.get("registration")) : REGISTRATION_REJECTED.equals(failCode) ? r.errorDetails() : null;
+            }
+            case ROOM_STITCH -> {
+                column = "stitch_report";
+                doc = ok ? asMap(config == null ? null : config.get("stitch")) : STITCH_REJECTED.equals(failCode) ? r.errorDetails() : null;
+            }
+            case NAVIGATION_BAKING -> {
+                column = "room_connectivity";
+                doc = ok ? asMap(config == null ? null : config.get("rooms")) : "NAVMESH_ROOMS_DISCONNECTED".equals(failCode) ? r.errorDetails() : null;
+            }
+            default -> {
+                return null;
+            }
+        }
+        if (doc != null) {
+            jdbc.sql("UPDATE scan_version SET " + column + " = CAST(:d AS jsonb) WHERE id = :v AND status = 'DRAFT'")
+                .param("d", json(doc)).param("v", run.scanVersionId()).update();
+        }
+        if (!ok || stage != JobStage.ROOM_REGISTRATION) {
+            return null;
+        }
+        if (doc == null) {
+            return "ROOM_REGISTRATION reported success without a registration report";
+        }
+        List<String> expected = jdbc.sql("SELECT space_id::text FROM scan_version_stitch_source WHERE stitch_version_id = :v ORDER BY 1")
+            .param("v", run.scanVersionId()).query(String.class).list();
+        List<String> registered = doc.get("registered") instanceof List<?> l ? l.stream().map(String::valueOf).sorted().toList() : List.of();
+        boolean none = !(doc.get("unregistered") instanceof Map<?, ?> u) || u.isEmpty();
+        if (!"ACCEPTED".equals(doc.get("status")) || !none || !registered.equals(expected)) {
+            return "ROOM_REGISTRATION reported success but did not place every room of the stitch (registered " + registered
+                + ", unregistered " + doc.get("unregistered") + ", expected " + expected + ")";
+        }
+        return null;
+    }
     private static final Set<String> ALIGNMENT_METHODS = Set.of("FEATURE_RANSAC_ICP", "DIRECT_CANONICAL_ICP", "FEATURE_SIMILARITY_ICP");
 
     /**
@@ -826,6 +967,14 @@ public class PipelineService {
         if (run.incremental()) {
             recordRescanOutcome(actor, run, status, failCode);
         }
+        if (run.stitch()) {
+            Map<String, Object> meta = new LinkedHashMap<>();
+            meta.put("outcome", status);
+            if (failCode != null) {
+                meta.put("failureCode", failCode);
+            }
+            audit.successInOrganization(actor, run.orgId(), run.venueId(), "stitch.outcome", "scan_version", run.scanVersionId(), meta);
+        }
         return status;
     }
 
@@ -839,6 +988,9 @@ public class PipelineService {
      */
     private ApiException tryPromote(Actor actor, RunRow run) {
         UUID frameRun = run.reconstructionFrameRunId() == null ? run.id() : run.reconstructionFrameRunId();
+        if (versions.roomOf(run.scanVersionId()).isPresent()) {
+            return finalizeRoomVersion(actor, run, frameRun);
+        }
         if (!run.incremental() && frames.activeForRun(frameRun).filter(FrameView::canonical).isEmpty()) {
             audit.successInOrganization(actor, run.orgId(), run.venueId(), "scan_version.awaiting_calibration", "scan_version",
                 run.scanVersionId(), Map.of("runId", run.id().toString()));
@@ -869,6 +1021,54 @@ public class PipelineService {
     }
 
     /**
+     * A room run's version (docs/multi-room.md) is finalized -- its cloud, viewer asset and canonical frame pinned -- but
+     * never promoted: the floor does not show one room. An uncalibrated room stays DRAFT until it is calibrated and
+     * finalized (POST .../rooms/{roomId}/versions/finalize-current). Inside a savepoint like a promotion; a refusal is
+     * returned so the run ends FAILED with nothing finalized.
+     */
+    private ApiException finalizeRoomVersion(Actor actor, RunRow run, UUID frameRun) {
+        if (frames.activeForRun(frameRun).filter(FrameView::canonical).isEmpty()) {
+            audit.successInOrganization(actor, run.orgId(), run.venueId(), "scan_version.awaiting_calibration", "scan_version",
+                run.scanVersionId(), Map.of("runId", run.id().toString(), "room", true));
+            return null;
+        }
+        jdbc.sql("SAVEPOINT room_version_finalize").update();
+        try {
+            UUID frameId = versions.finalizeVersion(run.scanVersionId(), Map.of("runId", run.id().toString(),
+                "stages", run.stages().stream().map(Enum::name).toList(), "room", true));
+            jdbc.sql("RELEASE SAVEPOINT room_version_finalize").update();
+            audit.successInOrganization(actor, run.orgId(), run.venueId(), "scan_version.room_finalized", "scan_version",
+                run.scanVersionId(), Map.of("runId", run.id().toString(), "coordinateFrameId", frameId.toString()));
+            return null;
+        } catch (ApiException e) {
+            jdbc.sql("ROLLBACK TO SAVEPOINT room_version_finalize").update();
+            return e;
+        } catch (org.springframework.dao.DataAccessException e) {
+            jdbc.sql("ROLLBACK TO SAVEPOINT room_version_finalize").update();
+            return new ApiException(HttpStatus.CONFLICT, "VERSION_INCONSISTENT", String.valueOf(e.getMostSpecificCause().getMessage()));
+        }
+    }
+
+    /** A room run that succeeded before its room was calibrated: finalized now (docs/multi-room.md). Inside the caller's
+     * transaction; a refusal propagates. */
+    public UUID finalizeRoomRun(Actor actor, UUID runId) {
+        RunRow run = lockRun(runId);
+        if (!"SUCCEEDED".equals(run.status()) || run.scanVersionId() == null || versions.roomOf(run.scanVersionId()).isEmpty()) {
+            throw new ApiException(HttpStatus.CONFLICT, "RUN_NOT_SUCCEEDED", "run " + runId + " is not a successful room capture's run");
+        }
+        UUID frameRun = run.reconstructionFrameRunId() == null ? run.id() : run.reconstructionFrameRunId();
+        if (frames.activeForRun(frameRun).filter(FrameView::canonical).isEmpty()) {
+            throw new ApiException(HttpStatus.CONFLICT, CoordinateFrameService.NOT_CALIBRATED, "the room's reconstruction has no "
+                + "calibrated canonical coordinate frame; calibrate it first (POST .../reconstructions/" + runId + "/coordinate-frames)");
+        }
+        UUID frameId = versions.finalizeVersion(run.scanVersionId(), Map.of("runId", run.id().toString(),
+            "stages", run.stages().stream().map(Enum::name).toList(), "room", true));
+        audit.success(actor, run.venueId(), "scan_version.room_finalized", "scan_version", run.scanVersionId(),
+            Map.of("runId", run.id().toString(), "coordinateFrameId", frameId.toString()));
+        return run.scanVersionId();
+    }
+
+    /**
      * POST .../scan-versions/finalize-current for a run whose version is still DRAFT after it succeeded (its reconstruction
      * was calibrated only afterwards), or a run from before every run was a version. Inside the caller's transaction; a
      * refusal propagates and rolls everything back.
@@ -885,6 +1085,9 @@ public class PipelineService {
     private ScanVersionService.Promotion publish(Actor actor, RunRow run) {
         UUID versionId = run.scanVersionId() != null ? run.scanVersionId()
             : jdbc.sql("SELECT id FROM scan_version WHERE pipeline_run_id = :r").param("r", run.id()).query(UUID.class).single();
+        if (run.stitch()) {
+            requireStitchFrameUnchanged(run);
+        }
         boolean draft = "DRAFT".equals(jdbc.sql("SELECT status FROM scan_version WHERE id = :v").param("v", versionId)
             .query(String.class).single());
         // A run from before V28 ingested its detections when SEMANTIC_INDEXING reported; promote binds them instead.
@@ -905,6 +1108,21 @@ public class PipelineService {
         meta.putAll(p.frameChange());
         audit.successInOrganization(actor, run.orgId(), run.venueId(), "scan_version.promoted", "scan_version", versionId, meta);
         return p;
+    }
+
+    /** The stitched floor was registered in its anchor room's calibration as it was when the stitch started; it is in that
+     * reconstruction's frame, and finalization pins the frame active now. A recalibration in between would publish the
+     * other rooms placed by the old one (STITCH_FRAME_CHANGED, permanent: start a new stitch). */
+    private void requireStitchFrameUnchanged(RunRow run) {
+        UUID registered = jdbc.sql("SELECT coordinate_frame_id FROM scan_version_stitch_source WHERE stitch_version_id = :v AND anchor")
+            .param("v", run.scanVersionId()).query(UUID.class).single();
+        UUID frameRun = run.reconstructionFrameRunId() == null ? run.id() : run.reconstructionFrameRunId();
+        UUID active = frames.activeForRun(frameRun).filter(FrameView::canonical).map(FrameView::id).orElse(null);
+        if (!registered.equals(active)) {
+            throw new ApiException(HttpStatus.CONFLICT, STITCH_FRAME_CHANGED, "the anchor room was recalibrated (frame " + registered
+                + " -> " + active + ") after this stitch registered the rooms in it; publishing would place the other rooms by the old "
+                + "calibration. Start a new stitch");
+        }
     }
 
     /**
@@ -1004,6 +1222,14 @@ public class PipelineService {
         }
         if (stage == JobStage.NAVIGATION_BAKING && kinds.contains("NAVIGATION_GRAPH")) {
             OutputProblem p = navigationGraphProblem(run, first(stored, "NAVIGATION_GRAPH"), stored);
+            if (p != null) {
+                return p;
+            }
+        }
+        if (stage == JobStage.ROOM_STITCH && run.stitch() && kinds.contains("STITCH_REPORT") && kinds.contains("SPLAT_MERGED")
+                && kinds.contains("SEMANTIC_LABELS_MERGED")) {
+            OutputProblem p = stitchLineageProblem(run, first(stored, "STITCH_REPORT"), first(stored, "SPLAT_MERGED"),
+                first(stored, "SEMANTIC_LABELS_MERGED"));
             if (p != null) {
                 return p;
             }
@@ -1139,6 +1365,67 @@ public class PipelineService {
         }
         return problem == null ? null : new OutputProblem("SPLICE_LINEAGE_INVALID", "REGION_SPLICE's report does not prove what was "
             + "spliced: " + problem, Map.of("splatMergedSha256", merged.sha256()));
+    }
+
+    /**
+     * STITCH_REPORT in the worker's shape (chaya_worker.stages.room_stitch) is the stitched floor's provenance, so it is
+     * checked rather than copied: it must name this run's version, have stitched exactly the clouds and labels the stitch
+     * recorded for its rooms (artifact id and SHA-256 each, nothing more or less), name the SPLAT_MERGED and
+     * SEMANTIC_LABELS_MERGED this report published, and keep a non-empty block of Gaussians for every room.
+     */
+    @SuppressWarnings("unchecked")
+    private OutputProblem stitchLineageProblem(RunRow run, ArtifactReport report, ArtifactReport merged, ArtifactReport labels) {
+        OutputProblem[] unreadable = new OutputProblem[1];
+        Object raw = readDocument(report, unreadable);
+        if (unreadable[0] != null) {
+            return unreadable[0];
+        }
+        Map<?, ?> doc = raw instanceof Map<?, ?> m ? m : Map.of();
+        Map<?, ?> source = doc.get("source") instanceof Map<?, ?> m ? m : Map.of();
+        Map<?, ?> output = doc.get("output") instanceof Map<?, ?> m ? m : Map.of();
+        Map<?, ?> labelDoc = doc.get("labels") instanceof Map<?, ?> m ? m : Map.of();
+        Map<?, ?> inputs = doc.get("inputs") instanceof Map<?, ?> m ? m : Map.of();
+        List<?> rooms = inputs.get("rooms") instanceof List<?> l ? l : List.of();
+        List<?> blocks = doc.get("blocks") instanceof List<?> l ? l : List.of();
+        record Expected(String space, String cloud, String cloudSha, String labels, String labelsSha) {}
+        List<Expected> expected = jdbc.sql("""
+                SELECT s.space_id::text, c.id::text, c.checksum_sha256, l.id::text, l.checksum_sha256
+                  FROM scan_version_stitch_source s
+                  JOIN processing_artifact c ON c.id = s.cloud_artifact_id
+                  JOIN processing_artifact l ON l.id = s.labels_artifact_id
+                 WHERE s.stitch_version_id = :v ORDER BY s.space_id
+                """).param("v", run.scanVersionId())
+            .query((rs, i) -> new Expected(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5))).list();
+        List<Expected> reported = new ArrayList<>();
+        for (Object o : rooms) {
+            Map<?, ?> room = o instanceof Map<?, ?> m ? m : Map.of();
+            Map<?, ?> cloud = room.get("cloud") instanceof Map<?, ?> m ? m : Map.of();
+            Map<?, ?> lab = room.get("labels") instanceof Map<?, ?> m ? m : Map.of();
+            reported.add(new Expected(String.valueOf(room.get("space_id")), String.valueOf(cloud.get("artifact_id")),
+                String.valueOf(cloud.get("sha256")), String.valueOf(lab.get("artifact_id")), String.valueOf(lab.get("sha256"))));
+        }
+        reported.sort(java.util.Comparator.comparing(Expected::space));
+        java.util.Set<String> blockRooms = new java.util.HashSet<>();
+        boolean emptyBlock = false;
+        for (Object o : blocks) {
+            Map<?, ?> b = o instanceof Map<?, ?> m ? m : Map.of();
+            blockRooms.add(String.valueOf(b.get("piece")));
+            emptyBlock |= !(b.get("count") instanceof Number n) || n.longValue() <= 0;
+        }
+        String problem = null;
+        if (!run.scanVersionId().toString().equals(String.valueOf(source.get("scan_version_id")))) {
+            problem = "the report names scan version " + source.get("scan_version_id") + ", not " + run.scanVersionId();
+        } else if (!reported.equals(expected)) {
+            problem = "the report stitched " + reported + ", not the rooms' recorded clouds and labels " + expected;
+        } else if (!merged.sha256().equals(output.get("sha256"))) {
+            problem = "the report's output " + output.get("sha256") + " is not the SPLAT_MERGED published (" + merged.sha256() + ")";
+        } else if (!labels.sha256().equals(labelDoc.get("sha256"))) {
+            problem = "the report's labels " + labelDoc.get("sha256") + " are not the SEMANTIC_LABELS_MERGED published (" + labels.sha256() + ")";
+        } else if (emptyBlock || !blockRooms.equals(new java.util.HashSet<>(expected.stream().map(Expected::space).toList()))) {
+            problem = "the stitched cloud does not keep a block of Gaussians for every room (blocks " + blockRooms + ")";
+        }
+        return problem == null ? null : new OutputProblem("STITCH_LINEAGE_INVALID", "ROOM_STITCH's report does not prove what was "
+            + "stitched: " + problem, Map.of("splatMergedSha256", merged.sha256()));
     }
 
     /** NAVIGATION_GRAPH in the worker's shape (chaya_worker.stages.navigation_baking): a `graphs` map whose STANDARD profile

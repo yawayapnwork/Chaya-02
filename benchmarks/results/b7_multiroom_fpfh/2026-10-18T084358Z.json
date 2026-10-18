@@ -1,0 +1,887 @@
+{
+  "benchmark": "b7_multiroom_fpfh",
+  "title": "Multi-room registration and stitching on a synthetic floor, real FPFH matches",
+  "started": "2026-10-18T08:43:58+00:00",
+  "finished": "2026-10-18T08:45:12+00:00",
+  "git": {
+    "commit": "",
+    "dirty_files": 0
+  },
+  "environment": {
+    "python": "3.12.14",
+    "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.36",
+    "cpus": 18
+  },
+  "inputs": {
+    "scene": "synthetic three-room floor (tests/multiroom_scene.py)",
+    "scene_sha256": "60ae1654ca40a7819d4024f312019337c42aa738cd8caffbe90fa4344f71d46e",
+    "trials": 5
+  },
+  "metrics": [
+    {
+      "metric": "floor",
+      "value": "two rooms and a corridor, three 1.2 m doorways (one loop)",
+      "unit": "",
+      "kind": "assumption",
+      "condition": "setup",
+      "source": "synthetic three-room floor (tests/multiroom_scene.py)",
+      "note": "stands in for independently captured rooms; NOT real-room data",
+      "command": null
+    },
+    {
+      "metric": "feature matcher",
+      "value": "FPFH (Open3D) mutual nearest neighbours, as in production",
+      "unit": "",
+      "kind": "configuration",
+      "condition": "setup",
+      "source": "chaya_worker.region_alignment.fpfh_correspondences",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "trials registered and stitched",
+      "value": "0/5",
+      "unit": "trials",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, real FPFH (Open3D)",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": "REGISTRATION_FAILED: REGISTRATION_REJECTED",
+      "command": null
+    },
+    {
+      "metric": "pairwise outcomes, all trials",
+      "value": "FREE_SPACE_CONFLICT 3, NO_SHARED_FEATURES 5, REGISTERED 7",
+      "unit": "pairs",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, real FPFH (Open3D)",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": "3 pairs per trial",
+      "command": null
+    },
+    {
+      "metric": "trials registered and stitched",
+      "value": "2/5",
+      "unit": "trials",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, real FPFH (Open3D), unconfirmed rooms accepted",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": "REGISTRATION_FAILED: REGISTRATION_REJECTED",
+      "command": null
+    },
+    {
+      "metric": "pairwise outcomes, all trials",
+      "value": "FREE_SPACE_CONFLICT 3, NO_SHARED_FEATURES 5, REGISTERED 7",
+      "unit": "pairs",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, real FPFH (Open3D), unconfirmed rooms accepted",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": "3 pairs per trial",
+      "command": null
+    },
+    {
+      "metric": "rooms placed in refused trials, worst median error",
+      "value": 0.00107,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, real FPFH (Open3D), unconfirmed rooms accepted",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": "3 placements; a refusal must not hide a wrong one",
+      "command": null
+    },
+    {
+      "metric": "registration error, median over rooms and trials",
+      "value": 0.00059,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, real FPFH (Open3D), unconfirmed rooms accepted",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": "per room: median point distance from the true placement",
+      "command": null
+    },
+    {
+      "metric": "registration error, worst room p95",
+      "value": 0.00176,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, real FPFH (Open3D), unconfirmed rooms accepted",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "rotation error, worst room",
+      "value": 0.0212,
+      "unit": "deg",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, real FPFH (Open3D), unconfirmed rooms accepted",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "edge residual after optimisation, max",
+      "value": 0.0,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, real FPFH (Open3D), unconfirmed rooms accepted",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "ROOM_REGISTRATION time, median",
+      "value": 6.94808,
+      "unit": "s",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, real FPFH (Open3D), unconfirmed rooms accepted",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": "stage timing_seconds; this CPU",
+      "command": null
+    },
+    {
+      "metric": "ROOM_STITCH time, median",
+      "value": 3.38973,
+      "unit": "s",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, real FPFH (Open3D), unconfirmed rooms accepted",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": "58660 Gaussians in",
+      "command": null
+    },
+    {
+      "metric": "registration + stitch wall clock, median",
+      "value": 10.46219,
+      "unit": "s",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, real FPFH (Open3D), unconfirmed rooms accepted",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": "both stage runs through the orchestrator, including I/O",
+      "command": null
+    },
+    {
+      "metric": "overlap misalignment after stitching, max",
+      "value": 0.00223,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, real FPFH (Open3D), unconfirmed rooms accepted",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": "rigid offset ICP still finds in each pair's overlap",
+      "command": null
+    },
+    {
+      "metric": "seam step, median",
+      "value": 0.00347,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, real FPFH (Open3D), unconfirmed rooms accepted",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "seam step p90, max",
+      "value": 0.01136,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, real FPFH (Open3D), unconfirmed rooms accepted",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "duplicate Gaussians left, max",
+      "value": 0.00282,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, real FPFH (Open3D), unconfirmed rooms accepted",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "Gaussians removed as duplicates, median",
+      "value": 0.23739,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, real FPFH (Open3D), unconfirmed rooms accepted",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "colour step in shared voxels, median",
+      "value": 0.01017,
+      "unit": "RGB [0,1]",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, real FPFH (Open3D), unconfirmed rooms accepted",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": "both captures sample the same synthetic surface colour",
+      "command": null
+    }
+  ],
+  "details": {
+    "trials": {
+      "3 rooms, loop, noise 3 mm, real FPFH (Open3D)": [
+        {
+          "status": "REGISTRATION_FAILED",
+          "code": "REGISTRATION_REJECTED",
+          "message": "2 of 3 rooms could not be registered: Room C: only one chain of registrations places it: no loop confirms it, so a wrong registration on that chain could not be detected. Capture an overlap with another room, or start the stitch accepting unconfirmed rooms; Room B: only one chain of registrations places it: no loop confirms it, so a wrong registration on that chain could not be detected. Capture an overlap with another room, or start the stitch accepting unconfirmed rooms. Nothing was stitched or published.",
+          "unregistered": {
+            "space-C": "only one chain of registrations places it: no loop confirms it, so a wrong registration on that chain could not be detected. Capture an overlap with another room, or start the stitch accepting unconfirmed rooms",
+            "space-B": "only one chain of registrations places it: no loop confirms it, so a wrong registration on that chain could not be detected. Capture an overlap with another room, or start the stitch accepting unconfirmed rooms"
+          },
+          "pairs": [
+            {
+              "source": "space-B",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-B",
+              "status": "REJECTED",
+              "outcome": "NO_SHARED_FEATURES",
+              "failed_gates": [
+                "ransac_inliers",
+                "correspondence_count",
+                "inlier_ratio",
+                "rotation_residual_deg",
+                "translation_residual_m",
+                "icp_residual_m",
+                "confidence",
+                "constraint_ratio",
+                "estimation"
+              ]
+            }
+          ],
+          "placed_errors": {}
+        },
+        {
+          "status": "REGISTRATION_FAILED",
+          "code": "REGISTRATION_REJECTED",
+          "message": "2 of 3 rooms could not be registered: Room C: no accepted registration links it to the fixed rooms; Room B: only one chain of registrations places it: no loop confirms it, so a wrong registration on that chain could not be detected. Capture an overlap with another room, or start the stitch accepting unconfirmed rooms. Nothing was stitched or published.",
+          "unregistered": {
+            "space-C": "no accepted registration links it to the fixed rooms",
+            "space-B": "only one chain of registrations places it: no loop confirms it, so a wrong registration on that chain could not be detected. Capture an overlap with another room, or start the stitch accepting unconfirmed rooms"
+          },
+          "pairs": [
+            {
+              "source": "space-B",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-A",
+              "status": "REJECTED",
+              "outcome": "NO_SHARED_FEATURES",
+              "failed_gates": [
+                "ransac_inliers",
+                "correspondence_count",
+                "inlier_ratio",
+                "rotation_residual_deg",
+                "translation_residual_m",
+                "icp_residual_m",
+                "confidence",
+                "constraint_ratio",
+                "estimation"
+              ]
+            },
+            {
+              "source": "space-C",
+              "target": "space-B",
+              "status": "REJECTED",
+              "outcome": "NO_SHARED_FEATURES",
+              "failed_gates": [
+                "ransac_inliers",
+                "relative_scale",
+                "correspondence_count",
+                "inlier_ratio",
+                "rotation_residual_deg",
+                "translation_residual_m",
+                "icp_residual_m",
+                "confidence",
+                "constraint_ratio",
+                "estimation"
+              ]
+            }
+          ],
+          "placed_errors": {}
+        },
+        {
+          "status": "REGISTRATION_FAILED",
+          "code": "REGISTRATION_REJECTED",
+          "message": "2 of 3 rooms could not be registered: Room C: no accepted registration links it to the fixed rooms; Room B: only one chain of registrations places it: no loop confirms it, so a wrong registration on that chain could not be detected. Capture an overlap with another room, or start the stitch accepting unconfirmed rooms. Nothing was stitched or published.",
+          "unregistered": {
+            "space-C": "no accepted registration links it to the fixed rooms",
+            "space-B": "only one chain of registrations places it: no loop confirms it, so a wrong registration on that chain could not be detected. Capture an overlap with another room, or start the stitch accepting unconfirmed rooms"
+          },
+          "pairs": [
+            {
+              "source": "space-B",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-A",
+              "status": "REJECTED",
+              "outcome": "NO_SHARED_FEATURES",
+              "failed_gates": [
+                "ransac_inliers",
+                "correspondence_count",
+                "inlier_ratio",
+                "rotation_residual_deg",
+                "translation_residual_m",
+                "icp_residual_m",
+                "confidence",
+                "constraint_ratio",
+                "estimation"
+              ]
+            },
+            {
+              "source": "space-C",
+              "target": "space-B",
+              "status": "REJECTED",
+              "outcome": "FREE_SPACE_CONFLICT",
+              "failed_gates": [
+                "free_space_conflict"
+              ]
+            }
+          ],
+          "placed_errors": {}
+        },
+        {
+          "status": "REGISTRATION_FAILED",
+          "code": "REGISTRATION_REJECTED",
+          "message": "2 of 3 rooms could not be registered: Room C: only one chain of registrations places it: no loop confirms it, so a wrong registration on that chain could not be detected. Capture an overlap with another room, or start the stitch accepting unconfirmed rooms; Room B: only one chain of registrations places it: no loop confirms it, so a wrong registration on that chain could not be detected. Capture an overlap with another room, or start the stitch accepting unconfirmed rooms. Nothing was stitched or published.",
+          "unregistered": {
+            "space-C": "only one chain of registrations places it: no loop confirms it, so a wrong registration on that chain could not be detected. Capture an overlap with another room, or start the stitch accepting unconfirmed rooms",
+            "space-B": "only one chain of registrations places it: no loop confirms it, so a wrong registration on that chain could not be detected. Capture an overlap with another room, or start the stitch accepting unconfirmed rooms"
+          },
+          "pairs": [
+            {
+              "source": "space-B",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-B",
+              "status": "REJECTED",
+              "outcome": "FREE_SPACE_CONFLICT",
+              "failed_gates": [
+                "free_space_conflict"
+              ]
+            }
+          ],
+          "placed_errors": {}
+        },
+        {
+          "status": "REGISTRATION_FAILED",
+          "code": "REGISTRATION_REJECTED",
+          "message": "2 of 3 rooms could not be registered: Room C: no accepted registration links it to the fixed rooms; Room B: only one chain of registrations places it: no loop confirms it, so a wrong registration on that chain could not be detected. Capture an overlap with another room, or start the stitch accepting unconfirmed rooms. Nothing was stitched or published.",
+          "unregistered": {
+            "space-C": "no accepted registration links it to the fixed rooms",
+            "space-B": "only one chain of registrations places it: no loop confirms it, so a wrong registration on that chain could not be detected. Capture an overlap with another room, or start the stitch accepting unconfirmed rooms"
+          },
+          "pairs": [
+            {
+              "source": "space-B",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-A",
+              "status": "REJECTED",
+              "outcome": "FREE_SPACE_CONFLICT",
+              "failed_gates": [
+                "free_space_conflict"
+              ]
+            },
+            {
+              "source": "space-C",
+              "target": "space-B",
+              "status": "REJECTED",
+              "outcome": "NO_SHARED_FEATURES",
+              "failed_gates": [
+                "ransac_inliers",
+                "correspondence_count",
+                "inlier_ratio",
+                "rotation_residual_deg",
+                "translation_residual_m",
+                "icp_residual_m",
+                "confidence",
+                "constraint_ratio",
+                "estimation"
+              ]
+            }
+          ],
+          "placed_errors": {}
+        }
+      ],
+      "3 rooms, loop, noise 3 mm, real FPFH (Open3D), unconfirmed rooms accepted": [
+        {
+          "status": "STITCHED",
+          "registration": {
+            "B": {
+              "median_error_m": 0.0007020187876085964,
+              "p95_error_m": 0.0014408414167163064,
+              "rotation_error_deg": 0.021227945872364266
+            },
+            "C": {
+              "median_error_m": 0.0002939740465513768,
+              "p95_error_m": 0.0003079412146595615,
+              "rotation_error_deg": 0.0005572794518935487
+            }
+          },
+          "loops": [],
+          "edges": [
+            {
+              "edge": "space-B->space-A",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 1.7075472925031877e-06,
+              "residual_translation_m": 1.7763568394002505e-15,
+              "source": "space-B",
+              "status": "ACCEPTED",
+              "target": "space-A",
+              "weight": 0.7773712381969556
+            },
+            {
+              "edge": "space-C->space-A",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 9.507220963046152e-06,
+              "residual_translation_m": 8.881784197001252e-16,
+              "source": "space-C",
+              "status": "ACCEPTED",
+              "target": "space-A",
+              "weight": 0.7722028563202272
+            }
+          ],
+          "pairs": [
+            {
+              "source": "space-B",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-B",
+              "status": "REJECTED",
+              "outcome": "NO_SHARED_FEATURES",
+              "failed_gates": [
+                "ransac_inliers",
+                "correspondence_count",
+                "inlier_ratio",
+                "rotation_residual_deg",
+                "translation_residual_m",
+                "icp_residual_m",
+                "confidence",
+                "constraint_ratio",
+                "estimation"
+              ]
+            }
+          ],
+          "unconfirmed": [
+            "space-B",
+            "space-C"
+          ],
+          "registration_seconds": 6.998766695000086,
+          "registration_wall_seconds": 7.02846139400026,
+          "stitch_seconds": 4.068436097999438,
+          "stitch_wall_seconds": 4.1661952970007405,
+          "gaussians_in": 58660,
+          "gaussians_out": 44738,
+          "duplicate_fraction": 0.002816397693236175,
+          "overlaps": [
+            {
+              "pieces": [
+                "space-A",
+                "space-B"
+              ],
+              "offset_m": 0.0002677466551409187,
+              "rotation_deg": 0.025587174143956583,
+              "plane_median_m": 0.003325708128205817,
+              "colour_step": 0.010166198015213013
+            },
+            {
+              "pieces": [
+                "space-A",
+                "space-C"
+              ],
+              "offset_m": 0.0011549776809832181,
+              "rotation_deg": 0.009191214299370695,
+              "plane_median_m": 0.0033205967987252694,
+              "colour_step": 0.0103759765625
+            },
+            {
+              "pieces": [
+                "space-B",
+                "space-C"
+              ],
+              "offset_m": 0.0014994831670396614,
+              "rotation_deg": 0.027607889503803943,
+              "plane_median_m": 0.0031708301250465316,
+              "colour_step": 0.010423928499221802
+            }
+          ],
+          "seams": [
+            {
+              "pieces": [
+                "space-A",
+                "space-B"
+              ],
+              "median_m": 0.0036416384199650332,
+              "p90_m": 0.008809223748401126
+            },
+            {
+              "pieces": [
+                "space-A",
+                "space-C"
+              ],
+              "median_m": 0.003533512586557712,
+              "p90_m": 0.009196842941647448
+            },
+            {
+              "pieces": [
+                "space-B",
+                "space-C"
+              ],
+              "median_m": 0.0033295786877654424,
+              "p90_m": 0.007337105544692339
+            }
+          ]
+        },
+        {
+          "status": "REGISTRATION_FAILED",
+          "code": "REGISTRATION_REJECTED",
+          "message": "1 of 3 rooms could not be registered: Room C: no accepted registration links it to the fixed rooms. Nothing was stitched or published.",
+          "unregistered": {
+            "space-C": "no accepted registration links it to the fixed rooms"
+          },
+          "pairs": [
+            {
+              "source": "space-B",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-A",
+              "status": "REJECTED",
+              "outcome": "NO_SHARED_FEATURES",
+              "failed_gates": [
+                "ransac_inliers",
+                "correspondence_count",
+                "inlier_ratio",
+                "rotation_residual_deg",
+                "translation_residual_m",
+                "icp_residual_m",
+                "confidence",
+                "constraint_ratio",
+                "estimation"
+              ]
+            },
+            {
+              "source": "space-C",
+              "target": "space-B",
+              "status": "REJECTED",
+              "outcome": "NO_SHARED_FEATURES",
+              "failed_gates": [
+                "ransac_inliers",
+                "relative_scale",
+                "correspondence_count",
+                "inlier_ratio",
+                "rotation_residual_deg",
+                "translation_residual_m",
+                "icp_residual_m",
+                "confidence",
+                "constraint_ratio",
+                "estimation"
+              ]
+            }
+          ],
+          "placed_errors": {
+            "B": {
+              "median_error_m": 0.000716336499874372,
+              "p95_error_m": 0.00118226662033017,
+              "rotation_error_deg": 0.011934469370002705
+            }
+          }
+        },
+        {
+          "status": "REGISTRATION_FAILED",
+          "code": "REGISTRATION_REJECTED",
+          "message": "1 of 3 rooms could not be registered: Room C: no accepted registration links it to the fixed rooms. Nothing was stitched or published.",
+          "unregistered": {
+            "space-C": "no accepted registration links it to the fixed rooms"
+          },
+          "pairs": [
+            {
+              "source": "space-B",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-A",
+              "status": "REJECTED",
+              "outcome": "NO_SHARED_FEATURES",
+              "failed_gates": [
+                "ransac_inliers",
+                "correspondence_count",
+                "inlier_ratio",
+                "rotation_residual_deg",
+                "translation_residual_m",
+                "icp_residual_m",
+                "confidence",
+                "constraint_ratio",
+                "estimation"
+              ]
+            },
+            {
+              "source": "space-C",
+              "target": "space-B",
+              "status": "REJECTED",
+              "outcome": "FREE_SPACE_CONFLICT",
+              "failed_gates": [
+                "free_space_conflict"
+              ]
+            }
+          ],
+          "placed_errors": {
+            "B": {
+              "median_error_m": 0.0007892466325395604,
+              "p95_error_m": 0.0012933585788887766,
+              "rotation_error_deg": 0.014134143199575771
+            }
+          }
+        },
+        {
+          "status": "STITCHED",
+          "registration": {
+            "B": {
+              "median_error_m": 0.0004689607715996289,
+              "p95_error_m": 0.0010165828938132231,
+              "rotation_error_deg": 0.01481412139230828
+            },
+            "C": {
+              "median_error_m": 0.001685099163001041,
+              "p95_error_m": 0.0017601098035677962,
+              "rotation_error_deg": 0.008039324520731873
+            }
+          },
+          "loops": [],
+          "edges": [
+            {
+              "edge": "space-B->space-A",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 2.4148365394514667e-06,
+              "residual_translation_m": 1.9100999153570945e-15,
+              "source": "space-B",
+              "status": "ACCEPTED",
+              "target": "space-A",
+              "weight": 0.7810123772671066
+            },
+            {
+              "edge": "space-C->space-A",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 2.699869328381916e-06,
+              "residual_translation_m": 0.0,
+              "source": "space-C",
+              "status": "ACCEPTED",
+              "target": "space-A",
+              "weight": 0.7563717384586868
+            }
+          ],
+          "pairs": [
+            {
+              "source": "space-B",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-B",
+              "status": "REJECTED",
+              "outcome": "FREE_SPACE_CONFLICT",
+              "failed_gates": [
+                "free_space_conflict"
+              ]
+            }
+          ],
+          "unconfirmed": [
+            "space-B",
+            "space-C"
+          ],
+          "registration_seconds": 6.897397490000003,
+          "registration_wall_seconds": 6.927959352999096,
+          "stitch_seconds": 2.7110331159983616,
+          "stitch_wall_seconds": 2.801769907999187,
+          "gaussians_in": 58659,
+          "gaussians_out": 44731,
+          "duplicate_fraction": 0.0025262122465404308,
+          "overlaps": [
+            {
+              "pieces": [
+                "space-A",
+                "space-B"
+              ],
+              "offset_m": 0.00041636493473540075,
+              "rotation_deg": 0.01570963484776065,
+              "plane_median_m": 0.0033961493949859877,
+              "colour_step": 0.010161489248275757
+            },
+            {
+              "pieces": [
+                "space-A",
+                "space-C"
+              ],
+              "offset_m": 0.002230579672264942,
+              "rotation_deg": 0.00918673092174428,
+              "plane_median_m": 0.003122338006850614,
+              "colour_step": 0.009977519512176514
+            },
+            {
+              "pieces": [
+                "space-B",
+                "space-C"
+              ],
+              "offset_m": 0.00203950815454527,
+              "rotation_deg": 0.020518710799125817,
+              "plane_median_m": 0.003219034573827707,
+              "colour_step": 0.010177378853162139
+            }
+          ],
+          "seams": [
+            {
+              "pieces": [
+                "space-A",
+                "space-B"
+              ],
+              "median_m": 0.003497197768546511,
+              "p90_m": 0.01135891059569622
+            },
+            {
+              "pieces": [
+                "space-A",
+                "space-C"
+              ],
+              "median_m": 0.002887262297163115,
+              "p90_m": 0.007730157603822782
+            },
+            {
+              "pieces": [
+                "space-B",
+                "space-C"
+              ],
+              "median_m": 0.003449666502360378,
+              "p90_m": 0.008409057797277983
+            }
+          ]
+        },
+        {
+          "status": "REGISTRATION_FAILED",
+          "code": "REGISTRATION_REJECTED",
+          "message": "1 of 3 rooms could not be registered: Room C: no accepted registration links it to the fixed rooms. Nothing was stitched or published.",
+          "unregistered": {
+            "space-C": "no accepted registration links it to the fixed rooms"
+          },
+          "pairs": [
+            {
+              "source": "space-B",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-A",
+              "status": "REJECTED",
+              "outcome": "FREE_SPACE_CONFLICT",
+              "failed_gates": [
+                "free_space_conflict"
+              ]
+            },
+            {
+              "source": "space-C",
+              "target": "space-B",
+              "status": "REJECTED",
+              "outcome": "NO_SHARED_FEATURES",
+              "failed_gates": [
+                "ransac_inliers",
+                "correspondence_count",
+                "inlier_ratio",
+                "rotation_residual_deg",
+                "translation_residual_m",
+                "icp_residual_m",
+                "confidence",
+                "constraint_ratio",
+                "estimation"
+              ]
+            }
+          ],
+          "placed_errors": {
+            "B": {
+              "median_error_m": 0.0010679105401993803,
+              "p95_error_m": 0.0016046584875568633,
+              "rotation_error_deg": 0.013932116347612827
+            }
+          }
+        }
+      ]
+    }
+  }
+}

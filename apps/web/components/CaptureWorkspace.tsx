@@ -49,6 +49,9 @@ import { type StorageStatus, requestPersistentStorage, storageStatus } from "@/l
 import CaptureQueuePanel, { FileRowView } from "@/components/CaptureQueuePanel";
 import FloorManager from "@/components/FloorManager";
 import RescanStart from "@/components/RescanStart";
+import RoomStitchPanel from "@/components/RoomStitchPanel";
+import { listRooms } from "@/lib/stitch-api";
+import type { Room } from "@/lib/stitch-view";
 import { followCaptureProcessing } from "@/lib/processing-stream";
 import { type LiveState, isNewer } from "@/lib/processing-live";
 import { floorLabel } from "@/lib/floor-transitions";
@@ -96,6 +99,9 @@ export default function CaptureWorkspace() {
   const [floors, setFloors] = useState<Floor[]>([]);
   const [venueId, setVenueId] = useState("");
   const [floorId, setFloorId] = useState("");
+  // The rooms of the selected floor, and the room the next session captures on its own (docs/multi-room.md).
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [roomId, setRoomId] = useState("");
   const [capture, setCapture] = useState<Capture | null>(null);
   // The durable upload queue (lib/capture-queue): sessions and files are recorded on this device first, then synchronised.
   const [summaries, setSummaries] = useState<SessionSummary[]>([]);
@@ -254,6 +260,18 @@ export default function CaptureWorkspace() {
     return () => handle.close();
   }, [captureId, venueOfCapture, followLive, applyProcessing]);
 
+  const reloadRooms = useCallback(async () => {
+    if (!venueId || !floorId) return;
+    // A server without rooms (before V41) answers 404: the floor simply has no rooms to offer.
+    setRooms(await listRooms(venueId, floorId).catch(() => []));
+  }, [venueId, floorId]);
+  useEffect(() => {
+    if (!venueId || !floorId) return;
+    listRooms(venueId, floorId).then(setRooms, () => setRooms([]));
+  }, [venueId, floorId]);
+  // Only the selected floor's rooms: another floor's are never offered while its own are loading.
+  const floorRooms = rooms.filter((r) => r.floorId === floorId);
+
   /** Records the session on this device first; it is created on the server now if online, or when back online. */
   async function onCreate() {
     setError(null);
@@ -261,8 +279,10 @@ export default function CaptureWorkspace() {
     try {
       const venue = venues.find((v) => v.id === venueId);
       const floor = floors.find((f) => f.id === floorId);
+      const room = floor ? floorRooms.find((r) => r.id === roomId) : undefined;
       const s = await captureQueue().createSession({
         venueId, venueName: venue?.name ?? venueId, floorId: floor?.id ?? null, floorName: floor?.name ?? null,
+        roomId: room?.id ?? null, roomName: room?.name ?? null,
         // What the floor publishes now; a server that predates the field leaves it unknown (no check).
         expectedScanVersionId: floor ? floor.currentScanVersionId : undefined,
         device: await deviceMetadata(),
@@ -479,7 +499,7 @@ export default function CaptureWorkspace() {
             <span className="text-sm">Venue</span>
             <select className="mt-1 block w-full rounded border p-2" value={venueId} onChange={(e) => {
               if (e.target.value === venueId) return; // re-selecting the same venue keeps its floors
-              setVenueId(e.target.value); setFloorId(""); setFloors([]);
+              setVenueId(e.target.value); setFloorId(""); setFloors([]); setRoomId("");
             }}>
               <option value="">Select a venue…</option>
               {venues.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
@@ -488,15 +508,36 @@ export default function CaptureWorkspace() {
           {venues.length === 0 && <p className="text-sm text-zinc-600">No venues are assigned to your account.</p>}
           <label className="block">
             <span className="text-sm">Floor (optional)</span>
-            <select className="mt-1 block w-full rounded border p-2" value={floorId} onChange={(e) => setFloorId(e.target.value)} disabled={!venueId}>
+            <select className="mt-1 block w-full rounded border p-2" value={floorId} onChange={(e) => { setFloorId(e.target.value); setRoomId(""); }}
+              disabled={!venueId}>
               <option value="">No specific floor</option>
               {floors.map((f) => <option key={f.id} value={f.id}>{floorLabel(f)}</option>)}
             </select>
           </label>
+          {floorId && floorRooms.length > 0 && (
+            <label className="block">
+              <span className="text-sm">Room (optional)</span>
+              <select className="mt-1 block w-full rounded border p-2" value={roomId} onChange={(e) => setRoomId(e.target.value)}
+                data-testid="capture-room">
+                <option value="">The whole floor</option>
+                {floorRooms.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+              </select>
+              {roomId && (
+                <span className="mt-1 block text-xs text-zinc-600">
+                  This session captures one room. It is reconstructed on its own and becomes part of the floor when the
+                  floor&apos;s rooms are stitched. Also film a little through each door: that is where rooms are joined.
+                </span>
+              )}
+            </label>
+          )}
           {venueId && <FloorManager venueId={venueId} floors={floors} onChanged={() => listFloors(venueId).then(setFloors, fail)} />}
           {floorId && floors.find((f) => f.id === floorId)?.currentScanVersionId !== undefined && (
             <RescanStart venueId={venueId} floor={floors.find((f) => f.id === floorId)!} online={online} device={deviceMetadata}
               onStarted={async (r) => onResumeCapture(await getCapture(venueId, r.captureId))} />
+          )}
+          {floorId && floors.find((f) => f.id === floorId) && (
+            <RoomStitchPanel key={floorId} venueId={venueId} floor={floors.find((f) => f.id === floorId)!} rooms={floorRooms} online={online}
+              onRoomsChanged={reloadRooms} onCaptureRoom={(id) => setRoomId(id)} />
           )}
           {floorId === "" && venueId && (
             <p className="text-sm text-amber-800">Without a floor, no calibration measurements can be recorded for this capture.</p>

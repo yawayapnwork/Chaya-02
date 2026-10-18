@@ -37,7 +37,12 @@ class PipelineArtifactContractTest {
         JsonNode plans = contract().get("plans");
         assertThat(PipelineDefinition.STAGES.stream().map(Enum::name).toList()).isEqualTo(strings(plans.get("full")));
         assertThat(PipelineDefinition.INCREMENTAL_STAGES.stream().map(Enum::name).toList()).isEqualTo(strings(plans.get("incremental")));
+        assertThat(PipelineDefinition.ROOM_STAGES.stream().map(Enum::name).toList()).isEqualTo(strings(plans.get("room")));
+        assertThat(PipelineDefinition.STITCH_STAGES.stream().map(Enum::name).toList()).isEqualTo(strings(plans.get("stitch")));
         assertThat(PipelineDefinition.plan(false)).doesNotContain(JobStage.PRIVACY_PREPROCESS);
+        assertThat(PipelineDefinition.roomPlan(false)).doesNotContain(JobStage.PRIVACY_PREPROCESS);
+        assertThat(PipelineDefinition.mergesClouds(PipelineDefinition.STITCH_STAGES)).isTrue();
+        assertThat(PipelineDefinition.mergesClouds(PipelineDefinition.ROOM_STAGES)).isFalse();
         assertThat(strings(plans.get("optionalStages"))).containsExactlyInAnyOrder("PRIVACY_PREPROCESS", "NAVIGATION_BAKING");
     }
 
@@ -47,6 +52,8 @@ class PipelineArtifactContractTest {
         Set<String> planned = new LinkedHashSet<>();
         PipelineDefinition.STAGES.forEach(s -> planned.add(s.name()));
         PipelineDefinition.INCREMENTAL_STAGES.forEach(s -> planned.add(s.name()));
+        PipelineDefinition.ROOM_STAGES.forEach(s -> planned.add(s.name()));
+        PipelineDefinition.STITCH_STAGES.forEach(s -> planned.add(s.name()));
         for (String stage : planned) {
             assertThat(stages.has(stage)).as(stage + " has a contract entry").isTrue();
             assertThat(PipelineDefinition.REQUIRED_OUTPUTS.get(JobStage.valueOf(stage))).as(stage)

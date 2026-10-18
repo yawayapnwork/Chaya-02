@@ -1157,8 +1157,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
-          description: "Malformed request: an unparseable parameter or body, or a\
-            \ failed validation (code BAD_REQUEST or an operation-specific code)"
+          description: ROOM_REQUIRES_FLOOR
         "401":
           description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
             \ header)"
@@ -5814,6 +5813,243 @@ paths:
       - ADMIN
       - VENUE_MANAGER
       - OPERATOR
+  /api/v1/venues/{venueId}/floors/{floorId}/rooms:
+    get:
+      operationId: stitchRooms
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: floorId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RoomView"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Malformed request: an unparseable parameter or body, or a\
+            \ failed validation (code BAD_REQUEST or an operation-specific code)"
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "The caller's roles do not allow this operation (empty body),\
+            \ or an operation-specific refusal (problem with a code)"
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Not found, or not visible to the caller's organization or\
+            \ venue (code NOT_FOUND)"
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      summary: "The floor's rooms, each with its latest room version and capture"
+      tags:
+      - stitch-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
+      - OPERATOR
+      - VIEWER
+    post:
+      operationId: stitchCreateRoom
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: floorId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRoom"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoomView"
+          description: Created
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: ROOM_KIND_INVALID
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "The caller's roles do not allow this operation (empty body),\
+            \ or an operation-specific refusal (problem with a code)"
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Not found, or not visible to the caller's organization or\
+            \ venue (code NOT_FOUND)"
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: ROOM_NAME_TAKEN
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      summary: "Add a room to the floor (admin, venue-manager, operator)"
+      tags:
+      - stitch-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
+      - OPERATOR
+  /api/v1/venues/{venueId}/floors/{floorId}/rooms/{roomId}/versions/finalize-current:
+    post:
+      description: A room version is never published as the floor's; it can be viewed
+        on its own and stitched.
+      operationId: stitchFinalizeRoom
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: floorId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: roomId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoomView"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Malformed request: an unparseable parameter or body, or a\
+            \ failed validation (code BAD_REQUEST or an operation-specific code)"
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "The caller's roles do not allow this operation (empty body),\
+            \ or an operation-specific refusal (problem with a code)"
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Not found, or not visible to the caller's organization or\
+            \ venue (code NOT_FOUND)"
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "NOT_CALIBRATED, VERSION_INCOMPLETE, RUN_NOT_SUCCEEDED"
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      summary: Finalize the room's latest reconstruction once it is calibrated
+      tags:
+      - stitch-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
+      - OPERATOR
   /api/v1/venues/{venueId}/floors/{floorId}/scan-versions:
     get:
       operationId: rescanListVersions
@@ -5964,6 +6200,242 @@ paths:
       - ADMIN
       - VENUE_MANAGER
       - OPERATOR
+  /api/v1/venues/{venueId}/floors/{floorId}/stitches:
+    get:
+      operationId: stitchListStitches
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: floorId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/StitchView"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Malformed request: an unparseable parameter or body, or a\
+            \ failed validation (code BAD_REQUEST or an operation-specific code)"
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "The caller's roles do not allow this operation (empty body),\
+            \ or an operation-specific refusal (problem with a code)"
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Not found, or not visible to the caller's organization or\
+            \ venue (code NOT_FOUND)"
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      summary: "The floor's stitches, newest first"
+      tags:
+      - stitch-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
+      - OPERATOR
+      - VIEWER
+    post:
+      description: "Registers the rooms into the anchor room's frame, combines their\
+        \ Gaussians, re-derives the floor's planes, viewer asset and navigation, and\
+        \ publishes the result only when every stage succeeded and every room was\
+        \ placed consistently. See docs/multi-room.md."
+      operationId: stitchStartStitch
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: floorId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StitchRequest"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StitchView"
+          description: Created
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: STITCH_ROOMS_INVALID
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "The caller's roles do not allow this operation (empty body),\
+            \ or an operation-specific refusal (problem with a code)"
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Not found, or not visible to the caller's organization or\
+            \ venue (code NOT_FOUND)"
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "NOT_CALIBRATED, ROOM_NOT_RECONSTRUCTED, VERSION_NOT_FINALIZED,\
+            \ VERSION_INCOMPLETE"
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      summary: Stitch finalized room versions into the floor's reconstruction
+      tags:
+      - stitch-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
+      - OPERATOR
+  /api/v1/venues/{venueId}/floors/{floorId}/stitches/{stitchId}:
+    get:
+      operationId: stitchGetStitch
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: floorId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: stitchId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StitchView"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Malformed request: an unparseable parameter or body, or a\
+            \ failed validation (code BAD_REQUEST or an operation-specific code)"
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "The caller's roles do not allow this operation (empty body),\
+            \ or an operation-specific refusal (problem with a code)"
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Not found, or not visible to the caller's organization or\
+            \ venue (code NOT_FOUND)"
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      summary: "One stitch: its rooms, how each was registered, and what the stitch\
+        \ measured"
+      tags:
+      - stitch-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
+      - OPERATOR
+      - VIEWER
   /api/v1/venues/{venueId}/jobs/{jobId}/cancel:
     post:
       operationId: scanCancel
@@ -8650,8 +9122,13 @@ components:
           format: int32
         operatorId:
           type: string
+        purpose:
+          type: string
         qualityState:
           type: string
+        roomId:
+          type: string
+          format: uuid
         startedAt:
           type: string
           format: date-time
@@ -8685,6 +9162,8 @@ components:
           - GEOMETRIC_CLEANUP
           - REGION_ALIGNMENT
           - REGION_SPLICE
+          - ROOM_REGISTRATION
+          - ROOM_STITCH
           - PLANE_FITTING
           - ARTIFACT_GENERATION
           - NAVIGATION_BAKING
@@ -8710,6 +9189,8 @@ components:
             - GEOMETRIC_CLEANUP
             - REGION_ALIGNMENT
             - REGION_SPLICE
+            - ROOM_REGISTRATION
+            - ROOM_STITCH
             - PLANE_FITTING
             - ARTIFACT_GENERATION
             - NAVIGATION_BAKING
@@ -8927,6 +9408,9 @@ components:
         floorId:
           type: string
           format: uuid
+        roomId:
+          type: string
+          format: uuid
         startedAt:
           type: string
           format: date-time
@@ -8958,6 +9442,17 @@ components:
           additionalProperties:
             type: number
             format: double
+    CreateRoom:
+      type: object
+      properties:
+        kind:
+          type: string
+        name:
+          type: string
+          maxLength: 120
+          minLength: 0
+      required:
+      - name
     CreateScan:
       type: object
       properties:
@@ -9141,6 +9636,8 @@ components:
           - GEOMETRIC_CLEANUP
           - REGION_ALIGNMENT
           - REGION_SPLICE
+          - ROOM_REGISTRATION
+          - ROOM_STITCH
           - PLANE_FITTING
           - ARTIFACT_GENERATION
           - NAVIGATION_BAKING
@@ -11131,9 +11628,16 @@ components:
         generatedAt:
           type: string
           format: date-time
+        kind:
+          type: string
         parentVersionId:
           type: string
           format: uuid
+        roomId:
+          type: string
+          format: uuid
+        roomName:
+          type: string
         runId:
           type: string
           format: uuid
@@ -11377,6 +11881,58 @@ components:
           items:
             type: number
             format: double
+    RoomVersion:
+      type: object
+      properties:
+        awaitingCalibration:
+          type: boolean
+        coordinateFrameId:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        finalizedAt:
+          type: string
+          format: date-time
+        id:
+          type: string
+          format: uuid
+        pipelineRunId:
+          type: string
+          format: uuid
+        runStatus:
+          type: string
+        status:
+          type: string
+        versionNumber:
+          type: integer
+          format: int32
+    RoomView:
+      type: object
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+        floorId:
+          type: string
+          format: uuid
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+        latestCaptureId:
+          type: string
+          format: uuid
+        latestCaptureStatus:
+          type: string
+        latestFinalizedVersion:
+          $ref: "#/components/schemas/RoomVersion"
+        latestVersion:
+          $ref: "#/components/schemas/RoomVersion"
+        name:
+          type: string
     Rotation:
       type: object
       properties:
@@ -11616,6 +12172,8 @@ components:
         id:
           type: string
           format: uuid
+        kind:
+          type: string
         parentVersionId:
           type: string
           format: uuid
@@ -11631,6 +12189,9 @@ components:
         rejectedAt:
           type: string
           format: date-time
+        roomId:
+          type: string
+          format: uuid
         scanId:
           type: string
           format: uuid
@@ -12022,6 +12583,134 @@ components:
           minLength: 1
       required:
       - status
+    StitchPair:
+      type: object
+      properties:
+        edgeStatus:
+          type: string
+        failedGates:
+          type: array
+          items:
+            type: string
+        outcome:
+          type: string
+        sourceRoomId:
+          type: string
+          format: uuid
+        status:
+          type: string
+        targetRoomId:
+          type: string
+          format: uuid
+    StitchRequest:
+      type: object
+      properties:
+        allowUnconfirmedRooms:
+          type: boolean
+        anchorRoomId:
+          type: string
+          format: uuid
+        rooms:
+          type: array
+          items:
+            $ref: "#/components/schemas/StitchRoomRequest"
+          maxItems: 2147483647
+          minItems: 2
+        timeBudgetSeconds:
+          type: integer
+          format: int32
+      required:
+      - rooms
+    StitchRoom:
+      type: object
+      properties:
+        anchor:
+          type: boolean
+        coordinateFrameId:
+          type: string
+          format: uuid
+        loopConfirmed:
+          type: boolean
+        name:
+          type: string
+        reason:
+          type: string
+        registered:
+          type: boolean
+        roomId:
+          type: string
+          format: uuid
+        roomVersionId:
+          type: string
+          format: uuid
+        roomVersionNumber:
+          type: integer
+          format: int32
+    StitchRoomRequest:
+      type: object
+      properties:
+        roomId:
+          type: string
+          format: uuid
+        scanVersionId:
+          type: string
+          format: uuid
+      required:
+      - roomId
+    StitchView:
+      type: object
+      properties:
+        allowUnconfirmedRooms:
+          type: boolean
+        anchorRoomId:
+          type: string
+          format: uuid
+        captureId:
+          type: string
+          format: uuid
+        connectivity:
+          type: object
+          additionalProperties: {}
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+        current:
+          type: boolean
+        finalizedAt:
+          type: string
+          format: date-time
+        floorId:
+          type: string
+          format: uuid
+        id:
+          type: string
+          format: uuid
+        pairs:
+          type: array
+          items:
+            $ref: "#/components/schemas/StitchPair"
+        registration:
+          type: object
+          additionalProperties: {}
+        rooms:
+          type: array
+          items:
+            $ref: "#/components/schemas/StitchRoom"
+        run:
+          $ref: "#/components/schemas/RunView"
+        scanId:
+          type: string
+          format: uuid
+        status:
+          type: string
+        stitch:
+          type: object
+          additionalProperties: {}
+        versionNumber:
+          type: integer
+          format: int32
     StopResult:
       type: object
       properties:
@@ -12360,6 +13049,10 @@ components:
         regionGeometry:
           type: object
           additionalProperties: {}
+        rooms:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkOrderRoom"
         runId:
           type: string
           format: uuid
@@ -12371,7 +13064,35 @@ components:
           format: uuid
         stage:
           type: string
+        stitchOptions:
+          type: object
+          additionalProperties: {}
         venueId:
+          type: string
+          format: uuid
+    WorkOrderRoom:
+      type: object
+      properties:
+        anchor:
+          type: boolean
+        cloudArtifactId:
+          type: string
+          format: uuid
+        coordinateFrame:
+          type: object
+          additionalProperties: {}
+        labelsArtifactId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        runId:
+          type: string
+          format: uuid
+        scanVersionId:
+          type: string
+          format: uuid
+        spaceId:
           type: string
           format: uuid
     WorkerStatus:

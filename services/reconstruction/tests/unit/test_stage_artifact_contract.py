@@ -6,8 +6,8 @@ publishes under another name than the contract says, breaks a real run only when
 GPU work. These tests read what every stage really reads and writes (its source) and check:
 
   * every kind a stage reads or writes is declared, and every declared kind is really read or written;
-  * every plan the control plane creates -- full and incremental, with and without privacy preprocessing, with and
-    without navigation baking -- can satisfy every stage's required inputs from the required outputs of the stages
+  * every plan the control plane creates -- full, incremental, a room capture's and a multi-room stitch's, with and without
+    privacy preprocessing, with and without navigation baking -- can satisfy every stage's required inputs from the required outputs of the stages
     before it (or the inputs the control plane supplies from outside the run);
   * every stage of every plan is a real implementation on this worker.
 
@@ -85,6 +85,9 @@ def plans() -> list[tuple[str, list[str]]]:
         plan = [s for s in CONTRACT["plans"][kind]
                 if (privacy or s != "PRIVACY_PREPROCESS") and (navigation or s != "NAVIGATION_BAKING")]
         out.append((f"{kind}{'' if privacy else '-no-privacy'}{'' if navigation else '-no-navigation'}", plan))
+    for privacy in (True, False):  # a room capture never bakes navigation; its floor is baked once stitched
+        out.append((f"room{'' if privacy else '-no-privacy'}", [s for s in CONTRACT["plans"]["room"] if privacy or s != "PRIVACY_PREPROCESS"]))
+    out.append(("stitch", list(CONTRACT["plans"]["stitch"])))  # no media, so no privacy stage; always bakes navigation
     return out
 
 
@@ -93,6 +96,8 @@ def test_every_plan_satisfies_every_stage_from_the_stages_before_it(name, plan):
     available = set(CONTRACT["externalInputs"]["always"])
     if name.startswith("incremental"):
         available |= set(CONTRACT["externalInputs"]["incremental"])
+    if name == "stitch":
+        available = set(CONTRACT["externalInputs"]["stitch"])  # the rooms' finalized clouds and labels; a stitch has no media
     for stage in plan:
         for group in STAGES[stage]["requiredInputs"]:
             assert available & set(group), f"plan {name}: {stage} needs one of {group}, but nothing before it publishes one"
@@ -101,7 +106,7 @@ def test_every_plan_satisfies_every_stage_from_the_stages_before_it(name, plan):
 
 def test_every_planned_stage_is_implemented_on_this_worker():
     registry = default_registry()
-    for stage in set(CONTRACT["plans"]["full"]) | set(CONTRACT["plans"]["incremental"]):
+    for stage in {s for plan in ("full", "incremental", "room", "stitch") for s in CONTRACT["plans"][plan]}:
         assert stage in STAGES, f"{stage} is planned but has no contract entry"
         assert not isinstance(registry[stage], PlannedStage), f"{stage} is planned but not implemented"
 
@@ -144,8 +149,8 @@ def test_every_stage_of_every_plan_is_claimed_by_a_shipped_worker():
                              r"WORKER_ID: cpu-worker[\s\S]*?WORKER_STAGES: ([A-Z_,]+)")
     gpu = _stages_claimed_by((REPO / "services" / "reconstruction" / "Dockerfile.gpu").read_text(encoding="utf-8"),
                              r"WORKER_STAGES=([A-Z_,]+)")
-    planned = set(CONTRACT["plans"]["full"]) | set(CONTRACT["plans"]["incremental"])
+    planned = {s for plan in ("full", "incremental", "room", "stitch") for s in CONTRACT["plans"][plan]}
     assert planned - (cpu | gpu) == set(), f"no shipped worker claims {sorted(planned - (cpu | gpu))}"
     needs_gpu_host = {"POSE_ESTIMATION", "SPLAT_RECONSTRUCTION", "SEMANTIC_SEGMENTATION", "GEOMETRIC_CLEANUP", "PLANE_FITTING",
-                      "SEMANTIC_INDEXING", "REGION_ALIGNMENT"}  # COLMAP, gsplat/CUDA, transformers, Open3D: not in the CPU image
+                      "SEMANTIC_INDEXING", "REGION_ALIGNMENT", "ROOM_REGISTRATION"}  # COLMAP, gsplat/CUDA, transformers, Open3D: not in the CPU image
     assert cpu & needs_gpu_host == set(), f"the CPU worker claims stages its image cannot run: {sorted(cpu & needs_gpu_host)}"

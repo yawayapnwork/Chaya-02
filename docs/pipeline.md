@@ -68,7 +68,7 @@ chaya-navmesh specifically is needed only for `NAVIGATION_BAKING` (the run's las
 `SUCCEEDED` end to end.
 Coordinate frames ([coordinate-frames.md](coordinate-frames.md)): every stage up to ARTIFACT_GENERATION works in the
 reconstruction's own arbitrary frame, with scale-invariant thresholds. The stages whose output is metric --
-SEMANTIC_INDEXING, NAVIGATION_BAKING, REGION_ALIGNMENT, REGION_SPLICE -- read the calibrated frame from their work
+SEMANTIC_INDEXING, NAVIGATION_BAKING, REGION_ALIGNMENT, REGION_SPLICE, ROOM_REGISTRATION, ROOM_STITCH -- read the calibrated frame from their work
 order and fail with `NOT_CALIBRATED` (retryable) when there is none; they are never run on reconstruction units
 presented as metres. A full run therefore stops at SEMANTIC_INDEXING until an operator calibrates the reconstruction
 (`POST /venues/{v}/reconstructions/{runId}/coordinate-frames`) and retries the run.
@@ -178,10 +178,10 @@ reconstruction storage account cannot read `pii/` staging (DEPLOYMENT.md), so a 
 need a worker with access to it.
 
 **Who runs what.** The shipped CPU worker (`infra/deploy`) claims the stages before privacy, plus REGION_SPLICE,
-ARTIFACT_GENERATION and **NAVIGATION_BAKING**. NAVIGATION_BAKING needs only numpy and `chaya-navmesh`, which the CPU image
+ROOM_STITCH, ARTIFACT_GENERATION and **NAVIGATION_BAKING**. NAVIGATION_BAKING needs only numpy and `chaya-navmesh`, which the CPU image
 builds. No shipped worker claimed it before, so every run waited at the last stage until its deadline. The GPU image
 (`Dockerfile.gpu`) claims POSE_ESTIMATION, SPLAT_RECONSTRUCTION, SEMANTIC_SEGMENTATION, GEOMETRIC_CLEANUP,
-REGION_ALIGNMENT, PLANE_FITTING and SEMANTIC_INDEXING.
+REGION_ALIGNMENT, ROOM_REGISTRATION (Open3D FPFH), PLANE_FITTING and SEMANTIC_INDEXING.
 
 ## The stage contract
 Every attempt of every stage produces one immutable `pipeline_stage_run` row (returned by
@@ -238,6 +238,16 @@ just the changed region), before the usual `PLANE_FITTING`/`ARTIFACT_GENERATION`
 from the merged cloud (navigation is re-baked whenever the parent version has a navmesh, and checked against the
 parent scene outside the region). See [docs/rescan.md](rescan.md) for the full design, including the alignment
 quality gates and exactly what is regional.
+
+## Multi-room stitch
+A room capture (`roomId` on `POST /venues/{v}/captures`) runs `PipelineDefinition.ROOM_STAGES`: the full plan up to
+`ARTIFACT_GENERATION`. Its version is a room version, finalized once the room is calibrated and never published as the
+floor's. A stitch (`POST /venues/{v}/floors/{f}/stitches`) runs `PipelineDefinition.STITCH_STAGES` on a capture with no
+media: `ROOM_REGISTRATION` (every pair of rooms registered, then a pose graph with loop closure; every room must be
+placed or the run fails with `REGISTRATION_REJECTED`) and `ROOM_STITCH` (the Gaussians moved into the anchor room's
+frame and merged without doubled surfaces, or `STITCH_REJECTED`). `PLANE_FITTING`, `ARTIFACT_GENERATION` and
+`NAVIGATION_BAKING` then run on the merged cloud; `NAVIGATION_BAKING` fails with `NAVMESH_ROOMS_DISCONNECTED` when a
+room cannot be reached. The rejections are not retryable. See [docs/multi-room.md](multi-room.md).
 
 ## Time-boxed reconstruction
 Each run has `time_budget_seconds` (default 3600, max 86400) and a `deadline_at`. Work orders carry the deadline;

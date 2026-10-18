@@ -42,6 +42,7 @@ INVALID_GEOMETRY = "INVALID_GEOMETRY"
 NO_WALKABLE_SURFACE = "NO_WALKABLE_SURFACE"
 NAVMESH_BUILD_FAILED = "NAVMESH_BUILD_FAILED"
 NAVMESH_REGION_INCONSISTENT = "NAVMESH_REGION_INCONSISTENT"
+NAVMESH_ROOMS_DISCONNECTED = "NAVMESH_ROOMS_DISCONNECTED"
 NAVMESH_NOT_READY = "NAVMESH_NOT_READY"
 NO_ROUTE = "NO_ROUTE"
 NO_ACCESSIBLE_ROUTE = "NO_ACCESSIBLE_ROUTE"
@@ -785,3 +786,182 @@ def build_routing_graphs(polygons: list[Polygon], *, max_ramp_slope_deg: float, 
 
     return {"STANDARD": {"nodes": nodes, "edges": standard_edges}, "STEP_FREE": {"nodes": nodes, "edges": step_free_edges}}
 
+
+
+# ---- rooms of a stitched floor ---------------------------------------------------------------------------------------
+
+
+def _components(n: int, edges: list[tuple[int, int]]) -> np.ndarray:
+    """Pure: connected-component label of each of `n` nodes (union-find)."""
+    parent = np.arange(n)
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for a, b in edges:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[max(ra, rb)] = min(ra, rb)
+    return np.array([find(i) for i in range(n)])
+
+
+def room_seed(cells: np.ndarray, cell_m: float) -> np.ndarray | None:
+    """Pure: the point deepest inside a room's floor footprint (`cells`: (i, j) on a `cell_m` grid, canonical): the centre of
+    the cell farthest from the footprint's edge, holes filled. The middle of a room, somewhere along the middle of a
+    corridor; never a doorway, which is where a footprint is thinnest. None for an empty footprint."""
+    from scipy.ndimage import binary_fill_holes, distance_transform_edt  # noqa: PLC0415
+
+    c = np.asarray(cells, dtype=np.int64).reshape(-1, 2)
+    if len(c) == 0:
+        return None
+    lo = c.min(axis=0) - 1
+    mask = np.zeros(tuple(c.max(axis=0) - lo + 2), dtype=bool)
+    mask[c[:, 0] - lo[0], c[:, 1] - lo[1]] = True
+    depth = np.where(mask, distance_transform_edt(binary_fill_holes(mask)), -1.0)
+    deepest = np.argwhere(depth >= depth.max() - 0.5)  # a plateau (the middle line of a rectangle): its middle
+    i, j = deepest[int(np.argmin(np.linalg.norm(deepest - deepest.mean(axis=0), axis=1)))]
+    return (np.array([i, j]) + lo + 0.5) * cell_m
+
+
+def _roomiest_near(width: np.ndarray, cell: np.ndarray, max_cells: int) -> tuple[int, int] | None:
+    """The free cell (width >= 0) with the most room within `max_cells` of `cell`, or None: a path is never wider than the
+    cell it starts from, and a seed can sit beside furniture."""
+    free = np.argwhere(width >= 0)
+    near = free[np.linalg.norm(free - np.asarray(cell), axis=1) <= max_cells]
+    if len(near) == 0:
+        return None
+    k = int(np.argmax(width[near[:, 0], near[:, 1]]))
+    return int(near[k][0]), int(near[k][1])
+
+
+def seed_clearance(surface: SurfaceModel, a_xy: np.ndarray, b_xy: np.ndarray, *, snap_cells: int = 10) -> float:
+    """Pure: the widest body that can travel from one point to another over the floor: the bottleneck (SurfaceModel.width_m,
+    the width available to a body centred in a cell) of the widest path between the free cells containing them,
+    8-connected, found by bisecting over the widths present as SurfaceModel.edge_clear_width_m does. Between two rooms'
+    seeds it is the narrowest door (or passage) on the roomiest way from one room to the other. Each end starts from the
+    roomiest free cell within `snap_cells` of its point (a seed may be beside or under furniture). 0 when nothing joins
+    them."""
+    from scipy.ndimage import label  # noqa: PLC0415
+
+    nx, ny = surface.ground_z.shape
+    a, b = surface.cell_of(np.asarray(a_xy)), surface.cell_of(np.asarray(b_xy))
+    if not all(0 <= c[0] < nx and 0 <= c[1] < ny for c in (a, b)):
+        return 0.0
+    width = np.where(surface.free, surface.width_m, -1.0)
+    a, b = _roomiest_near(width, a, snap_cells), _roomiest_near(width, b, snap_cells)
+    if a is None or b is None:
+        return 0.0
+    candidates = np.unique(width[width >= 0])
+    candidates = candidates[candidates <= min(width[a], width[b])]
+    eight = np.ones((3, 3), dtype=int)
+
+    def joined(t: float) -> bool:
+        labels, _ = label(width >= t, structure=eight)
+        return labels[a] != 0 and labels[a] == labels[b]
+
+    if len(candidates) == 0 or not joined(candidates[0]):
+        return 0.0
+    lo_i, hi_i = 0, len(candidates) - 1
+    while lo_i < hi_i:  # largest candidate width that still joins a and b
+        mid = (lo_i + hi_i + 1) // 2
+        if joined(candidates[mid]):
+            lo_i = mid
+        else:
+            hi_i = mid - 1
+    return float(candidates[lo_i])
+
+
+def room_connectivity(graphs: dict[str, dict[str, list]], footprints: dict[str, np.ndarray], cell_m: float, *,
+                      accessible_width_m: float, surface: SurfaceModel | None = None, seed_snap_m: float = 1.5) -> dict[str, Any]:
+    """Pure: whether the routing graph of a stitched floor joins its rooms, and how.
+
+    `footprints`: room id -> the horizontal cells (integer (i, j) on a `cell_m` grid, canonical) holding that room's kept
+    floor. Which room a Gaussian is kept from is the stitch's ownership, not a floor plan: near a door one capture may keep
+    the floor just beyond it. So rooms are judged at their **seeds** (room_seed: the deepest point of each footprint), not
+    at their footprints' edges:
+
+      * a room is **reached** when the STANDARD node nearest its seed (within `seed_snap_m`) lies in the component that
+        holds most of the floor's nodes; `connected` when every room is; `unreachable_rooms` lists the others (no node
+        near the seed, or one cut off). `step_free_connected` is the same over STEP_FREE;
+      * `clear_widths`: for every pair of rooms, with the surface model, the widest body that can travel from one seed to
+        the other (seed_clearance: the narrowest doorway or passage on the roomiest way between them);
+      * `connections`: the graph edges whose nodes lie on two rooms' kept floors (each node in the room with most kept
+        floor cells in the 3 x 3 cells around it): where the navmesh passes from one room's geometry to another's, with
+        whether one of them is step-free and where the widest crosses (its portal's midpoint). Rooms that are reached but
+        share no such edge are joined through a third.
+
+    Nothing here moves or adds geometry: a connection the navmesh does not make is reported missing, never invented."""
+    standard = graphs["STANDARD"]
+    nodes = standard["nodes"]
+    index = {n["local_id"]: i for i, n in enumerate(nodes)}
+    rooms = list(footprints)
+    xy = np.array([[n["x"], n["y"]] for n in nodes], dtype=np.float64).reshape(-1, 2)
+    cell_sets = {r: {(int(c[0]), int(c[1])) for c in np.asarray(footprints[r]).reshape(-1, 2)} for r in rooms}
+    room_of: list[str | None] = []
+    for x, y in xy:
+        i, j = int(np.floor(x / cell_m)), int(np.floor(y / cell_m))
+        near = [(i + di, j + dj) for di in (-1, 0, 1) for dj in (-1, 0, 1)]
+        counts = [sum(c in cell_sets[r] for c in near) for r in rooms]
+        best = int(np.argmax(counts)) if counts else 0
+        room_of.append(rooms[best] if counts and counts[best] > 0 else None)
+
+    seeds = {r: room_seed(footprints[r], cell_m) for r in rooms}
+    seed_node = {}
+    for r, s in seeds.items():
+        if s is None or not len(xy):
+            seed_node[r] = None
+            continue
+        d = np.linalg.norm(xy - s, axis=1)
+        k = int(np.argmin(d))
+        seed_node[r] = k if d[k] <= seed_snap_m else None
+
+    def reached(profile: str) -> set[str]:
+        if not nodes:
+            return set()
+        edges = [(index[e["from"]], index[e["to"]]) for e in graphs[profile]["edges"] if e["from"] in index and e["to"] in index]
+        labels = _components(len(nodes), edges)
+        values, counts = np.unique(labels, return_counts=True)
+        main = values[int(np.argmax(counts))]
+        return {r for r, k in seed_node.items() if k is not None and labels[k] == main}
+
+    connections: dict[tuple[str, str], dict[str, Any]] = {}
+    for e in standard["edges"]:
+        a, b = index.get(e["from"]), index.get(e["to"])
+        if a is None or b is None or room_of[a] is None or room_of[b] is None or room_of[a] == room_of[b]:
+            continue
+        key = tuple(sorted((room_of[a], room_of[b])))
+        c = connections.setdefault(key, {"rooms": list(key), "edges": 0, "max_edge_clearance_m": 0.0, "step_free": False,
+                                         "portal_midpoint": None})
+        c["edges"] += 1
+        c["step_free"] = c["step_free"] or bool(e.get("step_free"))
+        clearance = float(e.get("min_clearance_m") or 0.0)
+        if clearance >= c["max_edge_clearance_m"]:
+            c["max_edge_clearance_m"] = clearance
+            portal = e.get("portal")
+            c["portal_midpoint"] = np.mean(np.array(portal, dtype=np.float64), axis=0).round(3).tolist() if portal else None
+
+    widths = []
+    if surface is not None:
+        for i, ra in enumerate(rooms):
+            for rb in rooms[i + 1:]:
+                if seeds[ra] is not None and seeds[rb] is not None:
+                    w = seed_clearance(surface, seeds[ra], seeds[rb])
+                    widths.append({"rooms": [ra, rb], "clear_width_m": w, "accessible_width": w >= accessible_width_m})
+
+    standard_reach, step_free_reach = reached("STANDARD"), reached("STEP_FREE")
+    per_room = {r: {"seed_xy": None if seeds[r] is None else [round(float(v), 3) for v in seeds[r]],
+                    "nodes": sum(1 for x in room_of if x == r), "reached": r in standard_reach,
+                    "step_free_reached": r in step_free_reach} for r in rooms}
+    unreachable = [r for r in rooms if not per_room[r]["reached"]]
+    return {
+        "cell_m": cell_m, "rooms": per_room, "connections": sorted(connections.values(), key=lambda c: c["rooms"]),
+        "clear_widths": widths, "nodes": len(nodes), "nodes_outside_rooms": sum(1 for x in room_of if x is None),
+        "connected": not unreachable, "unreachable_rooms": unreachable,
+        "step_free_connected": all(per_room[r]["step_free_reached"] for r in rooms),
+        "accessible_width_m": accessible_width_m,
+        "narrow_between": [w["rooms"] for w in widths if not w["accessible_width"]],
+        "judged_at": "each room's seed (room_seed), not its footprint's edge: ownership near a door is the stitch's, not a floor plan",
+    }

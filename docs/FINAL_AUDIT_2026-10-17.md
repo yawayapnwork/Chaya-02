@@ -259,3 +259,23 @@ differentiators, have never run on their real inputs.**
 - **Demo readiness:** a staging deployment showing upload → processing control plane → versioning → search → navigation →
   operations on synthetic or pre-made scenes is achievable after steps 1–3 of the plan. A live venue demo additionally needs
   steps 4–5. The document should be corrected first, because several of its claims are untrue as written.
+
+## Dated notes
+
+- **2026-10-18, row 3 / P1-6 (multi-room stitching):** now **IMPLEMENTED BUT NOT END-TO-END VERIFIED** (was NOT
+  IMPLEMENTED). What exists (docs/multi-room.md):
+  - room captures and room versions;
+  - stitch runs with ROOM_REGISTRATION (FPFH, verified placements, free-space gate, pose graph with loop closure) and
+    ROOM_STITCH (Gaussian transform, deduplication, misalignment and seam checks);
+  - connectivity-checked NAVIGATION_BAKING;
+  - V41, the API, and a web panel.
+
+  Tests run on 2026-10-18:
+  - worker: 121 passed (the multi-room, navmesh and contract suites);
+  - `tests/gpu/test_room_registration.py` with real FPFH: 5 passed in `chaya-bench-open3d`;
+  - backend: `StitchControlPlaneTest`, `PipelineArtifactContractTest` and `OpenApiContractTest`, 22 passed;
+  - web: 352 passed.
+
+  Benchmark 7 (docs/BENCHMARKS.md section 8) covers the **synthetic** floor only. With real FPFH, 0/5 trials stitched
+  under the default policy (nothing was misplaced). No real room has been stitched; that needs a GPU host. The row
+  above is kept as recorded.

@@ -222,7 +222,7 @@ public class ErasureService {
         List<UUID> dependents = captures.stream().filter(c -> !initialCaptures.contains(c)).toList();
         if (target != Target.VENUE && !dependents.isEmpty() && !cascade) {
             throw new ApiException(HttpStatus.CONFLICT, "ERASURE_HAS_DEPENDENTS", "erasing this also erases " + dependents.size()
-                + " capture(s) derived from it (re-scans and their versions): " + dependents
+                + " capture(s) derived from it (re-scans, stitches and their versions): " + dependents
                 + ". Repeat the request with cascade=true to erase them too");
         }
         // Lock what a concurrent stage report would lock (PipelineService locks the run, then the job), so a report either
@@ -311,6 +311,12 @@ public class ErasureService {
             "INSERT INTO erase_set SELECT 'version', scan_version_id FROM pipeline_run WHERE venue_id = :v AND scan_version_id IS NOT NULL "
                 + "AND id IN " + in("run"),
             "INSERT INTO erase_set SELECT 'version', id FROM scan_version WHERE venue_id = :v AND pipeline_run_id IN " + in("run"),
+            // A stitched floor is made of its rooms' reconstructions (docs/multi-room.md): erasing a room version erases every
+            // stitch of it, and a stitch's own capture (it has no media) goes with it.
+            "INSERT INTO erase_set SELECT 'version', s.stitch_version_id FROM scan_version_stitch_source s JOIN scan_version v "
+                + "ON v.id = s.stitch_version_id WHERE v.venue_id = :v AND s.room_version_id IN " + in("version"),
+            "INSERT INTO erase_set SELECT 'capture', c.id FROM capture_session c JOIN scan sc ON sc.capture_session_id = c.id "
+                + "WHERE c.venue_id = :v AND c.stitch AND sc.id IN (SELECT scan_id FROM scan_version WHERE id IN " + in("version") + ")",
         };
         for (int round = 0; ; round++) {
             int added = 0;
@@ -470,6 +476,8 @@ public class ErasureService {
             + " OR measurement_id IN " + measurements));
         n.put("capture_calibration_attempt", u("DELETE FROM capture_calibration_attempt WHERE capture_session_id IN " + C
             + " OR run_id IN " + R + " OR coordinate_frame_id IN " + F));
+        n.put("scan_version_stitch_source", u("DELETE FROM scan_version_stitch_source WHERE stitch_version_id IN " + V
+            + " OR room_version_id IN " + V));
         n.put("scan_version_artifact", u("DELETE FROM scan_version_artifact WHERE scan_version_id IN " + V + " OR owner_version_id IN " + V));
         n.put("pii_staging_purge", u("DELETE FROM pii_staging_purge WHERE artifact_id IN " + A + " OR run_id IN " + R));
         n.put("pii_staging_sweep", u("DELETE FROM pii_staging_sweep WHERE run_id IN " + R));

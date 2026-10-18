@@ -45,3 +45,12 @@ test("the picker names versions by number and says which one is current", () => 
   assert.equal(versionLabel({ versionNumber: 1, generatedAt: "x" }, "28 Sep", false), "v1 · 28 Sep");
   assert.equal(versionLabel({ versionNumber: null, generatedAt: "x" }, "27 Sep", false), "27 Sep (not a finalized version)");
 });
+
+test("a room's own version is named by its room, a stitched floor says so, and neither opens by default over the floor", () => {
+  assert.equal(versionLabel({ versionNumber: 3, generatedAt: "x", kind: "ROOM", roomName: "Kitchen" }, "1 Oct", false), "Room Kitchen · v3 · 1 Oct");
+  assert.equal(versionLabel({ versionNumber: 5, generatedAt: "x", kind: "STITCHED" }, "2 Oct", true), "v5 · 2 Oct · stitched rooms (current)");
+  const room = { runId: "run-room", versionNumber: 4, current: false, kind: "ROOM" };
+  const floor = { runId: "run-floor", versionNumber: 2, current: false, kind: "FLOOR" };
+  assert.equal(initialVersion([room, floor]), floor, "nothing published: the newest whole-floor version, not one room");
+  assert.equal(initialVersion([room]), room, "only rooms: the newest room");
+});

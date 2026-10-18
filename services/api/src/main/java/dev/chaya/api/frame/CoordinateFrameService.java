@@ -61,7 +61,8 @@ public class CoordinateFrameService {
         scale_relative_spread, gravity_source, gravity_up_reconstruction, gravity_disagreement_deg, control_point_rms_m,
         method, inputs, residuals, calibrated_by, calibrated_at""";
 
-    private record RunInfo(UUID id, UUID orgId, UUID venueId, UUID floorId, UUID reconstructionFrameRunId) {}
+    /** room: the run reconstructs one room of the floor (docs/multi-room.md), never what the floor shows. */
+    private record RunInfo(UUID id, UUID orgId, UUID venueId, UUID floorId, UUID reconstructionFrameRunId, boolean room) {}
 
     /** The run's own reconstructed-structure gravity evidence (PLANE_FITTING's GRAVITY_ESTIMATE), reconstruction frame. */
     private record GravityEvidence(double[] up, double[] floorPoint, double[] cameraCentroid) {}
@@ -95,13 +96,13 @@ public class CoordinateFrameService {
     public FrameView calibrate(Actor actor, UUID venueId, UUID runId, CalibrationRequest request) {
         guard.requireVenue(actor, venueId);
         RunInfo run = jdbc.sql("""
-                SELECT r.id, r.organization_id, r.venue_id, c.floor_id, r.reconstruction_frame_run_id
+                SELECT r.id, r.organization_id, r.venue_id, c.floor_id, r.reconstruction_frame_run_id, c.space_id IS NOT NULL
                   FROM pipeline_run r JOIN capture_session c ON c.id = r.capture_session_id
                  WHERE r.id = :r AND r.venue_id = :v AND r.organization_id = :o FOR UPDATE OF r
                 """)
             .param("r", runId).param("v", venueId).param("o", actor.organizationId())
             .query((rs, i) -> new RunInfo(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class), rs.getObject(3, UUID.class),
-                rs.getObject(4, UUID.class), rs.getObject(5, UUID.class)))
+                rs.getObject(4, UUID.class), rs.getObject(5, UUID.class), rs.getBoolean(6)))
             .optional().orElseThrow(() -> new NotFoundException("reconstruction run not found"));
         UUID posesArtifact = latestArtifact(runId, "POSE_ESTIMATION", "POSES")
             .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, "RECONSTRUCTION_FRAME_UNAVAILABLE",
@@ -154,7 +155,12 @@ public class CoordinateFrameService {
         meta.put("horizontalDatum", result.datum());
         meta.put("method", result.method());
         boolean frameRoot = runId.equals(run.reconstructionFrameRunId());
-        if (view.canonical() && frameRoot && run.floorId() != null) {
+        if (view.canonical() && frameRoot && run.floorId() != null && run.room()) {
+            // One room of the floor: its frame is the room's. The floor takes a frame from what it publishes, which a room
+            // version never is (a stitch of it is, in its anchor room's frame, when that stitch is promoted).
+            meta.put("floorFrameChanged", false);
+            meta.put("room", true);
+        } else if (view.canonical() && frameRoot && run.floorId() != null) {
             if (publishesAnotherReconstruction(run.floorId(), runId)) {
                 // A reconstruction the floor does not publish yet: its frame becomes the floor's when its version is
                 // promoted (ScanVersionService#promote), never before, so the published version's POIs, anchors and routes

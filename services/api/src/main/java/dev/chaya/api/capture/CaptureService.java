@@ -32,10 +32,12 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Service
 public class CaptureService {
 
+    /** roomId: the room of the floor this capture reconstructs on its own (docs/multi-room.md), or null. purpose: FLOOR
+     * (a whole floor), ROOM, RESCAN (a region of the published floor) or STITCH (no media: the rooms combined). */
     public record CaptureView(UUID id, UUID venueId, UUID floorId, String operatorId, CaptureStatus status,
                               Map<String, Object> device, Instant startedAt, Instant endedAt, Double durationSeconds,
                               String qualityState, String failureCode, String failureMessage,
-                              int mediaCount, int acceptedMediaCount, Instant createdAt) {}
+                              int mediaCount, int acceptedMediaCount, Instant createdAt, UUID roomId, String purpose) {}
 
     public record JobView(UUID id, String stage, String status, int retryCount, String errorCode,
                           String errorMessage, Instant queuedAt, Instant startedAt, Instant finishedAt) {}
@@ -70,7 +72,8 @@ public class CaptureService {
 
     private static final String SELECT = """
             SELECT c.id, c.venue_id, c.floor_id, c.operator_id, c.status, c.device, c.started_at, c.ended_at,
-                   c.duration_seconds, c.quality_state, c.failure_code, c.failure_message, c.created_at,
+                   c.duration_seconds, c.quality_state, c.failure_code, c.failure_message, c.created_at, c.space_id, c.stitch,
+                   c.parent_scan_version_id,
                    (SELECT count(*) FROM capture_media m WHERE m.capture_session_id = c.id) AS media_count,
                    (SELECT count(*) FROM capture_media m WHERE m.capture_session_id = c.id AND m.status = 'ACCEPTED') AS accepted_count
               FROM capture_session c
@@ -110,7 +113,9 @@ public class CaptureService {
                 CaptureStatus.valueOf(rs.getString("status")), device, rs.getTimestamp("started_at").toInstant(),
                 ended == null ? null : ended.toInstant(), duration == null ? null : duration.doubleValue(),
                 rs.getString("quality_state"), rs.getString("failure_code"), rs.getString("failure_message"),
-                rs.getInt("media_count"), rs.getInt("accepted_count"), rs.getTimestamp("created_at").toInstant());
+                rs.getInt("media_count"), rs.getInt("accepted_count"), rs.getTimestamp("created_at").toInstant(),
+                rs.getObject("space_id", UUID.class), rs.getBoolean("stitch") ? "STITCH" : rs.getObject("space_id") != null ? "ROOM"
+                    : rs.getObject("parent_scan_version_id") != null ? "RESCAN" : "FLOOR");
         } catch (JsonProcessingException e) {
             throw new SQLException("corrupt device metadata", e);
         }
@@ -140,7 +145,21 @@ public class CaptureService {
      */
     public Created create(Actor actor, UUID venueId, UUID floorId, Map<String, Object> device, Instant startedAt,
                           UUID clientSessionId, ExpectedScanVersion expectedScanVersion) {
+        return create(actor, venueId, floorId, null, device, startedAt, clientSessionId, expectedScanVersion);
+    }
+
+    /** As above; with `roomId`, a capture of that room of the floor only (docs/multi-room.md): processed with the room plan,
+     * its version a room version that a stitch of the floor's rooms combines. */
+    public Created create(Actor actor, UUID venueId, UUID floorId, UUID roomId, Map<String, Object> device, Instant startedAt,
+                          UUID clientSessionId, ExpectedScanVersion expectedScanVersion) {
         guard.requireVenue(actor, venueId);
+        if (roomId != null && floorId == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ROOM_REQUIRES_FLOOR", "a room capture names the floor its room is on");
+        }
+        if (roomId != null && jdbc.sql("SELECT count(*) FROM space WHERE id = :s AND floor_id = :f AND venue_id = :v AND deleted_at IS NULL")
+                .param("s", roomId).param("f", floorId).param("v", venueId).query(Integer.class).single() == 0) {
+            throw new NotFoundException("room not found on this floor");
+        }
         if (clientSessionId != null) {
             boolean erased = jdbc.sql("SELECT EXISTS (SELECT 1 FROM capture_client_session_tombstone WHERE organization_id = :o "
                     + "AND operator_id = :op AND client_session_id = :cs)")
@@ -181,12 +200,18 @@ public class CaptureService {
         try {
             id = tx.execute(s -> {
                 UUID created = jdbc.sql("INSERT INTO capture_session (organization_id, venue_id, floor_id, operator_id, device, "
-                        + "started_at, client_session_id) VALUES (:o, :v, :f, :op, CAST(:d AS jsonb), :s, :cs) RETURNING id")
+                        + "started_at, client_session_id, space_id) VALUES (:o, :v, :f, :op, CAST(:d AS jsonb), :s, :cs, :room) RETURNING id")
                     .param("o", actor.organizationId()).param("v", venueId).param("f", floorId).param("op", actor.subject())
-                    .param("d", deviceJson).param("s", Timestamp.from(started)).param("cs", clientSessionId)
+                    .param("d", deviceJson).param("s", Timestamp.from(started)).param("cs", clientSessionId).param("room", roomId)
                     .query(UUID.class).single();
-                audit.success(actor, venueId, "capture.create", "capture_session", created,
-                    clientSessionId == null ? Map.of() : Map.of("clientSessionId", clientSessionId.toString()));
+                Map<String, Object> meta = new java.util.LinkedHashMap<>();
+                if (clientSessionId != null) {
+                    meta.put("clientSessionId", clientSessionId.toString());
+                }
+                if (roomId != null) {
+                    meta.put("roomId", roomId.toString());
+                }
+                audit.success(actor, venueId, "capture.create", "capture_session", created, meta);
                 return created;
             });
         } catch (DuplicateKeyException e) {

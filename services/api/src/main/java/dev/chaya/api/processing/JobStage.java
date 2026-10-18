@@ -18,6 +18,10 @@ public enum JobStage {
     // a full-venue reconstruction plan.
     REGION_ALIGNMENT,
     REGION_SPLICE,
+    // Multi-room stitching only (see PipelineDefinition.STITCH_STAGES, docs/multi-room.md): the first two stages of a
+    // stitch, whose inputs are finalized room versions rather than media.
+    ROOM_REGISTRATION,
+    ROOM_STITCH,
     PLANE_FITTING,
     ARTIFACT_GENERATION,
     NAVIGATION_BAKING,

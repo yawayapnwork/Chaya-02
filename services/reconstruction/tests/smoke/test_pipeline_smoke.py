@@ -61,6 +61,11 @@ EXCLUDED_IN_CI = {
     # Its splice logic is covered by tests/unit/test_region_splice.py.
     "REGION_SPLICE": ("needs REGION_ALIGNMENT's SPLAT_ALIGNED output and a calibrated frame; incremental re-scan only",
                       "NOT_CALIBRATED"),
+    # Multi-room stitch only: their inputs are the rooms' finalized clouds, and the stitched floor is written in the anchor
+    # room's calibrated frame. Covered by tests/unit/test_room_registration.py, test_room_stitch.py and
+    # tests/orchestration/test_room_stitching_stages.py.
+    "ROOM_REGISTRATION": ("needs Open3D, the rooms' finalized clouds and calibrated frames; multi-room stitch only", "NOT_CALIBRATED"),
+    "ROOM_STITCH": ("needs ROOM_REGISTRATION's report and a calibrated frame; multi-room stitch only", "NOT_CALIBRATED"),
     "PLANE_FITTING": ("needs Open3D", "DEPENDENCY_UNAVAILABLE"),
     "SEMANTIC_INDEXING": ("needs torch + Grounding DINO + CLIP, and a calibrated frame", "NOT_CALIBRATED"),
     "NAVIGATION_BAKING": ("needs the chaya-navmesh Recast/Detour tool and a calibrated frame", "NOT_CALIBRATED"),

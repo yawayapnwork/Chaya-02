@@ -18,6 +18,11 @@ export interface ReconstructionVersion {
   versionNumber: number | null;
   parentVersionId: string | null;
   current: boolean;
+  /** FLOOR, RESCAN, STITCHED (rooms combined) or ROOM: one room of the floor (roomName), viewable on its own and never
+   * what the floor publishes (docs/multi-room.md). Absent from APIs before V41. */
+  kind?: "FLOOR" | "RESCAN" | "STITCHED" | "ROOM";
+  roomId?: string | null;
+  roomName?: string | null;
 }
 
 export type { ArtifactFormat, ArtifactRef } from "./artifact-integrity";

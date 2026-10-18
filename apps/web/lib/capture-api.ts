@@ -42,6 +42,10 @@ export interface Capture {
   failureMessage: string | null;
   mediaCount: number;
   acceptedMediaCount: number;
+  /** The room this capture reconstructs on its own (docs/multi-room.md); absent from APIs before V41. */
+  roomId?: string | null;
+  /** FLOOR, ROOM, RESCAN or STITCH (no media: rooms combined); absent from APIs before V41. */
+  purpose?: "FLOOR" | "ROOM" | "RESCAN" | "STITCH";
 }
 export interface MediaItem {
   id: string;
@@ -210,7 +214,10 @@ export interface FloorConsistencyReport {
 export const getFloorConsistency = (venueId: string) => api<FloorConsistencyReport>(`/venues/${venueId}/floors/consistency`);
 
 export const createCapture = (venueId: string, body: {
-  floorId?: string; device: Record<string, unknown>; startedAt: string;
+  floorId?: string;
+  /** Capture one room of the floor (docs/multi-room.md): it is reconstructed on its own, then stitched with the others. */
+  roomId?: string;
+  device: Record<string, unknown>; startedAt: string;
   /** Idempotency: the same operator repeating it gets the same session back (offline queue, lib/capture-queue). */
   clientSessionId?: string;
   /** Refused with SCAN_VERSION_CHANGED when the floor now publishes another version. */

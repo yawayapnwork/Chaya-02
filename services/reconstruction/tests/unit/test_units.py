@@ -61,7 +61,7 @@ def test_malformed_urls_and_misspelt_stages_stop_the_worker_before_it_polls():
 def test_the_registry_covers_every_planned_stage_in_order():
     assert list(STAGE_ORDER) == [
         "INPUT_VALIDATION", "FFMPEG_PREPROCESS", "FRAME_QUALITY_FILTER", "PRIVACY_PREPROCESS", "POSE_ESTIMATION", "SPLAT_RECONSTRUCTION",
-        "SEMANTIC_SEGMENTATION", "GEOMETRIC_CLEANUP", "REGION_ALIGNMENT", "REGION_SPLICE",
+        "SEMANTIC_SEGMENTATION", "GEOMETRIC_CLEANUP", "REGION_ALIGNMENT", "REGION_SPLICE", "ROOM_REGISTRATION", "ROOM_STITCH",
         "PLANE_FITTING", "ARTIFACT_GENERATION", "SEMANTIC_INDEXING", "NAVIGATION_BAKING"]
     assert set(default_registry()) == set(STAGE_ORDER)
     assert not runs_after_privacy("FRAME_QUALITY_FILTER") and not runs_after_privacy("PRIVACY_PREPROCESS")

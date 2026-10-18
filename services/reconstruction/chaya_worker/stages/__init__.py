@@ -14,6 +14,8 @@ from .pose_estimation import PoseEstimation
 from .privacy import PrivacyPreprocess
 from .region_alignment import RegionAlignment
 from .region_splice import RegionSplice
+from .room_registration import RoomRegistration
+from .room_stitch import RoomStitch
 from .semantic_indexing import SemanticIndexing
 from .semantic_segmentation import SemanticSegmentation
 from .splat_reconstruction import SplatReconstruction
@@ -28,6 +30,10 @@ STAGE_ORDER = [
     # PLANE_FITTING, because PLANE_FITTING/ARTIFACT_GENERATION/NAVIGATION_BAKING/SEMANTIC_INDEXING must run
     # on the spliced, venue-wide result (SPLAT_MERGED), not on the region alone.
     "REGION_ALIGNMENT", "REGION_SPLICE",
+    # ROOM_REGISTRATION/ROOM_STITCH only appear in a multi-room stitch's plan (dev.chaya.api.pipeline.PipelineDefinition
+    # .STITCH_STAGES, docs/multi-room.md), which starts with them: its inputs are the rooms' finalized reconstructions, not
+    # media. Like the splice, they come before PLANE_FITTING, which runs on their venue-wide result (SPLAT_MERGED).
+    "ROOM_REGISTRATION", "ROOM_STITCH",
     "PLANE_FITTING", "ARTIFACT_GENERATION", "SEMANTIC_INDEXING", "NAVIGATION_BAKING",
 ]
 # SEMANTIC_INDEXING runs before NAVIGATION_BAKING (not the order the two were originally planned in):
@@ -42,7 +48,8 @@ PRIVACY_STAGE = "PRIVACY_PREPROCESS"
 def default_registry() -> dict[str, Stage]:
     stages: list[Stage] = [InputValidation(), FfmpegPreprocess(), FrameQualityFilter(), PrivacyPreprocess(), PoseEstimation(),
                            SplatReconstruction(), SemanticSegmentation(), GeometricCleanup(), RegionAlignment(), RegionSplice(),
-                           PlaneFitting(), ArtifactGeneration(), NavigationBaking(), SemanticIndexing(),
+                           RoomRegistration(), RoomStitch(), PlaneFitting(), ArtifactGeneration(), NavigationBaking(),
+                           SemanticIndexing(),
                            *(PlannedStage(name) for name in PLANNED)]
     registry = {s.name: s for s in stages}
     missing = [n for n in STAGE_ORDER if n not in registry]

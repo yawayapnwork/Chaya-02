@@ -55,6 +55,38 @@ public final class PipelineDefinition {
         JobStage.SEMANTIC_INDEXING,
         JobStage.NAVIGATION_BAKING);
 
+    /**
+     * A room capture's plan (docs/multi-room.md): the full plan up to the viewer asset. The room is reconstructed, cleaned,
+     * fitted and viewable on its own, and its version is finalized once it is calibrated, but it is never published as the
+     * floor's: its navigation and search come with the stitched floor. SEMANTIC_INDEXING and NAVIGATION_BAKING are left
+     * out because a room's detections and navmesh would describe one room in that room's own frame.
+     */
+    public static final List<JobStage> ROOM_STAGES = List.of(
+        JobStage.INPUT_VALIDATION,
+        JobStage.FFMPEG_PREPROCESS,
+        JobStage.FRAME_QUALITY_FILTER,
+        JobStage.PRIVACY_PREPROCESS,
+        JobStage.POSE_ESTIMATION,
+        JobStage.SPLAT_RECONSTRUCTION,
+        JobStage.SEMANTIC_SEGMENTATION,
+        JobStage.GEOMETRIC_CLEANUP,
+        JobStage.PLANE_FITTING,
+        JobStage.ARTIFACT_GENERATION);
+
+    /**
+     * A multi-room stitch (docs/multi-room.md): registers the selected room versions into one frame, stitches their
+     * Gaussians, then derives the floor's planes, viewer asset and navigation from the result (SPLAT_MERGED), like a
+     * re-scan does from its splice. It has no media, so no capture or privacy stages. NAVIGATION_BAKING is always part of
+     * it: the stitched floor must prove its rooms are connected before it is published. SEMANTIC_INDEXING needs camera
+     * frames, which a stitch does not have; a stitched floor publishes no detected objects (staff POIs are unaffected).
+     */
+    public static final List<JobStage> STITCH_STAGES = List.of(
+        JobStage.ROOM_REGISTRATION,
+        JobStage.ROOM_STITCH,
+        JobStage.PLANE_FITTING,
+        JobStage.ARTIFACT_GENERATION,
+        JobStage.NAVIGATION_BAKING);
+
     /** Artifact kinds that count as "a reconstruction exists" for time-boxed partial results. Matches the
      * kind chaya_worker.stages.splat_reconstruction actually publishes (SPLAT) for its trained Gaussian
      * cloud, plus SPLAT_PARTIAL for a worker that checkpoints before the time budget is fully spent. */
@@ -78,6 +110,8 @@ public final class PipelineDefinition {
         Map.entry(JobStage.GEOMETRIC_CLEANUP, List.of("SPLAT_CLEAN", "SEMANTIC_LABELS_CLEAN")),
         Map.entry(JobStage.REGION_ALIGNMENT, List.of("SPLAT_ALIGNED")),
         Map.entry(JobStage.REGION_SPLICE, List.of("SPLAT_MERGED", "SPLICE_REPORT")),
+        Map.entry(JobStage.ROOM_REGISTRATION, List.of("ROOM_REGISTRATION_REPORT")),
+        Map.entry(JobStage.ROOM_STITCH, List.of("SPLAT_MERGED", "SEMANTIC_LABELS_MERGED", "STITCH_REPORT")),
         Map.entry(JobStage.PLANE_FITTING, List.of("PLANE_MODEL", "GRAVITY_ESTIMATE")),
         Map.entry(JobStage.ARTIFACT_GENERATION, List.of("KSPLAT", "ARTIFACT_MANIFEST")),
         Map.entry(JobStage.SEMANTIC_INDEXING, List.of("DETECTED_OBJECTS")),
@@ -96,6 +130,17 @@ public final class PipelineDefinition {
     /** Privacy preprocessing is part of the plan unless it was explicitly disabled for the run. */
     public static List<JobStage> plan(boolean privacyEnabled) {
         return privacyEnabled ? STAGES : STAGES.stream().filter(s -> s != JobStage.PRIVACY_PREPROCESS).toList();
+    }
+
+    /** A room capture's plan, with privacy preprocessing unless it was explicitly disabled. */
+    public static List<JobStage> roomPlan(boolean privacyEnabled) {
+        return privacyEnabled ? ROOM_STAGES : ROOM_STAGES.stream().filter(s -> s != JobStage.PRIVACY_PREPROCESS).toList();
+    }
+
+    /** Whether a run's cloud is a venue-wide merge (SPLAT_MERGED) rather than its own capture's SPLAT_CLEAN: a re-scan
+     * (REGION_SPLICE) or a stitch (ROOM_STITCH). */
+    public static boolean mergesClouds(List<JobStage> plan) {
+        return plan.contains(JobStage.REGION_SPLICE) || plan.contains(JobStage.ROOM_STITCH);
     }
 
     /** The incremental plan, with privacy preprocessing and (per {@code includeNavigationBaking}, decided

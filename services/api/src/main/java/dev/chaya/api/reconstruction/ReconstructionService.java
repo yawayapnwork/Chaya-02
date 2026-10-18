@@ -57,8 +57,11 @@ public class ReconstructionService {
     /** One FINALIZED ScanVersion of the floor (scanVersionId / versionNumber / parentVersionId) and the run it is. current:
      * whether it is the version the floor publishes (floor.current_scan_version_id, V28). A reconstruction that is not a
      * FINALIZED version is never listed: what a viewer can pick is always one coherent version. */
+    /** kind: FLOOR, RESCAN, STITCHED (rooms combined) or ROOM (one room of the floor, named by roomId/roomName: viewable on
+     * its own, never what the floor publishes; docs/multi-room.md). */
     public record ReconstructionVersion(UUID runId, UUID floorId, Instant generatedAt, String runStatus, String runQuality,
-                                        UUID scanVersionId, Integer versionNumber, UUID parentVersionId, boolean current) {}
+                                        UUID scanVersionId, Integer versionNumber, UUID parentVersionId, boolean current,
+                                        String kind, UUID roomId, String roomName) {}
 
     /** What the API validated when it published the artifact (V31): for a KSPLAT, its headers against the viewer contract
      * (packages/contracts/viewer/ksplat-contract.json). Null for other kinds and for a KSPLAT published before V31. */
@@ -113,11 +116,13 @@ public class ReconstructionService {
         guard.requireVenue(actor, venueId);
         requireFloor(venueId, floorId);
         return jdbc.sql("""
-                SELECT DISTINCT ON (sv.version_number) r.id AS run_id, cs.floor_id, sr.finished_at, r.status, r.quality,
+                SELECT DISTINCT ON (sv.version_number) r.id AS run_id, sv.floor_id, sr.finished_at, r.status, r.quality,
                        sv.id AS scan_version_id, sv.version_number, sv.parent_version_id,
-                       sv.id = f.current_scan_version_id IS TRUE AS current
+                       sv.id = f.current_scan_version_id IS TRUE AS current, sv.space_id, sp.name AS space_name,
+                       EXISTS (SELECT 1 FROM scan_version_stitch_source s WHERE s.stitch_version_id = sv.id) AS stitched
                   FROM scan_version sv
                   JOIN floor f ON f.id = sv.floor_id
+                  LEFT JOIN space sp ON sp.id = sv.space_id
                   JOIN pipeline_run r ON r.id = sv.pipeline_run_id
                   JOIN capture_session cs ON cs.id = r.capture_session_id
                   JOIN pipeline_stage_run sr ON sr.run_id = r.id AND sr.stage = 'ARTIFACT_GENERATION' AND sr.status = 'SUCCEEDED'
@@ -126,6 +131,8 @@ public class ReconstructionService {
                    -- that is no version at all are never listed: none of them is a coherent twin (docs/rescan.md)
                    AND sv.floor_id = :floor AND sv.venue_id = :venue AND sv.organization_id = :org
                    AND (r.privacy_enabled OR NOT :anonymous)
+                   -- one room is the venue team's to inspect; a public link shows the floor
+                   AND (sv.space_id IS NULL OR NOT :anonymous)
                  ORDER BY sv.version_number DESC, sr.finished_at DESC
                  LIMIT 50
                 """)
@@ -134,7 +141,10 @@ public class ReconstructionService {
             .query((rs, i) -> new ReconstructionVersion(rs.getObject("run_id", UUID.class), rs.getObject("floor_id", UUID.class),
                 rs.getTimestamp("finished_at").toInstant(), rs.getString("status"), rs.getString("quality"),
                 rs.getObject("scan_version_id", UUID.class), (Integer) rs.getObject("version_number"),
-                rs.getObject("parent_version_id", UUID.class), rs.getBoolean("current")))
+                rs.getObject("parent_version_id", UUID.class), rs.getBoolean("current"),
+                rs.getObject("space_id") != null ? "ROOM" : rs.getBoolean("stitched") ? "STITCHED"
+                    : rs.getObject("parent_version_id") != null ? "RESCAN" : "FLOOR",
+                rs.getObject("space_id", UUID.class), rs.getString("space_name")))
             .list();
     }
 

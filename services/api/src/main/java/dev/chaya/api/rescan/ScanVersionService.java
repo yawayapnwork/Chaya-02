@@ -133,15 +133,30 @@ public class ScanVersionService {
      * run on it with {@link #attachRun}.
      */
     public UUID createFullRunDraft(Actor actor, UUID venueId, UUID scanId, UUID floorId, Map<String, Object> processingConfig) {
+        return createFullRunDraft(actor, venueId, scanId, floorId, processingConfig, null);
+    }
+
+    /** As above; with `spaceId`, the run reconstructs that room of the floor only, and the version is a ROOM VERSION
+     * (docs/multi-room.md): finalized like any version once calibrated, never published as the floor's. */
+    public UUID createFullRunDraft(Actor actor, UUID venueId, UUID scanId, UUID floorId, Map<String, Object> processingConfig,
+                                   UUID spaceId) {
         return jdbc.sql("""
                 INSERT INTO scan_version (organization_id, venue_id, scan_id, floor_id, version_number, status, processing_config,
-                    created_by)
-                VALUES (:o, :v, :s, :f, :n, 'DRAFT', CAST(:config AS jsonb), :by) RETURNING id
+                    created_by, space_id)
+                VALUES (:o, :v, :s, :f, :n, 'DRAFT', CAST(:config AS jsonb), :by, :space) RETURNING id
                 """)
             .param("o", actor.organizationId()).param("v", venueId).param("s", scanId).param("f", floorId)
             .param("n", nextVersionNumber(floorId)).param("config", json(processingConfig)).param("by", actor.subject())
-            .query(UUID.class).single();
+            .param("space", spaceId).query(UUID.class).single();
     }
+
+    /** The room a version reconstructs, when it is a room version (docs/multi-room.md). */
+    public Optional<UUID> roomOf(UUID versionId) {
+        return jdbc.sql("SELECT space_id FROM scan_version WHERE id = :v").param("v", versionId)
+            .query((rs, i) -> Optional.ofNullable(rs.getObject(1, UUID.class))).optional().flatMap(o -> o);
+    }
+
+    public static final String ROOM_VERSION_NOT_PUBLISHABLE = "ROOM_VERSION_NOT_PUBLISHABLE";
 
     public void attachRun(UUID versionId, UUID runId) {
         jdbc.sql("UPDATE scan_version SET pipeline_run_id = :r WHERE id = :v AND pipeline_run_id IS NULL")
@@ -187,6 +202,10 @@ public class ScanVersionService {
         if ("ALIGNMENT_REJECTED".equals(v.status())) {
             throw new ApiException(HttpStatus.CONFLICT, "VERSION_REJECTED", "scan version " + versionId
                 + " failed its alignment gate and can never be published");
+        }
+        if (roomOf(versionId).isPresent()) {
+            throw new ApiException(HttpStatus.CONFLICT, ROOM_VERSION_NOT_PUBLISHABLE, "scan version " + versionId + " reconstructs one "
+                + "room; a floor publishes a reconstruction of the whole floor. Stitch the floor's rooms instead (docs/multi-room.md)");
         }
         if (v.parent() != null && previous != null && !previous.equals(v.parent())) {
             throw new ApiException(HttpStatus.CONFLICT, PARENT_NOT_CURRENT, "scan version " + versionId + " is a re-scan of "
@@ -304,17 +323,19 @@ public class ScanVersionService {
         if (!"DRAFT".equals(v.status()) || v.runId() == null) {
             throw new IllegalStateException("scan version " + versionId + " is " + v.status() + " / run " + v.runId());
         }
-        record Run(UUID frameRun, boolean incremental) {}
+        // merged: the run's cloud is a venue-wide merge, SPLAT_MERGED -- a re-scan's splice or a stitch of rooms.
+        record Run(UUID frameRun, boolean merged) {}
         Run run = jdbc.sql("SELECT coalesce(reconstruction_frame_run_id, id), stages FROM pipeline_run WHERE id = :r")
             .param("r", v.runId())
-            .query((rs, i) -> new Run(rs.getObject(1, UUID.class), contains(rs.getArray(2), "REGION_SPLICE"))).single();
+            .query((rs, i) -> new Run(rs.getObject(1, UUID.class),
+                contains(rs.getArray(2), "REGION_SPLICE") || contains(rs.getArray(2), "ROOM_STITCH"))).single();
         FrameView frame = frames.activeForRun(run.frameRun()).filter(FrameView::canonical)
             .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, CoordinateFrameService.NOT_CALIBRATED,
                 "the reconstruction has no calibrated canonical coordinate frame; a version's POIs, anchors and navigation are "
                     + "canonical metres, so it cannot be finalized until that reconstruction is calibrated"));
 
         List<String> kinds = new java.util.ArrayList<>(OWN_KINDS);
-        kinds.add(run.incremental() ? "SPLAT_MERGED" : "SPLAT_CLEAN");
+        kinds.add(run.merged() ? "SPLAT_MERGED" : "SPLAT_CLEAN");
         jdbc.sql("""
                 INSERT INTO scan_version_artifact (scan_version_id, artifact_id, kind, owner_version_id)
                 SELECT DISTINCT ON (a.kind) :v, a.id, a.kind, :v
@@ -334,7 +355,7 @@ public class ScanVersionService {
 
         List<String> own = jdbc.sql("SELECT kind FROM scan_version_artifact WHERE scan_version_id = :v AND owner_version_id = :v")
             .param("v", versionId).query(String.class).list();
-        String cloudKind = run.incremental() ? "SPLAT_MERGED" : "SPLAT_CLEAN";
+        String cloudKind = run.merged() ? "SPLAT_MERGED" : "SPLAT_CLEAN";
         if (!own.contains("KSPLAT") || !own.contains(cloudKind)) {
             throw new ApiException(HttpStatus.CONFLICT, "VERSION_INCOMPLETE", "run " + v.runId() + " published no "
                 + (own.contains("KSPLAT") ? cloudKind : "viewer asset (KSPLAT)") + "; a version is only finalized with its own "

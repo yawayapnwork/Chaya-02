@@ -32,6 +32,10 @@ const STAGE_LABEL: Record<string, string> = {
   SPLAT_RECONSTRUCTION: "Gaussian splat reconstruction",
   SEMANTIC_SEGMENTATION: "Semantic segmentation",
   GEOMETRIC_CLEANUP: "Geometric cleanup",
+  REGION_ALIGNMENT: "Region alignment",
+  REGION_SPLICE: "Region splice",
+  ROOM_REGISTRATION: "Room registration",
+  ROOM_STITCH: "Room stitching",
   PLANE_FITTING: "Plane fitting",
   ARTIFACT_GENERATION: "Artifact generation",
   NAVIGATION_BAKING: "Navigation baking",
@@ -79,6 +83,16 @@ export function explainStageError(code: string | null, message: string | null, d
       return "The GPU failed during this stage. Retry; if it repeats, the worker's GPU needs checking.";
     case "REPORT_REJECTED":
       return "The control plane refused the stage output. This is a bug; contact support with the run id.";
+    case "REGISTRATION_REJECTED":
+      return "Not every room could be placed: a room has no reliable registration linking it to the others. See which room and why below; re-capture it so it overlaps a neighbouring room through a door, or leave it out, and start a new stitch.";
+    case "STITCH_REJECTED":
+      return "The registered rooms do not meet on the same surfaces (a misaligned overlap or a visible seam), so they were not combined. Nothing was published; start a new stitch after re-capturing or re-calibrating the rooms involved.";
+    case "STITCH_LINEAGE_INVALID":
+      return "The stitch report does not prove which rooms were combined. Retry the stage on an up-to-date worker.";
+    case "STITCH_FRAME_CHANGED":
+      return "The anchor room was recalibrated while the stitch ran, so the other rooms were placed by its old calibration. Start a new stitch.";
+    case "NAVMESH_ROOMS_DISCONNECTED":
+      return "The stitched floor's navigation does not join every room: a doorway is blocked or closed, or a room is misplaced. Nothing was published.";
     default:
       return message ?? "The stage failed.";
   }
@@ -188,6 +202,10 @@ export function retryBlockedText(run: RunLike | null): string | null {
       return "The floor has published a newer version since this re-scan started, so it can never be published. Start a new re-scan.";
     case "VERSION_SUPERSEDED":
       return "The floor publishes a newer version than this run's, so this run can never be published. Reconstruct or re-scan again.";
+    case "REGISTRATION_REJECTED":
+    case "STITCH_REJECTED":
+    case "STITCH_FRAME_CHANGED":
+      return "This stitch's rooms and calibrations are fixed, so running it again gives the same answer. Re-capture or re-calibrate the rooms it names, or leave one out, and start a new stitch.";
     default:
       return "Retrying cannot fix this failure.";
   }

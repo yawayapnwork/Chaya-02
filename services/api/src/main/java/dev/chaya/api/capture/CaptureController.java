@@ -33,12 +33,13 @@ import org.springframework.web.bind.annotation.RestController;
 @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR')")
 public class CaptureController {
 
-    /** clientSessionId and expectedScanVersion: see CaptureService#create (offline capture recovery). */
+    /** clientSessionId and expectedScanVersion: see CaptureService#create (offline capture recovery). roomId: capture one room
+     * of the floor (docs/multi-room.md). */
     public record CreateCapture(UUID floorId, Map<String, Object> device, Instant startedAt, UUID clientSessionId,
-                                CaptureService.ExpectedScanVersion expectedScanVersion) {
+                                CaptureService.ExpectedScanVersion expectedScanVersion, UUID roomId) {
 
         public CreateCapture(UUID floorId, Map<String, Object> device, Instant startedAt) {
-            this(floorId, device, startedAt, null, null);
+            this(floorId, device, startedAt, null, null, null);
         }
     }
 
@@ -56,13 +57,14 @@ public class CaptureController {
 
     @Operation(summary = "Create a capture session (status CREATED)",
             description = "201 when created; 200 with the existing session when the same operator repeats a clientSessionId.")
+    @ProblemResponse(status = 400, description = "ROOM_REQUIRES_FLOOR")
     @ProblemResponse(status = 409, description = "CLIENT_SESSION_CONFLICT, SCAN_VERSION_CHANGED")
     @ProblemResponse(status = 410, description = "CAPTURE_ERASED: the session recorded under this clientSessionId was erased")
     @PostMapping
     public ResponseEntity<CaptureView> create(@PathVariable UUID venueId, @RequestBody(required = false) CreateCapture body) {
         CreateCapture b = body == null ? new CreateCapture(null, null, null) : body;
-        CaptureService.Created c = captures.create(ActorAuthentication.currentActor(), venueId, b.floorId(), b.device(), b.startedAt(),
-            b.clientSessionId(), b.expectedScanVersion());
+        CaptureService.Created c = captures.create(ActorAuthentication.currentActor(), venueId, b.floorId(), b.roomId(), b.device(),
+            b.startedAt(), b.clientSessionId(), b.expectedScanVersion());
         return ResponseEntity.status(c.replayed() ? HttpStatus.OK : HttpStatus.CREATED).body(c.capture());
     }
 

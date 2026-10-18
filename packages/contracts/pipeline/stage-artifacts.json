@@ -7,11 +7,15 @@
     "incremental": ["INPUT_VALIDATION", "FFMPEG_PREPROCESS", "FRAME_QUALITY_FILTER", "PRIVACY_PREPROCESS", "POSE_ESTIMATION",
                     "SPLAT_RECONSTRUCTION", "SEMANTIC_SEGMENTATION", "GEOMETRIC_CLEANUP", "REGION_ALIGNMENT", "REGION_SPLICE",
                     "PLANE_FITTING", "ARTIFACT_GENERATION", "SEMANTIC_INDEXING", "NAVIGATION_BAKING"],
+    "room": ["INPUT_VALIDATION", "FFMPEG_PREPROCESS", "FRAME_QUALITY_FILTER", "PRIVACY_PREPROCESS", "POSE_ESTIMATION",
+             "SPLAT_RECONSTRUCTION", "SEMANTIC_SEGMENTATION", "GEOMETRIC_CLEANUP", "PLANE_FITTING", "ARTIFACT_GENERATION"],
+    "stitch": ["ROOM_REGISTRATION", "ROOM_STITCH", "PLANE_FITTING", "ARTIFACT_GENERATION", "NAVIGATION_BAKING"],
     "optionalStages": ["PRIVACY_PREPROCESS", "NAVIGATION_BAKING"]
   },
   "externalInputs": {
     "always": ["RAW_VIDEO", "RAW_IMAGE", "RAW_METADATA"],
-    "incremental": ["GLOBAL_CLOUD", "GLOBAL_LABELS"]
+    "incremental": ["GLOBAL_CLOUD", "GLOBAL_LABELS"],
+    "stitch": ["ROOM_CLOUD", "ROOM_LABELS"]
   },
   "stages": {
     "INPUT_VALIDATION": {
@@ -56,6 +60,14 @@
       "requiredOutputs": ["SPLAT_MERGED", "SPLICE_REPORT"], "optionalOutputs": ["SPLICE_INDEX", "SEMANTIC_LABELS_MERGED"],
       "requiredInputs": [["GLOBAL_CLOUD"], ["SPLAT_ALIGNED"]], "optionalInputs": ["GLOBAL_LABELS", "SEMANTIC_LABELS_CLEAN"]
     },
+    "ROOM_REGISTRATION": {
+      "requiredOutputs": ["ROOM_REGISTRATION_REPORT"], "optionalOutputs": [],
+      "requiredInputs": [["ROOM_CLOUD"]], "optionalInputs": ["ROOM_LABELS"]
+    },
+    "ROOM_STITCH": {
+      "requiredOutputs": ["SPLAT_MERGED", "SEMANTIC_LABELS_MERGED", "STITCH_REPORT"], "optionalOutputs": ["STITCH_INDEX"],
+      "requiredInputs": [["ROOM_CLOUD"], ["ROOM_LABELS"], ["ROOM_REGISTRATION_REPORT"]], "optionalInputs": []
+    },
     "PLANE_FITTING": {
       "requiredOutputs": ["PLANE_MODEL", "GRAVITY_ESTIMATE"], "optionalOutputs": [],
       "requiredInputs": [["SPLAT_MERGED", "SPLAT_CLEAN"]],
@@ -74,7 +86,7 @@
     "NAVIGATION_BAKING": {
       "requiredOutputs": ["NAVMESH", "NAVMESH_MANIFEST", "NAVIGATION_GRAPH"], "optionalOutputs": ["NAVMESH_INPUT_GEOMETRY", "NAVIGATION_BAKING_REPORT"],
       "requiredInputs": [["SPLAT_MERGED", "SPLAT_CLEAN", "SPLAT"], ["SEMANTIC_LABELS_MERGED", "SEMANTIC_LABELS_CLEAN", "SEMANTIC_LABELS"], ["PLANE_MODEL"]],
-      "optionalInputs": ["GLOBAL_CLOUD", "GLOBAL_LABELS", "SPLICE_REPORT"]
+      "optionalInputs": ["GLOBAL_CLOUD", "GLOBAL_LABELS", "SPLICE_REPORT", "STITCH_REPORT"]
     }
   }
 }

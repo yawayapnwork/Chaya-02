@@ -1,0 +1,2350 @@
+{
+  "benchmark": "b7_multiroom",
+  "title": "Multi-room registration and stitching on a synthetic floor",
+  "started": "2026-10-18T08:43:46+00:00",
+  "finished": "2026-10-18T08:48:19+00:00",
+  "git": {
+    "commit": "d3bfaf59fe553ec663e913edcc3506938e40f6c4",
+    "dirty_files": 59
+  },
+  "environment": {
+    "python": "3.12.10",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "cpus": 18
+  },
+  "inputs": {
+    "scene": "synthetic three-room floor (tests/multiroom_scene.py)",
+    "scene_sha256": "60ae1654ca40a7819d4024f312019337c42aa738cd8caffbe90fa4344f71d46e",
+    "trials": 5
+  },
+  "metrics": [
+    {
+      "metric": "floor",
+      "value": "two rooms and a corridor, three 1.2 m doorways (one loop), 0.15 m walls, asymmetric furniture",
+      "unit": "",
+      "kind": "assumption",
+      "condition": "setup",
+      "source": "synthetic three-room floor (tests/multiroom_scene.py)",
+      "note": "stands in for independently captured rooms; NOT real-room data",
+      "command": null
+    },
+    {
+      "metric": "room calibrations",
+      "value": "each room metric and gravity-aligned with its own origin, heading and reconstruction scale (0.5-2 units/m)",
+      "unit": "",
+      "kind": "assumption",
+      "condition": "setup",
+      "source": "synthetic three-room floor (tests/multiroom_scene.py)",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "feature matcher",
+      "value": "oracle_matches: true correspondences inside the real overlap, 60% replaced by random wrong matches",
+      "unit": "",
+      "kind": "configuration",
+      "condition": "setup",
+      "source": "stand-in for FPFH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "capture noise levels",
+      "value": "3 mm, 10 mm",
+      "unit": "",
+      "kind": "configuration",
+      "condition": "setup",
+      "source": "this benchmark",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "gates",
+      "value": "production defaults (chaya_worker.settings room_* and stitch_*)",
+      "unit": "",
+      "kind": "configuration",
+      "condition": "setup",
+      "source": "Settings",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "trials registered and stitched",
+      "value": "5/5",
+      "unit": "trials",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "pairwise outcomes, all trials",
+      "value": "REGISTERED 15",
+      "unit": "pairs",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": "3 pairs per trial",
+      "command": null
+    },
+    {
+      "metric": "registration error, median over rooms and trials",
+      "value": 0.00089,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": "per room: median point distance from the true placement",
+      "command": null
+    },
+    {
+      "metric": "registration error, worst room p95",
+      "value": 0.00294,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "rotation error, worst room",
+      "value": 0.021,
+      "unit": "deg",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "loop A-B-C cycle error before optimisation, median",
+      "value": 0.00154,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "loop A-B-C cycle rotation before optimisation, max",
+      "value": 0.0273,
+      "unit": "deg",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "loops consistent before optimisation",
+      "value": "5/5",
+      "unit": "loops",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "edge residual after optimisation, max",
+      "value": 0.00071,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "ROOM_REGISTRATION time, median",
+      "value": 5.594,
+      "unit": "s",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": "stage timing_seconds; this CPU",
+      "command": null
+    },
+    {
+      "metric": "ROOM_STITCH time, median",
+      "value": 5.469,
+      "unit": "s",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": "58772 Gaussians in",
+      "command": null
+    },
+    {
+      "metric": "registration + stitch wall clock, median",
+      "value": 12.24496,
+      "unit": "s",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": "both stage runs through the orchestrator, including I/O",
+      "command": null
+    },
+    {
+      "metric": "overlap misalignment after stitching, max",
+      "value": 0.00237,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": "rigid offset ICP still finds in each pair's overlap",
+      "command": null
+    },
+    {
+      "metric": "seam step, median",
+      "value": 0.00337,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "seam step p90, max",
+      "value": 0.01116,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "duplicate Gaussians left, max",
+      "value": 0.00284,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "Gaussians removed as duplicates, median",
+      "value": 0.23792,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "colour step in shared voxels, median",
+      "value": 0.0102,
+      "unit": "RGB [0,1]",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 3 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": "both captures sample the same synthetic surface colour",
+      "command": null
+    },
+    {
+      "metric": "trials registered and stitched",
+      "value": "5/5",
+      "unit": "trials",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 10 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "pairwise outcomes, all trials",
+      "value": "REGISTERED 15",
+      "unit": "pairs",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 10 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": "3 pairs per trial",
+      "command": null
+    },
+    {
+      "metric": "registration error, median over rooms and trials",
+      "value": 0.00213,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 10 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": "per room: median point distance from the true placement",
+      "command": null
+    },
+    {
+      "metric": "registration error, worst room p95",
+      "value": 0.00505,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 10 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "rotation error, worst room",
+      "value": 0.0453,
+      "unit": "deg",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 10 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "loop A-B-C cycle error before optimisation, median",
+      "value": 0.00469,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 10 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "loop A-B-C cycle rotation before optimisation, max",
+      "value": 0.1006,
+      "unit": "deg",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 10 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "loops consistent before optimisation",
+      "value": "5/5",
+      "unit": "loops",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 10 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "edge residual after optimisation, max",
+      "value": 0.00236,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 10 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "ROOM_REGISTRATION time, median",
+      "value": 7.11,
+      "unit": "s",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 10 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": "stage timing_seconds; this CPU",
+      "command": null
+    },
+    {
+      "metric": "ROOM_STITCH time, median",
+      "value": 6.812,
+      "unit": "s",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 10 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": "58772 Gaussians in",
+      "command": null
+    },
+    {
+      "metric": "registration + stitch wall clock, median",
+      "value": 16.38999,
+      "unit": "s",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 10 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": "both stage runs through the orchestrator, including I/O",
+      "command": null
+    },
+    {
+      "metric": "overlap misalignment after stitching, max",
+      "value": 0.00508,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 10 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": "rigid offset ICP still finds in each pair's overlap",
+      "command": null
+    },
+    {
+      "metric": "seam step, median",
+      "value": 0.00983,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 10 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "seam step p90, max",
+      "value": 0.02551,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 10 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "duplicate Gaussians left, max",
+      "value": 0.0023,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 10 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "Gaussians removed as duplicates, median",
+      "value": 0.2388,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 10 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "colour step in shared voxels, median",
+      "value": 0.01037,
+      "unit": "RGB [0,1]",
+      "kind": "measured",
+      "condition": "3 rooms, loop, noise 10 mm, oracle matches",
+      "source": "ROOM_REGISTRATION + ROOM_STITCH",
+      "note": "both captures sample the same synthetic surface colour",
+      "command": null
+    },
+    {
+      "metric": "registration error with real FPFH matches",
+      "value": null,
+      "unit": "m",
+      "kind": "unavailable",
+      "condition": "3 rooms, loop, real FPFH",
+      "source": "",
+      "note": "Open3D is not installed in this interpreter; see results/b7_multiroom_fpfh",
+      "command": "docker run --rm -v \"$PWD:/repo\" -w /repo chaya-bench-open3d sh -c \"pip install -q pytest && python benchmarks/b7_multiroom/run.py --fpfh-only\""
+    },
+    {
+      "metric": "trials refused with REGISTRATION_REJECTED",
+      "value": "5/5",
+      "unit": "trials",
+      "kind": "measured",
+      "condition": "consistently wrong matches",
+      "source": "ROOM_REGISTRATION",
+      "note": "outcomes: FREE_SPACE_CONFLICT, NO_SHARED_FEATURES",
+      "command": null
+    },
+    {
+      "metric": "trials refused with REGISTRATION_REJECTED",
+      "value": "5/5",
+      "unit": "trials",
+      "kind": "measured",
+      "condition": "scale inconsistency",
+      "source": "ROOM_REGISTRATION",
+      "note": "outcomes: SCALE_INCONSISTENT",
+      "command": null
+    },
+    {
+      "metric": "trials refused with REGISTRATION_REJECTED",
+      "value": "5/5",
+      "unit": "trials",
+      "kind": "measured",
+      "condition": "weak overlap",
+      "source": "ROOM_REGISTRATION",
+      "note": "outcomes: FREE_SPACE_CONFLICT, WEAK_OVERLAP",
+      "command": null
+    },
+    {
+      "metric": "rooms still placed, worst median error",
+      "value": 0.00443,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "weak overlap",
+      "source": "ROOM_REGISTRATION",
+      "note": "5 placements in refused trials",
+      "command": null
+    },
+    {
+      "metric": "every room reached (STANDARD)",
+      "value": true,
+      "unit": "",
+      "kind": "measured",
+      "condition": "3 rooms stitched, noise 3 mm, baked by Recast/Detour",
+      "source": "navmesh.room_connectivity",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "every room reached (STEP_FREE)",
+      "value": true,
+      "unit": "",
+      "kind": "measured",
+      "condition": "3 rooms stitched, noise 3 mm, baked by Recast/Detour",
+      "source": "navmesh.room_connectivity",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "room pairs with a direct navmesh connection",
+      "value": 3,
+      "unit": "pairs",
+      "kind": "measured",
+      "condition": "3 rooms stitched, noise 3 mm, baked by Recast/Detour",
+      "source": "navmesh.room_connectivity",
+      "note": "the floor has 3 doorways",
+      "command": null
+    },
+    {
+      "metric": "doorway clear width, min",
+      "value": 0.92,
+      "unit": "m",
+      "kind": "measured",
+      "condition": "3 rooms stitched, noise 3 mm, baked by Recast/Detour",
+      "source": "navmesh.seed_clearance",
+      "note": "1.2 m openings, measured on the 0.1 m grid",
+      "command": null
+    },
+    {
+      "metric": "cross-room Detour routes found",
+      "value": "3/3",
+      "unit": "routes",
+      "kind": "measured",
+      "condition": "3 rooms stitched, noise 3 mm, baked by Recast/Detour",
+      "source": "chaya-navmesh path",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "NAVIGATION_BAKING wall clock",
+      "value": 3.68,
+      "unit": "s",
+      "kind": "measured",
+      "condition": "3 rooms stitched, noise 3 mm, baked by Recast/Detour",
+      "source": "orchestrator",
+      "note": null,
+      "command": null
+    },
+    {
+      "metric": "registration and seam quality on real rooms",
+      "value": null,
+      "unit": "",
+      "kind": "unavailable",
+      "condition": "real rooms",
+      "source": "",
+      "note": "no independently captured real rooms have been reconstructed: SPLAT_RECONSTRUCTION needs a CUDA GPU (docs/REAL_VENUE_ACCEPTANCE.md)",
+      "command": "capture two adjoining rooms, reconstruct and calibrate each, then POST /api/v1/venues/{venueId}/floors/{floorId}/stitches"
+    },
+    {
+      "metric": "rendered seam quality (PSNR/SSIM across a seam)",
+      "value": null,
+      "unit": "dB",
+      "kind": "unavailable",
+      "condition": "real rooms",
+      "source": "",
+      "note": "needs trained splats rendered from held-out views (CUDA GPU)",
+      "command": "after a real stitch: render held-out views across each doorway from the stitched and the per-room splats"
+    }
+  ],
+  "details": {
+    "trials": {
+      "3 rooms, loop, noise 3 mm, oracle matches": [
+        {
+          "status": "STITCHED",
+          "registration": {
+            "B": {
+              "median_error_m": 0.0005107106196943062,
+              "p95_error_m": 0.0009029928150915239,
+              "rotation_error_deg": 0.013393635325920058
+            },
+            "C": {
+              "median_error_m": 0.00038437400571370223,
+              "p95_error_m": 0.0004876060963011277,
+              "rotation_error_deg": 0.005345263182985022
+            }
+          },
+          "loops": [
+            {
+              "consistent_before_optimisation": true,
+              "cycle_log_scale": 0.0,
+              "cycle_rotation_deg": 0.019018346933456897,
+              "cycle_translation_m": 0.0008659971669497962,
+              "edge": "space-C->space-A",
+              "status_after": "ACCEPTED"
+            }
+          ],
+          "edges": [
+            {
+              "edge": "space-B->space-A",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.009631104497475469,
+              "residual_translation_m": 0.00014037396984571836,
+              "source": "space-B",
+              "status": "ACCEPTED",
+              "target": "space-A",
+              "weight": 0.7773712381969518
+            },
+            {
+              "edge": "space-C->space-A",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.004796370560965688,
+              "residual_translation_m": 0.00014136054836173359,
+              "source": "space-C",
+              "status": "ACCEPTED",
+              "target": "space-A",
+              "weight": 0.7719458367154303
+            },
+            {
+              "edge": "space-C->space-B",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.004786274403882455,
+              "residual_translation_m": 0.0001410629338501648,
+              "source": "space-C",
+              "status": "ACCEPTED",
+              "target": "space-B",
+              "weight": 0.7735744877210228
+            }
+          ],
+          "pairs": [
+            {
+              "source": "space-B",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-B",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            }
+          ],
+          "unconfirmed": [],
+          "registration_seconds": 5.594000000011874,
+          "registration_wall_seconds": 6.214627300010761,
+          "stitch_seconds": 6.796999999991385,
+          "stitch_wall_seconds": 7.495418300008168,
+          "gaussians_in": 58660,
+          "gaussians_out": 44728,
+          "duplicate_fraction": 0.00277231264532284,
+          "overlaps": [
+            {
+              "pieces": [
+                "space-A",
+                "space-B"
+              ],
+              "offset_m": 0.0003086259813736942,
+              "rotation_deg": 0.021791845921083765,
+              "plane_median_m": 0.003286144288874631,
+              "colour_step": 0.01009783148765564
+            },
+            {
+              "pieces": [
+                "space-A",
+                "space-C"
+              ],
+              "offset_m": 0.0011256586483630998,
+              "rotation_deg": 0.012098480685978425,
+              "plane_median_m": 0.0032946631807849913,
+              "colour_step": 0.01039762794971466
+            },
+            {
+              "pieces": [
+                "space-B",
+                "space-C"
+              ],
+              "offset_m": 0.0013688753246223703,
+              "rotation_deg": 0.013906140063522813,
+              "plane_median_m": 0.0032007258086138805,
+              "colour_step": 0.01036381721496582
+            }
+          ],
+          "seams": [
+            {
+              "pieces": [
+                "space-A",
+                "space-B"
+              ],
+              "median_m": 0.0034819848850643842,
+              "p90_m": 0.008693764057735268
+            },
+            {
+              "pieces": [
+                "space-A",
+                "space-C"
+              ],
+              "median_m": 0.003454136903238458,
+              "p90_m": 0.009113846916330983
+            },
+            {
+              "pieces": [
+                "space-B",
+                "space-C"
+              ],
+              "median_m": 0.0031743988111305084,
+              "p90_m": 0.007172189939803167
+            }
+          ]
+        },
+        {
+          "status": "STITCHED",
+          "registration": {
+            "B": {
+              "median_error_m": 0.0009341017357384895,
+              "p95_error_m": 0.001565953341468721,
+              "rotation_error_deg": 0.012394538071209495
+            },
+            "C": {
+              "median_error_m": 0.0008478450648996339,
+              "p95_error_m": 0.0009753611347271748,
+              "rotation_error_deg": 0.0046515848010364284
+            }
+          },
+          "loops": [
+            {
+              "consistent_before_optimisation": true,
+              "cycle_log_scale": 0.0,
+              "cycle_rotation_deg": 0.020228112933965946,
+              "cycle_translation_m": 0.001544189162168164,
+              "edge": "space-C->space-B",
+              "status_after": "ACCEPTED"
+            }
+          ],
+          "edges": [
+            {
+              "edge": "space-B->space-A",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.006298856133181444,
+              "residual_translation_m": 0.0005039325042158703,
+              "source": "space-B",
+              "status": "ACCEPTED",
+              "target": "space-A",
+              "weight": 0.779964660931375
+            },
+            {
+              "edge": "space-C->space-A",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.007772880664361107,
+              "residual_translation_m": 0.0005037370333291037,
+              "source": "space-C",
+              "status": "ACCEPTED",
+              "target": "space-A",
+              "weight": 0.780267320270467
+            },
+            {
+              "edge": "space-C->space-B",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.00799359354619073,
+              "residual_translation_m": 0.0005180407181656365,
+              "source": "space-C",
+              "status": "ACCEPTED",
+              "target": "space-B",
+              "weight": 0.7587232644092091
+            }
+          ],
+          "pairs": [
+            {
+              "source": "space-B",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-B",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            }
+          ],
+          "unconfirmed": [],
+          "registration_seconds": 5.828000000008615,
+          "registration_wall_seconds": 6.579554600000847,
+          "stitch_seconds": 4.85899999999674,
+          "stitch_wall_seconds": 5.58198089999496,
+          "gaussians_in": 58772,
+          "gaussians_out": 44670,
+          "duplicate_fraction": 0.0028430714125811506,
+          "overlaps": [
+            {
+              "pieces": [
+                "space-A",
+                "space-B"
+              ],
+              "offset_m": 0.000844107885562993,
+              "rotation_deg": 0.013596573064201865,
+              "plane_median_m": 0.0034224214937419203,
+              "colour_step": 0.009831070899963379
+            },
+            {
+              "pieces": [
+                "space-A",
+                "space-C"
+              ],
+              "offset_m": 0.0017632119749579327,
+              "rotation_deg": 0.022638034949296386,
+              "plane_median_m": 0.0032970038501529877,
+              "colour_step": 0.010323673486709595
+            },
+            {
+              "pieces": [
+                "space-B",
+                "space-C"
+              ],
+              "offset_m": 0.0018451246344988628,
+              "rotation_deg": 0.011916610031555492,
+              "plane_median_m": 0.0031739701719597983,
+              "colour_step": 0.01006363332271576
+            }
+          ],
+          "seams": [
+            {
+              "pieces": [
+                "space-A",
+                "space-B"
+              ],
+              "median_m": 0.003490824081954701,
+              "p90_m": 0.010343723598518206
+            },
+            {
+              "pieces": [
+                "space-A",
+                "space-C"
+              ],
+              "median_m": 0.0033131983376158015,
+              "p90_m": 0.007875251133632116
+            },
+            {
+              "pieces": [
+                "space-B",
+                "space-C"
+              ],
+              "median_m": 0.0032238856266898447,
+              "p90_m": 0.008172550399159558
+            }
+          ]
+        },
+        {
+          "status": "STITCHED",
+          "registration": {
+            "B": {
+              "median_error_m": 0.001066999710444596,
+              "p95_error_m": 0.001698808914939178,
+              "rotation_error_deg": 0.01551778526157598
+            },
+            "C": {
+              "median_error_m": 0.0005245474288347632,
+              "p95_error_m": 0.0009618847774251436,
+              "rotation_error_deg": 0.013394637008687014
+            }
+          },
+          "loops": [
+            {
+              "consistent_before_optimisation": true,
+              "cycle_log_scale": 0.0,
+              "cycle_rotation_deg": 0.018663099390164188,
+              "cycle_translation_m": 0.002335741796852174,
+              "edge": "space-C->space-A",
+              "status_after": "ACCEPTED"
+            }
+          ],
+          "edges": [
+            {
+              "edge": "space-B->space-A",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.010257513749110537,
+              "residual_translation_m": 0.0006880706455417633,
+              "source": "space-B",
+              "status": "ACCEPTED",
+              "target": "space-A",
+              "weight": 0.7847676496358477
+            },
+            {
+              "edge": "space-C->space-A",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.005858812370588815,
+              "residual_translation_m": 0.0007131103644610198,
+              "source": "space-C",
+              "status": "ACCEPTED",
+              "target": "space-A",
+              "weight": 0.7572117994907485
+            },
+            {
+              "edge": "space-C->space-B",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.0056383026748656325,
+              "residual_translation_m": 0.0006862708943125443,
+              "source": "space-C",
+              "status": "ACCEPTED",
+              "target": "space-B",
+              "weight": 0.7868257082453571
+            }
+          ],
+          "pairs": [
+            {
+              "source": "space-B",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-B",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            }
+          ],
+          "unconfirmed": [],
+          "registration_seconds": 6.48399999999674,
+          "registration_wall_seconds": 7.170232700009365,
+          "stitch_seconds": 6.592999999993481,
+          "stitch_wall_seconds": 7.263836800004356,
+          "gaussians_in": 58935,
+          "gaussians_out": 44913,
+          "duplicate_fraction": 0.002649566940529468,
+          "overlaps": [
+            {
+              "pieces": [
+                "space-A",
+                "space-B"
+              ],
+              "offset_m": 0.001225029684751267,
+              "rotation_deg": 0.018794585296717153,
+              "plane_median_m": 0.0033869807707951807,
+              "colour_step": 0.01027420163154602
+            },
+            {
+              "pieces": [
+                "space-A",
+                "space-C"
+              ],
+              "offset_m": 0.0009115929495779123,
+              "rotation_deg": 0.006193635705079366,
+              "plane_median_m": 0.0032053166741545574,
+              "colour_step": 0.010078132152557373
+            },
+            {
+              "pieces": [
+                "space-B",
+                "space-C"
+              ],
+              "offset_m": 0.0003842224477461158,
+              "rotation_deg": 0.011451561067932175,
+              "plane_median_m": 0.0031978550342347477,
+              "colour_step": 0.010399952530860901
+            }
+          ],
+          "seams": [
+            {
+              "pieces": [
+                "space-A",
+                "space-B"
+              ],
+              "median_m": 0.003081016291520875,
+              "p90_m": 0.009013547267031583
+            },
+            {
+              "pieces": [
+                "space-A",
+                "space-C"
+              ],
+              "median_m": 0.003367430943521029,
+              "p90_m": 0.007911716806438419
+            },
+            {
+              "pieces": [
+                "space-B",
+                "space-C"
+              ],
+              "median_m": 0.0030692397929465024,
+              "p90_m": 0.008805891318300469
+            }
+          ]
+        },
+        {
+          "status": "STITCHED",
+          "registration": {
+            "B": {
+              "median_error_m": 0.0005596642119268027,
+              "p95_error_m": 0.0007077329723860759,
+              "rotation_error_deg": 0.009649315918544307
+            },
+            "C": {
+              "median_error_m": 0.001692103559692249,
+              "p95_error_m": 0.0018328663345634486,
+              "rotation_error_deg": 0.006216384375487558
+            }
+          },
+          "loops": [
+            {
+              "consistent_before_optimisation": true,
+              "cycle_log_scale": 0.0,
+              "cycle_rotation_deg": 0.02733998217360164,
+              "cycle_translation_m": 0.0012942806343090275,
+              "edge": "space-C->space-A",
+              "status_after": "ACCEPTED"
+            }
+          ],
+          "edges": [
+            {
+              "edge": "space-B->space-A",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.013513007525573445,
+              "residual_translation_m": 0.00022215394191676908,
+              "source": "space-B",
+              "status": "ACCEPTED",
+              "target": "space-A",
+              "weight": 0.7810123772671034
+            },
+            {
+              "edge": "space-C->space-A",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.00695518808362096,
+              "residual_translation_m": 0.00022939114382514256,
+              "source": "space-C",
+              "status": "ACCEPTED",
+              "target": "space-A",
+              "weight": 0.7563717384586888
+            },
+            {
+              "edge": "space-C->space-B",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.006949912255687818,
+              "residual_translation_m": 0.00022921716760355182,
+              "source": "space-C",
+              "status": "ACCEPTED",
+              "target": "space-B",
+              "weight": 0.7569458257311978
+            }
+          ],
+          "pairs": [
+            {
+              "source": "space-B",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-B",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            }
+          ],
+          "unconfirmed": [],
+          "registration_seconds": 4.5,
+          "registration_wall_seconds": 5.116217600007076,
+          "stitch_seconds": 5.375,
+          "stitch_wall_seconds": 6.1285420000203885,
+          "gaussians_in": 58659,
+          "gaussians_out": 44749,
+          "duplicate_fraction": 0.002681624170372522,
+          "overlaps": [
+            {
+              "pieces": [
+                "space-A",
+                "space-B"
+              ],
+              "offset_m": 0.0007453604110058004,
+              "rotation_deg": 0.022935272313842965,
+              "plane_median_m": 0.003386494005623521,
+              "colour_step": 0.0101967453956604
+            },
+            {
+              "pieces": [
+                "space-A",
+                "space-C"
+              ],
+              "offset_m": 0.002365029642599699,
+              "rotation_deg": 0.013373816415440675,
+              "plane_median_m": 0.0031043276343548465,
+              "colour_step": 0.009981170296669006
+            },
+            {
+              "pieces": [
+                "space-B",
+                "space-C"
+              ],
+              "offset_m": 0.0019036590220657898,
+              "rotation_deg": 0.006250049849277344,
+              "plane_median_m": 0.0031852871011809458,
+              "colour_step": 0.010154396295547485
+            }
+          ],
+          "seams": [
+            {
+              "pieces": [
+                "space-A",
+                "space-B"
+              ],
+              "median_m": 0.003443757608752018,
+              "p90_m": 0.011162930236785192
+            },
+            {
+              "pieces": [
+                "space-A",
+                "space-C"
+              ],
+              "median_m": 0.0029198040540840985,
+              "p90_m": 0.007882004825997277
+            },
+            {
+              "pieces": [
+                "space-B",
+                "space-C"
+              ],
+              "median_m": 0.0034228734827571813,
+              "p90_m": 0.007676522853082962
+            }
+          ]
+        },
+        {
+          "status": "STITCHED",
+          "registration": {
+            "B": {
+              "median_error_m": 0.0013324987947928397,
+              "p95_error_m": 0.0018987520071682166,
+              "rotation_error_deg": 0.014107691076934865
+            },
+            "C": {
+              "median_error_m": 0.001515856725652201,
+              "p95_error_m": 0.002944472096471075,
+              "rotation_error_deg": 0.0210031620080134
+            }
+          },
+          "loops": [
+            {
+              "consistent_before_optimisation": true,
+              "cycle_log_scale": 0.0,
+              "cycle_rotation_deg": 0.016273437381283437,
+              "cycle_translation_m": 0.0015691430766557103,
+              "edge": "space-C->space-B",
+              "status_after": "ACCEPTED"
+            }
+          ],
+          "edges": [
+            {
+              "edge": "space-B->space-A",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.005198334043643772,
+              "residual_translation_m": 0.0004863968312194462,
+              "source": "space-B",
+              "status": "ACCEPTED",
+              "target": "space-A",
+              "weight": 0.771068751117467
+            },
+            {
+              "edge": "space-C->space-A",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.007319308208910461,
+              "residual_translation_m": 0.00048013815272620345,
+              "source": "space-C",
+              "status": "ACCEPTED",
+              "target": "space-A",
+              "weight": 0.7811197570796636
+            },
+            {
+              "edge": "space-C->space-B",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.007461084961931277,
+              "residual_translation_m": 0.0004894385898896521,
+              "source": "space-C",
+              "status": "ACCEPTED",
+              "target": "space-B",
+              "weight": 0.7662767199454196
+            }
+          ],
+          "pairs": [
+            {
+              "source": "space-B",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-B",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            }
+          ],
+          "unconfirmed": [],
+          "registration_seconds": 5.344000000011874,
+          "registration_wall_seconds": 6.021537700027693,
+          "stitch_seconds": 5.4689999999827705,
+          "stitch_wall_seconds": 6.223423199990066,
+          "gaussians_in": 58798,
+          "gaussians_out": 44663,
+          "duplicate_fraction": 0.002821127107449119,
+          "overlaps": [
+            {
+              "pieces": [
+                "space-A",
+                "space-B"
+              ],
+              "offset_m": 0.0007883398277438759,
+              "rotation_deg": 0.0069748704563381446,
+              "plane_median_m": 0.003560467701708727,
+              "colour_step": 0.010263890027999878
+            },
+            {
+              "pieces": [
+                "space-A",
+                "space-C"
+              ],
+              "offset_m": 0.0007119808126908953,
+              "rotation_deg": 0.015716327432939742,
+              "plane_median_m": 0.0032219785360057,
+              "colour_step": 0.010110408067703247
+            },
+            {
+              "pieces": [
+                "space-B",
+                "space-C"
+              ],
+              "offset_m": 0.0013769005141361244,
+              "rotation_deg": 0.02178615037514158,
+              "plane_median_m": 0.0032192932794027906,
+              "colour_step": 0.010400772094726562
+            }
+          ],
+          "seams": [
+            {
+              "pieces": [
+                "space-A",
+                "space-B"
+              ],
+              "median_m": 0.003847738609628575,
+              "p90_m": 0.010600123345324378
+            },
+            {
+              "pieces": [
+                "space-A",
+                "space-C"
+              ],
+              "median_m": 0.002832686848721339,
+              "p90_m": 0.008169646947965143
+            },
+            {
+              "pieces": [
+                "space-B",
+                "space-C"
+              ],
+              "median_m": 0.003431661738026578,
+              "p90_m": 0.008209492407574875
+            }
+          ]
+        }
+      ],
+      "3 rooms, loop, noise 10 mm, oracle matches": [
+        {
+          "status": "STITCHED",
+          "registration": {
+            "B": {
+              "median_error_m": 0.0019153630859352953,
+              "p95_error_m": 0.003577256903576382,
+              "rotation_error_deg": 0.041558342587643515
+            },
+            "C": {
+              "median_error_m": 0.0019974217482818545,
+              "p95_error_m": 0.0025956941341006216,
+              "rotation_error_deg": 0.020715557875666448
+            }
+          },
+          "loops": [
+            {
+              "consistent_before_optimisation": true,
+              "cycle_log_scale": 0.0,
+              "cycle_rotation_deg": 0.05587526171986022,
+              "cycle_translation_m": 0.006261999921799846,
+              "edge": "space-C->space-A",
+              "status_after": "ACCEPTED"
+            }
+          ],
+          "edges": [
+            {
+              "edge": "space-B->space-A",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.029915374070874662,
+              "residual_translation_m": 0.0017424149223515962,
+              "source": "space-B",
+              "status": "ACCEPTED",
+              "target": "space-A",
+              "weight": 0.7568033955409286
+            },
+            {
+              "edge": "space-C->space-A",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.018001585688342297,
+              "residual_translation_m": 0.001814442587384239,
+              "source": "space-C",
+              "status": "ACCEPTED",
+              "target": "space-A",
+              "weight": 0.7267606802540498
+            },
+            {
+              "edge": "space-C->space-B",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.017685395876914374,
+              "residual_translation_m": 0.0017825726286870777,
+              "source": "space-C",
+              "status": "ACCEPTED",
+              "target": "space-B",
+              "weight": 0.7397541668077214
+            }
+          ],
+          "pairs": [
+            {
+              "source": "space-B",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-B",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            }
+          ],
+          "unconfirmed": [],
+          "registration_seconds": 6.75,
+          "registration_wall_seconds": 7.425880800001323,
+          "stitch_seconds": 10.375,
+          "stitch_wall_seconds": 11.072934800002258,
+          "gaussians_in": 58660,
+          "gaussians_out": 44681,
+          "duplicate_fraction": 0.002170945144468566,
+          "overlaps": [
+            {
+              "pieces": [
+                "space-A",
+                "space-B"
+              ],
+              "offset_m": 0.0012581879132372148,
+              "rotation_deg": 0.057434063199154624,
+              "plane_median_m": 0.009033349043039828,
+              "colour_step": 0.010434374213218689
+            },
+            {
+              "pieces": [
+                "space-A",
+                "space-C"
+              ],
+              "offset_m": 0.0038490814048444035,
+              "rotation_deg": 0.05859882813504752,
+              "plane_median_m": 0.008971620339778831,
+              "colour_step": 0.010819345712661743
+            },
+            {
+              "pieces": [
+                "space-B",
+                "space-C"
+              ],
+              "offset_m": 0.0012796634830370148,
+              "rotation_deg": 0.038379890192301175,
+              "plane_median_m": 0.009166509973053672,
+              "colour_step": 0.010454252362251282
+            }
+          ],
+          "seams": [
+            {
+              "pieces": [
+                "space-A",
+                "space-B"
+              ],
+              "median_m": 0.009765878250673425,
+              "p90_m": 0.02550716824963678
+            },
+            {
+              "pieces": [
+                "space-A",
+                "space-C"
+              ],
+              "median_m": 0.00997174165559447,
+              "p90_m": 0.022758512367488937
+            },
+            {
+              "pieces": [
+                "space-B",
+                "space-C"
+              ],
+              "median_m": 0.008575686869542413,
+              "p90_m": 0.023947229256582173
+            }
+          ]
+        },
+        {
+          "status": "STITCHED",
+          "registration": {
+            "B": {
+              "median_error_m": 0.0015664605497775093,
+              "p95_error_m": 0.0035399345653280333,
+              "rotation_error_deg": 0.045302204585758094
+            },
+            "C": {
+              "median_error_m": 0.0027835748519469783,
+              "p95_error_m": 0.0033623347211711833,
+              "rotation_error_deg": 0.012818120080342964
+            }
+          },
+          "loops": [
+            {
+              "consistent_before_optimisation": true,
+              "cycle_log_scale": 0.0,
+              "cycle_rotation_deg": 0.057039791095095854,
+              "cycle_translation_m": 0.002698345807115408,
+              "edge": "space-C->space-A",
+              "status_after": "ACCEPTED"
+            }
+          ],
+          "edges": [
+            {
+              "edge": "space-B->space-A",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.026753029040792242,
+              "residual_translation_m": 0.0005669982204137335,
+              "source": "space-B",
+              "status": "ACCEPTED",
+              "target": "space-A",
+              "weight": 0.7561157076717642
+            },
+            {
+              "edge": "space-C->space-A",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.01616021211321188,
+              "residual_translation_m": 0.0005836382117360147,
+              "source": "space-C",
+              "status": "ACCEPTED",
+              "target": "space-A",
+              "weight": 0.7345582453111059
+            },
+            {
+              "edge": "space-C->space-B",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.016099572007835242,
+              "residual_translation_m": 0.0005814481473839029,
+              "source": "space-C",
+              "status": "ACCEPTED",
+              "target": "space-B",
+              "weight": 0.7373250092386964
+            }
+          ],
+          "pairs": [
+            {
+              "source": "space-B",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-B",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            }
+          ],
+          "unconfirmed": [],
+          "registration_seconds": 8.10899999999674,
+          "registration_wall_seconds": 8.863002900005085,
+          "stitch_seconds": 6.812000000005355,
+          "stitch_wall_seconds": 7.526987599994754,
+          "gaussians_in": 58772,
+          "gaussians_out": 44697,
+          "duplicate_fraction": 0.0019240664921583103,
+          "overlaps": [
+            {
+              "pieces": [
+                "space-A",
+                "space-B"
+              ],
+              "offset_m": 0.0015234462567298675,
+              "rotation_deg": 0.057486441277338936,
+              "plane_median_m": 0.00938930534358802,
+              "colour_step": 0.010070651769638062
+            },
+            {
+              "pieces": [
+                "space-A",
+                "space-C"
+              ],
+              "offset_m": 0.001737812563942075,
+              "rotation_deg": 0.04174839024810358,
+              "plane_median_m": 0.009217169003296171,
+              "colour_step": 0.010366499423980713
+            },
+            {
+              "pieces": [
+                "space-B",
+                "space-C"
+              ],
+              "offset_m": 0.0018585881147566733,
+              "rotation_deg": 0.06314238407892422,
+              "plane_median_m": 0.008955239908929578,
+              "colour_step": 0.01048971712589264
+            }
+          ],
+          "seams": [
+            {
+              "pieces": [
+                "space-A",
+                "space-B"
+              ],
+              "median_m": 0.010592190762797516,
+              "p90_m": 0.024014315235891738
+            },
+            {
+              "pieces": [
+                "space-A",
+                "space-C"
+              ],
+              "median_m": 0.010834122602261312,
+              "p90_m": 0.02472611333908198
+            },
+            {
+              "pieces": [
+                "space-B",
+                "space-C"
+              ],
+              "median_m": 0.009127453567010502,
+              "p90_m": 0.022968039003041795
+            }
+          ]
+        },
+        {
+          "status": "STITCHED",
+          "registration": {
+            "B": {
+              "median_error_m": 0.002271122226024512,
+              "p95_error_m": 0.002736167495081023,
+              "rotation_error_deg": 0.013352098580023003
+            },
+            "C": {
+              "median_error_m": 0.0017903092912199482,
+              "p95_error_m": 0.002169633257268565,
+              "rotation_error_deg": 0.019490376933878062
+            }
+          },
+          "loops": [
+            {
+              "consistent_before_optimisation": true,
+              "cycle_log_scale": 0.0,
+              "cycle_rotation_deg": 0.10064056465513344,
+              "cycle_translation_m": 0.0026293856477850397,
+              "edge": "space-C->space-A",
+              "status_after": "ACCEPTED"
+            }
+          ],
+          "edges": [
+            {
+              "edge": "space-B->space-A",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.03576649804299677,
+              "residual_translation_m": 0.0009395520374212867,
+              "source": "space-B",
+              "status": "ACCEPTED",
+              "target": "space-A",
+              "weight": 0.755798529861932
+            },
+            {
+              "edge": "space-C->space-A",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.03397372767979159,
+              "residual_translation_m": 0.0009693996060430118,
+              "source": "space-C",
+              "status": "ACCEPTED",
+              "target": "space-A",
+              "weight": 0.7325276842008089
+            },
+            {
+              "edge": "space-C->space-B",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.032959879952499646,
+              "residual_translation_m": 0.0009404706818853427,
+              "source": "space-C",
+              "status": "ACCEPTED",
+              "target": "space-B",
+              "weight": 0.7550602716372669
+            }
+          ],
+          "pairs": [
+            {
+              "source": "space-B",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-B",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            }
+          ],
+          "unconfirmed": [],
+          "registration_seconds": 7.110000000015134,
+          "registration_wall_seconds": 7.8005781000247225,
+          "stitch_seconds": 6.655999999988126,
+          "stitch_wall_seconds": 7.2996980999887455,
+          "gaussians_in": 58935,
+          "gaussians_out": 44843,
+          "duplicate_fraction": 0.0020739022812925095,
+          "overlaps": [
+            {
+              "pieces": [
+                "space-A",
+                "space-B"
+              ],
+              "offset_m": 0.0021493957922121463,
+              "rotation_deg": 0.044069722989395314,
+              "plane_median_m": 0.00902367311659463,
+              "colour_step": 0.010641098022460938
+            },
+            {
+              "pieces": [
+                "space-A",
+                "space-C"
+              ],
+              "offset_m": 0.002211701397670259,
+              "rotation_deg": 0.054203375998338514,
+              "plane_median_m": 0.008882464411164276,
+              "colour_step": 0.010058671236038208
+            },
+            {
+              "pieces": [
+                "space-B",
+                "space-C"
+              ],
+              "offset_m": 0.0023643047406117367,
+              "rotation_deg": 0.01842640257969573,
+              "plane_median_m": 0.008969902458633765,
+              "colour_step": 0.010766640305519104
+            }
+          ],
+          "seams": [
+            {
+              "pieces": [
+                "space-A",
+                "space-B"
+              ],
+              "median_m": 0.008825785714099548,
+              "p90_m": 0.022857409885069464
+            },
+            {
+              "pieces": [
+                "space-A",
+                "space-C"
+              ],
+              "median_m": 0.00983044886641975,
+              "p90_m": 0.0221419090420142
+            },
+            {
+              "pieces": [
+                "space-B",
+                "space-C"
+              ],
+              "median_m": 0.009939323532133134,
+              "p90_m": 0.024559470443670458
+            }
+          ]
+        },
+        {
+          "status": "STITCHED",
+          "registration": {
+            "B": {
+              "median_error_m": 0.0012703197450412034,
+              "p95_error_m": 0.001734647258386263,
+              "rotation_error_deg": 0.014897064413634146
+            },
+            "C": {
+              "median_error_m": 0.003864342596476273,
+              "p95_error_m": 0.004140644523237064,
+              "rotation_error_deg": 0.021733046817640548
+            }
+          },
+          "loops": [
+            {
+              "consistent_before_optimisation": true,
+              "cycle_log_scale": 0.0,
+              "cycle_rotation_deg": 0.09578441488377837,
+              "cycle_translation_m": 0.0046914845701813476,
+              "edge": "space-C->space-B",
+              "status_after": "ACCEPTED"
+            }
+          ],
+          "edges": [
+            {
+              "edge": "space-B->space-A",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.045362010849539475,
+              "residual_translation_m": 0.0010498223397709056,
+              "source": "space-B",
+              "status": "ACCEPTED",
+              "target": "space-A",
+              "weight": 0.7544552352456633
+            },
+            {
+              "edge": "space-C->space-A",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.027077993517019977,
+              "residual_translation_m": 0.0011006165461249675,
+              "source": "space-C",
+              "status": "ACCEPTED",
+              "target": "space-A",
+              "weight": 0.719636610244894
+            },
+            {
+              "edge": "space-C->space-B",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.027166144682369785,
+              "residual_translation_m": 0.001104199540038974,
+              "source": "space-C",
+              "status": "ACCEPTED",
+              "target": "space-B",
+              "weight": 0.7173014764538681
+            }
+          ],
+          "pairs": [
+            {
+              "source": "space-B",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-B",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            }
+          ],
+          "unconfirmed": [],
+          "registration_seconds": 8.859000000025844,
+          "registration_wall_seconds": 9.495712599979015,
+          "stitch_seconds": 7.5310000000172295,
+          "stitch_wall_seconds": 8.222885700000916,
+          "gaussians_in": 58659,
+          "gaussians_out": 44811,
+          "duplicate_fraction": 0.002298542768516659,
+          "overlaps": [
+            {
+              "pieces": [
+                "space-A",
+                "space-B"
+              ],
+              "offset_m": 0.0008534692135476622,
+              "rotation_deg": 0.05039859539674771,
+              "plane_median_m": 0.00903328894304676,
+              "colour_step": 0.010342776775360107
+            },
+            {
+              "pieces": [
+                "space-A",
+                "space-C"
+              ],
+              "offset_m": 0.002342351393181226,
+              "rotation_deg": 0.028433155801142633,
+              "plane_median_m": 0.00885960154000905,
+              "colour_step": 0.010333895683288574
+            },
+            {
+              "pieces": [
+                "space-B",
+                "space-C"
+              ],
+              "offset_m": 0.005081439600990277,
+              "rotation_deg": 0.026252196352604874,
+              "plane_median_m": 0.008985392294044246,
+              "colour_step": 0.010149776935577393
+            }
+          ],
+          "seams": [
+            {
+              "pieces": [
+                "space-A",
+                "space-B"
+              ],
+              "median_m": 0.008340722899354936,
+              "p90_m": 0.02086499241537647
+            },
+            {
+              "pieces": [
+                "space-A",
+                "space-C"
+              ],
+              "median_m": 0.00800522163923588,
+              "p90_m": 0.022243650454852205
+            },
+            {
+              "pieces": [
+                "space-B",
+                "space-C"
+              ],
+              "median_m": 0.010350812460428243,
+              "p90_m": 0.023112831335618183
+            }
+          ]
+        },
+        {
+          "status": "STITCHED",
+          "registration": {
+            "B": {
+              "median_error_m": 0.0032933962638254876,
+              "p95_error_m": 0.004369179558971007,
+              "rotation_error_deg": 0.03436207492206583
+            },
+            "C": {
+              "median_error_m": 0.0027974218720734144,
+              "p95_error_m": 0.005053681672954115,
+              "rotation_error_deg": 0.04261349344829701
+            }
+          },
+          "loops": [
+            {
+              "consistent_before_optimisation": true,
+              "cycle_log_scale": 0.0,
+              "cycle_rotation_deg": 0.04345157420794068,
+              "cycle_translation_m": 0.008416025118773235,
+              "edge": "space-C->space-B",
+              "status_after": "ACCEPTED"
+            }
+          ],
+          "edges": [
+            {
+              "edge": "space-B->space-A",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.03643985870989178,
+              "residual_translation_m": 0.0023370401170719536,
+              "source": "space-B",
+              "status": "ACCEPTED",
+              "target": "space-A",
+              "weight": 0.7446833152442632
+            },
+            {
+              "edge": "space-C->space-A",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.008436155594589722,
+              "residual_translation_m": 0.0023253241424360106,
+              "source": "space-C",
+              "status": "ACCEPTED",
+              "target": "space-A",
+              "weight": 0.7484353475693946
+            },
+            {
+              "edge": "space-C->space-B",
+              "reason": null,
+              "residual_log_scale": 0.0,
+              "residual_rotation_deg": 0.008559863394601177,
+              "residual_translation_m": 0.0023594225452753382,
+              "source": "space-C",
+              "status": "ACCEPTED",
+              "target": "space-B",
+              "weight": 0.7376189507027066
+            }
+          ],
+          "pairs": [
+            {
+              "source": "space-B",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-A",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            },
+            {
+              "source": "space-C",
+              "target": "space-B",
+              "status": "ACCEPTED",
+              "outcome": "REGISTERED",
+              "failed_gates": []
+            }
+          ],
+          "unconfirmed": [],
+          "registration_seconds": 5.953000000008615,
+          "registration_wall_seconds": 6.663413000002038,
+          "stitch_seconds": 6.10899999999674,
+          "stitch_wall_seconds": 6.78977869998198,
+          "gaussians_in": 58798,
+          "gaussians_out": 44757,
+          "duplicate_fraction": 0.0018768013941953213,
+          "overlaps": [
+            {
+              "pieces": [
+                "space-A",
+                "space-B"
+              ],
+              "offset_m": 0.0034284367514164035,
+              "rotation_deg": 0.03780806900044867,
+              "plane_median_m": 0.009136384373108535,
+              "colour_step": 0.010258615016937256
+            },
+            {
+              "pieces": [
+                "space-A",
+                "space-C"
+              ],
+              "offset_m": 0.0017391234029509766,
+              "rotation_deg": 0.053316488689970756,
+              "plane_median_m": 0.008837264213703542,
+              "colour_step": 0.010343760251998901
+            },
+            {
+              "pieces": [
+                "space-B",
+                "space-C"
+              ],
+              "offset_m": 0.0014248647560886518,
+              "rotation_deg": 0.04889999482518669,
+              "plane_median_m": 0.00908056592753103,
+              "colour_step": 0.010678529739379883
+            }
+          ],
+          "seams": [
+            {
+              "pieces": [
+                "space-A",
+                "space-B"
+              ],
+              "median_m": 0.011075137213255003,
+              "p90_m": 0.023662009976579492
+            },
+            {
+              "pieces": [
+                "space-A",
+                "space-C"
+              ],
+              "median_m": 0.009272737202189973,
+              "p90_m": 0.02327755863143093
+            },
+            {
+              "pieces": [
+                "space-B",
+                "space-C"
+              ],
+              "median_m": 0.010210199996828049,
+              "p90_m": 0.02360619642958026
+            }
+          ]
+        }
+      ]
+    },
+    "rejection": {
+      "consistently wrong matches": [
+        {
+          "status": "FAILED",
+          "code": "REGISTRATION_REJECTED",
+          "unregistered": [
+            "space-B",
+            "space-C"
+          ],
+          "outcomes": [
+            "FREE_SPACE_CONFLICT",
+            "NO_SHARED_FEATURES"
+          ],
+          "placed_errors": {}
+        },
+        {
+          "status": "FAILED",
+          "code": "REGISTRATION_REJECTED",
+          "unregistered": [
+            "space-B",
+            "space-C"
+          ],
+          "outcomes": [
+            "FREE_SPACE_CONFLICT",
+            "NO_SHARED_FEATURES"
+          ],
+          "placed_errors": {}
+        },
+        {
+          "status": "FAILED",
+          "code": "REGISTRATION_REJECTED",
+          "unregistered": [
+            "space-B",
+            "space-C"
+          ],
+          "outcomes": [
+            "FREE_SPACE_CONFLICT",
+            "NO_SHARED_FEATURES"
+          ],
+          "placed_errors": {}
+        },
+        {
+          "status": "FAILED",
+          "code": "REGISTRATION_REJECTED",
+          "unregistered": [
+            "space-B",
+            "space-C"
+          ],
+          "outcomes": [
+            "FREE_SPACE_CONFLICT",
+            "NO_SHARED_FEATURES"
+          ],
+          "placed_errors": {}
+        },
+        {
+          "status": "FAILED",
+          "code": "REGISTRATION_REJECTED",
+          "unregistered": [
+            "space-B",
+            "space-C"
+          ],
+          "outcomes": [
+            "FREE_SPACE_CONFLICT",
+            "NO_SHARED_FEATURES"
+          ],
+          "placed_errors": {}
+        }
+      ],
+      "scale inconsistency": [
+        {
+          "status": "FAILED",
+          "code": "REGISTRATION_REJECTED",
+          "unregistered": [
+            "space-B",
+            "space-C"
+          ],
+          "outcomes": [
+            "SCALE_INCONSISTENT"
+          ],
+          "placed_errors": {}
+        },
+        {
+          "status": "FAILED",
+          "code": "REGISTRATION_REJECTED",
+          "unregistered": [
+            "space-B",
+            "space-C"
+          ],
+          "outcomes": [
+            "SCALE_INCONSISTENT"
+          ],
+          "placed_errors": {}
+        },
+        {
+          "status": "FAILED",
+          "code": "REGISTRATION_REJECTED",
+          "unregistered": [
+            "space-B",
+            "space-C"
+          ],
+          "outcomes": [
+            "SCALE_INCONSISTENT"
+          ],
+          "placed_errors": {}
+        },
+        {
+          "status": "FAILED",
+          "code": "REGISTRATION_REJECTED",
+          "unregistered": [
+            "space-B",
+            "space-C"
+          ],
+          "outcomes": [
+            "SCALE_INCONSISTENT"
+          ],
+          "placed_errors": {}
+        },
+        {
+          "status": "FAILED",
+          "code": "REGISTRATION_REJECTED",
+          "unregistered": [
+            "space-B",
+            "space-C"
+          ],
+          "outcomes": [
+            "SCALE_INCONSISTENT"
+          ],
+          "placed_errors": {}
+        }
+      ],
+      "weak overlap": [
+        {
+          "status": "FAILED",
+          "code": "REGISTRATION_REJECTED",
+          "unregistered": [
+            "space-B"
+          ],
+          "outcomes": [
+            "WEAK_OVERLAP"
+          ],
+          "placed_errors": {
+            "C": {
+              "median_error_m": 0.0007307104538193599,
+              "p95_error_m": 0.001969222117589097,
+              "rotation_error_deg": 0.015582317290004111
+            }
+          }
+        },
+        {
+          "status": "FAILED",
+          "code": "REGISTRATION_REJECTED",
+          "unregistered": [
+            "space-B"
+          ],
+          "outcomes": [
+            "WEAK_OVERLAP"
+          ],
+          "placed_errors": {
+            "C": {
+              "median_error_m": 0.0014941524553320684,
+              "p95_error_m": 0.0017682373001975825,
+              "rotation_error_deg": 0.007552302931904187
+            }
+          }
+        },
+        {
+          "status": "FAILED",
+          "code": "REGISTRATION_REJECTED",
+          "unregistered": [
+            "space-B"
+          ],
+          "outcomes": [
+            "FREE_SPACE_CONFLICT",
+            "WEAK_OVERLAP"
+          ],
+          "placed_errors": {
+            "C": {
+              "median_error_m": 0.0018603330859590277,
+              "p95_error_m": 0.002170139801792829,
+              "rotation_error_deg": 0.011272210286014562
+            }
+          }
+        },
+        {
+          "status": "FAILED",
+          "code": "REGISTRATION_REJECTED",
+          "unregistered": [
+            "space-B"
+          ],
+          "outcomes": [
+            "WEAK_OVERLAP"
+          ],
+          "placed_errors": {
+            "C": {
+              "median_error_m": 0.00442801174875706,
+              "p95_error_m": 0.004832085247170434,
+              "rotation_error_deg": 0.013466857198554606
+            }
+          }
+        },
+        {
+          "status": "FAILED",
+          "code": "REGISTRATION_REJECTED",
+          "unregistered": [
+            "space-B"
+          ],
+          "outcomes": [
+            "FREE_SPACE_CONFLICT",
+            "WEAK_OVERLAP"
+          ],
+          "placed_errors": {
+            "C": {
+              "median_error_m": 0.0020620538982537243,
+              "p95_error_m": 0.0024905809317591447,
+              "rotation_error_deg": 0.013491706742840089
+            }
+          }
+        }
+      ]
+    },
+    "navigation": {
+      "status": "SUCCEEDED",
+      "wall_seconds": 3.6816400999960024,
+      "connected": true,
+      "step_free_connected": true,
+      "unreachable": [],
+      "clear_widths": [
+        {
+          "rooms": [
+            "space-A",
+            "space-B"
+          ],
+          "clear_width_m": 0.919803902718557
+        },
+        {
+          "rooms": [
+            "space-A",
+            "space-C"
+          ],
+          "clear_width_m": 0.919803902718557
+        },
+        {
+          "rooms": [
+            "space-B",
+            "space-C"
+          ],
+          "clear_width_m": 1.1
+        }
+      ],
+      "connections": [
+        {
+          "rooms": [
+            "space-A",
+            "space-B"
+          ],
+          "step_free": true
+        },
+        {
+          "rooms": [
+            "space-A",
+            "space-C"
+          ],
+          "step_free": true
+        },
+        {
+          "rooms": [
+            "space-B",
+            "space-C"
+          ],
+          "step_free": true
+        }
+      ],
+      "routes": {
+        "A-B": {
+          "found": true,
+          "length_m": 8.021543830194307,
+          "reaches_m": 5.637161715352811e-07
+        },
+        "A-C": {
+          "found": true,
+          "length_m": 9.281501327396818,
+          "reaches_m": 4.948404641682989e-07
+        },
+        "B-C": {
+          "found": true,
+          "length_m": 8.807076629175985,
+          "reaches_m": 5.176725166318945e-07
+        }
+      }
+    }
+  }
+}

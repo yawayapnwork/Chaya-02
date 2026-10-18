@@ -23,12 +23,23 @@ public final class PipelineDtos {
      * <p>`coordinateFrame` is the ACTIVE calibration of the reconstruction frame this stage's geometry is in (null when
      * none exists; see dev.chaya.api.frame and docs/coordinate-frames.md); `parentCoordinateFrame` is the parent
      * reconstruction's, set only for REGION_ALIGNMENT and REGION_SPLICE of an incremental re-scan. Both are
-     * {@link dev.chaya.api.frame.FrameDtos.FrameView#wire()} maps. */
+     * {@link dev.chaya.api.frame.FrameDtos.FrameView#wire()} maps.
+     *
+     * <p>`rooms` is set only for ROOM_REGISTRATION and ROOM_STITCH of a multi-room stitch (docs/multi-room.md,
+     * chaya_worker.stages.room_registration): one {@link WorkOrderRoom} per room version being stitched; `stitchOptions`
+     * then carries what the stitch was started with ({@code allowUnconfirmedRooms}). */
     public record WorkOrder(UUID id, UUID organizationId, UUID venueId, UUID scanId, UUID scanVersionId, String stage,
                             UUID runId, int attempt, Instant deadlineAt, boolean privacyEnabled, String derivedBucket,
                             String outputPrefix, List<InputRef> inputs, Map<String, Object> regionGeometry,
                             Map<String, Object> coordinateFrame, Map<String, Object> parentCoordinateFrame,
-                            String leaseToken) {}
+                            List<WorkOrderRoom> rooms, Map<String, Object> stitchOptions, String leaseToken) {}
+
+    /** One room of a stitch, as its work orders carry it: the room (space), the FINALIZED room version and its run, whether
+     * it is the anchor (the stitched floor is written in its reconstruction frame), the calibration it is registered with
+     * (a FrameView#wire() map), and its cloud and labels by artifact id among the order's inputs (ROOM_CLOUD,
+     * ROOM_LABELS). */
+    public record WorkOrderRoom(UUID spaceId, String name, UUID scanVersionId, UUID runId, boolean anchor,
+                             Map<String, Object> coordinateFrame, UUID cloudArtifactId, UUID labelsArtifactId) {}
 
     public record ArtifactReport(String kind, String key, String sha256, String contentType, long sizeBytes,
                                  boolean containsPii, boolean partial) {}

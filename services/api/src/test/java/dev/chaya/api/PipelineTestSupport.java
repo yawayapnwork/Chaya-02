@@ -40,10 +40,11 @@ abstract class PipelineTestSupport extends CaptureTestSupport {
     record Started(Ctx c, UUID capture, UUID scan, UUID run) {}
 
     /** Every stage a real worker claims (chaya_worker.stages.STAGE_ORDER): the full-venue plan plus the incremental
-     * re-scan's REGION_ALIGNMENT and REGION_SPLICE. */
+     * re-scan's REGION_ALIGNMENT and REGION_SPLICE and a stitch's ROOM_REGISTRATION and ROOM_STITCH. */
     protected static String allStages() {
         var stages = new java.util.LinkedHashSet<>(PipelineDefinition.STAGES);
         stages.addAll(PipelineDefinition.INCREMENTAL_STAGES);
+        stages.addAll(PipelineDefinition.STITCH_STAGES);
         return "[" + String.join(",", stages.stream().map(s -> "\"" + s + "\"").toList()) + "]";
     }
 

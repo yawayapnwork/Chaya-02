@@ -45,6 +45,7 @@ rescan timings. What *was* measured used:
 | 6 | Semantic models (all **stock** checkpoints; none fine-tuned) | Baseline only: nothing has been trained, so there is nothing to compare against it yet. On 102 held-out COCO indoor images: segmentation mIoU **0.548**; detection mAP@0.5 **0.500** over 4 classes, with "table" at 0.07; CLIP text→crop recall@5 **0.744**. The reviewed class mapping beats the keyword rule by **+0.005 mIoU** (paired 95% CI +0.001 to +0.010): a mapping change, not a model change. | Real images and human labels, but COCO is not a venue, the sample is small, and the detector's pre-training overlaps COCO. Details: docs/ML_EVALUATION.md. |
 | 2c | Geometry cleanup, controlled | On synthetic scenes with ground truth, the outlier filters remove 86% of the noise at 99.95% precision and keep the stairs, ramp and mezzanine. Semantic-aware cleanup adds about nothing with perfect labels. With the stock model's measured label errors (drawn per point), precision falls to 0.37 and it removes 4% of the stairs and 9% of the thin furniture. | Synthetic scene; the noise and opacities are assumptions. |
 | 5 | Incremental rescan | Similarity alignment recovers known misalignments, **including a ×1.08 scale error**, to ~0.005° when noise-free, up to 30°. The quality gates rejected every failed alignment (**138/138**, 0 false accepts) and 18/118 correct ones. Noisy trials need a larger FPFH voxel. | Real geometry, controlled misalignment. Real rescan timings: **unavailable**. |
+| 7 | Multi-room registration and stitching | On a synthetic three-room floor with 60 % wrong feature matches: **10/10** trials placed every room (median error **0.9 mm** at 3 mm noise, **2.1 mm** at 10 mm), closed the loop, and stitched with a median seam step of **3–10 mm** and ≤ 0.3 % duplicate Gaussians left; the stitched navmesh reached every room and 3/3 cross-room routes were found. Wrong matches, a 5 % scale disagreement and a weak overlap were refused in **15/15** trials. With **real FPFH** matches, only **0/5** stitched under the default loop policy (2/5 with unconfirmed rooms accepted): the corridor usually fails to register, but no room was ever placed wrong (worst 1.7 mm). | Synthetic point clouds only, with a stand-in matcher for most conditions. Real rooms and rendered seam quality: **unavailable**. |
 
 ---
 
@@ -671,6 +672,115 @@ baseline any trained checkpoint must beat on the same dataset lock?
 docs/ML_EVALUATION.md. Detection, retrieval and 3D localization are reported separately. Localization is unavailable
 there, because COCO has no 3D truth.
 
+## 8. Benchmark 7: multi-room registration and stitching
+
+**Question.** Can independently captured rooms be placed in one frame through their doorways, checked by loop closure,
+and merged into one floor that has no doubled surfaces and that routes cross? And are wrong registrations refused
+rather than published?
+
+**Setup.** `benchmarks/b7_multiroom/run.py` runs the production stages through the worker's orchestrator:
+ROOM_REGISTRATION → ROOM_STITCH → NAVIGATION_BAKING. It runs them on the **synthetic** floor
+`services/reconstruction/tests/multiroom_scene.py`:
+
+- rooms A and B and a corridor C, joined by three 1.2 m doorways, which form one loop;
+- 0.15 m walls with door jambs, and asymmetric furniture;
+- each room stored in its own reconstruction frame (0.5–2 units per metre, its own heading and origin) with a FLOOR_LOCAL
+  calibration.
+
+A capture sees its own room, its door jambs, and the neighbouring space through each door. Most conditions use the
+stand-in matcher `oracle_matches`: true correspondences inside the real overlap, with **60 % of them replaced by
+random wrong ones**. The real-FPFH condition runs the production matcher (Open3D 0.19) in `chaya-bench-open3d`. Every
+condition has 5 trials (different samplings of every capture). The gates are the production defaults.
+
+Runs:
+
+| Run | Result file | Started | Git |
+|---|---|---|---|
+| Host | `results/b7_multiroom/2026-10-18T084346Z.json` | 2026-10-18 | `d3bfaf5` + uncommitted multi-room work |
+| Real FPFH | `results/b7_multiroom_fpfh/2026-10-18T084358Z.json` | 2026-10-18 | none recorded: the container has no git; same working tree |
+
+**These are synthetic point clouds, not real rooms.** Planar surfaces sampled as points have no floaters, no
+view-dependent colour and no SfM drift. The numbers below describe the code on known geometry. They do **not** validate
+stitching of real rooms.
+
+### 8a. Registration, loop closure, stitching (measured, oracle matches)
+
+| Metric | 3 mm noise | 10 mm noise |
+|---|--:|--:|
+| Trials registered and stitched | 5/5 | 5/5 |
+| Pairwise outcomes (15 pairs) | 15 REGISTERED | 15 REGISTERED |
+| Registration error, median over rooms and trials | 0.9 mm | 2.1 mm |
+| Registration error, worst room p95 | 2.9 mm | 5.1 mm |
+| Rotation error, worst room | 0.021° | 0.045° |
+| Loop A-B-C cycle error before optimisation, median | 1.5 mm | 4.7 mm |
+| Loop cycle rotation before optimisation, max | 0.027° | 0.101° |
+| Loops consistent before optimisation (limits 5 cm, 1°) | 5/5 | 5/5 |
+| Edge residual after optimisation, max | 0.7 mm | 2.4 mm |
+| Overlap misalignment ICP still finds after stitching, max (limit 3 cm) | 2.4 mm | 5.1 mm |
+| Seam step, median (limit 3 cm) | 3.4 mm | 9.8 mm |
+| Seam step p90, max | 11.2 mm | 25.5 mm |
+| Duplicate Gaussians left, max | 0.28 % | 0.23 % |
+| Gaussians removed as duplicates, median (of 58,772) | 23.8 % | 23.9 % |
+| Colour step in shared voxels, median | 0.010 | 0.010 |
+| ROOM_REGISTRATION, median (stage timing, this CPU) | 5.6 s | 7.1 s |
+| ROOM_STITCH, median | 5.5 s | 6.8 s |
+| Both stages, wall clock through the orchestrator, median | 12.2 s | 16.4 s |
+
+The colour step is near zero by construction: both captures sample the same synthetic surface colour. It says nothing
+about exposure differences between real captures. The seam step tracks the capture noise, as expected for two
+independently sampled surfaces.
+
+### 8b. Rejection (measured)
+
+| Condition | Refused (REGISTRATION_REJECTED) | Outcomes named | Rooms still placed |
+|---|--:|---|---|
+| Consistently wrong matches (one wrong 90° placement for every pair) | 5/5 | FREE_SPACE_CONFLICT, NO_SHARED_FEATURES | none |
+| Room B's calibration 5 % off in scale (the matcher pairs truly corresponding points) | 5/5 | SCALE_INCONSISTENT | none |
+| Weak overlap (room B saw only its neighbours' door frames) | 5/5 | WEAK_OVERLAP, FREE_SPACE_CONFLICT | 5, all within 4.4 mm of the truth (the corridor, through room A) |
+
+Nothing was ever published from a refused run, and no refusal hid a wrong placement.
+
+### 8c. Real FPFH matches (measured, synthetic floor)
+
+| Metric | Default (loop confirmation required) | Unconfirmed rooms accepted |
+|---|--:|--:|
+| Trials registered and stitched | **0/5** | **2/5** |
+| Pairwise outcomes (15 pairs) | 7 REGISTERED, 5 NO_SHARED_FEATURES, 3 FREE_SPACE_CONFLICT | same |
+| Registration error of every room placed, worst median | — | 1.7 mm (1.1 mm in the refused trials) |
+| Seam step, median (stitched trials) | — | 3.5 mm |
+| Both stages, wall clock, median (stitched trials) | — | 10.5 s |
+
+Room B registers onto room A in every trial, through the A|B door. The corridor's registrations mostly fail: too few
+consistent matches (NO_SHARED_FEATURES), or a placement that puts it inside room A's or room B's observed free space
+(FREE_SPACE_CONFLICT; its two doors are 5 m apart and alike). So the loop is never closed, and the default policy
+refuses every trial. With unconfirmed rooms accepted, the
+stitch completes when one corridor registration survives. **In all 10 trials no room was placed wrong.** The
+system's failure mode with real descriptors on this floor is *refusal*, not misplacement. Getting more pairs through
+(more overlap per doorway, a better descriptor) is open work. The same behaviour is pinned by
+`tests/gpu/test_room_registration.py` (5 passed in `chaya-bench-open3d`, 2026-10-18).
+
+### 8d. Route connectivity (measured, real Recast/Detour)
+
+The floor was stitched at 3 mm noise with a denser floor sampling (no hole in the navmesh's 0.1 m grid), then baked by
+the MinGW build of chaya-navmesh.
+
+| Metric | Value |
+|---|--:|
+| Every room reached (STANDARD / STEP_FREE) | yes / yes |
+| Room pairs with a direct navmesh connection | 3 of 3 doorways |
+| Doorway clear width, min (1.2 m openings, 0.1 m grid) | 0.92 m |
+| Cross-room Detour routes found (A→B, A→C, B→C) | 3/3 |
+| NAVIGATION_BAKING wall clock | 3.7 s |
+
+### 8e. Unavailable
+
+| Metric | Why | How to measure |
+|---|---|---|
+| Registration and seam quality on real rooms | No room has been reconstructed: SPLAT_RECONSTRUCTION needs a CUDA GPU | Capture two adjoining rooms, reconstruct and calibrate each, start a stitch (`POST …/floors/{f}/stitches`), then compare with surveyed control points |
+| Rendered seam quality (PSNR/SSIM across a seam) | Needs trained splats rendered from held-out views | After a real stitch: render held-out views across each doorway from the stitched and the per-room splats |
+
+---
+
 ## 6. Datasets that would turn "unavailable" into "measured"
 
 | Dataset | Unlocks | Collection |
@@ -681,6 +791,7 @@ there, because COCO has no 3D truth.
 | Real POI lists and real search logs with judged answers | B3 on real queries; auto-detected vs manual ranking | from the first pilot venues |
 | Baked navigation graphs of real multi-floor venues + origin-destination pairs | B4 on real venues | from the same pipeline runs |
 | A real venue changed physically, then rescanned regionally, plus a full re-reconstruction as reference, with surveyed control points | B5 timings, scope, real alignment error, calibration of the gates and the 0.10 m FPFH voxel on real splats | one pilot venue |
+| Two or more adjoining real rooms captured separately, with a surveyed floor plan or control points across their doorways | B7 on real rooms: registration error, FPFH success rate on real splats, seam quality, calibration of the room_* and stitch_* thresholds | one pilot venue |
 
 ## 7. Reproducing
 
@@ -691,4 +802,5 @@ there, because COCO has no 3D truth.
 - Hosts:
   - B1: Java 21 in `maven:3.9-eclipse-temurin-21`.
   - B2 and B5: `chaya-bench-open3d` (Python 3.12, open3d-cpu 0.19.0).
+  - B7: the worker venv (Python 3.12) with the MinGW build of chaya-navmesh on Windows 11, 18 CPUs; its real-FPFH condition in `chaya-bench-open3d`.
   - B3 and B4: the E2E stack on Windows 11 / Docker Desktop, 18 CPUs, no GPU.
