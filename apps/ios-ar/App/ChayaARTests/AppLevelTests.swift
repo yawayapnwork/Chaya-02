@@ -249,7 +249,7 @@ final class ARSessionManagerTests: XCTestCase {
         let manager = ARSessionManager(
             registry: MarkerRegistry(anchors: []), floorId: UUID(),
             relocalize: { (_: [AnchorObservation], _: UUID, _: UUID?) in throw APIError(status: 0, code: "UNUSED", detail: "not called") },
-            planRoute: { (_: Vec3, _: Localization) in throw APIError(status: 0, code: "UNUSED", detail: "not called") },
+            planRoute: { (_: Vec3, _: Localization, _: [BlockedRegion]) in throw APIError(status: 0, code: "UNUSED", detail: "not called") },
             listConnections: { throw APIError(status: 0, code: "UNUSED", detail: "not called") })
         XCTAssertEqual(manager.snapshot.state.phase, .idle)
         XCTAssertNil(manager.snapshot.state.pinnedScanVersionId)

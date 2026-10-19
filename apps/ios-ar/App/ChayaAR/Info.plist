@@ -23,7 +23,7 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Chaya AR uses the camera to recognise the venue's printed markers and to show your route in the room.</string>
+	<string>Chaya AR uses the camera to recognise the venue's printed markers, to show your route in the room, and to notice people or objects in your way so it can route around them. Camera images stay on this device and are not stored.</string>
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
 		<string>arkit</string>

@@ -144,6 +144,25 @@ measured positions, which wall, height) in the record below.
 | Same-floor version pin | Destination on the session's floor | The `routes` request body carries `scanVersionId` (the localization's); for another floor's destination it does not. |
 | Drift over distance | Localize at marker A; walk 10, 20 and 40 m along the route; at each point aim at a registered marker you have not used and read "… m from where the transform puts it" in the drift message, or the residual of the refresh | Record translation and rotation at each distance. This is the only measurement of VIO drift; unit tests cannot provide it. |
 
+## 6d. Camera obstacle sensing (added 2026-10-19)
+
+Needs an ARCore device with the Depth API (Google's ARCore supported-devices list, "Supports Depth API"). Check
+`chrome://inspect` → console: `session.enabledFeatures` must include `depth-sensing`. Without it, the overlay says
+"Obstacle detection is not available on this device", and that is the expected result on such a phone. Rules:
+docs/navigation.md, "Camera obstacle sensing".
+
+| Check | How | Expected |
+|---|---|---|
+| Depth convention | Localize, then hold a flat board square-on across the route at a tape-measured 2.0 m | An obstruction about 2 m ahead. Record the reported uncertainty, and the region's distance from the device computed from the request body. If it is off by more than its uncertainty, the assumed `getDepthInMeters` convention (top-left origin, depth along −Z) is wrong. |
+| Static obstacle | A box or cart on the route 3 m ahead | Within about a second: "Something is in the way about 3 m ahead (estimated position, ±…)" and a `routes` request with `blockedRegions` (network log). The drawn route goes around it. |
+| Restore | Remove it | After about 5 s: "back on the usual route", and a `routes` request without `blockedRegions`. |
+| Beside the route | The same box 1 m beside the route | No request, no warning. |
+| A person | Someone stands on the route | On Android they are found by depth, as "Something" (no person detector in the browser). |
+| Unreachable | Block the only way to the destination | "No way around the obstruction … route is unchanged"; the route stays drawn; the request is not repeated (network log). |
+| Step-free | The same with Step-free ticked, where only a narrow part is blocked | The step-free reroute keeps `accessibility: STEP_FREE`. |
+| Tracking loss | Cover the camera while an obstacle is shown | "Obstacle detection paused"; no request while it lasts. |
+| Cost | Read "Obstacle sensing every … ms, … ms per run (p90)" over 5 minutes of walking | Record both figures and the device model. A low-end phone should show the back-off ("reduced detail"), not frame drops. |
+
 ## 7. Negative capability checks (same phone, plus a desktop)
 
 | Setup | Expected page state |

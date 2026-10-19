@@ -170,15 +170,16 @@ public final class APIClient: @unchecked Sendable {
     /// version its localization was solved in when the destination is on that floor. Such a route stays on that floor (the
     /// server refuses another floor's destination with VERSION_WRONG_FLOOR), so a destination on another floor is
     /// requested without one (`RouteGeometry.routeScanVersion`).
+    /// `blockedRegions`: obstacles the device observed (ObstacleTracker), routed around for this request only.
     public func planRoute(venueId: UUID, floorId: UUID, start: Vec3, destinationPoiId: UUID, scanVersionId: UUID?,
-                          accessibility: String? = nil) async throws -> RouteResponse {
+                          accessibility: String? = nil, blockedRegions: [BlockedRegion] = []) async throws -> RouteResponse {
         try await request("/navigation/routes", method: "POST",
                           body: try Self.routeBody(venueId: venueId, floorId: floorId, start: start, destinationPoiId: destinationPoiId,
-                                                   scanVersionId: scanVersionId, accessibility: accessibility))
+                                                   scanVersionId: scanVersionId, accessibility: accessibility, blockedRegions: blockedRegions))
     }
 
     static func routeBody(venueId: UUID, floorId: UUID, start: Vec3, destinationPoiId: UUID, scanVersionId: UUID?,
-                          accessibility: String?) throws -> Data {
+                          accessibility: String?, blockedRegions: [BlockedRegion] = []) throws -> Data {
         struct Body: Encodable {
             let venueId: String
             let floorId: String
@@ -186,10 +187,12 @@ public final class APIClient: @unchecked Sendable {
             let destinationPoiId: String
             let scanVersionId: String?
             let accessibility: String?
+            let blockedRegions: [BlockedRegion]?
         }
         return try JSONEncoder.chayaAR.encode(Body(venueId: venueId.apiString, floorId: floorId.apiString,
                                                    start: [start.x, start.y, start.z], destinationPoiId: destinationPoiId.apiString,
-                                                   scanVersionId: scanVersionId?.apiString, accessibility: accessibility))
+                                                   scanVersionId: scanVersionId?.apiString, accessibility: accessibility,
+                                                   blockedRegions: blockedRegions.isEmpty ? nil : blockedRegions))
     }
 }
 

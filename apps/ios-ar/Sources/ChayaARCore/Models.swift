@@ -198,6 +198,34 @@ public struct RoutingSource: Codable, Equatable, Sendable {
     }
 }
 
+/// An obstacle the device observed, routed around for one request (dev.chaya.api.navigation.NavigationDtos.BlockedRegion,
+/// docs/navigation.md "Dynamic obstacles"): a horizontal box in canonical metres on one floor, when it was observed and the
+/// coordinate frame the device was localized in. The server refuses stale, future-dated and other-frame observations.
+public struct BlockedRegion: Encodable, Equatable, Sendable {
+    public var floorId: UUID
+    public var minX: Double, minY: Double, maxX: Double, maxY: Double
+    public var observedAt: Date
+    public var coordinateFrameId: UUID?
+
+    public init(floorId: UUID, minX: Double, minY: Double, maxX: Double, maxY: Double, observedAt: Date, coordinateFrameId: UUID?) {
+        self.floorId = floorId; self.minX = minX; self.minY = minY; self.maxX = maxX; self.maxY = maxY
+        self.observedAt = observedAt; self.coordinateFrameId = coordinateFrameId
+    }
+
+    enum CodingKeys: String, CodingKey { case floorId, minX, minY, maxX, maxY, observedAt, coordinateFrameId }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(floorId.apiString, forKey: .floorId)
+        try c.encode(minX, forKey: .minX)
+        try c.encode(minY, forKey: .minY)
+        try c.encode(maxX, forKey: .maxX)
+        try c.encode(maxY, forKey: .maxY)
+        try c.encode(observedAt, forKey: .observedAt)
+        try c.encodeIfPresent(coordinateFrameId?.apiString, forKey: .coordinateFrameId)
+    }
+}
+
 /// Mirrors dev.chaya.api.navigation.NavigationDtos.RouteResponse (docs/navigation.md). Both AR clients
 /// render this same route; neither computes its own path. `routingSources` is optional only so that a response without
 /// it still decodes: a leg without a routing source is never drawn (RouteGeometry.leg(of:for:)).

@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Vec3 } from "./coordinate-frame.ts";
 import {
+  CLEAR_HOLD_MS,
   OBSTACLE_MAX_AGE_MS,
   REROUTE_MIN_INTERVAL_MS,
   type ObstacleObservation,
+  clearedSince,
   freshObstacles,
   obstacleSourceStatus,
   rerouteDecision,
@@ -73,4 +75,50 @@ test("observations are reported with their observation time and frame", () => {
   assert.deepEqual(toBlockedRegions([box(1, 2, 3, 4, Date.UTC(2026, 9, 14, 12, 0, 0))]), [
     { floorId: F, minX: 1, minY: 2, maxX: 3, maxY: 4, observedAt: "2026-10-14T12:00:00.000Z", coordinateFrameId: "frame" },
   ]);
+});
+
+// ---- restoring the route, unreachable reroutes ---------------------------------------------------------------------
+
+test("an obstacle outside the route never asks for a reroute", () => {
+  const far = box(3, 4, 4, 5, 1000);
+  const d = rerouteDecision({ floorId: F, remainingPath: path, routedAround: [], observed: [far], nowMs: 2000, lastRerouteMs: null });
+  assert.equal(d.reroute, false);
+  assert.equal(d.reason, "NOTHING_NEW_ON_PATH");
+});
+
+test("once everything the route avoided is gone for CLEAR_HOLD_MS, the normal route is restored", () => {
+  const cart = box(4, -0.2, 5, 0.2, 1000);
+  // still there: nothing to do
+  let since = clearedSince([cart], [cart], null, 2000);
+  assert.equal(since, null);
+  // gone: the hold starts, and a person stepping back in resets it
+  since = clearedSince([cart], [], since, 10_000);
+  assert.equal(since, 10_000);
+  const early = rerouteDecision({ floorId: F, remainingPath: path, routedAround: [cart], observed: [], nowMs: 10_000 + CLEAR_HOLD_MS - 1,
+    lastRerouteMs: null, clearedSinceMs: since });
+  assert.equal(early.reroute, false);
+  const restored = rerouteDecision({ floorId: F, remainingPath: path, routedAround: [cart], observed: [], nowMs: 10_000 + CLEAR_HOLD_MS,
+    lastRerouteMs: null, clearedSinceMs: since });
+  assert.deepEqual(restored, { reroute: true, reason: "OBSTACLE_CLEARED", obstacles: [] });
+  assert.equal(clearedSince([cart], [cart], since, 11_000), null);
+  assert.equal(clearedSince([], [], 5, 11_000), null, "a route planned around nothing has nothing to restore");
+});
+
+test("when a reroute found no way around, the same obstacle never asks again; a new one does", () => {
+  const blocker = box(4, -0.5, 5, 0.5, 1000);
+  const d = rerouteDecision({ floorId: F, remainingPath: path, routedAround: [], observed: [blocker], nowMs: 20_000,
+    lastRerouteMs: 0, failedAround: [blocker] });
+  assert.equal(d.reroute, false);
+  assert.equal(d.reason, "NO_ALTERNATIVE");
+  const another = box(7, -0.2, 7.5, 0.2, 1000);
+  const again = rerouteDecision({ floorId: F, remainingPath: path, routedAround: [], observed: [blocker, another], nowMs: 20_000,
+    lastRerouteMs: 0, failedAround: [blocker] });
+  assert.equal(again.reroute, true);
+});
+
+test("an obstacle around the traveller's own position is never sent: there is no route from inside a box", () => {
+  const atMe = box(-0.5, -0.5, 0.5, 0.5, 1000);
+  const d = rerouteDecision({ floorId: F, remainingPath: path, routedAround: [], observed: [atMe], nowMs: 2000, lastRerouteMs: null });
+  assert.equal(d.reroute, false);
+  assert.deepEqual(d.obstacles, []);
 });

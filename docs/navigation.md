@@ -508,9 +508,9 @@ The web clients share pure, unit-tested modules; the components only wire positi
   line. A tracking gap restarts the dwell. Stops are reached in order; the route then stays complete.
 - **Obstacles** (`apps/web/lib/obstacle-reroute.ts`): only observations from a real source on the device are reported,
   and observations older than 120 s are dropped. A reroute is requested only when a new or moved obstacle (moved by more
-  than 0.3 m) comes within the walking body's radius of the path still ahead, and at most every 5 s. **Neither web
-  client has an obstacle source**: WebXR offers no obstacle detection here, and the iOS client does not report any. The
-  Android AR overlay states that the route does not adapt to obstacles; no client claims live detection.
+  than 0.3 m) comes within the walking body's radius of the path still ahead, and at most every 5 s. The AR clients'
+  source is camera depth (and, on iOS, Vision person detection): see "Camera obstacle sensing" below. The viewer has no
+  obstacle source. A device without depth says the route does not adapt to obstacles.
 - **Viewer** (`ViewerWorkspace`): one or more destinations, in a list that can be reordered, trimmed, or put in the
   fastest order (the multi-stop endpoint with `optimizeOrder`). Each segment is one route request, cached by scene, scan
   version, profile, obstacles and endpoints (`apps/web/lib/multi-stop.ts`): changing one destination re-requests only the
@@ -536,6 +536,196 @@ The web clients share pure, unit-tested modules; the components only wire positi
   - A route on a pinned historical version stays on its floor. The worker's own Detour query (`chaya_worker.recast.find_path`) also fails with
 `NO_ROUTE`.
 
+## Camera obstacle sensing
+
+The AR clients can notice a person or a moved object in the way of the route and plan around it. The server side is
+unchanged. It still routes around the `blockedRegions` a client reports, for one request, and rejects stale,
+future-dated and other-frame observations ("Dynamic obstacles" above). What is new is a real source for those regions on
+the device.
+
+Code: `apps/web/lib/obstacle-sensing.ts`, `obstacle-tracker.ts`, `obstacle-reroute.ts`, `obstacle-status.ts` (pure), and
+`ar-depth-obstacles.ts` (WebXR, device-only), wired in `components/ArWorkspace.tsx`. On iOS the same rules are in
+`ChayaARCore/ObstacleSensing.swift` (pure), with `ChayaARKitSession/ObstacleSensor.swift` (ARKit and Vision, device-only)
+wired in `ARSessionManager`.
+
+### What each device can sense
+
+| | Depth | People | Other objects | Status |
+|---|---|---|---|---|
+| iPhone/iPad with LiDAR (iPhone 12 Pro and later Pro models, iPad Pro 2020 and later) | ARKit scene depth, with ARKit's per-pixel confidence | Vision `VNDetectHumanRectanglesRequest`, on device | Depth standing in the route corridor (`UNCLASSIFIED`) | Implemented, **not device-validated** |
+| iPhone/iPad with A12 or later, no LiDAR | ARKit person segmentation with depth (`estimatedDepthData`, on person pixels only) | Vision, as above | **None**: there is no depth for anything but people | Implemented, **not device-validated** |
+| Older iOS devices | none | none | none | Sensing unavailable; the overlay says so |
+| Android, Chrome, ARCore device with the Depth API | WebXR `depth-sensing`, CPU-optimized (an optional session feature) | **None**: no person detector runs in the browser | Depth standing in the route corridor (`UNCLASSIFIED`) | Implemented, **not device-validated** |
+| Android without ARCore depth, or a browser that does not grant `depth-sensing` | none | none | none | Sensing unavailable; the overlay says so |
+
+There is no person detection on Android. The web app has no on-device detection model, and adding one would mean
+shipping model weights and reading camera pixels through WebXR `camera-access`. The existing detection models (Grounding
+DINO and SegFormer in the reconstruction worker) run offline on the server. Sending live camera frames to the server to
+use them was ruled out for privacy and latency reasons. On Android, a person in the corridor is found by depth like any
+other object, as `UNCLASSIFIED`. It is then treated as an object, with the longer lifetime and no "walking by" exemption.
+
+### From a camera frame to a placed obstacle
+
+A 2-D box says nothing about where something is in 3-D. An obstacle is placed **only** from depth measured in the same
+camera frame (`localizeDetection`, `corridorOccupancy`), and nothing estimates depth from a box's size or position.
+
+1. **Same frame.** The detection, the depth and the camera pose must carry the same platform frame timestamp (within
+   1 ms). Otherwise the result is `FRAME_MISMATCH`.
+2. **Localized and tracking normally.** Without a device-to-venue transform the result is `NOT_LOCALIZED`. With limited
+   or lost tracking it is `TRACKING_NOT_NORMAL`. Sensing does not run at all in those states.
+3. **Depth inside the box.** Only the inner 70% of the box is sampled, because its edges hold background. Samples the
+   platform marks as low confidence are dropped. There must be at least 8 samples (`TOO_FEW_DEPTH_SAMPLES`, or
+   `NO_DEPTH`).
+4. **One surface.** At least half of the samples must lie within max(0.25 m, 10%) of the median range. No more than 10%
+   may be nearer than that surface: a thin or partly hidden object in front of a wall is ambiguous, so it is rejected
+   rather than placed at the wall (`INCONSISTENT_DEPTH`). The range must be 0.3–5 m (`OUT_OF_RANGE`).
+5. **Into the venue frame.** Points go camera → AR world (the platform's measured camera pose) → canonical venue (the
+   world-anchor-corrected relocalization transform).
+6. **On the floor.** The surface must reach within 1.2 m of the route's floor, rise at least 0.3 m above it, top out
+   below 2.5 m, and never sit more than 0.4 m below it. A wrong transform (translated, or with the axis change missing)
+   or an overhead sign fails this check (`NOT_ON_FLOOR`).
+7. **Footprint and uncertainty.** The footprint is the 10th–90th percentile of the points in plan view. It is extended
+   **0.25 m** away from the camera, because depth only sees the near surface. That figure is a stated size allowance
+   (about a body's depth), not a measurement. The footprint is then grown by the uncertainty:
+   `2 × (depth error at that range) + localization residual`. The depth error is 1 cm + 0.5 cm/m² for LiDAR, and
+   3 cm + 2 cm/m² for ARKit person depth and ARCore depth. These are conservative orders of magnitude for each class of
+   sensor, not a calibration of any one device. An unknown residual (localized from one marker) counts as 0.25 m, and
+   the observation records that it was not measured. Above 0.75 m of uncertainty the result is `TOO_UNCERTAIN`; with
+   ARCore depth that happens from about 4.3 m.
+8. **Confidence** is the detector score times the share of depth samples that agree. It is a quality figure, not a
+   probability.
+
+**Corridor occupancy** works on depth alone. A measured point is an obstacle candidate when all of these hold:
+- it is 0.3–1.8 m above the route's floor;
+- it is within 0.25 m of the path still ahead in plan view;
+- it is no more than 4 m from the camera.
+
+Candidates are clustered on a 0.25 m grid, and a cluster needs at least 8 points. The route was planned on the scanned
+static geometry, and Recast keeps the walking body's radius (0.35 m) between the route and that geometry. So walls and
+door jambs stay outside the 0.25 m corridor, and something standing in it was **not part of the scan**: a moved or new
+object, or a person. That is the evidence used to tell dynamic obstacles from static geometry. Its limit is that an
+error in the reconstruction or the localization larger than about 0.1 m can bring static geometry into the corridor.
+The confirmation rule and the "seen clear" rule below then act on it like on any other obstacle.
+
+### Tracking over time
+
+- **One obstacle, not many.** An observation joins the nearest track of a compatible category within 0.75 m plus both
+  uncertainties. A Vision person and a depth cluster at the same place are one track, a person.
+- **Confirmation.** A track is reported only after two sightings.
+- **People walking by.** A person moving faster than 0.4 m/s (smoothed velocity) is not routed around: they will be
+  somewhere else by the time the traveller gets there. The overlay says that people are moving near the route. A person
+  who stands still blocks like an object.
+- **Occlusion.** A track that is not detected again is kept while its place is hidden behind something nearer, or out
+  of view. Hidden means the depth along that direction is more than 0.5 m short of it. It is also kept while depth still
+  shows something there that the detector missed. It is dropped once its place has been measured clear (depth more than
+  0.5 m beyond it) three times.
+- **Expiry.** A person not seen for 10 s, or an object not seen for 30 s, is dropped, so no person becomes a permanent
+  obstacle. A new floor or a new coordinate frame drops every track. A region is stamped with its last sighting, which
+  the server checks against its 120 s limit.
+
+### Rerouting
+
+- **When.** A confirmed, not-moving obstacle that comes within the walking body's radius of the path still ahead, and
+  that the current route did not already avoid, triggers a reroute. There is at most one request every 5 s and one at a
+  time, and only when online. Obstacles beside or behind the traveller do nothing. An obstacle whose footprint contains
+  the traveller is never sent, because the server has no route from inside a box.
+- **The request.** It is the same route request as before, from where the device is now, with the same destination,
+  the same accessibility profile (STEP_FREE stays step-free) and the same scan-version pinning, plus `blockedRegions` in
+  the localization's coordinate frame. The AR session, its localization and the world anchor are untouched. Only the
+  route and its instructions are replaced when the answer arrives.
+- **No way around.** If the answer is `NO_ROUTE` (the obstacle blocks the only way, or the only step-free way), the
+  current route is kept and the overlay explains why. The same obstacles never ask again; a new one does.
+- **Restoring the normal route.** Once everything the route avoided has been gone for 5 s, the route is planned again
+  without it, and the overlay says "back on the usual route".
+
+### What the user sees
+
+The obstacle lines live in the AR overlay on both clients (`obstacleMessages` / `ObstacleStatus.messages`):
+- "A person is in the way about 3 m ahead (estimated position, ±0.3 m)." Positions are always estimates with their
+  uncertainty, never shown as verified. "Something" is used for unclassified obstacles.
+- Rerouting status: "Finding a way around…", "Route changed to avoid an obstruction", "back on the usual route".
+- Why a route could not be recalculated: no way around, no step-free way around, or a request failure. In each case
+  the current route is kept.
+- "Obstacle detection paused (tracking is limited / not localized). Watch for people and objects yourself."
+- "Obstacle detection is not available on this device (…)" when there is no depth.
+- How often sensing runs and its p90 latency.
+
+### Performance
+
+| | Android (WebXR) | iOS |
+|---|---|---|
+| Where it runs | In the XR frame callback | On a background serial queue, never on the ARKit delegate queue |
+| Work per run | Synchronous depth sampling of a 40 × 30 grid (20 × 15 when backed off) | Vision on the camera image; 12 × 16 depth samples per person box; a 32 × 24 corridor grid (16 × 12 when backed off) |
+| Rate | At most 4 runs a second | At most 3 runs a second |
+| Back-off | Interval doubles up to every 2 s while the 90th-percentile run takes more than 6 ms | Interval doubles up to every 2 s while the 90th-percentile run takes more than 150 ms |
+
+A run never overlaps the previous one (`ObstacleScheduler`). Sensing makes **no network request** of its own. Route
+requests are bounded as above. The latency of each run is measured and shown in the overlay.
+
+### Privacy
+
+No camera image is stored or sent:
+- **Android** reads depth values only (not camera pixels), at a sparse grid, inside the frame callback.
+- **iOS** reads the camera image and depth buffers in place on the device, for Vision and depth sampling, and releases
+  them when the run ends.
+
+Only obstacle footprints leave the device: boxes in venue metres with a time and a coordinate frame, in the route
+request. They carry no image, no identity and no person attribute, and the server does not store them. Route requests
+keep their venue authorization: the same authenticated, venue-scoped route endpoint as before. The iOS camera usage
+text now says the camera is also used to notice obstacles and that images stay on the device.
+
+### Verification and what it does not prove
+
+Pure tests cover detection placement, tracking and rerouting separately, on synthetic depth that is ray-cast from boxes
+through the real camera → AR world → venue chain.
+
+`apps/web/lib/obstacle-sensing.test.ts` (localization) covers:
+- static placement with its uncertainty, and an unknown residual;
+- no depth, too little depth, low-confidence depth, and depth that is not one surface;
+- a far, a low-score and a too-uncertain detection;
+- tracking loss, no localization, and depth or a detection from another frame;
+- a wrong transform (translated, axis change missing) and an overhead sign;
+- corridor occupancy against walls beside the route, the floor and overhead beams, and multiple objects;
+- visibility for occlusion, projection round trips, and the scheduler's bounds and back-off;
+- one end-to-end case: depth → tracking → reroute → request body → clearing → restore.
+
+`obstacle-tracker.test.ts` (tracking) covers:
+- confirmation;
+- a moving person versus a standing one;
+- person and object lifetimes;
+- temporary occlusion;
+- multiple obstacles and duplicate detectors;
+- frame changes.
+
+`obstacle-reroute.test.ts` (route recalculation) covers:
+- an obstacle outside the route;
+- restoring the normal route after the hold;
+- an unreachable reroute that does not ask again;
+- an obstacle at the traveller;
+- the existing staleness, interval and shift rules.
+
+`obstacle-status.test.ts` covers what the overlay says.
+
+`ObstacleSensingTests.swift` repeats these cases for the iOS core, including the route request body with
+`blockedRegions` and STEP_FREE. The server's own tests cover the reroute on the real navmesh, including the accessible
+case (`RealNavmeshNavigationTest`: a bin narrowing the 1.1 m doorway reroutes STEP_FREE through the 1.6 m one), a
+`NO_ROUTE` when obstacles cut every path, and stale and other-frame rejection (`RouteServiceTest`).
+
+**Not verified, and not provable without devices:**
+- **Detection accuracy.** How often Vision finds people (and misses them, or fires on mannequins and posters) in a
+  venue. That needs a labelled set of real venue frames, which does not exist yet.
+- **Real depth.** The quality of real LiDAR, ARKit person depth or ARCore depth, and so whether the error figures above
+  hold. On Android, two things are assumed from the WebXR Depth Sensing specification and still need confirming on a
+  device: that `getDepthInMeters` takes top-left-origin normalized view coordinates, and that it returns distance along
+  the view's −Z axis.
+- **Real-time behaviour.** Inference latency, frame rate and battery on a real phone, and whether ARKit warns about
+  retained frames while Vision runs.
+- **The ARKit adapter, and the WebXR adapter's interaction with three.js.** `ObstacleSensor.swift` is parse-checked
+  only; it is type-checked in the macOS CI job. `ar-depth-obstacles.ts` is type-checked and built, and neither has run.
+
+Synthetic obstacle tests do not prove camera-based detection works. The device procedures are
+[ar-android-validation.md](ar-android-validation.md) §6d and the iOS checklist in [ar.md](ar.md#obstacle-sensing-ios).
+
 ## What is measured and what is assumed
 
 | Quantity | Status | Source and limits |
@@ -550,7 +740,7 @@ The web clients share pure, unit-tested modules; the components only wire positi
 | Accessibility limits: 0.9 m clear width, 4.76° slope | **assumed** (ADA-derived) | `chaya.navigation.*`. The worker bakes STEP_FREE at 5° (`navmesh_max_ramp_slope_deg`); the API then applies 4.76°. |
 | Floor connections: existence, landings, stairs/ramp walked length, ramp slope, clear width | **registered by staff**, not reconstructed | `floor_connection`. Chaya cannot check them against geometry. |
 | Walking speeds (1.3 / 1.0 m/s), stairs speed (0.5 m/s), elevator ride (45 s) | **assumed** planning constants | `chaya.navigation.*`. |
-| Dynamic obstacles | **reported by the client** | `blockedRegions`. The server never invents one. |
+| Dynamic obstacles | **reported by the client** | `blockedRegions`. The server never invents one. The AR clients place them from measured camera depth; the 0.25 m far-side allowance, the per-sensor depth error figures and the 0.25 m unknown-residual allowance are **assumed** ("Camera obstacle sensing"). |
 
 ### Routing: what has and has not been validated
 

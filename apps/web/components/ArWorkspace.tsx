@@ -94,7 +94,11 @@ import {
   routeInstructions,
   updateArrival,
 } from "@/lib/route-instructions";
-import { type ObstacleObservation, obstacleSourceStatus, rerouteDecision, toBlockedRegions } from "@/lib/obstacle-reroute";
+import { type ObstacleObservation, clearedSince, rerouteDecision, toBlockedRegions, touchesPath } from "@/lib/obstacle-reroute";
+import { type CameraContext, ObstacleScheduler, corridorOccupancy, visibilityAt } from "@/lib/obstacle-sensing";
+import { type TrackerState, blockingObservations, expireTracks, initialTracker, movingPeople, updateTracks } from "@/lib/obstacle-tracker";
+import { type ObstacleMessage, type RerouteOutcome, type SensingAvailability, obstacleMessages } from "@/lib/obstacle-status";
+import { depthAvailability, sampleWebXrDepth } from "@/lib/ar-depth-obstacles";
 import { formatDistance } from "@/lib/viewer-route";
 import { listFloorConnections } from "@/lib/navigation-api";
 import { transitionsStillUsable } from "@/lib/floor-transitions";
@@ -121,6 +125,9 @@ const SUPPORT_TEXT: Record<AnchorSupport, string> = {
 const MAX_TRACKED_IMAGES = 32;
 
 const RETRY_AFTER_FAILURE_MS = 1500;
+/** Camera obstacle sensing (lib/obstacle-sensing.ts): at most 4 runs a second, backing off to one every 2 s while a run
+ * (depth sampling + placement + tracking, in the frame callback) takes more than 6 ms at the 90th percentile. */
+const SENSING = { minIntervalMs: 250, maxIntervalMs: 2000, budgetMs: 6 };
 /** How long a newly created world anchor may be missing from XRFrame.trackedAnchors before that counts as a loss. */
 const WORLD_ANCHOR_GRACE_MS = 1000;
 
@@ -166,10 +173,11 @@ export default function ArWorkspace() {
   const stateRef = useRef<ArSessionState>(initialArSessionState());
   const [ui, setUi] = useState<{
     state: ArSessionState; progress: RouteProgress | null; route: RouteResponse | null;
-    next: Instruction | null; remainingMeters: number | null; arrived: boolean; obstacles: "LIVE" | "UNAVAILABLE";
+    next: Instruction | null; remainingMeters: number | null; arrived: boolean; obstacles: ObstacleMessage[];
+    sensingStats: string | null;
   }>({
     state: initialArSessionState(), progress: null, route: null, next: null, remainingMeters: null, arrived: false,
-    obstacles: "UNAVAILABLE",
+    obstacles: [], sensingStats: null,
   });
   const routeRef = useRef<{ route: RouteResponse } | null>(null);
   /** The leg drawn now: this floor's part of the route, checked against the localization's version and frame. */
@@ -182,10 +190,19 @@ export default function ArWorkspace() {
   const positionRef = useRef<RoutePosition | null>(null);
   const instructionsRef = useRef<Instruction[]>([]);
   const arrivalRef = useRef<ArrivalState | null>(null);
-  /** Obstacles the device observed (lib/obstacle-reroute.ts). null: this client has no obstacle source -- WebXR gives no
-   * obstacle detection here -- so nothing is reported and the UI says the route does not adapt to obstacles. */
+  /** Camera obstacle sensing from WebXR depth (lib/ar-depth-obstacles.ts). available=false: the session has no CPU depth,
+   * nothing is observed or reported, and the UI says the route does not adapt to obstacles. */
+  const sensingRef = useRef<{ available: true; scheduler: ObstacleScheduler } | { available: false; reason: string }>(
+    { available: false, reason: "no AR session" });
+  const trackerRef = useRef<TrackerState>(initialTracker());
+  /** The confirmed obstacles now (lib/obstacle-tracker.ts). null: no obstacle source on this device. */
   const obstacleSourceRef = useRef<ObstacleObservation[] | null>(null);
   const routedAroundRef = useRef<ObstacleObservation[]>([]);
+  /** Obstacles a reroute found no way around (NO_ROUTE): the route is kept and they do not ask again. */
+  const failedAroundRef = useRef<ObstacleObservation[]>([]);
+  const clearedSinceRef = useRef<number | null>(null);
+  const rerouteOutcomeRef = useRef<RerouteOutcome>({ kind: "NONE" });
+  const rerouteInFlightRef = useRef(false);
   const lastRerouteAtRef = useRef<number | null>(null);
   const markersRef = useRef<TrackedMarker[]>([]);
   const rendererRef = useRef<ArRouteRenderer | null>(null);
@@ -193,7 +210,8 @@ export default function ArWorkspace() {
   /** The WebXR world anchor created where the localizing marker was observed, and its pose then (lib/ar-route.ts). */
   const worldAnchorRef = useRef<{ anchor: XRAnchor; poseAtSolve: Pose; createdAtMs: number; seenTracked: boolean } | null>(null);
   const onFrameRef = useRef<(time: number, frame: XRFrame) => void>(() => {});
-  const fetchRouteRef = useRef<(viewerPose: Pose, deviceToVenue: Pose, obstacles?: ObstacleObservation[]) => Promise<void>>(async () => {});
+  const fetchRouteRef = useRef<(viewerPose: Pose, deviceToVenue: Pose, obstacles?: ObstacleObservation[],
+    reroute?: "OBSTACLE_ON_PATH" | "OBSTACLE_CLEARED") => Promise<void>>(async () => {});
   const lastFailureAtRef = useRef(0);
   /** Requests are not retried on their own after this (an expired sign-in or viewer link). */
   const blockedRef = useRef<ClassifiedFailure | null>(null);
@@ -280,6 +298,32 @@ export default function ArWorkspace() {
     return () => { cancelled = true; };
   }, [venueId, floorId, trackable, registered, env]);
 
+  /** The overlay's obstacle lines (lib/obstacle-status.ts) and the sensing cost, from the current refs. */
+  const obstacleUi = (): { obstacles: ObstacleMessage[]; sensingStats: string | null } => {
+    const sensing = sensingRef.current;
+    const s = stateRef.current;
+    const availability: SensingAvailability = !sensing.available ? { kind: "UNAVAILABLE", reason: sensing.reason }
+      : s.state !== "LOCALIZED" ? { kind: "PAUSED", reason: s.state === "LIMITED" ? "tracking is limited" : "not localized" }
+      : { kind: "LIVE", detail: "ARCore depth" };
+    const leg = legRef.current;
+    const ahead = leg ? leg.points.slice(Math.max(0, (progressRef.current?.nextIndex ?? 1) - 1)) : [];
+    const device = leg && lastViewerRef.current && s.localization ? devicePositionInVenue(lastViewerRef.current, s.localization.deviceToVenue) : null;
+    const onPath = leg && ahead.length > 0
+      ? (obstacleSourceRef.current ?? []).filter((o) => o.floorId === leg.floorId && touchesPath(ahead, o)).map((o) => ({
+        obstacle: o,
+        aheadMeters: device ? Math.hypot((o.minX + o.maxX) / 2 - device[0], (o.minY + o.maxY) / 2 - device[1]) : null,
+      }))
+      : [];
+    const obstacles = routeRef.current
+      ? obstacleMessages({ sensing: availability, onPath, movingNearby: movingPeople(trackerRef.current).length, outcome: rerouteOutcomeRef.current })
+      : [];
+    const p90 = sensing.available ? sensing.scheduler.p90() : null;
+    const sensingStats = sensing.available && p90 !== null
+      ? `Obstacle sensing every ${sensing.scheduler.intervalMs} ms, ${p90.toFixed(1)} ms per run (p90)${sensing.scheduler.lowDetail ? ", reduced detail" : ""}`
+      : null;
+    return { obstacles, sensingStats };
+  };
+
   const publish = useCallback((force: boolean) => {
     const now = performance.now();
     if (!force && now - lastUiAtRef.current < 250) return;
@@ -289,7 +333,7 @@ export default function ArWorkspace() {
       next: nextInstruction(instructionsRef.current, positionRef.current),
       remainingMeters: positionRef.current?.remainingMeters ?? null,
       arrived: arrivalRef.current?.arrived ?? false,
-      obstacles: obstacleSourceStatus(obstacleSourceRef.current),
+      ...obstacleUi(),
     });
   }, []);
 
@@ -319,10 +363,16 @@ export default function ArWorkspace() {
   /** Fetches the route once, from where the device is, through the same contract the viewer uses (lib/ar-navigation.ts
    * arRouteRequest: step-free when asked; a same-floor destination on the localization's scan version). A failure is a
    * routing error, not a localization one: the localization stays, and a network failure is retried when back online. */
-  const fetchRoute = useCallback(async (viewerPose: Pose, deviceToVenue: Pose, obstacles: ObstacleObservation[] = []) => {
+  const fetchRoute = useCallback(async (viewerPose: Pose, deviceToVenue: Pose, obstacles: ObstacleObservation[] = [],
+                                        reroute?: "OBSTACLE_ON_PATH" | "OBSTACLE_CLEARED") => {
     const localization = stateRef.current.localization;
     const destination = pois.find((p) => p.id === destinationId);
     if (!localization || !destination || blockedRef.current) return;
+    if (reroute) {
+      rerouteInFlightRef.current = true;
+      rerouteOutcomeRef.current = { kind: "REROUTING" };
+      publish(true);
+    }
     try {
       const route = await planRoute({
         ...arRouteRequest({
@@ -333,6 +383,11 @@ export default function ArWorkspace() {
       });
       routeRef.current = { route };
       routedAroundRef.current = obstacles;
+      failedAroundRef.current = [];
+      clearedSinceRef.current = null;
+      if (reroute) {
+        rerouteOutcomeRef.current = obstacles.length === 0 ? { kind: "RESTORED" } : { kind: "REROUTED", avoided: obstacles.length };
+      }
       instructionsRef.current = routeInstructions(route, {
         floorName: (id) => floors.find((f) => f.id === id)?.name ?? id,
         stopName: () => destination.label,
@@ -343,10 +398,20 @@ export default function ArWorkspace() {
       updateLeg();
       publish(true);
     } catch (e) {
+      if (reroute && e instanceof ApiError && e.code === "NO_ROUTE") {
+        // No way around: the current route and the navigation session stay as they are; these obstacles do not ask again.
+        failedAroundRef.current = obstacles;
+        rerouteOutcomeRef.current = { kind: "NO_ALTERNATIVE", stepFree: stepFreeRef.current };
+        publish(true);
+        return;
+      }
       const f = classifyArFailure(e, navigator.onLine);
       if (f.failure === "SESSION_EXPIRED") blockedRef.current = f;
+      if (reroute) rerouteOutcomeRef.current = { kind: "FAILED", detail: f.failure };
       setFailure(f);
       setError(`Route: ${f.failure}: ${message(e)}`);
+    } finally {
+      if (reroute) rerouteInFlightRef.current = false;
     }
   }, [venueId, destinationId, pois, floors, publish, updateLeg]);
 
@@ -534,15 +599,42 @@ export default function ArWorkspace() {
       positionRef.current = locateOnRoute(route, leg.floorId, device, positionRef.current);
       arrivalRef.current = updateArrival(arrivalRef.current, route, now.floorId, device, positionRef.current, performance.now());
       if (arrivalRef.current.arrived) publish(true);
-      // Reroute only for a real observation from the device that touches the path still ahead (lib/obstacle-reroute.ts).
       const ahead = leg.points.slice(Math.max(0, (progressRef.current?.nextIndex ?? 1) - 1));
+      // Camera obstacle sensing: measured depth in the route corridor ahead, placed in the venue frame and tracked over
+      // frames (lib/obstacle-sensing.ts, obstacle-tracker.ts). Bounded by the scheduler; nothing of the frame is kept.
+      const sensing = sensingRef.current;
+      if (sensing.available && sensing.scheduler.tryStart(frameMs)) {
+        const started = performance.now();
+        const fine = !sensing.scheduler.lowDetail;
+        const sampled = sampleWebXrDepth(frame, viewer, time, fine ? 40 : 20, fine ? 30 : 15);
+        if (sampled.ok && now.localization) {
+          const ctx: CameraContext = {
+            frameTimeMs: time, wallClockMs: Date.now(), camera: sampled.camera, tracking: "NORMAL", deviceToVenue: corrected,
+            floorId: leg.floorId, coordinateFrameId: now.localization.coordinateFrameId, residualMeters: now.localization.residualMeters,
+          };
+          const found = corridorOccupancy(sampled.depth, ctx, ahead);
+          trackerRef.current = updateTracks(trackerRef.current, found.obstacles, {
+            nowMs: ctx.wallClockMs, floorId: leg.floorId, coordinateFrameId: ctx.coordinateFrameId,
+            visibility: (p) => visibilityAt(p, ctx, sampled.depthAlong),
+          });
+        } else {
+          trackerRef.current = expireTracks(trackerRef.current, Date.now());
+        }
+        obstacleSourceRef.current = blockingObservations(trackerRef.current);
+        sensing.scheduler.finish(performance.now() - started);
+      }
+      // Reroute only for a confirmed observation from the device that touches the path still ahead, and restore the
+      // normal route once what it avoided is gone (lib/obstacle-reroute.ts). One request at a time.
+      clearedSinceRef.current = clearedSince(routedAroundRef.current, obstacleSourceRef.current, clearedSinceRef.current, Date.now());
       const decision = rerouteDecision({
         floorId: leg.floorId, remainingPath: [device, ...ahead], routedAround: routedAroundRef.current,
         observed: obstacleSourceRef.current, nowMs: Date.now(), lastRerouteMs: lastRerouteAtRef.current,
+        failedAround: failedAroundRef.current, clearedSinceMs: clearedSinceRef.current,
       });
-      if (decision.reroute && navigator.onLine) {
+      if (decision.reroute && navigator.onLine && !rerouteInFlightRef.current) {
         lastRerouteAtRef.current = Date.now();
-        void fetchRouteRef.current(viewerPose, corrected, decision.obstacles);
+        const avoid = decision.obstacles.filter((o) => o.floorId === leg.floorId);
+        void fetchRouteRef.current(viewerPose, corrected, avoid, decision.reason);
       }
     }
     const handoff = routeRef.current ? floorHandoff(routeRef.current.route, leg.floorId, progressRef.current?.remainingMeters ?? null) : null;
@@ -645,6 +737,14 @@ export default function ArWorkspace() {
     arrivalRef.current = null;
     instructionsRef.current = [];
     routedAroundRef.current = [];
+    failedAroundRef.current = [];
+    clearedSinceRef.current = null;
+    rerouteOutcomeRef.current = { kind: "NONE" };
+    rerouteInFlightRef.current = false;
+    trackerRef.current = initialTracker();
+    const depth = depthAvailability(session);
+    sensingRef.current = depth.available ? { available: true, scheduler: new ObstacleScheduler(SENSING) } : depth;
+    obstacleSourceRef.current = depth.available ? [] : null;
     lastRerouteAtRef.current = null;
     worldAnchorRef.current = null;
     session.addEventListener("visibilitychange", () => {
@@ -778,11 +878,13 @@ export default function ArWorkspace() {
           </p>
         )}
         {ui.route?.accessibilityProfile === "STEP_FREE" && <p>Step-free route: {ui.route.accessibilityConstraintsApplied.join("; ")}.</p>}
-        {ui.route && ui.obstacles === "UNAVAILABLE" && (
-          <p className="text-xs text-white/70" data-testid="ar-obstacles-unavailable">
-            Obstacle detection is not available on this device: the route does not adapt to people or objects in the way.
+        {ui.obstacles.map((m, i) => (
+          <p key={`${m.testId}-${i}`} data-testid={m.testId}
+            className={m.level === "warning" ? "text-sm font-medium text-amber-300" : "text-xs text-white/70"}>
+            {m.text}
           </p>
-        )}
+        ))}
+        {ui.sensingStats && <p className="text-[10px] text-white/50" data-testid="ar-sensing-stats">{ui.sensingStats}</p>}
         {s.state === "TRACKING_LOST" && (
           <p>
             Stop. Tracking lost ({s.lostReason}). Route position frozen

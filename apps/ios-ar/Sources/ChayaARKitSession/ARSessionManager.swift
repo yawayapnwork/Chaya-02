@@ -33,6 +33,11 @@ import Foundation
 ///      and the route is then planned again from there. The route's floor connections are re-checked every
 ///      `transitionCheckInterval` s; one that closed, was removed, changed direction or lost its step-free verification
 ///      gets the route planned again.
+///   8. Obstacles (ObstacleSensor, docs/navigation.md "Camera obstacle sensing"): while localized, people (Vision) and,
+///      with LiDAR, anything standing in the route corridor are placed from the frame's depth and tracked. A confirmed,
+///      not-moving obstacle on the path ahead gets the route planned around it (blockedRegions, same accessibility
+///      profile); when it is gone the normal route is restored; when no way around exists the route is kept and the
+///      UI says why (ObstacleReroute, ObstacleStatus). Without depth, nothing is sensed and the UI says so.
 ///
 /// Every value comes from an ARFrame/ARAnchor/ARCamera callback or from the server; nothing is fabricated, and where
 /// ARKit has not detected something the value stays absent. It needs a physical device: the iOS Simulator does not
@@ -44,8 +49,9 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
     /// The observations, the floor they are registered on, and the scan version the session pinned for that floor (nil
     /// before its first localization).
     public typealias Relocalize = @Sendable ([AnchorObservation], UUID, UUID?) async throws -> RelocalizationResponse
-    /// The device's canonical start, and the localization it was computed with (its floor, version and frame).
-    public typealias PlanRoute = @Sendable (Vec3, Localization) async throws -> RouteResponse
+    /// The device's canonical start, the localization it was computed with (its floor, version and frame), and the
+    /// obstacles to route around for this request (empty unless rerouting).
+    public typealias PlanRoute = @Sendable (Vec3, Localization, [BlockedRegion]) async throws -> RouteResponse
     /// The venue's floor connections, to re-check the route's transitions.
     public typealias ListConnections = @Sendable () async throws -> [FloorConnection]
 
@@ -67,6 +73,10 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
         public var handoff: RouteGeometry.Handoff?
         /// Why the route had to be planned again: a floor connection on it can no longer be used as planned.
         public var transitionProblem: String?
+        /// Obstruction warnings and rerouting status (ObstacleStatus): estimates, never verified positions.
+        public var obstacleMessages: [ObstacleStatus.Message] = []
+        /// How often obstacle sensing runs and what it costs (p90), when it runs.
+        public var sensingStats: String?
     }
 
     public let session = ARSession()
@@ -101,14 +111,28 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
     private var lastRouteAttemptAt: TimeInterval = -.infinity
     static let routeRetryInterval: TimeInterval = 5
 
+    /// Camera obstacle sensing; nil until `run` (ObstacleSensor.configure decides whether the device can).
+    public private(set) var obstacles: ObstacleSensor?
+    private var routedAround: [ObstacleReroute.Observation] = []
+    private var failedAround: [ObstacleReroute.Observation] = []
+    private var clearedSince: Date?
+    private var lastReroute: Date?
+    private var rerouteInFlight = false
+    private var rerouteOutcome: ObstacleStatus.Outcome = .none
+    /// The device's canonical position at the last sensing step (for "about N m ahead").
+    private var lastDevice: Vec3?
+    private let stepFree: Bool
+
     static let retryAfterFailure: TimeInterval = 1.5
     /// How long a newly added world anchor may be missing from ARFrame.anchors before that counts as a loss.
     static let worldAnchorGrace: TimeInterval = 1.0
     static let worldAnchorName = "chaya.localization"
 
     /// `registry`: the markers of every floor the session may reach; `floorId`: the floor the user starts on.
+    /// `stepFree`: the route's accessibility profile, kept by every reroute (only the UI wording depends on it here).
     public init(registry: MarkerRegistry, floorId: UUID, relocalize: @escaping Relocalize, planRoute: @escaping PlanRoute,
-                listConnections: ListConnections? = nil) {
+                listConnections: ListConnections? = nil, stepFree: Bool = false) {
+        self.stepFree = stepFree
         self.registry = registry
         self.startFloorId = floorId
         self.relocalize = relocalize
@@ -131,6 +155,10 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
         configuration.detectionImages = referenceImages
         configuration.maximumNumberOfTrackedImages = min(referenceImages.count, 4)
         configuration.automaticImageScaleEstimationEnabled = true
+        let sensor = ObstacleSensor(availability: ObstacleSensor.configure(configuration))
+        sensor.onResult = { [weak self] in self?.publish(force: false) }
+        obstacles = sensor
+        routedAround = []; failedAround = []; clearedSince = nil; lastReroute = nil; rerouteOutcome = .none
         session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
         dispatch(.sessionStarted(floorId: startFloorId))
     }
@@ -387,7 +415,7 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
         let generation = routeGeneration
         Task { @MainActor [weak self] in
             do {
-                let route = try await planRoute(start, localization)
+                let route = try await planRoute(start, localization, [])
                 guard let self, generation == self.routeGeneration else { return } // superseded by a replan
                 self.snapshot.route = route
                 self.applyRoute()
@@ -427,6 +455,8 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
         let state = snapshot.state
         guard state.routeVisible, let localization = state.localization, let world = worldAnchor else {
             renderer.hide() // not localized: nothing drawn, progress frozen
+            obstacles?.pause(now: Date())
+            updateObstacleMessages(paused: state.phase == .limited ? "tracking is limited" : "not localized")
             return
         }
         guard let current = frame.anchors.first(where: { $0.identifier == world.anchor.identifier }) else {
@@ -459,7 +489,95 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
         }
         renderer.update(venueToWorld: VenueFrames.venueToWorld(deviceToVenue: deviceToVenue),
                         nextIndex: snapshot.progress?.nextIndex ?? 0, visible: !routePoints.isEmpty)
+        senseObstacles(frame, deviceToVenue: deviceToVenue, localization: localization, device: device, canAdvance: state.canAdvanceRoute)
         publish(force: false)
+    }
+
+    // MARK: - Obstacles
+
+    private func pathAhead() -> [Vec3] {
+        Array(routePoints.dropFirst(max(0, (snapshot.progress?.nextIndex ?? 1) - 1)))
+    }
+
+    private func senseObstacles(_ frame: ARFrame, deviceToVenue: Pose, localization: Localization, device: Vec3, canAdvance: Bool) {
+        guard let sensor = obstacles, !routePoints.isEmpty, snapshot.route != nil else { return }
+        lastDevice = device
+        let ahead = pathAhead()
+        guard canAdvance, snapshot.state.deviceTracking == .normal else {
+            sensor.pause(now: Date())
+            updateObstacleMessages(paused: "tracking is limited")
+            return
+        }
+        let context = ObstacleSensing.CameraContext(frameTime: frame.timestamp, wallClock: Date(), camera: Pose(frame.camera.transform),
+                                                    tracking: .normal, deviceToVenue: deviceToVenue, floorId: localization.floorId,
+                                                    coordinateFrameId: localization.coordinateFrameId, residualMeters: localization.residualMeters)
+        sensor.process(frame, context: context, pathAhead: ahead)
+        guard case .available = sensor.availability else { updateObstacleMessages(paused: nil); return }
+        let now = Date()
+        clearedSince = ObstacleReroute.clearedSince(routedAround: routedAround, observed: sensor.blocking, previous: clearedSince, now: now)
+        let decision = ObstacleReroute.decide(floorId: localization.floorId, remainingPath: [device] + ahead, routedAround: routedAround,
+                                              observed: sensor.blocking, now: now, lastReroute: lastReroute, failedAround: failedAround,
+                                              clearedSince: clearedSince)
+        if decision.reroute, !rerouteInFlight, blocked == nil {
+            lastReroute = now
+            reroute(from: device, localization: localization, around: decision.obstacles.filter { $0.floorId == localization.floorId })
+        }
+        updateObstacleMessages(paused: nil)
+    }
+
+    /// Plans the route again around `around` (or without obstacles, to restore it). The navigation session, its
+    /// localization and the current route stay as they are until a new route arrives; with no way around (NO_ROUTE) the
+    /// current route is kept and these obstacles do not ask again.
+    private func reroute(from start: Vec3, localization: Localization, around: [ObstacleReroute.Observation]) {
+        rerouteInFlight = true
+        rerouteOutcome = .rerouting
+        let planRoute = self.planRoute
+        let generation = routeGeneration
+        let regions = around.map(\.blockedRegion)
+        Task { @MainActor [weak self] in
+            do {
+                let route = try await planRoute(start, localization, regions)
+                guard let self else { return }
+                self.rerouteInFlight = false
+                guard generation == self.routeGeneration else { return }
+                self.routedAround = around
+                self.failedAround = []
+                self.clearedSince = nil
+                self.rerouteOutcome = around.isEmpty ? .restored : .rerouted(around.count)
+                self.snapshot.route = route
+                self.snapshot.progress = nil
+                self.applyRoute()
+            } catch {
+                guard let self else { return }
+                self.rerouteInFlight = false
+                if let api = error as? APIError, api.code == "NO_ROUTE" {
+                    self.failedAround = around
+                    self.rerouteOutcome = .noAlternative(stepFree: self.stepFree)
+                } else {
+                    let failure = ArFailure.classify(error)
+                    if failure.kind == .sessionExpired { self.blocked = failure }
+                    self.rerouteOutcome = .failed(failure.kind.rawValue)
+                }
+                self.updateObstacleMessages(paused: nil)
+                self.publish(force: true)
+            }
+        }
+    }
+
+    private func updateObstacleMessages(paused: String?) {
+        guard let sensor = obstacles, snapshot.route != nil else {
+            snapshot.obstacleMessages = []
+            return
+        }
+        let sensing: ObstacleStatus.Sensing
+        if case .unavailable(let why) = sensor.availability { sensing = .unavailable(why) } else if let paused { sensing = .paused(paused) } else { sensing = .live }
+        let ahead = pathAhead()
+        let device = lastDevice
+        let onPath = ahead.isEmpty ? [] : sensor.blocking.filter { ObstacleReroute.touchesPath(ahead, $0) }.map { o -> (ObstacleReroute.Observation, Double?) in
+            (o, device.map { hypot((o.minX + o.maxX) / 2 - $0.x, (o.minY + o.maxY) / 2 - $0.y) })
+        }
+        snapshot.obstacleMessages = ObstacleStatus.messages(sensing: sensing, onPath: onPath, movingNearby: sensor.movingPeople, outcome: rerouteOutcome)
+        snapshot.sensingStats = sensor.statsText
     }
 }
 #endif

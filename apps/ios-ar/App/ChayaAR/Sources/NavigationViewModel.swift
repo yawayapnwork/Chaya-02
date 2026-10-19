@@ -147,15 +147,15 @@ final class NavigationViewModel: ObservableObject {
             relocalize: { observations, onFloor, scanVersionId in
                 try await api.relocalize(venueId: venue.id, floorId: onFloor, observations: observations, scanVersionId: scanVersionId)
             },
-            planRoute: { [stepFree, destinationFloorId = destination.floorId] start, localization in
+            planRoute: { [stepFree, destinationFloorId = destination.floorId] start, localization, blockedRegions in
                 // The same authenticated, venue-scoped route contract as the web client: on the localization's scan version
                 // when the destination is on its floor, otherwise on what each floor publishes now.
                 try await api.planRoute(venueId: venue.id, floorId: localization.floorId, start: start, destinationPoiId: destinationId,
                                         scanVersionId: RouteGeometry.routeScanVersion(destinationFloorId: destinationFloorId,
                                                                                       localization: localization),
-                                        accessibility: stepFree ? "STEP_FREE" : "STANDARD")
+                                        accessibility: stepFree ? "STEP_FREE" : "STANDARD", blockedRegions: blockedRegions)
             },
-            listConnections: { try await api.listFloorConnections(venueId: venue.id) })
+            listConnections: { try await api.listFloorConnections(venueId: venue.id) }, stepFree: stepFree)
         manager.onUpdate = { [weak self] snapshot in Task { @MainActor in self?.snapshot = snapshot } }
         self.manager = manager
         manager.run(referenceImages: referenceImages)

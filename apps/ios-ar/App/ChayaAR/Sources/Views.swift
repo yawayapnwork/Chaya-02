@@ -204,6 +204,11 @@ struct StatusText: View {
                 EmptyView()
             }
             if let problem = snapshot.transitionProblem { Text(problem).foregroundColor(.yellow) }
+            ForEach(snapshot.obstacleMessages) { m in
+                Text(m.text).font(m.warning ? .body : .caption).foregroundColor(m.warning ? .yellow : .secondary)
+                    .accessibilityIdentifier("ar-obstacle-\(m.kind)")
+            }
+            if let stats = snapshot.sensingStats { Text(stats).font(.caption2).foregroundColor(.secondary) }
             if let route = snapshot.route, s.phase == .localized || s.phase == .limited,
                let floorId = s.localization?.floorId,
                let transition = route.floorTransitions.first(where: { $0.fromFloorId == floorId }) {

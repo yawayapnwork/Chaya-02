@@ -137,6 +137,7 @@ Five different things get called "anchors" or "detection" in AR. They are kept a
 | **Fiducial detection** (AprilTag, ArUco, QR) | **Not provided by any WebXR API.** | Nothing. Anchors of those types are listed as "not detectable here" (`FIDUCIAL_DETECTION_UNSUPPORTED`). No detector is simulated. A camera-access + JS-detector pipeline would be a separate project, and `camera-access` is itself unshipped on most builds. |
 | **World anchors** (`anchors`, `XRAnchor`) | Shipped. Pins a pose that the platform keeps updating as it refines its map. Identifies nothing. | After a relocalization, one is created at the observed marker's pose. It carries later map corrections into the route transform. If the platform stops tracking it, that counts as tracking loss. |
 | **Route rendering** | `XRWebGLLayer` via three.js `WebXRManager` (`lib/ar-route-renderer.ts`) | Draws the server's route (tube + waypoint spheres, next waypoint highlighted) only while localized. |
+| **Depth sensing** (`depth-sensing`, CPU-optimized) | Shipped on ARCore devices with the Depth API. Per-pixel depth for the camera view. | **Obstacle sensing** (optional feature): depth standing in the route corridor is placed in the venue frame and routed around (docs/navigation.md, "Camera obstacle sensing"). No camera pixels are read. Without it, the overlay says obstacle detection is unavailable. |
 
 `dom-overlay` is requested as optional, for the in-session status text.
 
@@ -350,6 +351,27 @@ authors.
 | **Plane detection / raycasts** | Available | Not used. A surface identifies no marker. |
 | **World anchors** (`ARAnchor`) | ARKit updates anchor transforms as it refines its map | One is added at the observed marker's pose when relocalizing. It carries map corrections into the transform, and its removal is a tracking loss. |
 | **Route rendering** | `ARSCNView` + SceneKit | `RouteSceneRenderer`: tube and waypoint spheres built in canonical coordinates, placed each frame with the corrected canonical → world pose |
+| **Depth** (`.sceneDepth` on LiDAR devices, `.personSegmentationWithDepth` on A12+) and **Vision** person rectangles | Scene depth with confidence; person depth on person pixels; on-device person boxes | **Obstacle sensing** (`ObstacleSensor`): people and, with LiDAR, objects in the route corridor, placed from the frame's depth and routed around (docs/navigation.md, "Camera obstacle sensing") |
+
+### Obstacle sensing (iOS)
+
+`ObstacleSensor` runs while localized, at most three times a second, on a background queue. On LiDAR devices it uses
+scene depth: Vision person boxes are placed with the depth inside them, and anything else standing in the route corridor
+is found from depth alone. On A12+ devices without LiDAR it uses ARKit person depth: people only. Older devices do not
+sense obstacles, and the overlay says so. Rules and limits: docs/navigation.md, "Camera obstacle sensing".
+
+Device checklist (part of [ar-ios-validation.md](ar-ios-validation.md); not yet run):
+1. On a LiDAR iPhone, a person stands still on the route 3 m ahead. Within about a second the overlay shows "A person is
+   in the way about 3 m ahead (estimated position, ±…)", and the route changes (`blockedRegions` in the request). When
+   they leave, "back on the usual route" follows after about 5 s.
+2. A person walks across the route. The overlay says people are moving near the route, and the route does not change.
+3. A box or cart on the route (LiDAR): it is rerouted around as "Something is in the way".
+4. A person blocking a single-path corridor, with Step-free on. The overlay says "No step-free way around … route is
+   unchanged", and the request is not repeated.
+5. Cover the camera, or move fast: "Obstacle detection paused", and no reroute.
+6. On an A12 iPhone without LiDAR, a person still reroutes, and a cart does not (there is no depth for it).
+7. Watch the sensing p90 in the overlay and Xcode's ARKit "retaining ARFrames" console warnings over 5 minutes. Record
+   both.
 
 ### Identity chain
 

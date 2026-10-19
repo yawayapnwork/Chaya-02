@@ -25,16 +25,21 @@ import type { Vec3 } from "./coordinate-frame.ts";
 import type { RouteRequest, RouteResponse, RouteWaypoint } from "./navigation-api.ts";
 
 export const AR_REQUIRED_FEATURES: readonly string[] = ["image-tracking", "anchors"];
-export const AR_OPTIONAL_FEATURES: readonly string[] = ["dom-overlay"];
+/** depth-sensing is optional: it feeds camera obstacle sensing (lib/ar-depth-obstacles.ts) where the device has ARCore
+ * depth; without it the session navigates as before and says obstacle detection is unavailable. */
+export const AR_OPTIONAL_FEATURES: readonly string[] = ["dom-overlay", "depth-sensing"];
+/** The WebXR depth-sensing dictionary: CPU-readable depth (luminance-alpha is what ARCore serves; float32 is accepted). */
+export const DEPTH_SENSING_INIT = { usagePreference: ["cpu-optimized"], dataFormatPreference: ["luminance-alpha", "float32"] };
 
 /** The immersive-ar session request: marker detection (image tracking) and world anchors, nothing that places content
- * on a hit surface. */
+ * on a hit surface; depth when the device has it. */
 export function arSessionInit(images: XrTrackedImageInit[], overlayRoot: Element | null): Record<string, unknown> {
   return {
     requiredFeatures: [...AR_REQUIRED_FEATURES],
     optionalFeatures: [...AR_OPTIONAL_FEATURES],
     ...(overlayRoot ? { domOverlay: { root: overlayRoot } } : {}),
     trackedImages: images,
+    depthSensing: DEPTH_SENSING_INIT,
   };
 }
 
