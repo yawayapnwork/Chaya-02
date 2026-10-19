@@ -1,5 +1,5 @@
 # The full dependency closure of the GPU worker image, as resolved on 2026-10-10 for Python 3.12 / Linux x86_64 from
-# requirements-gpu.txt plus torch==2.7.1+cu126 (pip --dry-run --report against PyPI and download.pytorch.org/whl/cu126).
+# requirements-gpu.txt plus torch==2.14.1 (pip --dry-run --report against PyPI and download.pytorch.org/whl/cu126).
 # Dockerfile.gpu applies it to every pip install, so no transitive version floats. Regenerate it together with
 # requirements-gpu.txt; never edit one without the other.
 addict==2.4.0
@@ -108,7 +108,7 @@ sympy==1.14.0
 threadpoolctl==3.7.0
 timm==1.0.15
 tokenizers==0.21.4
-torch==2.7.1+cu126
+torch==2.14.1
 torchvision==0.22.1+cu126
 tqdm==4.70.1
 traitlets==5.16.1
