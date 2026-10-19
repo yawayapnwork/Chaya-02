@@ -482,6 +482,8 @@ public class ErasureService {
         n.put("pii_staging_purge", u("DELETE FROM pii_staging_purge WHERE artifact_id IN " + A + " OR run_id IN " + R));
         n.put("pii_staging_sweep", u("DELETE FROM pii_staging_sweep WHERE run_id IN " + R));
         n.put("processing_artifact", u("DELETE FROM processing_artifact WHERE id IN " + A));
+        n.put("job_attempt_usage", u("DELETE FROM job_attempt_usage WHERE job_id IN " + in("job") + " OR run_id IN " + R
+            + " OR stage_run_id IN " + in("stage_run")));
         n.put("pipeline_stage_run", u("DELETE FROM pipeline_stage_run WHERE id IN " + in("stage_run")));
         n.put("processing_job", u("DELETE FROM processing_job WHERE id IN " + in("job")));
         n.put("scan_version", u("DELETE FROM scan_version WHERE id IN " + V));
@@ -521,6 +523,7 @@ public class ErasureService {
         n.put("public_viewer_token", u("DELETE FROM public_viewer_token WHERE link_id IN (SELECT id FROM public_viewer_link WHERE " + v + ")"));
         n.put("public_viewer_link", u("DELETE FROM public_viewer_link WHERE " + v));
         n.put("search_query", u("DELETE FROM search_query WHERE " + v));
+        n.put("infrastructure_bill", u("DELETE FROM infrastructure_bill WHERE " + v));
         u("UPDATE floor SET current_scan_version_id = NULL, current_coordinate_frame_id = NULL WHERE " + v);
         n.put("navigation_edge_venue", u("DELETE FROM navigation_edge WHERE " + v));
         n.put("navigation_node_venue", u("DELETE FROM navigation_node WHERE " + v));

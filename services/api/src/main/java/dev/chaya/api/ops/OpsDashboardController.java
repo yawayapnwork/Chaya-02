@@ -2,22 +2,28 @@ package dev.chaya.api.ops;
 
 import dev.chaya.api.ops.OpsDtos.Access;
 import dev.chaya.api.ops.OpsDtos.Audit;
+import dev.chaya.api.ops.OpsDtos.Bill;
 import dev.chaya.api.ops.OpsDtos.Coverage;
 import dev.chaya.api.ops.OpsDtos.Failures;
 import dev.chaya.api.ops.OpsDtos.Jobs;
 import dev.chaya.api.ops.OpsDtos.Overview;
 import dev.chaya.api.ops.OpsDtos.Rescans;
+import dev.chaya.api.ops.OpsDtos.Resources;
 import dev.chaya.api.ops.OpsDtos.SearchAnalytics;
 import dev.chaya.api.ops.OpsDtos.Storage;
 import dev.chaya.api.security.ActorAuthentication;
 import dev.chaya.api.web.ProblemResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import java.util.UUID;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -77,12 +83,35 @@ public class OpsDashboardController {
         return ops.failures(ActorAuthentication.currentActor(), venueId, days);
     }
 
-    @Operation(summary = "Recorded raw media and artifact sizes, measured worker time per stage, cost",
-            description = "available=false when untracked.")
+    @Operation(summary = "Recorded raw media and artifact sizes, measured worker time per stage, estimated processing cost",
+            description = "cost.kind is ESTIMATED (measured worker time x configured rates, not a bill); available=false when "
+                + "nothing could be priced.")
     @ProblemResponse(status = 403, description = "OPS_SECTION_FORBIDDEN")
     @GetMapping("/storage")
     public Storage storage(@PathVariable UUID venueId) {
         return ops.storage(ActorAuthentication.currentActor(), venueId);
+    }
+
+    @Operation(summary = "Processing resources and cost (admin, venue-manager, operator; query: days<=365)",
+            description = "Measured attempt time, CPU and GPU where observed, estimated cost from configured rates (kind "
+                + "ESTIMATED), provider-billed cost recorded with evidence, per scan version, per worker and per day. "
+                + "See docs/operations-dashboard.md, \"Resources and cost\".")
+    @ProblemResponse(status = 403, description = "OPS_SECTION_FORBIDDEN")
+    @GetMapping("/resources")
+    public Resources resources(@PathVariable UUID venueId,
+                               @RequestParam(defaultValue = "" + OpsDashboardService.DEFAULT_DAYS) int days) {
+        return ops.resources(ActorAuthentication.currentActor(), venueId, days);
+    }
+
+    @Operation(summary = "Record a provider-billed amount with its evidence reference (admin)",
+            description = "Append-only and audited. Shown as billed cost, never mixed with estimates.")
+    @ProblemResponse(status = 400, description = "BILL_INVALID")
+    @ProblemResponse(status = 403, description = "OPS_SECTION_FORBIDDEN")
+    @PostMapping("/billed-costs")
+    @PreAuthorize("hasRole('ADMIN')")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Bill recordBill(@PathVariable UUID venueId, @RequestBody OpsDashboardService.BillRequest body) {
+        return ops.recordBill(ActorAuthentication.currentActor(), venueId, body);
     }
 
     @Operation(summary = "Logged search queries and POI counts (admin, venue-manager; query: days)",

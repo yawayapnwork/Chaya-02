@@ -76,6 +76,10 @@ def test_input_validation_succeeds_on_real_media_and_the_report_follows_the_stag
     assert report["command"]["commands"] and report["command"]["argv"][0].lower().endswith(("ffmpeg", "ffmpeg.exe")) or "ffmpeg" in report["command"]["argv"][0].lower()
     assert report["command"]["stage"] == "INPUT_VALIDATION" and "ffmpeg" in report["command"]["tools"]
     assert report["command"]["worker"]["id"]
+    resources = report["resources"]  # what the worker measured (chaya_worker.resources): CPU time; no GPU on this stage
+    assert resources["schema"] == 1 and resources["cpu"]["processSeconds"] >= 0
+    assert resources["gpu"] is None and resources["gpuUnmeasuredReason"]
+    assert resources["wallSeconds"] >= 0
     assert report["inputArtifactIds"] == [i["artifactId"] for i in inputs]
     # checksum, size, location of every output and both logs
     for a in report["artifacts"] + [report["stdout"], report["stderr"]]:
@@ -284,6 +288,7 @@ def test_metric_stages_report_not_calibrated_without_a_coordinate_frame(harness,
     the worker has, and never a result in reconstruction units presented as metres."""
     report = harness.run(harness.order(stage, []), toolchain=AllAvailable())
     assert report["status"] == "FAILED" and report["errorCode"] == "NOT_CALIBRATED" and report["artifacts"] == []
+    assert report["resources"]["cpu"] is not None, "a failed attempt reports what it used too"
 
 
 def test_artifact_generation_refuses_to_run_without_a_splat_and_never_writes_a_placeholder_ksplat(harness):

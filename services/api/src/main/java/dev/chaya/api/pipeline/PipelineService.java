@@ -4,6 +4,9 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.chaya.api.audit.AuditService;
+import dev.chaya.api.cost.ResourceMeasurements;
+import dev.chaya.api.cost.ResourceUsageRecorder;
+import dev.chaya.api.cost.ResourceUsageRecorder.AttemptEnd;
 import dev.chaya.api.frame.CoordinateFrameService;
 import dev.chaya.api.frame.FrameDtos.FrameView;
 import dev.chaya.api.pipeline.PipelineDtos.ArtifactReport;
@@ -124,13 +127,15 @@ public class PipelineService {
 
     private final ArtifactSealer sealer;
     private final WorkerPresenceRepository workers;
+    private final ResourceUsageRecorder usage;
 
     public PipelineService(JdbcClient jdbc, ProcessingJobRepository jobs, AuditService audit,
                            @Qualifier("derived") ObjectStore derived, PipelineProperties props,
                            RescanProperties rescanProps,
                            TransactionTemplate tx, ObjectMapper mapper, StorageProperties storage, CoordinateFrameService frames,
-                           ScanVersionService versions, WorkerPresenceRepository workers) {
+                           ScanVersionService versions, WorkerPresenceRepository workers, ResourceUsageRecorder usage) {
         this.workers = workers;
+        this.usage = usage;
         this.derivedBucketName = storage.derivedBucket();
         this.frames = frames;
         this.versions = versions;
@@ -324,8 +329,15 @@ public class PipelineService {
             if (!r.status().equals("RUNNING")) {
                 throw new ApiException(HttpStatus.CONFLICT, "RUN_NOT_CANCELLABLE", "the pipeline run is " + r.status());
             }
-            jdbc.sql("SELECT id FROM processing_job WHERE run_id = :r AND status IN ('QUEUED', 'RUNNING')").param("r", r.id())
-                .query(UUID.class).list().forEach(jobs::cancel);
+            for (UUID id : jdbc.sql("SELECT id FROM processing_job WHERE run_id = :r AND status IN ('QUEUED', 'RUNNING')")
+                    .param("r", r.id()).query(UUID.class).list()) {
+                JobRow job = lockJob(id);
+                if (job.status().equals("RUNNING")) { // a queued job never started: it used nothing
+                    recordControlPlaneEnd(job, r.id(), r.scanVersionId(), "CANCELLED", Instant.now(), "CANCEL_REQUEST",
+                        "cancelled by an operator; the worker stops at its next heartbeat");
+                }
+                jobs.cancel(id);
+            }
             jdbc.sql("UPDATE pipeline_run SET status = 'CANCELLED', finished_at = now() WHERE id = :r").param("r", r.id()).update();
             jdbc.sql("UPDATE capture_session SET status = 'FAILED', failure_code = 'PROCESSING_CANCELLED', "
                     + "failure_message = 'processing was cancelled by an operator' WHERE id = :c AND status = 'PROCESSING'")
@@ -595,7 +607,7 @@ public class PipelineService {
                 if (!run.status().equals("RUNNING")) {
                     throw new ApiException(HttpStatus.CONFLICT, "RUN_NOT_ACTIVE", "the pipeline run is " + run.status());
                 }
-                return applyReport(worker, job, run, r, sealed);
+                return applyReport(worker, job, run, r, sealed, null);
             });
         } catch (RuntimeException e) {
             sealed.values().forEach(x -> sealer.discard(x.key()));
@@ -626,9 +638,14 @@ public class PipelineService {
     // Applying a report (shared by workers and the system enforcer)
     // =========================================================================================
 
+    /** How the control plane itself ended an attempt (lease lost, time budget): the resource record's outcome, end and
+     * basis. Null for a worker's report, whose own times and measurements are recorded. */
+    private record ControlPlaneEnd(String outcome, Instant endedAt, String endBasis, String why) {}
+
     /** {@code sealedKeys}: worker key -> sealed copy for every reported object (worker reports); empty for the control
      * plane's own synthetic reports, which carry no objects. */
-    private Runnable applyReport(Actor actor, JobRow job, RunRow run, StageReport r, Map<String, ArtifactSealer.Sealed> sealedKeys) {
+    private Runnable applyReport(Actor actor, JobRow job, RunRow run, StageReport r, Map<String, ArtifactSealer.Sealed> sealedKeys,
+                                 ControlPlaneEnd end) {
         boolean ok = "SUCCEEDED".equals(r.status());
         if (!ok && !"FAILED".equals(r.status())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_REPORT", "status must be SUCCEEDED or FAILED");
@@ -689,6 +706,19 @@ public class PipelineService {
             sealedKeys.get(r.stdout().key()));
         if (r.stderr() != null) insertArtifact(stderrId, job, run.scanVersionId(), stageRunId, forceLog(r.stderr(), "LOG_STDERR"),
             sealedKeys.get(r.stderr().key()));
+        // The attempt's resources, once (job_attempt_usage; a duplicate is a no-op): as the worker measured them, or as the
+        // control plane ended the attempt.
+        long bytes = reportedObjects(r).stream().mapToLong(ArtifactReport::sizeBytes).sum();
+        if (end == null) {
+            double wall = Duration.between(r.startedAt(), r.finishedAt()).toNanos() / 1e9;
+            usage.record(new AttemptEnd(job.id(), attempt, job.orgId(), job.venueId(), job.scanId(), run.id(), run.scanVersionId(),
+                job.stage().name(), stageRunId, status, job.workerId(), r.startedAt(), r.finishedAt(), "WORKER_REPORT", bytes,
+                ResourceMeasurements.fromWorker(r.resources(), wall)));
+        } else {
+            usage.record(new AttemptEnd(job.id(), attempt, job.orgId(), job.venueId(), job.scanId(), run.id(), run.scanVersionId(),
+                job.stage().name(), stageRunId, end.outcome(), job.workerId(), r.startedAt(), end.endedAt(), end.endBasis(), bytes,
+                ResourceMeasurements.controlPlane(end.why())));
+        }
 
         String failCode = errorCode;
         String failMessage = errorMessage;
@@ -2174,18 +2204,48 @@ public class PipelineService {
                 // The run already ended (ending a run settles its jobs, so this is a leftover). The job must not stay
                 // RUNNING forever with an expired lease: fail it with the reason and leave the run exactly as it ended.
                 log.warn("job {} was RUNNING in run {} that is already {}; failing the job only", jobId, run.id(), run.status());
+                ControlPlaneEnd end = interruption(job, code);
+                recordControlPlaneEnd(job, run.id(), run.scanVersionId(), end.outcome(), end.endedAt(), end.endBasis(), end.why());
                 jobs.fail(jobId, code, message + " (its run had already ended " + run.status() + ")");
                 audit.successInOrganization(SYSTEM, job.orgId(), job.venueId(), "pipeline.stage_failed", "processing_job", jobId,
                     Map.of("stage", job.stage().name(), "code", code, "runStatus", run.status()));
                 return () -> { };
             }
             StageReport report = new StageReport("FAILED", started, Instant.now(), Map.of("synthetic", "enforced-by-control-plane", "reason", code),
-                List.of(), null, null, null, List.of(), code, message, Map.of());
-            return applyReport(SYSTEM, job, run, report, Map.of());
+                List.of(), null, null, null, List.of(), code, message, Map.of(), null);
+            return applyReport(SYSTEM, job, run, report, Map.of(), interruption(job, code));
         });
         if (after == null) return false;
         after.run();
         return true;
+    }
+
+    /**
+     * How the control plane ends an attempt it takes from its worker. A lost worker (WORKER_LOST) was last known to run at
+     * its last heartbeat: the lease is renewed to now + leaseSeconds by every heartbeat and by the claim, so that is
+     * lease_expires_at - leaseSeconds (LAST_HEARTBEAT; it may have run on, unobserved, until the lease expired). Any other
+     * reason (TIME_LIMIT_EXCEEDED) ends it now (CONTROL_PLANE_DETECTION).
+     */
+    private ControlPlaneEnd interruption(JobRow job, String code) {
+        Instant now = Instant.now();
+        if (PipelineDefinition.WORKER_LOST.equals(code)) {
+            Instant lease = jdbc.sql("SELECT lease_expires_at FROM processing_job WHERE id = :j").param("j", job.id())
+                .query((rs, i) -> rs.getTimestamp(1) == null ? null : rs.getTimestamp(1).toInstant()).single();
+            if (lease != null) {
+                Instant last = lease.minusSeconds(props.leaseSeconds());
+                Instant started = job.startedAt() == null ? now : job.startedAt();
+                last = last.isBefore(started) ? started : last.isAfter(now) ? now : last;
+                return new ControlPlaneEnd("INTERRUPTED", last, "LAST_HEARTBEAT", code + ": the worker stopped sending heartbeats");
+            }
+        }
+        return new ControlPlaneEnd("INTERRUPTED", now, "CONTROL_PLANE_DETECTION", code + ": ended by the control plane");
+    }
+
+    /** Records an attempt the control plane ends without a stage report (a cancel, or a job whose run already ended). */
+    private void recordControlPlaneEnd(JobRow job, UUID runId, UUID scanVersionId, String outcome, Instant ended, String basis, String why) {
+        Instant started = job.startedAt() == null ? ended : job.startedAt();
+        usage.record(new AttemptEnd(job.id(), job.retryCount() + 1, job.orgId(), job.venueId(), job.scanId(), runId, scanVersionId,
+            job.stage().name(), null, outcome, job.workerId(), started, ended, basis, 0, ResourceMeasurements.controlPlane(why)));
     }
 
     // =========================================================================================

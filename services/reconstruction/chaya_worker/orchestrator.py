@@ -31,6 +31,7 @@ from .api_client import ApiError, ControlPlane
 from .contract import ArtifactSpec, InputFile, Stage, StageContext, StageResult
 from .errors import StageError
 from .logging_json import file_logger
+from .resources import ResourceMeter
 from .runner import CommandRunner
 from .settings import Settings
 from .stages import STAGE_ORDER, default_registry, runs_after_privacy
@@ -135,8 +136,11 @@ class Orchestrator:
         try:
             logger.info("stage started", extra={"deadline": deadline})
             runner = CommandRunner(stdout_path, stderr_path, deadline)
+            meter = ResourceMeter(self.settings.resource_class)
+            meter.start()
             result = self._execute(order, workdir, runner, logger, deadline, cancelled)
             finished = self.clock()
+            resources = meter.measure(max(0.0, finished - started))
             logger.info("stage finished", extra={"status": result.status, "error_code": result.error_code,
                                                  "duration_seconds": round(finished - started, 3)})
             if cancelled.is_set():
@@ -150,6 +154,7 @@ class Orchestrator:
             logger.logger.removeHandler(handler)
             handler.close()
             report = self._build_report(order, result, started, finished, stdout_path, stderr_path)
+            report["resources"] = resources
             if cancelled.is_set():
                 log.warning("job was cancelled while running; not reporting", extra=context)
                 return None

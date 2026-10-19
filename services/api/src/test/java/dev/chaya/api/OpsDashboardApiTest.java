@@ -18,14 +18,14 @@ import org.springframework.http.HttpMethod;
  */
 class OpsDashboardApiTest extends ApiTest {
 
-    private static final String[] SECTIONS = {"overview", "coverage", "jobs", "failures", "storage", "search-analytics", "rescans", "audit"};
+    private static final String[] SECTIONS = {"overview", "coverage", "jobs", "failures", "storage", "resources", "search-analytics", "rescans", "audit"};
 
     /** Expected HTTP status per role and section; mirrors OpsSection. */
     private static final Map<String, Map<String, Integer>> MATRIX = Map.of(
-        "admin", Map.of("overview", 200, "coverage", 200, "jobs", 200, "failures", 200, "storage", 200, "search-analytics", 200, "rescans", 200, "audit", 200),
-        "venue-manager", Map.of("overview", 200, "coverage", 200, "jobs", 200, "failures", 200, "storage", 200, "search-analytics", 200, "rescans", 200, "audit", 200),
-        "operator", Map.of("overview", 200, "coverage", 200, "jobs", 200, "failures", 200, "storage", 200, "search-analytics", 403, "rescans", 200, "audit", 403),
-        "viewer", Map.of("overview", 200, "coverage", 403, "jobs", 403, "failures", 403, "storage", 403, "search-analytics", 403, "rescans", 403, "audit", 403));
+        "admin", Map.of("overview", 200, "coverage", 200, "jobs", 200, "failures", 200, "storage", 200, "resources", 200, "search-analytics", 200, "rescans", 200, "audit", 200),
+        "venue-manager", Map.of("overview", 200, "coverage", 200, "jobs", 200, "failures", 200, "storage", 200, "resources", 200, "search-analytics", 200, "rescans", 200, "audit", 200),
+        "operator", Map.of("overview", 200, "coverage", 200, "jobs", 200, "failures", 200, "storage", 200, "resources", 200, "search-analytics", 403, "rescans", 200, "audit", 403),
+        "viewer", Map.of("overview", 200, "coverage", 403, "jobs", 403, "failures", 403, "storage", 403, "resources", 403, "search-analytics", 403, "rescans", 403, "audit", 403));
 
     private String token(UUID org, UUID venue, String role) {
         return TestJwt.user(org, role).venues(venue).token();

@@ -11,6 +11,7 @@ export type OpsSection =
   | "JOBS"
   | "FAILURES"
   | "STORAGE"
+  | "RESOURCES"
   | "RESCANS"
   | "SEARCH_ANALYTICS"
   | "AUDIT";
@@ -207,11 +208,123 @@ export interface Failures {
   asOf: string;
 }
 
+/** The venue's processing cost, all time. kind is always ESTIMATED (measured worker time x configured rates), never a
+ * bill; complete=false means some attempts could not be priced, so amount is a lower bound. */
 export interface Cost {
   available: boolean;
   currency: string | null;
   amount: number | null;
   reason: string | null;
+  kind: "ESTIMATED";
+  complete: boolean;
+  pricedAttempts: number;
+  unpricedAttempts: number;
+}
+
+// ---- resources and cost (ops/resources; docs/operations-dashboard.md "Resources and cost") ----
+
+export interface Money {
+  currency: string;
+  amount: number;
+}
+
+/** cpuSeconds / gpuSeconds are null when no attempt measured them, never 0. */
+export interface UsageTotals {
+  attempts: number;
+  wallSeconds: number;
+  cpuSeconds: number | null;
+  cpuMeasuredAttempts: number;
+  gpuSeconds: number | null;
+  gpuMeasuredAttempts: number;
+  gpuUnmeasuredAttempts: number;
+  peakGpuMemoryBytes: number | null;
+  artifactBytes: number;
+}
+
+export type AttemptOutcome = "SUCCEEDED" | "FAILED" | "INTERRUPTED" | "CANCELLED";
+
+export interface OutcomeUsage {
+  outcome: AttemptOutcome;
+  attempts: number;
+  wallSeconds: number;
+  gpuSeconds: number | null;
+  estimated: Money[];
+  unpricedAttempts: number;
+}
+
+export interface CostEstimate {
+  kind: "ESTIMATED";
+  amounts: Money[];
+  pricedAttempts: number;
+  unpricedAttempts: number;
+  unpricedWallSeconds: number;
+  unpricedReasons: Record<string, number>;
+  complete: boolean;
+}
+
+export interface Bill {
+  id: string;
+  provider: string;
+  periodStart: string;
+  periodEnd: string;
+  amount: number;
+  currency: string;
+  evidenceReference: string;
+  description: string | null;
+  recordedBy: string;
+  recordedAt: string;
+}
+
+export interface BilledCost {
+  available: boolean;
+  totals: Money[];
+  bills: Bill[];
+  note: string;
+}
+
+export interface StorageUsage {
+  artifactBytes: number;
+  rawMediaBytes: number;
+  estimatedPerMonth: Money | null;
+  estimateBasis: string | null;
+  unavailableReason: string | null;
+}
+
+export interface VersionUsage {
+  scanVersionId: string;
+  floorId: string | null;
+  versionNumber: number | null;
+  status: string | null;
+  attempts: number;
+  wallSeconds: number;
+  gpuSeconds: number | null;
+  failedAttempts: number;
+  failedWallSeconds: number;
+  estimated: Money[];
+  unpricedAttempts: number;
+  lastEndedAt: string | null;
+}
+
+export interface Resources {
+  days: number;
+  since: string;
+  window: UsageTotals;
+  allTime: UsageTotals;
+  byOutcome: OutcomeUsage[];
+  estimate: CostEstimate;
+  estimateAllTime: CostEstimate;
+  billed: BilledCost;
+  storage: StorageUsage;
+  perScan: { versions: number; fullyPricedVersions: number; averageEstimated: Money[]; averageWallSeconds: number | null };
+  scanVersions: VersionUsage[];
+  workers: { workerId: string; resourceClass: string | null; gpuModels: string | null; attempts: number; wallSeconds: number;
+    gpuSeconds: number | null; lastEndedAt: string | null }[];
+  trend: { day: string; attempts: number; wallSeconds: number; gpuSeconds: number | null; failedWallSeconds: number;
+    estimated: Money[]; unpricedAttempts: number }[];
+  rateCard: { currency: string; sha256: string; workerClasses: Record<string, { hourly: number; kind: string; source: string }>;
+    storagePerGbMonth: { rate: number; source: string } | null } | null;
+  stageRunsWithoutUsage: number;
+  asOf: string;
 }
 
 export interface Storage {
@@ -318,6 +431,7 @@ export const getJobs = (venueId: string, status: JobStatus | null, limit = 50) =
   api<Jobs>(`${base(venueId)}/jobs?limit=${limit}${status ? `&status=${status}` : ""}`);
 export const getFailures = (venueId: string, days: number) => api<Failures>(`${base(venueId)}/failures?days=${days}`);
 export const getStorage = (venueId: string) => api<Storage>(`${base(venueId)}/storage`);
+export const getResources = (venueId: string, days: number) => api<Resources>(`${base(venueId)}/resources?days=${days}`);
 export const getSearchAnalytics = (venueId: string, days: number) =>
   api<SearchAnalytics>(`${base(venueId)}/search-analytics?days=${days}`);
 export const getRescans = (venueId: string) => api<Rescans>(`${base(venueId)}/rescans`);

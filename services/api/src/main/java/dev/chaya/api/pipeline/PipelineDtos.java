@@ -44,11 +44,13 @@ public final class PipelineDtos {
     public record ArtifactReport(String kind, String key, String sha256, String contentType, long sizeBytes,
                                  boolean containsPii, boolean partial) {}
 
-    /** The stage record the worker submits once, when the stage ends (successfully or not). */
+    /** The stage record the worker submits once, when the stage ends (successfully or not). resources: what the worker
+     * measured about the attempt (chaya_worker.resources: CPU time, GPU time, model and peak memory where observed, its
+     * resource class); optional, checked by dev.chaya.api.cost.ResourceMeasurements. */
     public record StageReport(String status, Instant startedAt, Instant finishedAt, Map<String, Object> command,
                               List<UUID> inputArtifactIds, Integer exitStatus, ArtifactReport stdout,
                               ArtifactReport stderr, List<ArtifactReport> artifacts, String errorCode,
-                              String errorMessage, Map<String, Object> errorDetails) {}
+                              String errorMessage, Map<String, Object> errorDetails, Map<String, Object> resources) {}
 
     public record Heartbeat(boolean keepGoing, Instant deadlineAt) {}
 

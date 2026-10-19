@@ -43,6 +43,9 @@ class Settings:
     # worker
     worker_id: str = field(default_factory=lambda: f"{socket.gethostname()}-{os.getpid()}")
     stages: tuple[str, ...] = ()
+    # The rate-card class this worker's machine is priced at (the API's CHAYA_COST_RATES; chaya_worker.resources). None:
+    # its attempts are recorded but not priced.
+    resource_class: str | None = None
     poll_interval: float = 5.0
     heartbeat_interval: float = 60.0
     workdir: Path = Path("work")
@@ -336,6 +339,7 @@ class Settings:
             s3_secret_key=e.get("S3_SECRET_KEY", ""),
             worker_id=e.get("WORKER_ID", d.worker_id),
             stages=tuple(s for s in e.get("WORKER_STAGES", "").split(",") if s),
+            resource_class=e.get("WORKER_RESOURCE_CLASS", "").strip() or None,
             poll_interval=_float(e, "WORKER_POLL_INTERVAL", d.poll_interval),
             heartbeat_interval=_float(e, "WORKER_HEARTBEAT_INTERVAL", d.heartbeat_interval),
             workdir=Path(e.get("WORKER_WORKDIR", str(d.workdir))),

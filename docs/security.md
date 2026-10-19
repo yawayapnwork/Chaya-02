@@ -109,8 +109,9 @@ A refused venue access is audited (`venue.access`, outcome `DENIED`, in the *cal
 The dashboard (`/ops` in the web app, `GET /api/v1/venues/{id}/ops/*`) is read-only; its retry/cancel buttons call the existing processing endpoints, which enforce their own rules. Section access is one table, `dev.chaya.api.ops.OpsSection`, used both to enforce (403 `OPS_SECTION_FORBIDDEN`, checked before the venue) and to answer `GET .../ops/access`, so the UI never renders a section the server would refuse. Venue scope is `TenantGuard.requireVenue` as everywhere else.
 
 - Viewers see venue state only (overview, current version, freshness) -- no capture, processing or audit data.
-- Operators additionally see capture/processing data (coverage, jobs, failures, storage, re-scans), matching the capture and job endpoints they may call.
+- Operators additionally see capture/processing data (coverage, jobs, failures, storage, resources and cost, re-scans), matching the capture and job endpoints they may call.
 - Venue managers additionally see search analytics and **their own venue's** audit trail. This is narrower than `GET /audit-log` (organization-wide, admin only), which is unchanged. Audit metadata is never returned.
+- Only admins may record a provider bill (`POST .../ops/billed-costs`, audited).
 - Admins additionally see refused `venue.access` attempts that targeted this venue (those rows have no `venue_id`; they are matched on `metadata.attemptedResourceId`).
 
 ## Rate limits

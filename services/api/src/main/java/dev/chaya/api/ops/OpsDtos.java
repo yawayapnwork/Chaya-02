@@ -2,14 +2,16 @@ package dev.chaya.api.ops;
 
 import dev.chaya.api.ops.JobActions.Action;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
 /**
  * Wire records of the operations dashboard. Every number here is read from, or computed from, stored rows; ages are
- * measured against the database clock ({@code asOf}) at read time. Nothing is estimated, scored or defaulted: a value
- * that does not exist is null, and the UI says so.
+ * measured against the database clock ({@code asOf}) at read time. Nothing is scored or defaulted: a value that does not
+ * exist is null, and the UI says so. The one kind of estimate is processing and storage cost, computed from measured
+ * time and configured rates, always labelled ESTIMATED and kept apart from provider-billed amounts (Resources).
  */
 public final class OpsDtos {
 
@@ -123,8 +125,14 @@ public final class OpsDtos {
 
     public record StageTime(String stage, long executions, double totalSeconds, double avgSeconds) {}
 
-    /** Always present; available=false with a reason when no real cost source exists. No amount is ever invented. */
-    public record Cost(boolean available, String currency, Double amount, String reason) {}
+    /**
+     * The venue's estimated processing cost, all time (the summary of Resources.estimateAllTime). kind is always
+     * ESTIMATED: measured worker time x configured rates, never a bill. available=false with a reason when nothing could
+     * be priced, or when amounts are in more than one currency; complete=false when some attempts could not be priced
+     * (unpricedAttempts), so the amount is a lower bound. No amount is ever invented.
+     */
+    public record Cost(boolean available, String currency, Double amount, String reason, String kind, boolean complete,
+                       long pricedAttempts, long unpricedAttempts) {}
 
     /**
      * Totals are sums of sizes recorded in the database when each object was verified (checksum and size checked
@@ -135,6 +143,63 @@ public final class OpsDtos {
                           long artifactCount, long artifactBytes, long piiArtifactCount, long piiArtifactBytes,
                           long piiPurgeIncompleteEvents, Instant lastArtifactAt, List<StageTime> stageTime, Cost cost,
                           Instant asOf) {}
+
+    // ---- resources and cost (V42 job_attempt_usage) ----------------------------------------------
+
+    public record Money(String currency, double amount) {}
+
+    /** Sums over attempt records. cpuSeconds / gpuSeconds are null when no attempt measured them (never 0), and cover only
+     * the cpuMeasuredAttempts / gpuMeasuredAttempts that did. peakGpuMemoryBytes: the largest single-attempt peak. */
+    public record UsageTotals(long attempts, double wallSeconds, Double cpuSeconds, long cpuMeasuredAttempts, Double gpuSeconds,
+                              long gpuMeasuredAttempts, long gpuUnmeasuredAttempts, Long peakGpuMemoryBytes, long artifactBytes) {}
+
+    /** outcome: SUCCEEDED, FAILED, INTERRUPTED (lease lost, time budget) or CANCELLED. */
+    public record OutcomeUsage(String outcome, long attempts, double wallSeconds, Double gpuSeconds, List<Money> estimated,
+                               long unpricedAttempts) {}
+
+    /** kind: always ESTIMATED. amounts per currency over the priced attempts; complete only when every attempt was priced.
+     * unpricedReasons: why the others were not, by reason code (NO_RATES_CONFIGURED, RESOURCE_CLASS_NOT_REPORTED,
+     * NO_RATE_FOR_CLASS). */
+    public record CostEstimate(String kind, List<Money> amounts, long pricedAttempts, long unpricedAttempts, double unpricedWallSeconds,
+                               Map<String, Long> unpricedReasons, boolean complete) {}
+
+    /** A provider-billed amount an admin recorded with its evidence (an invoice or billing-export reference). */
+    public record Bill(UUID id, String provider, LocalDate periodStart, LocalDate periodEnd, double amount, String currency,
+                       String evidenceReference, String description, String recordedBy, Instant recordedAt) {}
+
+    /** available=false when no bill has been recorded for the venue. Bills are never computed or split across scans. */
+    public record BilledCost(boolean available, List<Money> totals, List<Bill> bills, String note) {}
+
+    /** bytes as recorded at registration; estimatedPerMonth: (artifactBytes + rawMediaBytes) / 2^30 x the configured
+     * per-GiB-month rate, or null with unavailableReason. */
+    public record StorageUsage(long artifactBytes, long rawMediaBytes, Money estimatedPerMonth, String estimateBasis,
+                               String unavailableReason) {}
+
+    /** One scan version's processing: every attempt of every run that built it. failed*: FAILED, INTERRUPTED and
+     * CANCELLED attempts (retried work included). */
+    public record VersionUsage(UUID scanVersionId, UUID floorId, Integer versionNumber, String status, long attempts, double wallSeconds,
+                               Double gpuSeconds, long failedAttempts, double failedWallSeconds, List<Money> estimated,
+                               long unpricedAttempts, Instant lastEndedAt) {}
+
+    /** Averages over scan versions with at least one attempt; averageEstimated only over the fullyPricedVersions. */
+    public record PerScan(long versions, long fullyPricedVersions, List<Money> averageEstimated, Double averageWallSeconds) {}
+
+    public record WorkerUsage(String workerId, String resourceClass, String gpuModels, long attempts, double wallSeconds, Double gpuSeconds,
+                              Instant lastEndedAt) {}
+
+    /** day: UTC date of the attempts' end. */
+    public record DayUsage(LocalDate day, long attempts, double wallSeconds, Double gpuSeconds, double failedWallSeconds,
+                           List<Money> estimated, long unpricedAttempts) {}
+
+    /**
+     * Section 7a. window/byOutcome/estimate/trend/workers cover the last `days`; allTime/estimateAllTime (the venue's
+     * cost), scanVersions and perScan cover every recorded attempt. rateCard: the configured card (null: none).
+     * stageRunsWithoutUsage: stage records with no attempt record (run before resource tracking existed), not counted.
+     */
+    public record Resources(int days, Instant since, UsageTotals window, UsageTotals allTime, List<OutcomeUsage> byOutcome,
+                            CostEstimate estimate, CostEstimate estimateAllTime, BilledCost billed, StorageUsage storage, PerScan perScan,
+                            List<VersionUsage> scanVersions, List<WorkerUsage> workers, List<DayUsage> trend,
+                            Map<String, Object> rateCard, long stageRunsWithoutUsage, Instant asOf) {}
 
     // ---- POI and search analytics ---------------------------------------------------------------
 

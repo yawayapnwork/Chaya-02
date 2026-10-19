@@ -154,3 +154,74 @@ export function queueProblems(q: QueueLike): QueueProblem[] {
 export function leaseExpired(status: string, leaseExpiresAt: string | null, asOf: string): boolean {
   return status === "RUNNING" && leaseExpiresAt !== null && Date.parse(leaseExpiresAt) <= Date.parse(asOf);
 }
+
+// ---- resources and cost ---------------------------------------------------------------------------------------------
+// An estimate is always labelled as one, a missing measurement is "not measured" (never 0), and an estimate that left
+// attempts unpriced is shown as a lower bound with the reasons.
+
+export interface MoneyLike {
+  currency: string;
+  amount: number;
+}
+
+/** Amounts per currency, never summed across currencies; "—" when there is none. */
+export function formatMoney(amounts: MoneyLike[] | null | undefined): string {
+  if (!amounts || amounts.length === 0) return "—";
+  return amounts.map((m) => `${formatAmount(m.amount)} ${m.currency}`).join(" + ");
+}
+
+function formatAmount(amount: number): string {
+  if (amount === 0) return "0.00";
+  if (Math.abs(amount) < 0.01) return amount.toPrecision(2);
+  return amount.toFixed(2);
+}
+
+/** A measured total that only some attempts reported: null is "not measured", and a partial coverage says so. */
+export function formatMeasured(seconds: number | null | undefined, measured: number, attempts: number): string {
+  if (seconds === null || seconds === undefined || measured === 0) return "not measured";
+  const text = formatDuration(seconds);
+  return measured < attempts ? `${text} (measured on ${measured} of ${attempts} attempts)` : text;
+}
+
+const UNPRICED: Record<string, string> = {
+  NO_RATES_CONFIGURED: "no rate card is configured (CHAYA_COST_RATES)",
+  RESOURCE_CLASS_NOT_REPORTED: "the worker did not report its resource class (WORKER_RESOURCE_CLASS)",
+  NO_RATE_FOR_CLASS: "the rate card has no rate for the worker's resource class",
+};
+
+export function unpricedReasonText(code: string): string {
+  return UNPRICED[code] ?? code;
+}
+
+export interface EstimateLike {
+  amounts: MoneyLike[];
+  pricedAttempts: number;
+  unpricedAttempts: number;
+  unpricedReasons: Record<string, number>;
+  complete: boolean;
+}
+
+/**
+ * The headline of an estimate. value is null when nothing could be priced; lowerBound when some attempts were left out;
+ * notes list why attempts were not priced. The caller always labels it "Estimated".
+ */
+export function estimateSummary(e: EstimateLike): { value: string | null; lowerBound: boolean; notes: string[] } {
+  const notes = Object.entries(e.unpricedReasons ?? {})
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([code, n]) => `${n} attempt${n === 1 ? "" : "s"} not priced: ${unpricedReasonText(code)}`);
+  if (e.pricedAttempts === 0) {
+    return { value: null, lowerBound: false, notes: e.unpricedAttempts === 0 ? ["No processing attempt has been recorded."] : notes };
+  }
+  return { value: formatMoney(e.amounts), lowerBound: !e.complete, notes };
+}
+
+const OUTCOMES: Record<string, string> = {
+  SUCCEEDED: "Succeeded",
+  FAILED: "Failed",
+  INTERRUPTED: "Interrupted (worker lost or time budget)",
+  CANCELLED: "Cancelled",
+};
+
+export function attemptOutcomeLabel(outcome: string): string {
+  return OUTCOMES[outcome] ?? outcome;
+}

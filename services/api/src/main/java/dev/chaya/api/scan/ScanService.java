@@ -1,6 +1,7 @@
 package dev.chaya.api.scan;
 
 import dev.chaya.api.audit.AuditService;
+import dev.chaya.api.cost.ResourceUsageRecorder;
 import dev.chaya.api.processing.JobStage;
 import dev.chaya.api.processing.ProcessingJobRepository;
 import dev.chaya.api.security.Actor;
@@ -22,8 +23,11 @@ public class ScanService {
     private final TenantGuard guard;
     private final AuditService audit;
     private final ProcessingJobRepository jobs;
+    private final ResourceUsageRecorder usage;
 
-    public ScanService(JdbcClient jdbc, TenantGuard guard, AuditService audit, ProcessingJobRepository jobs) {
+    public ScanService(JdbcClient jdbc, TenantGuard guard, AuditService audit, ProcessingJobRepository jobs,
+                       ResourceUsageRecorder usage) {
+        this.usage = usage;
         this.jdbc = jdbc;
         this.guard = guard;
         this.audit = audit;
@@ -61,6 +65,9 @@ public class ScanService {
     public void cancelJob(Actor actor, UUID venueId, UUID jobId) {
         guard.requireVenue(actor, venueId);
         requireJob(actor, venueId, jobId);
+        jdbc.sql("SELECT 1 FROM processing_job WHERE id = :j FOR UPDATE").param("j", jobId).query(Integer.class).single();
+        // a running attempt's time up to the cancel is recorded (job_attempt_usage); a queued job used nothing
+        usage.recordDirectCancel(jobId, "cancelled by an operator; the worker stops at its next heartbeat");
         jobs.cancel(jobId);
         audit.success(actor, venueId, "job.cancel", "processing_job", jobId, Map.of());
     }

@@ -12,8 +12,9 @@ import java.util.Set;
  *
  * <ul>
  *   <li>Venue state (overview, current version, freshness): every venue role, including viewer.</li>
- *   <li>Capture and processing data (coverage, jobs, failures, storage/cost, re-scans): the roles that capture and
- *       process -- the same set the capture and job endpoints admit.</li>
+ *   <li>Capture and processing data (coverage, jobs, failures, storage/cost, resources/cost, re-scans): the roles that
+ *       capture and process -- the same set the capture and job endpoints admit. Recording a provider bill is admin-only
+ *       (OpsDashboardService#recordBill).</li>
  *   <li>Venue management data (search analytics, audit activity): admin and venue-manager.</li>
  * </ul>
  */
@@ -23,6 +24,7 @@ public enum OpsSection {
     JOBS(EnumSet.of(Role.ADMIN, Role.VENUE_MANAGER, Role.OPERATOR)),
     FAILURES(EnumSet.of(Role.ADMIN, Role.VENUE_MANAGER, Role.OPERATOR)),
     STORAGE(EnumSet.of(Role.ADMIN, Role.VENUE_MANAGER, Role.OPERATOR)),
+    RESOURCES(EnumSet.of(Role.ADMIN, Role.VENUE_MANAGER, Role.OPERATOR)),
     RESCANS(EnumSet.of(Role.ADMIN, Role.VENUE_MANAGER, Role.OPERATOR)),
     SEARCH_ANALYTICS(EnumSet.of(Role.ADMIN, Role.VENUE_MANAGER)),
     AUDIT(EnumSet.of(Role.ADMIN, Role.VENUE_MANAGER));

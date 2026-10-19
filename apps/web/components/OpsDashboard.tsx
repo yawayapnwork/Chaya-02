@@ -17,6 +17,7 @@ import {
   type OpsSection,
   type Overview,
   type Rescans,
+  type Resources,
   type SearchAnalytics,
   type Storage,
   getAudit,
@@ -26,6 +27,7 @@ import {
   getOpsAccess,
   getOverview,
   getRescans,
+  getResources,
   getSearchAnalytics,
   getStorage,
   performJobAction,
@@ -33,10 +35,14 @@ import {
 import {
   JOB_STATUSES,
   type LoadFailure,
+  attemptOutcomeLabel,
+  estimateSummary,
   classifyFailure,
   formatAge,
   formatCount,
   formatDuration,
+  formatMeasured,
+  formatMoney,
   formatMs,
   formatPercent,
   gapLabel,
@@ -117,6 +123,7 @@ const SECTION_ROLES: Record<OpsSection, string> = {
   JOBS: "admin, venue-manager or operator",
   FAILURES: "admin, venue-manager or operator",
   STORAGE: "admin, venue-manager or operator",
+  RESOURCES: "admin, venue-manager or operator",
   RESCANS: "admin, venue-manager or operator",
   SEARCH_ANALYTICS: "admin or venue-manager",
   AUDIT: "admin or venue-manager",
@@ -324,6 +331,7 @@ const NAV: { id: string; label: string }[] = [
   { id: "jobs", label: "Jobs" },
   { id: "failures", label: "Failures" },
   { id: "storage", label: "Storage & cost" },
+  { id: "resources", label: "Resources & cost" },
   { id: "search", label: "POI & search" },
   { id: "rescans", label: "Re-scans" },
   { id: "audit", label: "Audit" },
@@ -344,6 +352,7 @@ export default function OpsDashboard() {
   const [jobFilter, setJobFilter] = useState<JobStatus | null>(null);
   const [failureDays, setFailureDays] = useState(30);
   const [searchDays, setSearchDays] = useState(30);
+  const [resourceDays, setResourceDays] = useState(30);
   const [actionBusy, setActionBusy] = useState(false);
   const [actionMessage, setActionMessage] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -411,6 +420,7 @@ export default function OpsDashboard() {
   const jobsF = useMemo(() => gated(allowedKey, "JOBS", () => getJobs(venueId, jobFilter)), [allowedKey, venueId, jobFilter]);
   const failuresF = useMemo(() => gated(allowedKey, "FAILURES", () => getFailures(venueId, failureDays)), [allowedKey, venueId, failureDays]);
   const storageF = useMemo(() => gated(allowedKey, "STORAGE", () => getStorage(venueId)), [allowedKey, venueId]);
+  const resourcesF = useMemo(() => gated(allowedKey, "RESOURCES", () => getResources(venueId, resourceDays)), [allowedKey, venueId, resourceDays]);
   const searchF = useMemo(() => gated(allowedKey, "SEARCH_ANALYTICS", () => getSearchAnalytics(venueId, searchDays)), [allowedKey, venueId, searchDays]);
   const rescansF = useMemo(() => gated(allowedKey, "RESCANS", () => getRescans(venueId)), [allowedKey, venueId]);
   const auditF = useMemo(() => gated(allowedKey, "AUDIT", () => getAudit(venueId)), [allowedKey, venueId]);
@@ -420,6 +430,7 @@ export default function OpsDashboard() {
   const jobs = useGated<Jobs>(jobsF, refresh);
   const failures = useGated<Failures>(failuresF, refresh);
   const storage = useGated<Storage>(storageF, refresh);
+  const resources = useGated<Resources>(resourcesF, refresh);
   const search = useGated<SearchAnalytics>(searchF, refresh);
   const rescans = useGated<Rescans>(rescansF, refresh);
   const audit = useGated<Audit>(auditF, refresh);
@@ -1023,9 +1034,17 @@ export default function OpsDashboard() {
                 </div>
                 <div className="grid gap-4 md:grid-cols-2">
                   <div>
-                    <h3 className="mb-1 font-semibold">Processing cost</h3>
-                    {s.cost.available && s.cost.amount != null ? (
-                      <p className="tabular-nums">{s.cost.amount} {s.cost.currency}</p>
+                    <h3 className="mb-1 font-semibold">Processing cost (estimated)</h3>
+                    {s.cost.available && s.cost.amount != null && s.cost.currency ? (
+                      <div data-testid="ops-cost-estimate">
+                        <p className="tabular-nums">
+                          {s.cost.complete ? "" : "at least "}
+                          {formatMoney([{ currency: s.cost.currency, amount: s.cost.amount }])}
+                          <span className="ml-2 rounded bg-zinc-100 px-1 text-xs text-zinc-700">estimate, not a bill</span>
+                        </p>
+                        {s.cost.reason && <p className="text-xs text-zinc-600">{s.cost.reason}</p>}
+                        <p className="text-xs"><a className="underline" href="#resources">Resources and cost</a></p>
+                      </div>
                     ) : (
                       <div data-testid="ops-cost-unavailable">
                         <p className="font-medium">Cost data unavailable</p>
@@ -1056,6 +1075,187 @@ export default function OpsDashboard() {
                 </div>
               </div>
             )}
+          </Section>
+
+          {/* 7a. Resources and cost: measured attempt usage, estimates and provider bills */}
+          <Section
+            id="resources"
+            title="Processing resources and cost"
+            section="RESOURCES"
+            load={resources}
+            onRetry={reload}
+            controls={<DaysPicker label="Period:" value={resourceDays} onChange={setResourceDays} />}
+          >
+            {(r) => {
+              const est = estimateSummary(r.estimate);
+              const venueEst = estimateSummary(r.estimateAllTime);
+              return (
+                <div className="space-y-4 text-sm" data-testid="ops-resources">
+                  <p className="text-xs text-zinc-500">
+                    Measured per processing attempt (failed, interrupted and cancelled attempts included). Costs are
+                    estimates: measured worker time multiplied by the configured rates. They are not provider bills. A value
+                    the worker did not measure is shown as not measured, never as zero.
+                  </p>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <Stat label="Processing time" value={formatDuration(r.window.wallSeconds)}
+                      hint={`${r.window.attempts} attempt${r.window.attempts === 1 ? "" : "s"}, last ${r.days} days`} />
+                    <Stat label="GPU time" value={<span className="text-sm">{formatMeasured(r.window.gpuSeconds, r.window.gpuMeasuredAttempts, r.window.attempts)}</span>}
+                      hint="time a stage held CUDA allocations, not utilisation" />
+                    <Stat label="CPU time" value={<span className="text-sm">{formatMeasured(r.window.cpuSeconds, r.window.cpuMeasuredAttempts, r.window.attempts)}</span>} />
+                    <Stat label="Peak GPU memory" value={r.window.peakGpuMemoryBytes == null ? <span className="text-sm">not measured</span> : formatBytes(r.window.peakGpuMemoryBytes)}
+                      hint="torch allocator peak of one attempt" />
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    <div className="rounded border border-zinc-200 p-2" data-testid="ops-estimate">
+                      <p className="text-xs text-zinc-500">Estimated processing cost, last {r.days} days</p>
+                      <p className="text-lg tabular-nums">{est.value === null ? "Not estimated" : `${est.lowerBound ? "at least " : ""}${est.value}`}</p>
+                      {est.notes.map((n) => <p key={n} className="text-xs text-amber-800">{n}</p>)}
+                    </div>
+                    <div className="rounded border border-zinc-200 p-2" data-testid="ops-estimate-venue">
+                      <p className="text-xs text-zinc-500">Estimated cost of this venue, all time</p>
+                      <p className="text-lg tabular-nums">{venueEst.value === null ? "Not estimated" : `${venueEst.lowerBound ? "at least " : ""}${venueEst.value}`}</p>
+                      <p className="text-xs text-zinc-600">
+                        Per scan version: {r.perScan.averageEstimated.length ? formatMoney(r.perScan.averageEstimated) : "—"} on average over
+                        {" "}{r.perScan.fullyPricedVersions} fully priced of {r.perScan.versions} version{r.perScan.versions === 1 ? "" : "s"}
+                        {r.perScan.averageWallSeconds != null && <> · {formatDuration(r.perScan.averageWallSeconds)} average processing time</>}
+                      </p>
+                    </div>
+                    <div className="rounded border border-zinc-200 p-2" data-testid="ops-billed">
+                      <p className="text-xs text-zinc-500">Billed by providers (recorded)</p>
+                      <p className="text-lg tabular-nums">{r.billed.available ? formatMoney(r.billed.totals) : "None recorded"}</p>
+                      <p className="text-xs text-zinc-600">{r.billed.note}</p>
+                    </div>
+                  </div>
+                  <div>
+                    <h3 className="mb-1 font-semibold">Storage</h3>
+                    <p>
+                      {formatBytes(r.storage.artifactBytes)} derived artifacts · {formatBytes(r.storage.rawMediaBytes)} accepted raw media ·{" "}
+                      {r.storage.estimatedPerMonth ? (
+                        <span title={r.storage.estimateBasis ?? undefined}>estimated {formatMoney([r.storage.estimatedPerMonth])} per month</span>
+                      ) : (
+                        <span className="text-zinc-600">storage cost not estimated ({r.storage.unavailableReason})</span>
+                      )}
+                    </p>
+                  </div>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div>
+                      <h3 className="mb-1 font-semibold">By outcome (failed and retried work included)</h3>
+                      {r.byOutcome.length === 0 ? <p className="text-zinc-600">No attempt in this period.</p> : (
+                        <table className="w-full">
+                          <thead><tr><th className={TH}>Outcome</th><th className={TH}>Attempts</th><th className={TH}>Time</th><th className={TH}>GPU</th><th className={TH}>Estimated</th></tr></thead>
+                          <tbody>
+                            {r.byOutcome.map((o) => (
+                              <tr key={o.outcome}>
+                                <td className={TD}>{attemptOutcomeLabel(o.outcome)}</td>
+                                <td className={`${TD} tabular-nums`}>{o.attempts}</td>
+                                <td className={`${TD} tabular-nums`}>{formatDuration(o.wallSeconds)}</td>
+                                <td className={`${TD} tabular-nums`}>{o.gpuSeconds == null ? "not measured" : formatDuration(o.gpuSeconds)}</td>
+                                <td className={`${TD} tabular-nums`}>{formatMoney(o.estimated)}{o.unpricedAttempts > 0 && <span className="text-amber-800"> ({o.unpricedAttempts} unpriced)</span>}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                    <div>
+                      <h3 className="mb-1 font-semibold">Workers</h3>
+                      {r.workers.length === 0 ? <p className="text-zinc-600">No attempt in this period.</p> : (
+                        <table className="w-full">
+                          <thead><tr><th className={TH}>Worker</th><th className={TH}>Class</th><th className={TH}>GPU</th><th className={TH}>Attempts</th><th className={TH}>Time</th></tr></thead>
+                          <tbody>
+                            {r.workers.map((w) => (
+                              <tr key={w.workerId}>
+                                <td className={`${TD} font-mono text-xs`}>{w.workerId}</td>
+                                <td className={TD}>{w.resourceClass ?? "not reported"}</td>
+                                <td className={TD}>{w.gpuModels ?? "not measured"}</td>
+                                <td className={`${TD} tabular-nums`}>{w.attempts}</td>
+                                <td className={`${TD} tabular-nums`}>{formatDuration(w.wallSeconds)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <h3 className="mb-1 font-semibold">Per scan version (all time)</h3>
+                    {r.scanVersions.length === 0 ? <p className="text-zinc-600">No scan version has recorded processing.</p> : (
+                      <table className="w-full">
+                        <thead><tr><th className={TH}>Version</th><th className={TH}>Status</th><th className={TH}>Attempts</th><th className={TH}>Time</th><th className={TH}>Failed time</th><th className={TH}>GPU</th><th className={TH}>Estimated</th></tr></thead>
+                        <tbody>
+                          {r.scanVersions.map((v) => (
+                            <tr key={v.scanVersionId}>
+                              <td className={TD}>{v.versionNumber == null ? <span className="font-mono text-xs">{v.scanVersionId.slice(0, 8)}</span> : `v${v.versionNumber}`}</td>
+                              <td className={TD}>{v.status ?? "—"}</td>
+                              <td className={`${TD} tabular-nums`}>{v.attempts}{v.failedAttempts > 0 && <span className="text-zinc-600"> ({v.failedAttempts} failed)</span>}</td>
+                              <td className={`${TD} tabular-nums`}>{formatDuration(v.wallSeconds)}</td>
+                              <td className={`${TD} tabular-nums`}>{formatDuration(v.failedWallSeconds)}</td>
+                              <td className={`${TD} tabular-nums`}>{v.gpuSeconds == null ? "not measured" : formatDuration(v.gpuSeconds)}</td>
+                              <td className={`${TD} tabular-nums`}>{formatMoney(v.estimated)}{v.unpricedAttempts > 0 && <span className="text-amber-800"> (lower bound: {v.unpricedAttempts} unpriced)</span>}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                  <div>
+                    <h3 className="mb-1 font-semibold">By day (UTC)</h3>
+                    {r.trend.length === 0 ? <p className="text-zinc-600">No attempt in this period.</p> : (
+                      <table className="w-full" data-testid="ops-resource-trend">
+                        <thead><tr><th className={TH}>Day</th><th className={TH}>Attempts</th><th className={TH}>Time</th><th className={TH}>Failed time</th><th className={TH}>GPU</th><th className={TH}>Estimated</th></tr></thead>
+                        <tbody>
+                          {r.trend.map((d) => (
+                            <tr key={d.day}>
+                              <td className={TD}>{d.day}</td>
+                              <td className={`${TD} tabular-nums`}>{d.attempts}</td>
+                              <td className={`${TD} tabular-nums`}>{formatDuration(d.wallSeconds)}</td>
+                              <td className={`${TD} tabular-nums`}>{formatDuration(d.failedWallSeconds)}</td>
+                              <td className={`${TD} tabular-nums`}>{d.gpuSeconds == null ? "not measured" : formatDuration(d.gpuSeconds)}</td>
+                              <td className={`${TD} tabular-nums`}>{formatMoney(d.estimated)}{d.unpricedAttempts > 0 && <span className="text-amber-800"> ({d.unpricedAttempts} unpriced)</span>}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                  {r.billed.bills.length > 0 && (
+                    <div>
+                      <h3 className="mb-1 font-semibold">Recorded provider bills</h3>
+                      <table className="w-full">
+                        <thead><tr><th className={TH}>Provider</th><th className={TH}>Period</th><th className={TH}>Amount</th><th className={TH}>Evidence</th></tr></thead>
+                        <tbody>
+                          {r.billed.bills.map((b) => (
+                            <tr key={b.id}>
+                              <td className={TD}>{b.provider}</td>
+                              <td className={TD}>{b.periodStart} – {b.periodEnd}</td>
+                              <td className={`${TD} tabular-nums`}>{formatMoney([{ currency: b.currency, amount: b.amount }])}</td>
+                              <td className={TD}>{b.evidenceReference}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  <div className="text-xs text-zinc-600">
+                    <h3 className="mb-1 text-sm font-semibold text-zinc-900">Rates used for estimates</h3>
+                    {r.rateCard === null ? (
+                      <p>No rate card is configured (CHAYA_COST_RATES), so nothing is priced.</p>
+                    ) : (
+                      <ul className="list-inside list-disc">
+                        {Object.entries(r.rateCard.workerClasses).map(([cls, rate]) => (
+                          <li key={cls}>
+                            <span className="font-mono">{cls}</span>: {rate.hourly} {r.rateCard?.currency}/h ({rate.kind === "LOCAL_HARDWARE" ? "local hardware, operator's estimate" : rate.kind}; {rate.source})
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {r.stageRunsWithoutUsage > 0 && (
+                      <p className="mt-1">{r.stageRunsWithoutUsage} stage execution{r.stageRunsWithoutUsage === 1 ? "" : "s"} ran before resource tracking and are not counted here.</p>
+                    )}
+                  </div>
+                </div>
+              );
+            }}
           </Section>
 
           {/* 8. POI and search analytics */}

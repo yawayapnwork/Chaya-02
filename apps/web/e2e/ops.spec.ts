@@ -12,7 +12,7 @@ const OPS = `**/mock-api/api/v1/venues/${VENUE}/ops`;
 const now = () => new Date().toISOString();
 
 function access(sections: Partial<Record<string, boolean>>) {
-  const all = ["OVERVIEW", "COVERAGE", "JOBS", "FAILURES", "STORAGE", "SEARCH_ANALYTICS", "RESCANS", "AUDIT"];
+  const all = ["OVERVIEW", "COVERAGE", "JOBS", "FAILURES", "STORAGE", "RESOURCES", "SEARCH_ANALYTICS", "RESCANS", "AUDIT"];
   return {
     venueId: VENUE, roles: ["OPERATOR"], mayControlProcessing: true,
     sections: Object.fromEntries(all.map((s) => [s, sections[s] ?? false])),
@@ -125,4 +125,41 @@ test("a section whose first load fails shows the error and recovers on retry", a
   fail = false;
   await jobsSection.getByRole("button", { name: "Try again" }).click();
   await expect(page.getByTestId("ops-queue")).toBeVisible();
+});
+
+const usage = (attempts: number, wall: number, gpu: number | null, gpuN: number) => ({
+  attempts, wallSeconds: wall, cpuSeconds: null, cpuMeasuredAttempts: 0, gpuSeconds: gpu, gpuMeasuredAttempts: gpuN,
+  gpuUnmeasuredAttempts: attempts - gpuN, peakGpuMemoryBytes: null, artifactBytes: 0,
+});
+
+function resources() {
+  const estimate = {
+    kind: "ESTIMATED", amounts: [{ currency: "USD", amount: 1.25 }], pricedAttempts: 2, unpricedAttempts: 1, unpricedWallSeconds: 30,
+    unpricedReasons: { RESOURCE_CLASS_NOT_REPORTED: 1 }, complete: false,
+  };
+  return {
+    days: 30, since: now(), window: usage(3, 5400, 1800, 1), allTime: usage(3, 5400, 1800, 1),
+    byOutcome: [{ outcome: "INTERRUPTED", attempts: 1, wallSeconds: 30, gpuSeconds: null, estimated: [], unpricedAttempts: 1 }],
+    estimate, estimateAllTime: estimate,
+    billed: { available: true, totals: [{ currency: "USD", amount: 812.4 }], note: "Recorded by an admin with the provider's evidence reference.",
+      bills: [{ id: "b", provider: "AWS", periodStart: "2026-09-01", periodEnd: "2026-09-30", amount: 812.4, currency: "USD",
+        evidenceReference: "invoice 4417", description: null, recordedBy: "admin", recordedAt: now() }] },
+    storage: { artifactBytes: 0, rawMediaBytes: 0, estimatedPerMonth: null, estimateBasis: null, unavailableReason: "NO_STORAGE_RATE" },
+    perScan: { versions: 1, fullyPricedVersions: 0, averageEstimated: [], averageWallSeconds: 5400 },
+    scanVersions: [], workers: [], trend: [], rateCard: null, stageRunsWithoutUsage: 0, asOf: now(),
+  };
+}
+
+test("estimated cost is labelled as an estimate, a partial one as a lower bound, and kept apart from billed cost", async ({ page }) => {
+  await mockJson(page, `${OPS}/resources**`, resources());
+  await signedInDashboard(page, { OVERVIEW: true, RESOURCES: true });
+
+  const est = page.getByTestId("ops-estimate");
+  await expect(est).toContainText("Estimated processing cost");
+  await expect(est).toContainText("at least 1.25 USD");
+  await expect(est).toContainText("1 attempt not priced: the worker did not report its resource class");
+  await expect(page.getByTestId("ops-billed")).toContainText("812.40 USD");
+  const r = page.getByTestId("ops-resources");
+  await expect(r).toContainText("measured on 1 of 3 attempts"); // GPU time is never presented as covering every attempt
+  await expect(r).toContainText("not measured"); // CPU time the workers did not report
 });

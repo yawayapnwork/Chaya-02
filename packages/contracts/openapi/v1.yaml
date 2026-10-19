@@ -6719,6 +6719,74 @@ paths:
       - VENUE_MANAGER
       - OPERATOR
       - VIEWER
+  /api/v1/venues/{venueId}/ops/billed-costs:
+    post:
+      description: "Append-only and audited. Shown as billed cost, never mixed with\
+        \ estimates."
+      operationId: opsDashboardRecordBill
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BillRequest"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Bill"
+          description: Created
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: BILL_INVALID
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: OPS_SECTION_FORBIDDEN
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Not found, or not visible to the caller's organization or\
+            \ venue (code NOT_FOUND)"
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      summary: Record a provider-billed amount with its evidence reference (admin)
+      tags:
+      - ops-dashboard-controller
+      x-chaya-roles:
+      - ADMIN
   /api/v1/venues/{venueId}/ops/coverage:
     get:
       description: Measured coverage recomputed from the latest capture with a HUD
@@ -7065,6 +7133,82 @@ paths:
       - VENUE_MANAGER
       - OPERATOR
       - VIEWER
+  /api/v1/venues/{venueId}/ops/resources:
+    get:
+      description: "Measured attempt time, CPU and GPU where observed, estimated cost\
+        \ from configured rates (kind ESTIMATED), provider-billed cost recorded with\
+        \ evidence, per scan version, per worker and per day. See docs/operations-dashboard.md,\
+        \ \"Resources and cost\"."
+      operationId: opsDashboardResources
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: days
+        required: false
+        schema:
+          type: integer
+          format: int32
+          default: 30
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Resources"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Malformed request: an unparseable parameter or body, or a\
+            \ failed validation (code BAD_REQUEST or an operation-specific code)"
+        "401":
+          description: "Missing, invalid or expired credentials (empty body, WWW-Authenticate\
+            \ header)"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: OPS_SECTION_FORBIDDEN
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Not found, or not visible to the caller's organization or\
+            \ venue (code NOT_FOUND)"
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Rate limit exceeded (code RATE_LIMITED); see the Retry-After
+            header
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "A dependency is unavailable (code DATABASE_UNAVAILABLE, STORAGE_UNAVAILABLE\
+            \ or AUTHENTICATION_UNAVAILABLE); the request was not completed"
+      security:
+      - bearerAuth: []
+      summary: "Processing resources and cost (admin, venue-manager, operator; query:\
+        \ days<=365)"
+      tags:
+      - ops-dashboard-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
+      - OPERATOR
+      - VIEWER
   /api/v1/venues/{venueId}/ops/search-analytics:
     get:
       description: "Count, zero-result count, latency avg/p95, top and zero-result\
@@ -7141,7 +7285,8 @@ paths:
       - VIEWER
   /api/v1/venues/{venueId}/ops/storage:
     get:
-      description: available=false when untracked.
+      description: "cost.kind is ESTIMATED (measured worker time x configured rates,\
+        \ not a bill); available=false when nothing could be priced."
       operationId: opsDashboardStorage
       parameters:
       - in: path
@@ -7197,7 +7342,7 @@ paths:
       security:
       - bearerAuth: []
       summary: "Recorded raw media and artifact sizes, measured worker time per stage,\
-        \ cost"
+        \ estimated processing cost"
       tags:
       - ops-dashboard-controller
       x-chaya-roles:
@@ -8933,6 +9078,68 @@ components:
           format: uuid
         resourceType:
           type: string
+    Bill:
+      type: object
+      properties:
+        amount:
+          type: number
+          format: double
+        currency:
+          type: string
+        description:
+          type: string
+        evidenceReference:
+          type: string
+        id:
+          type: string
+          format: uuid
+        periodEnd:
+          type: string
+          format: date
+        periodStart:
+          type: string
+          format: date
+        provider:
+          type: string
+        recordedAt:
+          type: string
+          format: date-time
+        recordedBy:
+          type: string
+    BillRequest:
+      type: object
+      properties:
+        amount:
+          type: number
+        currency:
+          type: string
+        description:
+          type: string
+        evidenceReference:
+          type: string
+        periodEnd:
+          type: string
+          format: date
+        periodStart:
+          type: string
+          format: date
+        provider:
+          type: string
+    BilledCost:
+      type: object
+      properties:
+        available:
+          type: boolean
+        bills:
+          type: array
+          items:
+            $ref: "#/components/schemas/Bill"
+        note:
+          type: string
+        totals:
+          type: array
+          items:
+            $ref: "#/components/schemas/Money"
     BlockedRegion:
       type: object
       properties:
@@ -9350,10 +9557,45 @@ components:
           format: double
         available:
           type: boolean
+        complete:
+          type: boolean
         currency:
           type: string
+        kind:
+          type: string
+        pricedAttempts:
+          type: integer
+          format: int64
         reason:
           type: string
+        unpricedAttempts:
+          type: integer
+          format: int64
+    CostEstimate:
+      type: object
+      properties:
+        amounts:
+          type: array
+          items:
+            $ref: "#/components/schemas/Money"
+        complete:
+          type: boolean
+        kind:
+          type: string
+        pricedAttempts:
+          type: integer
+          format: int64
+        unpricedAttempts:
+          type: integer
+          format: int64
+        unpricedReasons:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int64
+        unpricedWallSeconds:
+          type: number
+          format: double
     Coverage:
       type: object
       properties:
@@ -9521,6 +9763,31 @@ components:
         versionNumber:
           type: integer
           format: int32
+    DayUsage:
+      type: object
+      properties:
+        attempts:
+          type: integer
+          format: int64
+        day:
+          type: string
+          format: date
+        estimated:
+          type: array
+          items:
+            $ref: "#/components/schemas/Money"
+        failedWallSeconds:
+          type: number
+          format: double
+        gpuSeconds:
+          type: number
+          format: double
+        unpricedAttempts:
+          type: integer
+          format: int64
+        wallSeconds:
+          type: number
+          format: double
     Diagnostics:
       type: object
       properties:
@@ -10711,6 +10978,14 @@ components:
           items:
             type: integer
             format: int32
+    Money:
+      type: object
+      properties:
+        amount:
+          type: number
+          format: double
+        currency:
+          type: string
     MultiStopRequest:
       type: object
       properties:
@@ -10891,6 +11166,27 @@ components:
           format: double
       required:
       - polygon
+    OutcomeUsage:
+      type: object
+      properties:
+        attempts:
+          type: integer
+          format: int64
+        estimated:
+          type: array
+          items:
+            $ref: "#/components/schemas/Money"
+        gpuSeconds:
+          type: number
+          format: double
+        outcome:
+          type: string
+        unpricedAttempts:
+          type: integer
+          format: int64
+        wallSeconds:
+          type: number
+          format: double
     Overview:
       type: object
       properties:
@@ -10950,6 +11246,22 @@ components:
         "y":
           type: number
           format: double
+    PerScan:
+      type: object
+      properties:
+        averageEstimated:
+          type: array
+          items:
+            $ref: "#/components/schemas/Money"
+        averageWallSeconds:
+          type: number
+          format: double
+        fullyPricedVersions:
+          type: integer
+          format: int64
+        versions:
+          type: integer
+          format: int64
     PinnedArtifact:
       type: object
       properties:
@@ -11881,6 +12193,54 @@ components:
           items:
             type: number
             format: double
+    Resources:
+      type: object
+      properties:
+        allTime:
+          $ref: "#/components/schemas/UsageTotals"
+        asOf:
+          type: string
+          format: date-time
+        billed:
+          $ref: "#/components/schemas/BilledCost"
+        byOutcome:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutcomeUsage"
+        days:
+          type: integer
+          format: int32
+        estimate:
+          $ref: "#/components/schemas/CostEstimate"
+        estimateAllTime:
+          $ref: "#/components/schemas/CostEstimate"
+        perScan:
+          $ref: "#/components/schemas/PerScan"
+        rateCard:
+          type: object
+          additionalProperties: {}
+        scanVersions:
+          type: array
+          items:
+            $ref: "#/components/schemas/VersionUsage"
+        since:
+          type: string
+          format: date-time
+        stageRunsWithoutUsage:
+          type: integer
+          format: int64
+        storage:
+          $ref: "#/components/schemas/StorageUsage"
+        trend:
+          type: array
+          items:
+            $ref: "#/components/schemas/DayUsage"
+        window:
+          $ref: "#/components/schemas/UsageTotals"
+        workers:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkerUsage"
     RoomVersion:
       type: object
       properties:
@@ -12493,6 +12853,9 @@ components:
           items:
             type: string
             format: uuid
+        resources:
+          type: object
+          additionalProperties: {}
         startedAt:
           type: string
           format: date-time
@@ -12771,6 +13134,21 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/StageTime"
+    StorageUsage:
+      type: object
+      properties:
+        artifactBytes:
+          type: integer
+          format: int64
+        estimateBasis:
+          type: string
+        estimatedPerMonth:
+          $ref: "#/components/schemas/Money"
+        rawMediaBytes:
+          type: integer
+          format: int64
+        unavailableReason:
+          type: string
     SurfaceBatchRequest:
       type: object
       properties:
@@ -12919,6 +13297,36 @@ components:
           type: string
         timezone:
           type: string
+    UsageTotals:
+      type: object
+      properties:
+        artifactBytes:
+          type: integer
+          format: int64
+        attempts:
+          type: integer
+          format: int64
+        cpuMeasuredAttempts:
+          type: integer
+          format: int64
+        cpuSeconds:
+          type: number
+          format: double
+        gpuMeasuredAttempts:
+          type: integer
+          format: int64
+        gpuSeconds:
+          type: number
+          format: double
+        gpuUnmeasuredAttempts:
+          type: integer
+          format: int64
+        peakGpuMemoryBytes:
+          type: integer
+          format: int64
+        wallSeconds:
+          type: number
+          format: double
     Vec3:
       type: object
       properties:
@@ -12955,6 +13363,45 @@ components:
           type: string
         version:
           type: string
+    VersionUsage:
+      type: object
+      properties:
+        attempts:
+          type: integer
+          format: int64
+        estimated:
+          type: array
+          items:
+            $ref: "#/components/schemas/Money"
+        failedAttempts:
+          type: integer
+          format: int64
+        failedWallSeconds:
+          type: number
+          format: double
+        floorId:
+          type: string
+          format: uuid
+        gpuSeconds:
+          type: number
+          format: double
+        lastEndedAt:
+          type: string
+          format: date-time
+        scanVersionId:
+          type: string
+          format: uuid
+        status:
+          type: string
+        unpricedAttempts:
+          type: integer
+          format: int64
+        versionNumber:
+          type: integer
+          format: int32
+        wallSeconds:
+          type: number
+          format: double
     ViewerToken:
       type: object
       properties:
@@ -13113,6 +13560,27 @@ components:
           type: array
           items:
             type: string
+        workerId:
+          type: string
+    WorkerUsage:
+      type: object
+      properties:
+        attempts:
+          type: integer
+          format: int64
+        gpuModels:
+          type: string
+        gpuSeconds:
+          type: number
+          format: double
+        lastEndedAt:
+          type: string
+          format: date-time
+        resourceClass:
+          type: string
+        wallSeconds:
+          type: number
+          format: double
         workerId:
           type: string
   securitySchemes:

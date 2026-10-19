@@ -11,7 +11,6 @@ import dev.chaya.api.ops.OpsDtos.ArtifactKind;
 import dev.chaya.api.ops.OpsDtos.Audit;
 import dev.chaya.api.ops.OpsDtos.AuditEntry;
 import dev.chaya.api.ops.OpsDtos.CodeCount;
-import dev.chaya.api.ops.OpsDtos.Cost;
 import dev.chaya.api.ops.OpsDtos.Coverage;
 import dev.chaya.api.ops.OpsDtos.CurrentVersion;
 import dev.chaya.api.ops.OpsDtos.FailedRun;
@@ -30,12 +29,14 @@ import dev.chaya.api.ops.OpsDtos.PoiStats;
 import dev.chaya.api.ops.OpsDtos.JobQueue;
 import dev.chaya.api.ops.OpsDtos.Rescan;
 import dev.chaya.api.ops.OpsDtos.Rescans;
+import dev.chaya.api.ops.OpsDtos.Resources;
 import dev.chaya.api.ops.OpsDtos.SearchAnalytics;
 import dev.chaya.api.ops.OpsDtos.StageTime;
 import dev.chaya.api.ops.OpsDtos.Storage;
 import dev.chaya.api.ops.OpsDtos.TermCount;
 import dev.chaya.api.ops.OpsDtos.UncoveredZone;
 import dev.chaya.api.ops.OpsDtos.WorkerStatus;
+import dev.chaya.api.audit.AuditService;
 import dev.chaya.api.health.HealthProperties;
 import dev.chaya.api.processing.JobStatus;
 import dev.chaya.api.processing.WorkerPresenceRepository;
@@ -80,9 +81,6 @@ public class OpsDashboardService {
     private static final int FAILURE_LIMIT = 100;
     private static final int TERM_LIMIT = 20;
 
-    static final String COST_UNAVAILABLE_REASON = "Processing cost is not tracked: no pricing, billing or GPU-hour rate is "
-        + "recorded for workers or storage. Measured worker stage time is shown instead; it is not a cost.";
-
     private static final TypeReference<Map<String, Object>> MAP = new TypeReference<>() {};
 
     private final JdbcClient jdbc;
@@ -93,10 +91,14 @@ public class OpsDashboardService {
     private final ObjectMapper mapper;
     private final WorkerPresenceRepository workers;
     private final HealthProperties health;
+    private final ResourceUsageQueries resources;
+    private final AuditService audit;
 
     public OpsDashboardService(JdbcClient jdbc, TenantGuard guard, VenueService venues, CaptureHudService hud,
                                StorageProperties storage, ObjectMapper mapper, WorkerPresenceRepository workers,
-                               HealthProperties health) {
+                               HealthProperties health, ResourceUsageQueries resources, AuditService audit) {
+        this.resources = resources;
+        this.audit = audit;
         this.workers = workers;
         this.health = health;
         this.jdbc = jdbc;
@@ -565,13 +567,66 @@ public class OpsDashboardService {
             .list();
 
         return new Storage(storage.bucket(), storage.derivedBucket(), media, kinds, totals.count(), totals.bytes(),
-            totals.piiCount(), totals.piiBytes(), purgeIncomplete, totals.last(), stageTime, costUnavailable(), asOf);
+            totals.piiCount(), totals.piiBytes(), purgeIncomplete, totals.last(), stageTime, resources.costSummary(venueId, org), asOf);
     }
 
-    /** No cost source exists anywhere in the system (no pricing, billing or rate table), so cost is always reported
-     * as unavailable. When one is added, this is the single place that changes. */
-    static Cost costUnavailable() {
-        return new Cost(false, null, null, COST_UNAVAILABLE_REASON);
+    // =========================================================================================
+    // 7a. Resources and cost: measured attempt usage, estimates, provider bills
+    // =========================================================================================
+
+    @Transactional(readOnly = true)
+    public Resources resources(Actor actor, UUID venueId, int days) {
+        require(actor, OpsSection.RESOURCES, venueId);
+        return resources.resources(venueId, actor.organizationId(), clampDays(days), dbNow());
+    }
+
+    /** body of POST .../ops/billed-costs: what a provider billed, with the evidence that it did. */
+    public record BillRequest(String provider, java.time.LocalDate periodStart, java.time.LocalDate periodEnd, java.math.BigDecimal amount,
+                              String currency, String evidenceReference, String description) {}
+
+    /**
+     * Records a provider bill for the venue (admin only): an amount a provider actually charged, with its evidence
+     * reference (an invoice number or billing-export id). Append-only and audited. It is shown as billed cost and never
+     * mixed with estimates or divided across scans.
+     */
+    @Transactional
+    public OpsDtos.Bill recordBill(Actor actor, UUID venueId, BillRequest b) {
+        if (!actor.roles().contains(Role.ADMIN)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "OPS_SECTION_FORBIDDEN", "Only an admin may record a provider bill.");
+        }
+        guard.requireVenue(actor, venueId);
+        java.util.List<String> problems = new ArrayList<>();
+        if (b == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "BILL_INVALID", "a JSON body is required");
+        }
+        if (b.provider() == null || b.provider().isBlank() || b.provider().length() > 100) problems.add("provider (1-100 characters)");
+        if (b.periodStart() == null || b.periodEnd() == null || b.periodEnd().isBefore(b.periodStart())) {
+            problems.add("periodStart and periodEnd (periodEnd not before periodStart)");
+        }
+        if (b.amount() == null || b.amount().signum() < 0 || b.amount().scale() > 2 || b.amount().compareTo(java.math.BigDecimal.valueOf(1e15)) >= 0) {
+            problems.add("amount (not negative, at most 2 decimals)");
+        }
+        if (b.currency() == null || !b.currency().matches("[A-Z]{3}")) problems.add("currency (ISO 4217, e.g. USD)");
+        if (b.evidenceReference() == null || b.evidenceReference().isBlank() || b.evidenceReference().length() > 300) {
+            problems.add("evidenceReference (the invoice or billing-export reference, 1-300 characters)");
+        }
+        if (b.description() != null && b.description().length() > 1000) problems.add("description (at most 1000 characters)");
+        if (!problems.isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "BILL_INVALID", "invalid or missing: " + String.join("; ", problems));
+        }
+        UUID id = jdbc.sql("""
+                INSERT INTO infrastructure_bill (organization_id, venue_id, provider, period_start, period_end, amount, currency,
+                    evidence_reference, description, recorded_by)
+                VALUES (:o, :v, :p, :ps, :pe, :a, :c, :e, :d, :by) RETURNING id
+                """)
+            .param("o", actor.organizationId()).param("v", venueId).param("p", b.provider().strip()).param("ps", b.periodStart())
+            .param("pe", b.periodEnd()).param("a", b.amount()).param("c", b.currency()).param("e", b.evidenceReference().strip())
+            .param("d", b.description()).param("by", actor.subject()).query(UUID.class).single();
+        audit.success(actor, venueId, "cost.bill_recorded", "infrastructure_bill", id, Map.of("provider", b.provider().strip(),
+            "currency", b.currency(), "amount", b.amount().toPlainString(), "periodStart", b.periodStart().toString(),
+            "periodEnd", b.periodEnd().toString()));
+        return new OpsDtos.Bill(id, b.provider().strip(), b.periodStart(), b.periodEnd(), b.amount().doubleValue(), b.currency(),
+            b.evidenceReference().strip(), b.description(), actor.subject(), dbNow());
     }
 
     // =========================================================================================

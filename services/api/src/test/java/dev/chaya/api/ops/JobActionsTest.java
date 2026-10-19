@@ -91,14 +91,6 @@ class JobActionsTest {
     }
 
     @Test
-    void costIsNeverInvented() {
-        OpsDtos.Cost cost = OpsDashboardService.costUnavailable();
-        assertThat(cost.available()).isFalse();
-        assertThat(cost.amount()).isNull();
-        assertThat(cost.currency()).isNull();
-    }
-
-    @Test
     void agesAreMeasuredFromTimestampsAndNullWhenNothingHappened() {
         Instant asOf = Instant.parse("2026-09-23T12:00:00Z");
         assertThat(OpsDashboardService.age(Instant.parse("2026-09-22T12:00:00Z"), asOf)).isEqualTo(86_400L);

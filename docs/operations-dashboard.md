@@ -1,8 +1,9 @@
 # Operations dashboard
 
 For venue staff: what state each venue's reconstruction is in, what processing is doing, and what failed.
-Everything shown comes from stored rows or is computed from them at read time. Nothing is estimated, scored or filled in.
-When a value does not exist, the API returns null and the UI says so ("never", "—", "Cost data unavailable").
+Everything shown comes from stored rows or is computed from them at read time. Nothing is scored or filled in. The one
+estimate is processing cost, computed from measured time and configured rates and always labelled ESTIMATED (see
+"Resources and cost"). When a value does not exist, the API returns null and the UI says so ("never", "—", "not measured").
 
 Code: `services/api/.../ops` (`OpsDashboardController`, `OpsDashboardService`, `OpsSection`, `JobActions`, `OpsDtos`);
 `apps/web/app/ops/page.tsx`, `apps/web/components/OpsDashboard.tsx`, `apps/web/lib/ops-api.ts`, `apps/web/lib/ops-view.ts`.
@@ -18,7 +19,8 @@ Access rules: docs/security.md, "Operations dashboard".
 | 4 | Coverage gaps | `ops/coverage` | Floors without a reconstruction or finalized version; measured coverage of the newest capture with a HUD room outline, recomputed by `CaptureHudService` (the capture planner) |
 | 5 | Processing jobs | `ops/jobs` | `processing_job`, counts for all five states, newest 50 (filterable); `queue`: this venue's queue depth, stale and overdue jobs, unserved stages, and the workers from `worker_presence` (below) |
 | 6 | Processing failures | `ops/failures` | FAILED `pipeline_run`s; FAILED `pipeline_stage_run` records (immutable, so they survive retries); FAILED legacy jobs without a run |
-| 7 | Storage, artifacts, cost | `ops/storage` | `capture_media` and `processing_artifact` sizes as recorded; `pipeline_stage_run` durations; cost (see below) |
+| 7 | Storage, artifacts, cost | `ops/storage` | `capture_media` and `processing_artifact` sizes as recorded; `pipeline_stage_run` durations; estimated cost summary (below) |
+| 7a | Resources and cost | `ops/resources` | `job_attempt_usage`, `cost_rate_set`, `infrastructure_bill` (below) |
 | 8 | POI and search analytics | `ops/search-analytics` | `search_query` (written by every search); latest `poi_version` per live POI |
 | 9 | Re-scan history | `ops/rescans` | `capture_session` rows with `parent_scan_version_id`, their run and resulting `scan_version` |
 | 10 | Audit activity | `ops/audit` | `audit_log` rows of the venue |
@@ -79,12 +81,95 @@ searched terms and the zero-result terms, over 7, 30, 90 or 365 days. The search
 the result count and the latency. It does not record which POIs were returned. "Most searched objects" is therefore shown
 as the most searched **terms**, and the UI states this limit. Logging returned POI ids would be needed to rank objects.
 
-## Cost
+## Resources and cost
 
-The system has no cost source: no pricing, billing or GPU-hour rate is recorded anywhere. `ops/storage` therefore always
-returns `cost: {available: false, amount: null, currency: null, reason}`, and the UI shows "Cost data unavailable".
-Measured worker time per stage (the sum of `pipeline_stage_run` durations) is shown beside it and is labelled as time,
-not cost. When a real cost source is added, `OpsDashboardService#costUnavailable` is the single place that changes.
+`ops/resources?days=N` (section 7a; admin, venue manager, operator). Sources: `job_attempt_usage`, `cost_rate_set`,
+`infrastructure_bill` (`V42__processing_resource_usage.sql`). Code: `dev.chaya.api.cost` (`ResourceMeasurements`,
+`RateCard`, `ResourceUsageRecorder`), `ops/ResourceUsageQueries`; worker side `chaya_worker/resources.py`.
+
+### What is measured
+
+Each job **attempt** (`job_id`, `attempt = retry_count + 1`) gets exactly one usage row when the attempt ends. The row
+is written in the same transaction that ends the attempt, and the primary key makes any second write a no-op. A
+duplicate report, a late report after a cancel, or a report racing the lease enforcer can never count an attempt twice.
+A retry is a new attempt and gets a new row, so failed and retried time stays on record.
+
+| Field | Source | When absent |
+|---|---|---|
+| start, end, wall seconds | the worker's own `startedAt`/`finishedAt` (`end_basis = WORKER_REPORT`) | never absent |
+| worker id | the lease holder (`processing_job.worker_id`) | — |
+| CPU seconds | `os.times()`: the worker process, plus child tools (COLMAP, FFmpeg) where the OS reports child time (not Windows) | null; `measurements.cpu` says what was counted |
+| GPU seconds, model, peak memory | torch, only if it is loaded and made CUDA allocations during the stage: device names, allocator peak (`max_memory_allocated`, tensors only), and stage wall time as the time the GPU was held | null, with `gpu_unmeasured_reason` (always set when GPU seconds are null) |
+| artifact bytes | sizes of the objects the report registered | 0 |
+| resource class | `WORKER_RESOURCE_CLASS` on the worker | null: not priced |
+
+GPU work done by external tools (COLMAP's CUDA SIFT) is invisible to torch and is **never counted**; the reason says so.
+GPU seconds mean "time the GPU was held", not utilisation. Nothing is invented: an unmeasured value is null, not 0.
+
+The API checks every reported figure (`ResourceMeasurements`). A value that is not a finite, non-negative number, or
+that is physically impossible (CPU time above wall time x CPU count, GPU time above wall time, memory above 2^46 bytes),
+is dropped and listed under `measurements.rejected`. The stage itself is still applied. Database CHECKs refuse negative
+or infinite values as a second line of defence, and the table is write-once (a trigger), except during data erasure.
+
+The control plane records attempts the worker cannot report on, with time only:
+
+- **Worker crash or lost lease** (`INTERRUPTED`, `LAST_HEARTBEAT`): ends at the last heartbeat
+  (`lease_expires_at - leaseSeconds`), clamped to [start, now]. The worker may have run on, unobserved, until the lease
+  expired.
+- **Time budget exceeded** (`INTERRUPTED`, `CONTROL_PLANE_DETECTION`): ends when the enforcer stopped it.
+- **Cancelled while running** (`CANCELLED`, `CANCEL_REQUEST`), through the run (`.../processing/cancel`) or directly
+  (`.../jobs/{j}/cancel`): ends at the cancel. A queued job that never started gets no row.
+
+Stage records from before V42 have no usage row. `stageRunsWithoutUsage` counts them, and they are not estimated.
+
+### Estimated cost
+
+`CHAYA_COST_RATES` (`chaya.cost.rates`) is an optional JSON rate card. Every rate names its `kind` and its `source`:
+
+```json
+{"currency": "USD",
+ "workerClasses": {"gpu-g5-xlarge": {"hourly": 1.006, "kind": "CLOUD_LIST_PRICE", "source": "AWS on-demand us-east-1 2026-10"},
+                   "local-rtx4090": {"hourly": 0.12, "kind": "LOCAL_HARDWARE", "source": "450 W at 0.27/kWh, no amortisation"}},
+ "storagePerGbMonth": {"rate": 0.023, "source": "S3 Standard us-east-1 2026-10"}}
+```
+
+`kind` is `CLOUD_LIST_PRICE`, `CLOUD_CONTRACT_RATE` or `LOCAL_HARDWARE`. A local GPU machine is priced only at its
+operator's own estimate (power, amortisation), never at a cloud price. An invalid card stops the API at startup.
+
+An attempt's estimate is `wall_seconds / 3600 x the hourly rate of its resource class`. It uses wall time because a
+machine is paid for while it is held, busy or not. The row stores the rate set (`cost_rate_set`, keyed by content hash,
+immutable), the rate entry with its kind and source, and the formula (`cost_basis`). Changing the card never re-prices
+history. An attempt is left **unpriced** with a reason code, never priced at 0, when:
+
+- `NO_RATES_CONFIGURED`: no card is configured.
+- `RESOURCE_CLASS_NOT_REPORTED`: the worker named no class. This is always true for attempts the control plane ended,
+  whose class is unknown.
+- `NO_RATE_FOR_CLASS`: the card does not list the worker's class.
+
+Partial attempts (failed, interrupted, cancelled) are priced like any other, because their time was spent. Every amount
+is labelled **ESTIMATED**. A total that includes unpriced attempts is marked incomplete (a lower bound). Amounts in
+different currencies are never added together.
+
+### Billed cost
+
+`POST .../ops/billed-costs` (admin only, audited as `cost.bill_recorded`) records an amount a provider actually charged,
+with its period and an **evidence reference** (an invoice number or billing-export id). Bills are append-only. They are
+shown as billed cost beside the estimate, never merged with it and never divided across scans. When no bill has been
+recorded, the dashboard says so.
+
+### What the dashboard shows
+
+- For the window (7–365 days) and all time: attempts, total processing time, CPU and GPU time (with how many attempts
+  measured each), peak GPU memory, and artifact bytes.
+- Usage per outcome, so failed, interrupted and cancelled time are shown separately.
+- The estimate with its unpriced reasons, and billed cost.
+- Storage: recorded bytes and, if the card has a storage rate, an estimated monthly figure.
+- Per scan version (every run that built it, retries included): time, failed time and the estimate. Per scan: the
+  average estimate over fully priced versions only. Per venue: the all-time estimate.
+- A per-worker breakdown (class, GPU models) and a per-day trend (UTC).
+
+`ops/storage.cost` summarises the venue's all-time estimate (`kind: ESTIMATED`, `complete`, priced and unpriced
+counts). It is `available: false`, with the reason, when nothing could be priced.
 
 ## Storage figures
 
@@ -106,10 +191,17 @@ Before 2026-10-11 a failed refresh replaced the data with the error, so one fail
 
 ## Verification
 
-- `JobActionsTest`: retry/cancel rules, coverage gap derivation, cost never invented, ages. A pure unit test.
+- `JobActionsTest`: retry/cancel rules, coverage gap derivation, ages. A pure unit test.
+- `ResourceCostTest` and `ResourceCostWithoutRatesTest` (Testcontainers, the real worker protocol) cover:
+  - attempts that succeed, fail, are retried, are cancelled (through the run and directly), or end with a crashed worker;
+  - missing GPU metrics, an unknown class, impossible figures and duplicate reports;
+  - several workers, per-day history and the window;
+  - bills kept apart from estimates, write-once rows and CHECKs, and no rate card.
+
+  `RateCardTest` and `ResourceMeasurementsTest` are pure unit tests. Worker: `tests/unit/test_resources.py`.
 - `OpsDashboardApiTest`: the role matrix for every section; tenant isolation (other venue or org: 404; no token: 401;
   service token: 403); job counts and retry availability from real rows; failures from stage records; search aggregates;
-  artifact sums with cost unavailable; null freshness before any reconstruction; venue-scoped audit with admin-only
+  artifact sums with no cost invented; null freshness before any reconstruction; venue-scoped audit with admin-only
   denials. Runs on Testcontainers Postgres and MinIO, and is skipped without Docker.
 - `JobRecoveryTest`: worker liveness from real claim polls and heartbeats (a heartbeat without the lease refreshes
   nothing), unserved stages and live/not-live workers in `ops/jobs`; lease expiry, retries and duplicate reports (see
@@ -120,5 +212,6 @@ Before 2026-10-11 a failed refresh replaced the data with the error, so one fail
 - `apps/web/e2e/ops.spec.ts` (Playwright, real browser, mocked API, sign-in through the real PKCE flow against a mocked
   OIDC provider): the queue panel with a lost worker, an unserved stage and an expired lease; a queue an older API does
   not report shown as unavailable; a failed refresh keeping the last data marked out of date, then recovering; a
-  forbidden section never requested; a failed first load recovering on retry.
+  forbidden section never requested; a failed first load recovering on retry; an incomplete estimate shown as a lower
+  bound with its unpriced reason, apart from billed cost, and partially measured GPU time saying so.
 - Not verified: the dashboard UI in a real browser against a running stack.
