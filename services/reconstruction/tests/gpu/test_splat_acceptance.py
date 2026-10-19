@@ -163,17 +163,18 @@ def test_gsplat_training_on_cuda_produces_a_validated_viewer_artifact(preflight,
 
     # 2. it learned: trained cloud vs the untrained SfM seed, over every training view, rendered by gsplat
     device = torch.device("cuda", preflight["selected_device"]["index"])
-    if dataset.cameras:
-        from chaya_worker import splat_training as st
+    # every dataset, synthetic or real, has its training cameras: without them this check would silently not run
+    assert dataset.cameras, f"dataset {dataset.name} has no cameras to measure the trained cloud with"
+    from chaya_worker import splat_training as st
 
-        cams = [{**c} for c in dataset.cameras]
-        trained = _params_from_ply(h.storage.root / DERIVED_BUCKET / arts["SPLAT"]["key"], device)
-        txt_points = _seed_points(dataset.sparse_tar, tmp_path / "seed")
-        seed = st.init_params(txt_points["xyz"], rgb_bytes_to_sh0(txt_points["rgb"]), initial_scale_log(txt_points["xyz"]), device)
-        psnr_trained, psnr_seed = _mean_psnr(trained, dataset, cams, device), _mean_psnr(seed, dataset, cams, device)
-        summary["quality"] = {"mean_psnr_trained_db": round(psnr_trained, 3), "mean_psnr_sfm_seed_db": round(psnr_seed, 3),
-                              "views": len(cams), "note": "training views of the dataset; not a held-out evaluation"}
-        assert psnr_trained >= psnr_seed + MIN_PSNR_GAIN_DB, summary["quality"]
+    cams = [{**c} for c in dataset.cameras]
+    trained = _params_from_ply(h.storage.root / DERIVED_BUCKET / arts["SPLAT"]["key"], device)
+    txt_points = _seed_points(dataset.sparse_tar, tmp_path / "seed")
+    seed = st.init_params(txt_points["xyz"], rgb_bytes_to_sh0(txt_points["rgb"]), initial_scale_log(txt_points["xyz"]), device)
+    psnr_trained, psnr_seed = _mean_psnr(trained, dataset, cams, device), _mean_psnr(seed, dataset, cams, device)
+    summary["quality"] = {"mean_psnr_trained_db": round(psnr_trained, 3), "mean_psnr_sfm_seed_db": round(psnr_seed, 3),
+                          "views": len(cams), "note": "training views of the dataset; not a held-out evaluation"}
+    assert psnr_trained >= psnr_seed + MIN_PSNR_GAIN_DB, summary["quality"]
 
     # 3. resume from the first job's checkpoint
     h.settings = replace(h.settings, gsplat_iterations=RESUMED_ITERATIONS)

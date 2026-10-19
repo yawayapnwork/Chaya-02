@@ -494,7 +494,7 @@ def load_checkpoint(path: Path, *, config: TrainingConfig, source: dict[str, Any
 
 class RenderOutput(NamedTuple):
     image: torch.Tensor  # (H, W, 3) in [0, 1]
-    means2d: torch.Tensor  # (N, 2) pixel positions, part of the graph, with retain_grad() called
+    means2d: torch.Tensor  # (N, 2) pixel positions; when rendering for training, part of the graph with retain_grad() called
     visible: torch.Tensor  # (N,) bool
 
 
@@ -530,7 +530,8 @@ def gsplat_rasterizer(device: torch.device) -> Rasterizer:
             raise GsplatContractError(f"gsplat {getattr(gsplat, '__version__', '?')} returned renders {tuple(renders.shape)}, means2d "
                                f"{tuple(means2d.shape)}, radii {tuple(radii.shape)}; this adapter expects gsplat "
                                f"{GSPLAT_VALIDATED_VERSION}'s unpacked shapes")
-        means2d.retain_grad()
+        if means2d.requires_grad:  # training; an evaluation render (no_grad, or a cloud read back from a PLY) has no graph
+            means2d.retain_grad()
         visible = (radii > 0).all(dim=-1) if radii.dim() == 3 else radii > 0
         return RenderOutput(renders[0], means2d, visible[0])
 

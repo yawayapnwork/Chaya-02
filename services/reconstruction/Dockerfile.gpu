@@ -10,7 +10,7 @@
 #
 # Everything that decides whether training works is pinned, and checked while the image is built:
 #   * CUDA 12.6.3 on Ubuntu 24.04 (Python 3.12), the base images pinned by digest;
-#   * torch 2.7.1+cu126, downloaded and checked against its sha256;
+#   * torch 2.7.1+cu126 and torchvision 0.22.1+cu126, downloaded and checked against their sha256;
 #   * gsplat 1.5.3 built from its sdist (sha256-checked) WITH its CUDA extension compiled for TORCH_CUDA_ARCH_LIST.
 #     The PyPI wheel is pure Python: it compiles the kernels with nvcc on first use, inside a job's time budget, and with
 #     no CUDA toolkit its backend is silently unset. So the PyPI wheel is not used here;
@@ -38,6 +38,9 @@ FROM ${CUDA_DEVEL} AS build
 ARG TORCH_WHEEL=torch-2.7.1+cu126-cp312-cp312-manylinux_2_28_x86_64.whl
 ARG TORCH_URL=https://download-r2.pytorch.org/whl/cu126/torch-2.7.1%2Bcu126-cp312-cp312-manylinux_2_28_x86_64.whl
 ARG TORCH_SHA256=63bce0590bc540fc16139e2be0177847585182b8c5e68d7f9213789d1d96c978
+ARG TORCHVISION_WHEEL=torchvision-0.22.1+cu126-cp312-cp312-manylinux_2_28_x86_64.whl
+ARG TORCHVISION_URL=https://download-r2.pytorch.org/whl/cu126/torchvision-0.22.1%2Bcu126-cp312-cp312-manylinux_2_28_x86_64.whl
+ARG TORCHVISION_SHA256=d6f17966552bb117d931db49bf49f19d2488631ff4c0b68a5215dd8739507b2e
 ARG GSPLAT_URL=https://files.pythonhosted.org/packages/6d/94/a0963873708223385ac926112dc3e40ab08297784ac53d95309b4cb5a801/gsplat-1.5.3.tar.gz
 ARG GSPLAT_SHA256=343f080c470e891ba3c697c03bdf0952cb982d1d535fdc24adb23c2cb4fba906
 # Volta .. Hopper as native code, plus PTX for newer GPUs to JIT from.
@@ -51,11 +54,18 @@ RUN python3 -m venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
 WORKDIR /src
 COPY gpu/requirements-gpu.txt gpu/constraints-gpu.txt gpu/
-RUN pip install -r gpu/requirements-gpu.txt -c gpu/constraints-gpu.txt
+# torch and torchvision first: the constraints pin their +cu126 builds, which exist only on the PyTorch index, and
+# open_clip_torch and timm (requirements-gpu.txt) depend on both. Installed from the sha256-checked wheels, they already
+# satisfy those pins, so the requirements step below never looks them up (on PyPI it cannot find them: ResolutionImpossible).
 RUN curl -fsSL -o "/tmp/${TORCH_WHEEL}" "${TORCH_URL}" \
  && echo "${TORCH_SHA256}  /tmp/${TORCH_WHEEL}" | sha256sum -c - \
  && pip install "/tmp/${TORCH_WHEEL}" -c gpu/constraints-gpu.txt \
- && rm "/tmp/${TORCH_WHEEL}"
+ && rm "/tmp/${TORCH_WHEEL}" \
+ && curl -fsSL -o "/tmp/${TORCHVISION_WHEEL}" "${TORCHVISION_URL}" \
+ && echo "${TORCHVISION_SHA256}  /tmp/${TORCHVISION_WHEEL}" | sha256sum -c - \
+ && pip install "/tmp/${TORCHVISION_WHEEL}" -c gpu/constraints-gpu.txt \
+ && rm "/tmp/${TORCHVISION_WHEEL}"
+RUN pip install -r gpu/requirements-gpu.txt -c gpu/constraints-gpu.txt
 # gsplat's setup.py compiles gsplat.csrc with nvcc when BUILD_NO_CUDA is unset; it imports torch, hence no build isolation.
 RUN curl -fsSL -o /tmp/gsplat-1.5.3.tar.gz "${GSPLAT_URL}" \
  && echo "${GSPLAT_SHA256}  /tmp/gsplat-1.5.3.tar.gz" | sha256sum -c - \

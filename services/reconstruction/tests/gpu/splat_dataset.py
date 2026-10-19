@@ -16,6 +16,7 @@ and the stage converts it with the real `colmap model_converter`, which validate
 from __future__ import annotations
 
 import json
+import shutil
 import struct
 from dataclasses import dataclass
 from pathlib import Path
@@ -227,9 +228,13 @@ def _package(out: Path, name: str, synthetic: bool, cameras, images, xyz, rgb, t
 
 def from_colmap_project(project: Path, out: Path, colmap: str, runner) -> Dataset:
     """A real dataset: `project/images/*` and `project/sparse/0` (cameras.bin, images.bin, points3D.bin) from COLMAP.
-    Converted with the real model_converter and the worker's own parsers. Only registered images are used."""
+    Converted with the real model_converter and the worker's own parsers. Only registered images are used. The frames
+    are the project's files byte for byte; the cameras and ground-truth images are the ones SPLAT_RECONSTRUCTION trains
+    with (its build_cameras and prepare_training_cameras: undistorted to pinhole when the camera has distortion)."""
+    from chaya_worker.camera_model import FrameRectifier  # noqa: PLC0415
     from chaya_worker.colmap_txt import parse_cameras_txt, parse_points3d_txt  # noqa: PLC0415
     from chaya_worker.stages.pose_estimation import parse_images_txt  # noqa: PLC0415
+    from chaya_worker.stages.splat_reconstruction import build_cameras, prepare_training_cameras  # noqa: PLC0415
 
     sparse = project / "sparse" / "0"
     txt = out / "txt"
@@ -241,16 +246,22 @@ def from_colmap_project(project: Path, out: Path, colmap: str, runner) -> Datase
     frames, masks = out / "frames", out / "masks"
     frames.mkdir(parents=True)
     masks.mkdir(parents=True)
-    images = {}
     for p in poses:
-        img = cv2.imread(str(project / "images" / p["name"]))
-        if img is None:
+        source = project / "images" / p["name"]
+        if not source.is_file():
             raise FileNotFoundError(f"registered image {p['name']} is missing from {project / 'images'}")
+        img = cv2.imread(str(source))
+        if img is None:
+            raise ValueError(f"registered image {p['name']} cannot be decoded")
         (frames / p["name"]).parent.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(frames / p["name"]), img)
+        shutil.copyfile(source, frames / p["name"])  # not re-encoded: a JPEG re-encode would differ from the ground truth
         (masks / p["name"]).parent.mkdir(parents=True, exist_ok=True)
         privacy_masks.write_mask(masks, p["name"], privacy_masks.valid_mask([], img.shape[0], img.shape[1]))
-        images[p["name"]] = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+    cams = prepare_training_cameras(build_cameras(poses, cams_model), frames, FrameRectifier())
+    if len(cams) != len(poses):
+        raise ValueError(f"only {len(cams)} of {len(poses)} registered images became training cameras")
+    cameras = [{k: c[k] for k in ("name", "viewmat", "K", "width", "height")} for c in cams]
+    images = {c["name"]: c["image"] for c in cams}
     poses_json = out / "poses.json"
     poses_json.write_text(json.dumps({"mapper": "external-colmap-project", "registered": len(poses), "frames": len(poses),
                                       "calibration_source": "SFM_SELF_CALIBRATION", "capture_calibration": None,
@@ -259,5 +270,5 @@ def from_colmap_project(project: Path, out: Path, colmap: str, runner) -> Datase
     archive.pack(sparse, sparse_tar)
     archive.pack(frames, frames_tar)
     archive.pack(masks, masks_tar)
-    return Dataset(f"colmap-project:{project.name} (REAL)", False, sparse_tar, poses_json, frames_tar, masks_tar, images, [],
+    return Dataset(f"colmap-project:{project.name} (REAL)", False, sparse_tar, poses_json, frames_tar, masks_tar, images, cameras,
                    len(points["ids"]))

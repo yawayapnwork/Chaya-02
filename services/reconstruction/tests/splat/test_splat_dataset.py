@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import struct
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -60,3 +61,63 @@ def test_points_are_seen_where_their_tracks_say_with_their_colour(dataset, tmp_p
     assert off == len(data), "points3D.bin parses to its exact length"
     assert n == dataset.points and all(errors)
     assert np.median(colour_diff) < 0.08, "a point's colour is what the views show at its projection"
+
+
+# ---- a real COLMAP project (CHAYA_SPLAT_DATASET) ------------------------------------------------------------------------
+
+
+def _colmap_project(dataset, root):
+    """A COLMAP project laid out as CHAYA_SPLAT_DATASET expects (images/ and sparse/0), from the synthetic scene, with JPEG
+    frames as real captures have, and a converter standing in for `colmap model_converter`: it writes COLMAP's
+    documented TXT for exactly that model. (CI's CPU job has no COLMAP; the real converter reads the same model in the
+    GPU acceptance test.)"""
+    import cv2
+
+    names = [c["name"].replace(".png", ".jpg") for c in dataset.cameras]
+    (root / "images").mkdir(parents=True)
+    for cam, name in zip(dataset.cameras, names, strict=True):
+        rgb8 = (dataset.images[cam["name"]] * 255).round().astype(np.uint8)
+        cv2.imwrite(str(root / "images" / name), cv2.cvtColor(rgb8, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 90])
+    (root / "sparse" / "0").mkdir(parents=True)
+    (root / "sparse" / "0" / "cameras.bin").write_bytes(b"")  # read only by the stand-in converter below
+
+    def convert(argv):
+        out = Path(argv[argv.index("--output_path") + 1])
+        (out / "cameras.txt").write_text(f"1 PINHOLE {ds.W} {ds.H} {ds.F} {ds.F} {ds.W / 2} {ds.H / 2}\n")
+        lines = []
+        for image_id, (cam, name) in enumerate(zip(dataset.cameras, names, strict=True), start=1):
+            q, t = ds._quat_wxyz(cam["viewmat"][:3, :3]), cam["viewmat"][:3, 3]
+            lines += [f"{image_id} {' '.join(repr(float(x)) for x in (*q, *t))} 1 {name}", "10.0 10.0 -1"]
+        (out / "images.txt").write_text("\n".join(lines) + "\n")
+        (out / "points3D.txt").write_text("".join(f"{i} {i * 0.01} 0.5 0.5 128 128 128 0.5 1 0\n" for i in range(1, 9)))
+
+    return names, convert
+
+
+def test_a_real_colmap_project_yields_the_cameras_and_ground_truth_the_stage_trains_with(dataset, tmp_path):
+    """The acceptance test only measures whether training learned (PSNR over the views) when the dataset has cameras; a
+    real COLMAP project must therefore have them, with the ground truth the stage trains against."""
+    import tarfile
+
+    import cv2
+
+    names, convert = _colmap_project(dataset, tmp_path / "project")
+    real = ds.from_colmap_project(tmp_path / "project", tmp_path / "out", "colmap", convert)
+    assert not real.synthetic and [c["name"] for c in real.cameras] == names
+    for cam, synthetic_cam in zip(real.cameras, dataset.cameras, strict=True):
+        validate_camera({**cam, "image": real.images[cam["name"]]})
+        assert np.allclose(cam["viewmat"], synthetic_cam["viewmat"], atol=1e-9) and np.allclose(cam["K"], synthetic_cam["K"])
+    with tarfile.open(real.frames_tar) as tar:
+        tar.extractall(tmp_path / "frames", filter="data")
+    for name in names:  # the frames the stage trains on are the project's own files, not a lossy re-encode
+        original = (tmp_path / "project" / "images" / name).read_bytes()
+        assert (tmp_path / "frames" / name).read_bytes() == original
+        decoded = cv2.cvtColor(cv2.imdecode(np.frombuffer(original, np.uint8), cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+        assert np.array_equal(real.images[name], decoded.astype(np.float32) / 255.0)
+
+
+def test_a_colmap_project_missing_a_registered_image_is_refused(dataset, tmp_path):
+    names, convert = _colmap_project(dataset, tmp_path / "project")
+    (tmp_path / "project" / "images" / names[3]).unlink()
+    with pytest.raises(FileNotFoundError, match=names[3]):
+        ds.from_colmap_project(tmp_path / "project", tmp_path / "out", "colmap", convert)
