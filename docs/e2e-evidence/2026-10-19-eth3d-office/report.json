@@ -1,0 +1,98 @@
+{
+  "startedAt": "2026-10-19T06:15:17Z",
+  "api": "http://localhost:18080",
+  "venue": "e5fa0d90-8a5a-489c-88e0-6e794c26726c",
+  "floor": "7f1294a4-29d9-4c12-871e-3653853e775e",
+  "input": {
+    "media": "C:\\Users\\YASHIK~1\\AppData\\Local\\Temp\\claude\\C--Dev-Chaya-02\\259ff780-9e30-404f-85da-72faf74cd5df\\scratchpad\\venue\\capture"
+  },
+  "serverVersion": {
+    "name": "chaya-api",
+    "version": "0.1.0-SNAPSHOT",
+    "apiVersion": "v1"
+  },
+  "captureId": "157ad845-174d-4198-85ab-03ddf4693dfc",
+  "calibrationEvidence": {
+    "state": "READY_TO_CALIBRATE",
+    "activeDistances": 4,
+    "activeControlPoints": 0,
+    "requirements": [
+      "Automatic location of the marked pixels in the reconstruction (triangulation through the reconstructed camera poses) is not implemented. Pick each measured point in the reconstruction and submit its reconstruction coordinates: eth3d-gt-distance-1 (A), eth3d-gt-distance-1 (B), eth3d-gt-distance-2 (A), eth3d-gt-distance-2 (B), eth3d-gt-distance-3 (A), eth3d-gt-distance-3 (B), eth3d-gt-distance-4 (A), eth3d-gt-distance-4 (B).",
+      "Until then the reconstruction keeps its arbitrary SfM scale: semantic indexing, navigation baking, POIs and AR anchors refuse it with NOT_CALIBRATED."
+    ]
+  },
+  "timeline": [
+    {
+      "t": 12.5,
+      "status": "FAILED",
+      "stages": {
+        "INPUT_VALIDATION": "SUCCEEDED",
+        "FFMPEG_PREPROCESS": "SUCCEEDED",
+        "FRAME_QUALITY_FILTER": "SUCCEEDED",
+        "PRIVACY_PREPROCESS": "SUCCEEDED",
+        "POSE_ESTIMATION": "SUCCEEDED",
+        "SPLAT_RECONSTRUCTION": "FAILED",
+        "SEMANTIC_SEGMENTATION": "PENDING",
+        "GEOMETRIC_CLEANUP": "PENDING",
+        "PLANE_FITTING": "PENDING",
+        "ARTIFACT_GENERATION": "PENDING",
+        "SEMANTIC_INDEXING": "PENDING",
+        "NAVIGATION_BAKING": "PENDING"
+      },
+      "jobs": [
+        {
+          "stage": "SPLAT_RECONSTRUCTION",
+          "status": "FAILED",
+          "workerId": "colmap-cpu-worker",
+          "leaseExpiresAt": "2026-10-19T06:11:50.900308Z",
+          "retryCount": 0
+        },
+        {
+          "stage": "POSE_ESTIMATION",
+          "status": "SUCCEEDED",
+          "workerId": "colmap-cpu-worker",
+          "leaseExpiresAt": "2026-10-19T06:11:25.426121Z",
+          "retryCount": 1
+        },
+        {
+          "stage": "PRIVACY_PREPROCESS",
+          "status": "SUCCEEDED",
+          "workerId": "acceptance-cpu-worker",
+          "leaseExpiresAt": "2026-10-19T06:08:48.771988Z",
+          "retryCount": 0
+        },
+        {
+          "stage": "FRAME_QUALITY_FILTER",
+          "status": "SUCCEEDED",
+          "workerId": "acceptance-cpu-worker",
+          "leaseExpiresAt": "2026-10-19T06:08:47.685547Z",
+          "retryCount": 0
+        },
+        {
+          "stage": "FFMPEG_PREPROCESS",
+          "status": "SUCCEEDED",
+          "workerId": "acceptance-cpu-worker",
+          "leaseExpiresAt": "2026-10-19T06:08:36.890153Z",
+          "retryCount": 0
+        },
+        {
+          "stage": "INPUT_VALIDATION",
+          "status": "SUCCEEDED",
+          "workerId": "acceptance-cpu-worker",
+          "leaseExpiresAt": "2026-10-19T06:08:26.779843Z",
+          "retryCount": 0
+        }
+      ]
+    }
+  ],
+  "failure": {
+    "status": "FAILED",
+    "failureStage": "SPLAT_RECONSTRUCTION",
+    "failureCode": "DEPENDENCY_UNAVAILABLE",
+    "failureMessage": "SPLAT_RECONSTRUCTION cannot run on this worker: python module 'torch' is not installed; python module 'gsplat' is not installed",
+    "retryable": true
+  },
+  "result": "FAILED",
+  "error": "the run ended FAILED at SPLAT_RECONSTRUCTION: DEPENDENCY_UNAVAILABLE SPLAT_RECONSTRUCTION cannot run on this worker: python module 'torch' is not installed; python module 'gsplat' is not installed",
+  "elapsedSeconds": 12.5
+}

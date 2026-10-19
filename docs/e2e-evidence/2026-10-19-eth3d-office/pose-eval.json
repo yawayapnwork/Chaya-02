@@ -1,0 +1,84 @@
+{
+ "matched_cameras": 14,
+ "registered": 14,
+ "similarity_scale_est_to_metric": 0.1765918508647355,
+ "position_error_m": {
+  "rmse": 0.0017474332960361269,
+  "median": 0.0012327869649070408,
+  "max": 0.003978028782008801
+ },
+ "gt_camera_spread_m": 1.306329160619028,
+ "per_camera": [
+  {
+   "frame": "i0025.jpg",
+   "image": "DSC_0255.JPG",
+   "error_m": 0.001223890279754142
+  },
+  {
+   "frame": "i0001.jpg",
+   "image": "DSC_0220.JPG",
+   "error_m": 0.0012416836500599396
+  },
+  {
+   "frame": "i0019.jpg",
+   "image": "DSC_0249.JPG",
+   "error_m": 0.0017452771155621425
+  },
+  {
+   "frame": "i0006.jpg",
+   "image": "DSC_0229.JPG",
+   "error_m": 0.0019093633896600643
+  },
+  {
+   "frame": "i0020.jpg",
+   "image": "DSC_0250.JPG",
+   "error_m": 8.550594807506752e-05
+  },
+  {
+   "frame": "i0000.jpg",
+   "image": "DSC_0219.JPG",
+   "error_m": 0.002289547794914873
+  },
+  {
+   "frame": "i0021.jpg",
+   "image": "DSC_0251.JPG",
+   "error_m": 0.000864077944718395
+  },
+  {
+   "frame": "i0007.jpg",
+   "image": "DSC_0230.JPG",
+   "error_m": 0.003978028782008801
+  },
+  {
+   "frame": "i0022.jpg",
+   "image": "DSC_0252.JPG",
+   "error_m": 0.0023727503159114227
+  },
+  {
+   "frame": "i0016.jpg",
+   "image": "DSC_0242.JPG",
+   "error_m": 0.0010236581728694113
+  },
+  {
+   "frame": "i0017.jpg",
+   "image": "DSC_0243.JPG",
+   "error_m": 0.0008226601470911501
+  },
+  {
+   "frame": "i0018.jpg",
+   "image": "DSC_0248.JPG",
+   "error_m": 0.0016553272853635861
+  },
+  {
+   "frame": "i0023.jpg",
+   "image": "DSC_0253.JPG",
+   "error_m": 0.0010040096272980865
+  },
+  {
+   "frame": "i0024.jpg",
+   "image": "DSC_0254.JPG",
+   "error_m": 0.00030750548748616473
+  }
+ ],
+ "note": "Similarity alignment of camera centres only (7 DoF fitted on the same cameras it is evaluated on); the estimated model is in arbitrary SfM units until calibrated."
+}

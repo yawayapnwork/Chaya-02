@@ -1,0 +1,33 @@
+{
+ "phase": "down",
+ "steps": [
+  {
+   "call": "GET /actuator/health/readiness",
+   "status": 503,
+   "ms": 7148.1,
+   "code": null,
+   "detail": null
+  },
+  {
+   "call": "GET /api/v1/health",
+   "status": 503,
+   "ms": 2061.7,
+   "code": null,
+   "detail": null
+  },
+  {
+   "call": "POST /api/v1/venues/e5fa0d90-8a5a-489c-88e0-6e794c26726c/captures",
+   "status": 201,
+   "ms": 2069.6,
+   "code": null,
+   "detail": null
+  },
+  {
+   "call": "POST /api/v1/venues/e5fa0d90-8a5a-489c-88e0-6e794c26726c/captures/61378ae6-c3ca-4de2-a3c3-996cdb7d6a86/media",
+   "status": 503,
+   "ms": 2414.6,
+   "code": "STORAGE_UNAVAILABLE",
+   "detail": "Object storage is unavailable. The request was not completed; retry later."
+  }
+ ]
+}

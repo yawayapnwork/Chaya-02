@@ -1,0 +1,46 @@
+{
+ "recorded": [
+  {
+   "label": "eth3d-gt-registered-distance-1",
+   "status": 201,
+   "response": {
+    "id": "996d6aec-25ab-48b3-95f3-780e56f832ef",
+    "valueMeters": null
+   }
+  },
+  {
+   "label": "eth3d-gt-registered-distance-2",
+   "status": 201,
+   "response": {
+    "id": "6f51319c-f5d1-4158-9e1d-e9417e6cd1c0",
+    "valueMeters": null
+   }
+  },
+  {
+   "label": "eth3d-gt-registered-distance-3",
+   "status": 201,
+   "response": {
+    "id": "bb2d7fe9-4e7d-42d1-aaa7-b52198eebb18",
+    "valueMeters": null
+   }
+  },
+  {
+   "label": "eth3d-gt-registered-distance-4",
+   "status": 201,
+   "response": {
+    "id": "66ee707d-10be-446b-969d-d25c7708495b",
+    "valueMeters": null
+   }
+  }
+ ],
+ "calibration": {
+  "status": 409,
+  "response": {
+   "title": "Conflict",
+   "status": 409,
+   "detail": "this run has no GRAVITY_ESTIMATE with an estimated floor plane; provide OPERATOR_FLOOR_POINTS or NONE",
+   "instance": "/api/v1/venues/e5fa0d90-8a5a-489c-88e0-6e794c26726c/captures/157ad845-174d-4198-85ab-03ddf4693dfc/calibration",
+   "code": "GRAVITY_UNAVAILABLE"
+  }
+ }
+}

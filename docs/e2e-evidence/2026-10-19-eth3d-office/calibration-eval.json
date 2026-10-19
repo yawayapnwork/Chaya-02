@@ -1,0 +1,57 @@
+{
+ "measurements": [
+  {
+   "label": "eth3d-gt-distance-1",
+   "status": "UNRESOLVED",
+   "reason": "a point's marked views are not both registered",
+   "registeredViews": {
+    "A": [
+     "DSC_0220.JPG"
+    ],
+    "B": [
+     "DSC_0248.JPG",
+     "DSC_0252.JPG"
+    ]
+   }
+  },
+  {
+   "label": "eth3d-gt-distance-2",
+   "status": "UNRESOLVED",
+   "reason": "a point's marked views are not both registered",
+   "registeredViews": {
+    "A": [
+     "DSC_0220.JPG"
+    ],
+    "B": [
+     "DSC_0220.JPG"
+    ]
+   }
+  },
+  {
+   "label": "eth3d-gt-distance-3",
+   "status": "UNRESOLVED",
+   "reason": "a point's marked views are not both registered",
+   "registeredViews": {
+    "A": [
+     "DSC_0220.JPG"
+    ],
+    "B": [
+     "DSC_0220.JPG",
+     "DSC_0229.JPG"
+    ]
+   }
+  },
+  {
+   "label": "eth3d-gt-distance-4",
+   "measured_m": 1.7846,
+   "reconstruction_units": 10.056474235842039,
+   "implied_scale": 0.17745782051919845
+  }
+ ],
+ "resolved": 1,
+ "scales": [
+  0.17745782051919845
+ ],
+ "scale_mean": 0.17745782051919845,
+ "scale_spread_rel": null
+}

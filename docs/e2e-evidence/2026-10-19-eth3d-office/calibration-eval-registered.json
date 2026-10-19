@@ -1,0 +1,37 @@
+{
+ "measurements": [
+  {
+   "label": "eth3d-gt-registered-distance-1",
+   "measured_m": 1.6409,
+   "reconstruction_units": 9.417083852768592,
+   "implied_scale": 0.17424714759416535
+  },
+  {
+   "label": "eth3d-gt-registered-distance-2",
+   "measured_m": 2.0416,
+   "reconstruction_units": 12.10512328671164,
+   "implied_scale": 0.1686558617904503
+  },
+  {
+   "label": "eth3d-gt-registered-distance-3",
+   "measured_m": 1.896,
+   "reconstruction_units": 10.762237740912429,
+   "implied_scale": 0.17617154031009688
+  },
+  {
+   "label": "eth3d-gt-registered-distance-4",
+   "measured_m": 1.7846,
+   "reconstruction_units": 10.056474235842039,
+   "implied_scale": 0.17745782051919845
+  }
+ ],
+ "resolved": 4,
+ "scales": [
+  0.17424714759416535,
+  0.1686558617904503,
+  0.17617154031009688,
+  0.17745782051919845
+ ],
+ "scale_mean": 0.17413309255347775,
+ "scale_spread_rel": 0.050547306084539834
+}

@@ -1,0 +1,61 @@
+{
+ "phase": "up",
+ "steps": [
+  {
+   "call": "GET /actuator/health/readiness",
+   "status": 200,
+   "ms": 2104.8,
+   "code": null,
+   "detail": null
+  },
+  {
+   "call": "GET /api/v1/health",
+   "status": 200,
+   "ms": 2084.9,
+   "code": null,
+   "detail": null
+  },
+  {
+   "call": "POST /api/v1/venues/e5fa0d90-8a5a-489c-88e0-6e794c26726c/captures",
+   "status": 201,
+   "ms": 2076.9,
+   "code": null,
+   "detail": null
+  },
+  {
+   "call": "POST /api/v1/venues/e5fa0d90-8a5a-489c-88e0-6e794c26726c/captures/663ce53f-dfd5-4b53-a468-842cbf603875/media",
+   "status": 201,
+   "ms": 2106.5,
+   "code": null,
+   "detail": null
+  },
+  {
+   "call": "PUT /api/v1/venues/e5fa0d90-8a5a-489c-88e0-6e794c26726c/captures/663ce53f-dfd5-4b53-a468-842cbf603875/media/7234533d-8aa5-42c7-8b6c-80d4f6442233/parts/1",
+   "status": 204,
+   "ms": 2332.7,
+   "code": null,
+   "detail": "None"
+  },
+  {
+   "call": "PUT /api/v1/venues/e5fa0d90-8a5a-489c-88e0-6e794c26726c/captures/663ce53f-dfd5-4b53-a468-842cbf603875/media/7234533d-8aa5-42c7-8b6c-80d4f6442233/parts/2",
+   "status": 204,
+   "ms": 2163.8,
+   "code": null,
+   "detail": "None"
+  },
+  {
+   "call": "POST /api/v1/venues/e5fa0d90-8a5a-489c-88e0-6e794c26726c/captures/663ce53f-dfd5-4b53-a468-842cbf603875/media/7234533d-8aa5-42c7-8b6c-80d4f6442233/complete",
+   "status": 202,
+   "ms": 2070.3,
+   "code": null,
+   "detail": "None"
+  },
+  {
+   "call": "GET /api/v1/venues/e5fa0d90-8a5a-489c-88e0-6e794c26726c/captures/663ce53f-dfd5-4b53-a468-842cbf603875/media/7234533d-8aa5-42c7-8b6c-80d4f6442233",
+   "status": 200,
+   "ms": 2071.4,
+   "code": null,
+   "detail": null
+  }
+ ]
+}

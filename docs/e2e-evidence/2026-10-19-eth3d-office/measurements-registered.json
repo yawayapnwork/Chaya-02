@@ -1,0 +1,138 @@
+[
+ {
+  "kind": "DISTANCE",
+  "label": "eth3d-gt-registered-distance-1",
+  "method": "OTHER",
+  "unit": "m",
+  "value": 1.6409,
+  "uncertainty": 0.005,
+  "observations": [
+   {
+    "point": "A",
+    "media": "DSC_0220.JPG",
+    "u": 2882.09,
+    "v": 2298.54
+   },
+   {
+    "point": "A",
+    "media": "DSC_0229.JPG",
+    "u": 5124.35,
+    "v": 2300.24
+   },
+   {
+    "point": "B",
+    "media": "DSC_0248.JPG",
+    "u": 4126.78,
+    "v": 284.41
+   },
+   {
+    "point": "B",
+    "media": "DSC_0252.JPG",
+    "u": 1451.78,
+    "v": 1578.49
+   }
+  ]
+ },
+ {
+  "kind": "DISTANCE",
+  "label": "eth3d-gt-registered-distance-2",
+  "method": "OTHER",
+  "unit": "m",
+  "value": 2.0416,
+  "uncertainty": 0.005,
+  "observations": [
+   {
+    "point": "A",
+    "media": "DSC_0220.JPG",
+    "u": 2882.09,
+    "v": 2298.54
+   },
+   {
+    "point": "A",
+    "media": "DSC_0229.JPG",
+    "u": 5124.35,
+    "v": 2300.24
+   },
+   {
+    "point": "B",
+    "media": "DSC_0220.JPG",
+    "u": 3180.75,
+    "v": 3422.63
+   },
+   {
+    "point": "B",
+    "media": "DSC_0229.JPG",
+    "u": 5548.26,
+    "v": 3608.12
+   }
+  ]
+ },
+ {
+  "kind": "DISTANCE",
+  "label": "eth3d-gt-registered-distance-3",
+  "method": "OTHER",
+  "unit": "m",
+  "value": 1.896,
+  "uncertainty": 0.005,
+  "observations": [
+   {
+    "point": "A",
+    "media": "DSC_0220.JPG",
+    "u": 3409.38,
+    "v": 2212.01
+   },
+   {
+    "point": "A",
+    "media": "DSC_0229.JPG",
+    "u": 5882.76,
+    "v": 2216.09
+   },
+   {
+    "point": "B",
+    "media": "DSC_0220.JPG",
+    "u": 1389.41,
+    "v": 3025.37
+   },
+   {
+    "point": "B",
+    "media": "DSC_0229.JPG",
+    "u": 3625.57,
+    "v": 2886.13
+   }
+  ]
+ },
+ {
+  "kind": "DISTANCE",
+  "label": "eth3d-gt-registered-distance-4",
+  "method": "OTHER",
+  "unit": "m",
+  "value": 1.7846,
+  "uncertainty": 0.005,
+  "observations": [
+   {
+    "point": "A",
+    "media": "DSC_0243.JPG",
+    "u": 2138.35,
+    "v": 494.1
+   },
+   {
+    "point": "A",
+    "media": "DSC_0251.JPG",
+    "u": 5632.42,
+    "v": 1878.76
+   },
+   {
+    "point": "B",
+    "media": "DSC_0252.JPG",
+    "u": 2523.23,
+    "v": 821.07
+   },
+   {
+    "point": "B",
+    "media": "DSC_0254.JPG",
+    "u": 651.62,
+    "v": 624.45
+   }
+  ]
+ }
+]

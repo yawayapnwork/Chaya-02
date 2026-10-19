@@ -1,0 +1,62 @@
+{
+  "capture_camera": {
+    "cx": 3127.19,
+    "cy": 2066.98,
+    "distortion_coefficients": {},
+    "distortion_model": "NONE",
+    "fx": 3437.84,
+    "fy": 3435.95,
+    "height": 4146,
+    "model": "PINHOLE",
+    "params": [
+      3437.84,
+      3435.95,
+      3127.19,
+      2066.98
+    ],
+    "pixel_convention": "COLMAP: (0, 0) is the top-left corner of the top-left pixel; that pixel's centre is (0.5, 0.5)",
+    "width": 6221
+  },
+  "declared": {
+    "height": 4146,
+    "model": "PINHOLE",
+    "params": [
+      3437.84,
+      3435.95,
+      3127.19,
+      2066.98
+    ],
+    "pixelCoordinateOrigin": "CORNER",
+    "source": "ETH3D high-res multi-view benchmark, scene 'office', dslr_calibration_undistorted/cameras.txt (published calibration)",
+    "width": 6221
+  },
+  "declared_pixel_coordinate_origin": "CORNER",
+  "declared_source": "ETH3D high-res multi-view benchmark, scene 'office', dslr_calibration_undistorted/cameras.txt (published calibration)",
+  "frame_camera": {
+    "cx": 814.848897283395,
+    "cy": 538.4318379160636,
+    "distortion_coefficients": {},
+    "distortion_model": "NONE",
+    "fx": 895.7946696672561,
+    "fy": 895.0376266280751,
+    "height": 1080,
+    "model": "PINHOLE",
+    "params": [
+      895.7946696672561,
+      895.0376266280751,
+      814.848897283395,
+      538.4318379160636
+    ],
+    "pixel_convention": "COLMAP: (0, 0) is the top-left corner of the top-left pixel; that pixel's centre is (0.5, 0.5)",
+    "width": 1621
+  },
+  "frame_scale": {
+    "uniform": false,
+    "x": 0.26056904034721107,
+    "y": 0.26049204052098407
+  },
+  "metadata_artifact_id": "913e61a3-6d03-4e8e-a868-3d74eabd8826",
+  "note": "the frames are as captured (distorted); undistortion happens where a pinhole camera is needed",
+  "source": "CAPTURE_METADATA",
+  "undistorted": false
+}

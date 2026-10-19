@@ -1,0 +1,1618 @@
+{
+  "classification": "C",
+  "kind": "cross-service acceptance on the real stack; stand-ins for POSE_ESTIMATION, SPLAT_RECONSTRUCTION, SEMANTIC_SEGMENTATION, SEMANTIC_INDEXING (synthetic viewer-scene fixture)",
+  "finished": "2026-10-19T05:46:36.918419+00:00",
+  "counts": {
+    "PASS": 40
+  },
+  "results": [
+    {
+      "test": "tests/acceptance/test_01_authentication.py::test_operator_login_carries_tenant_claims_and_scopes_the_venue_list",
+      "classification": "C",
+      "scenario": "test_01_authentication",
+      "name": "An operator signs in at Keycloak; the API accepts the token and lists only the operator's venue.",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "1.1",
+          "name": "Keycloak issues a token (password grant, test client)",
+          "expected": "200 with access_token",
+          "status": "PASS",
+          "actual": "HTTP 200",
+          "evidence": null
+        },
+        {
+          "id": "1.2",
+          "name": "Token carries audience, organization, venue and role",
+          "expected": "aud chaya-api; org_id A; venue_id [A]; operator",
+          "status": "PASS",
+          "actual": "aud=['chaya-api'] org_id=0f7d6e23-425e-49b6-8dab-ecdff3b9ef76 venue_id=['e48d39a4-92f0-4cd9-8480-fb9e79eb6afb'] roles=['offline_access', 'default-roles-chaya', 'uma_authorization', 'operator']",
+          "evidence": null
+        },
+        {
+          "id": "1.3",
+          "name": "The API lists exactly the operator's venue",
+          "expected": "[e48d39a4-92f0-4cd9-8480-fb9e79eb6afb]",
+          "status": "PASS",
+          "actual": "['e48d39a4-92f0-4cd9-8480-fb9e79eb6afb']",
+          "evidence": null
+        },
+        {
+          "id": "1.4",
+          "name": "No token is refused",
+          "expected": "401",
+          "status": "PASS",
+          "actual": "HTTP 401",
+          "evidence": null
+        },
+        {
+          "id": "1.5",
+          "name": "A token with a broken signature is refused",
+          "expected": "401",
+          "status": "PASS",
+          "actual": "HTTP 401",
+          "evidence": null
+        },
+        {
+          "id": "1.6",
+          "name": "A wrong password is refused by Keycloak",
+          "expected": "401",
+          "status": "PASS",
+          "actual": "HTTP 401",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_01_authentication.py::test_venue_authorization_follows_the_token_venue_and_role",
+      "classification": "C",
+      "scenario": "test_01_authentication",
+      "name": "An operator of venue A cannot see or write venue A2 of the same organization; a viewer cannot write.",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "1.7",
+          "name": "Another venue of the same organization is invisible",
+          "expected": "404 (no enumeration)",
+          "status": "PASS",
+          "actual": "HTTP 404",
+          "evidence": null
+        },
+        {
+          "id": "1.8",
+          "name": "...and cannot be written",
+          "expected": "404",
+          "status": "PASS",
+          "actual": "HTTP 404",
+          "evidence": null
+        },
+        {
+          "id": "1.9",
+          "name": "A viewer of venue A cannot create a capture there",
+          "expected": "403",
+          "status": "PASS",
+          "actual": "HTTP 403",
+          "evidence": null
+        },
+        {
+          "id": "1.10",
+          "name": "An operator cannot create a venue (admin only)",
+          "expected": "403",
+          "status": "PASS",
+          "actual": "HTTP 403",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_01_authentication.py::test_an_expired_token_is_refused",
+      "classification": "C",
+      "scenario": "test_01_authentication",
+      "name": "A token from a client whose access tokens live 10 s is accepted, then refused once it has expired.",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "1.11",
+          "name": "Short-lived token issued",
+          "expected": "exp - iat == 10 s",
+          "status": "PASS",
+          "actual": "exp-iat=10",
+          "evidence": null
+        },
+        {
+          "id": "1.12",
+          "name": "Accepted while valid",
+          "expected": "200",
+          "status": "PASS",
+          "actual": "HTTP 200",
+          "evidence": null
+        },
+        {
+          "id": "1.13",
+          "name": "Just after exp (inside the validator's 60 s clock-skew allowance)",
+          "expected": "200 (documented grace, not a bypass)",
+          "status": "PASS",
+          "actual": "HTTP 200 at exp + 3 s",
+          "evidence": null
+        },
+        {
+          "id": "1.14",
+          "name": "Refused once exp + clock skew has passed",
+          "expected": "401, WWW-Authenticate names the expiry",
+          "status": "PASS",
+          "actual": "HTTP 401 WWW-Authenticate=Bearer error=\"invalid_token\", error_description=\"An error occurred while attempting to decode the Jwt: Jwt expired at 2026-10-19T05:42:11Z\", error_uri=\"https://",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_01_authentication.py::test_cross_tenant_access_is_rejected",
+      "classification": "C",
+      "scenario": "test_01_authentication",
+      "name": "Organization B's admin and manager cannot see anything of organization A, and the reverse.",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "1.15",
+          "name": "Org B's venue list excludes org A's venues",
+          "expected": "only 745b258a-944c-4a85-97a8-b78f9c8826ff",
+          "status": "PASS",
+          "actual": "['745b258a-944c-4a85-97a8-b78f9c8826ff']",
+          "evidence": null
+        },
+        {
+          "id": "1.16.venue",
+          "name": "Org B admin reads org A's venue",
+          "expected": "404",
+          "status": "PASS",
+          "actual": "HTTP 404",
+          "evidence": null
+        },
+        {
+          "id": "1.16.captures",
+          "name": "Org B admin reads org A's captures",
+          "expected": "404",
+          "status": "PASS",
+          "actual": "HTTP 404",
+          "evidence": null
+        },
+        {
+          "id": "1.16.search",
+          "name": "Org B admin reads org A's search",
+          "expected": "404",
+          "status": "PASS",
+          "actual": "HTTP 404",
+          "evidence": null
+        },
+        {
+          "id": "1.16.POIs",
+          "name": "Org B admin reads org A's POIs",
+          "expected": "404",
+          "status": "PASS",
+          "actual": "HTTP 404",
+          "evidence": null
+        },
+        {
+          "id": "1.17",
+          "name": "Org B manager reads org A's operations overview",
+          "expected": "404",
+          "status": "PASS",
+          "actual": "HTTP 404",
+          "evidence": null
+        },
+        {
+          "id": "1.18",
+          "name": "Org A admin reads org B's venue",
+          "expected": "404",
+          "status": "PASS",
+          "actual": "HTTP 404",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_02_capture.py::test_create_capture_session_and_upload_valid_media",
+      "classification": "C",
+      "scenario": "test_02_capture",
+      "name": "A capture session on floor 0; the video is scanned, sniffed and stored, and its bytes are what was sent.",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "2.1",
+          "name": "Capture session created on the floor",
+          "expected": "status CREATED, floor 0",
+          "status": "PASS",
+          "actual": "status=CREATED floor=5eadf160-6844-44e8-a1ee-57ee0b11a6a5",
+          "evidence": null
+        },
+        {
+          "id": "2.2",
+          "name": "Valid video accepted by the real validation chain",
+          "expected": "ACCEPTED (checksum, content sniffing, ClamAV)",
+          "status": "PASS",
+          "actual": "status=ACCEPTED 162003 B",
+          "evidence": {
+            "id": "a736b985-e24e-4883-852b-6e85d3e1880c",
+            "kind": "VIDEO",
+            "status": "ACCEPTED",
+            "filename": "capture.mp4",
+            "claimedContentType": "video/mp4",
+            "detectedContentType": "video/quicktime",
+            "sizeBytes": 162003,
+            "sha256": "10e222b7174dddf2c72eacd2769e414ba4266aca415c176cdaa4d5131b4aa958",
+            "rejectionCode": null,
+            "rejectionMessage": null,
+            "totalParts": 1,
+            "partSizeBytes": 8388608,
+            "uploadedParts": [
+              1
+            ],
+            "createdAt": "2026-10-19T05:43:16.509411Z",
+            "pixelWidth": null,
+            "pixelHeight": null
+          }
+        },
+        {
+          "id": "2.3",
+          "name": "Server-verified checksum is the client's",
+          "expected": "verified sha256 == sent sha256",
+          "status": "PASS",
+          "actual": "server=10e222b7174dddf2c72eacd2769e414ba4266aca415c176cdaa4d5131b4aa958",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_02_capture.py::test_an_interrupted_upload_resumes_with_only_the_missing_parts",
+      "classification": "C",
+      "scenario": "test_02_capture",
+      "name": "A two-part video: part 1 is sent, the client 'drops', asks the server what it holds, sends only part 2, completes.",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "2.4",
+          "name": "Upload opened in several parts",
+          "expected": ">= 2 parts",
+          "status": "PASS",
+          "actual": "12247984 B, part 8388608 B, 2 parts",
+          "evidence": null
+        },
+        {
+          "id": "2.5",
+          "name": "Reopening returns the same upload, and the server says which parts it holds",
+          "expected": "same mediaId; part 1 held",
+          "status": "PASS",
+          "actual": "existing=True parts=[1]",
+          "evidence": null
+        },
+        {
+          "id": "2.6",
+          "name": "Completed from the remaining parts only, and accepted",
+          "expected": "ACCEPTED",
+          "status": "PASS",
+          "actual": "ACCEPTED",
+          "evidence": {
+            "id": "603f2938-ec5d-418b-a25d-8f043e3e2d67",
+            "kind": "VIDEO",
+            "status": "ACCEPTED",
+            "filename": "long.mp4",
+            "claimedContentType": "video/mp4",
+            "detectedContentType": "video/quicktime",
+            "sizeBytes": 12247984,
+            "sha256": "4f11c2370f467063e26542c47b36782fc8a25e7a54928a76112e7018046f493f",
+            "rejectionCode": null,
+            "rejectionMessage": null,
+            "totalParts": 2,
+            "partSizeBytes": 8388608,
+            "uploadedParts": [
+              1,
+              2
+            ],
+            "createdAt": "2026-10-19T05:43:18.487626Z",
+            "pixelWidth": null,
+            "pixelHeight": null
+          }
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_02_capture.py::test_invalid_files_are_rejected[checksum]",
+      "classification": "C",
+      "scenario": "test_02_capture",
+      "name": "A declared checksum that is not the bytes', a text file sent as video/mp4, and the EICAR test file: none is accepted.",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "2.7",
+          "name": "Declared checksum does not match the bytes",
+          "expected": "REJECTED",
+          "status": "PASS",
+          "actual": "REJECTED None",
+          "evidence": {
+            "id": "3e5174c2-3288-44b5-8419-ca1cf436649c",
+            "kind": "VIDEO",
+            "status": "REJECTED",
+            "filename": "c.mp4",
+            "claimedContentType": "video/mp4",
+            "detectedContentType": null,
+            "sizeBytes": 162003,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+            "rejectionCode": "CHECKSUM_MISMATCH",
+            "rejectionMessage": "content SHA-256 does not match the declared checksum",
+            "totalParts": 1,
+            "partSizeBytes": 8388608,
+            "uploadedParts": [
+              1
+            ],
+            "createdAt": "2026-10-19T05:43:20.840463Z",
+            "pixelWidth": null,
+            "pixelHeight": null
+          }
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_02_capture.py::test_invalid_files_are_rejected[not-a-video]",
+      "classification": "C",
+      "scenario": "test_02_capture",
+      "name": "A declared checksum that is not the bytes', a text file sent as video/mp4, and the EICAR test file: none is accepted.",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "2.8",
+          "name": "Content does not match the declared type",
+          "expected": "REJECTED (content sniffing)",
+          "status": "PASS",
+          "actual": "REJECTED None",
+          "evidence": {
+            "id": "4c74f776-2a1e-4802-ba05-598788fa8d57",
+            "kind": "VIDEO",
+            "status": "REJECTED",
+            "filename": "c.mp4",
+            "claimedContentType": "video/mp4",
+            "detectedContentType": "text/plain",
+            "sizeBytes": 8200,
+            "sha256": "3f0416cf8b0c878ee68b18fb7e322bbeb2d2044c41d28b701a60c0f193d1d3d6",
+            "rejectionCode": "UNSUPPORTED_CONTENT",
+            "rejectionMessage": "file content is text/plain, which is not an accepted VIDEO format",
+            "totalParts": 1,
+            "partSizeBytes": 8388608,
+            "uploadedParts": [
+              1
+            ],
+            "createdAt": "2026-10-19T05:43:21.973713Z",
+            "pixelWidth": null,
+            "pixelHeight": null
+          }
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_02_capture.py::test_invalid_files_are_rejected[eicar]",
+      "classification": "C",
+      "scenario": "test_02_capture",
+      "name": "A declared checksum that is not the bytes', a text file sent as video/mp4, and the EICAR test file: none is accepted.",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "2.9",
+          "name": "The EICAR test file is not accepted",
+          "expected": "REJECTED or QUARANTINED (real ClamAV)",
+          "status": "PASS",
+          "actual": "REJECTED None",
+          "evidence": {
+            "id": "634a9f3f-d12b-487b-a8f6-4de997d733a4",
+            "kind": "METADATA",
+            "status": "REJECTED",
+            "filename": "eicar.json",
+            "claimedContentType": "application/json",
+            "detectedContentType": null,
+            "sizeBytes": 68,
+            "sha256": "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f",
+            "rejectionCode": "MALWARE_DETECTED",
+            "rejectionMessage": "malware signature found: Eicar-Test-Signature",
+            "totalParts": 1,
+            "partSizeBytes": 8388608,
+            "uploadedParts": [
+              1
+            ],
+            "createdAt": "2026-10-19T05:43:23.141040Z",
+            "pixelWidth": null,
+            "pixelHeight": null
+          }
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_02_capture.py::test_calibration_evidence_is_persisted_and_drives_the_metric_frame",
+      "classification": "C",
+      "scenario": "test_02_capture",
+      "name": "Control points recorded against the capture video before processing; after the poses exist they calibrate the run.",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "2.10",
+          "name": "Every recorded control point is stored, in metres, with its two observations",
+          "expected": "5 CONTROL_POINT measurements",
+          "status": "PASS",
+          "actual": "[('floor corner (0, 0)', [0.0, 0.0, 0.0]), ('floor corner (6, 0)', [6.0, 0.0, 0.0]), ('floor corner (6, 4)', [6.0, 4.0, 0.0]), ('floor corner (0, 4)', [0.0, 4.0, 0.0]), ('red pillar top centre', [1.0, 1.0, 2.0])]",
+          "evidence": null
+        },
+        {
+          "id": "2.11",
+          "name": "The capture is calibrated from that evidence",
+          "expected": "CALIBRATED, VENUE_CONTROL_POINTS datum, scale 2.5, RMS ~0",
+          "status": "PASS",
+          "actual": "state=CALIBRATED datum=VENUE_CONTROL_POINTS scale=2.5000000000000004 rms=9.954931000182252e-16",
+          "evidence": null
+        },
+        {
+          "id": "2.12",
+          "name": "The evidence is marked as used by the active frame",
+          "expected": "every measurement usedByActiveFrame",
+          "status": "PASS",
+          "actual": "",
+          "evidence": null
+        },
+        {
+          "id": "2.13",
+          "name": "The calibration attempt is recorded (append-only)",
+          "expected": ">= 1 attempt, accepted",
+          "status": "PASS",
+          "actual": "[{'id': 'd087b187-9972-41fb-ab75-96c3eb4e8fbc', 'runId': 'a177d8ab-39fe-49a6-a9a0-15ec63eeaf59', 'outcome': 'ACCEPTED', 'coordinateFrameId': '9451ba19-a864-4452-8231-019fc26d9cfc', 'errorCode': None, 'errorMessage': None, 'measurementIds': ['4be918bb-2013-49a4-a556-629beb9da023', '5908646a-5962-47bd-82c5-c4fb2f80cad0', '6726f065-852d-4836-b05c-3b29642d0807', 'a15afe23-fbf4-44ee-85dc-ab7b14f65e92', 'cb20ac4d-7f02-4d2d-a7df-bc33909be637'], 'createdBy': '1cf2b449-ac7e-476d-a2c9-e689064118aa', 'createdAt': '2026-10-19T05:43:34.457683Z'}]",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_03_processing.py::test_a_submitted_run_goes_through_every_stage_in_order_on_real_workers",
+      "classification": "C",
+      "scenario": "test_03_processing",
+      "name": "The full plan, stage by stage; every stage that is not a labelled stand-in was executed by a real worker.",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "3.1",
+          "name": "The run succeeded with final quality",
+          "expected": "SUCCEEDED, FINAL",
+          "status": "PASS",
+          "actual": "status=SUCCEEDED quality=FINAL failure=None",
+          "evidence": null
+        },
+        {
+          "id": "3.2",
+          "name": "Every stage of the full plan, in order",
+          "expected": "INPUT_VALIDATION -> FFMPEG_PREPROCESS -> FRAME_QUALITY_FILTER -> PRIVACY_PREPROCESS -> POSE_ESTIMATION -> SPLAT_RECONSTRUCTION -> SEMANTIC_SEGMENTATION -> GEOMETRIC_CLEANUP -> PLANE_FITTING -> ARTIFACT_GENERATION -> SEMANTIC_INDEXING -> NAVIGATION_BAKING",
+          "status": "PASS",
+          "actual": "INPUT_VALIDATION -> FFMPEG_PREPROCESS -> FRAME_QUALITY_FILTER -> PRIVACY_PREPROCESS -> POSE_ESTIMATION -> SPLAT_RECONSTRUCTION -> SEMANTIC_SEGMENTATION -> GEOMETRIC_CLEANUP -> PLANE_FITTING -> ARTIFACT_GENERATION -> SEMANTIC_INDEXING -> NAVIGATION_BAKING",
+          "evidence": null
+        },
+        {
+          "id": "3.3",
+          "name": "No stage started before the previous one finished",
+          "expected": "finishedAt(n) <= startedAt(n+1)",
+          "status": "PASS",
+          "actual": "[('INPUT_VALIDATION', '2026-10-19T05:43:26.921Z', '2026-10-19T05:43:27.095Z'), ('FFMPEG_PREPROCESS', '2026-10-19T05:43:27.353Z', '2026-10-19T05:43:27.506Z'), ('FRAME_QUALITY_FILTER', '2026-10-19T05:43:27.695Z', '2026-10-19T05:43:27.757Z'), ('PRIVACY_PREPROCESS', '2026-10-19T05:43:27.952Z', '2026-10-19T05:43:31.175Z'), ('POSE_ESTIMATION', '2026-10-19T05:43:32.306974Z', '2026-10-19T05:43:32.306993Z'), ('SPLAT_RECONSTRUCTION', '2026-10-19T05:43:34.581826Z', '2026-10-19T05:43:34.581853Z'), ('SEMANTIC_SEGMENTATION', '2026-10-19T05:43:36.768054Z', '2026-10-19T05:43:36.768087Z'), ('GEOMETRIC_CLEANUP', '2026-10-19T05:43:36.974Z', '2026-10-19T05:43:40.198Z'), ('PLANE_FITTING', '2026-10-19T05:43:40.511Z', '2026-10-19T05:43:41.054Z'), ('ARTIFACT_GENERATION', '2026-10-19T05:43:41.449Z', '2026-10-19T05:43:41.911Z'), ('SEMANTIC_INDEXING', '2026-10-19T05:43:43.156262Z', '2026-10-19T05:43:43.156296Z'), ('NAVIGATION_BAKING', '2026-10-19T05:43:47.226Z', '2026-10-19T05:43:47.878Z')]",
+          "evidence": null
+        },
+        {
+          "id": "3.4",
+          "name": "Only the four labelled stages were stood in",
+          "expected": "stand-ins exactly ['POSE_ESTIMATION', 'SPLAT_RECONSTRUCTION', 'SEMANTIC_SEGMENTATION', 'SEMANTIC_INDEXING']",
+          "status": "PASS",
+          "actual": "{'INPUT_VALIDATION': 'acceptance-cpu-worker', 'FFMPEG_PREPROCESS': 'acceptance-cpu-worker', 'FRAME_QUALITY_FILTER': 'acceptance-cpu-worker', 'PRIVACY_PREPROCESS': 'acceptance-cpu-worker', 'POSE_ESTIMATION': 'STAND-IN', 'SPLAT_RECONSTRUCTION': 'STAND-IN', 'SEMANTIC_SEGMENTATION': 'STAND-IN', 'GEOMETRIC_CLEANUP': 'acceptance-open3d-worker', 'PLANE_FITTING': 'acceptance-open3d-worker', 'ARTIFACT_GENERATION': 'acceptance-cpu-worker', 'SEMANTIC_INDEXING': 'STAND-IN', 'NAVIGATION_BAKING': 'acceptance-cpu-worker'}",
+          "evidence": null
+        },
+        {
+          "id": "3.5",
+          "name": "Every other stage ran on a real worker (production stage code)",
+          "expected": "a worker id, never the stand-in",
+          "status": "PASS",
+          "actual": "{'INPUT_VALIDATION': 'acceptance-cpu-worker', 'FFMPEG_PREPROCESS': 'acceptance-cpu-worker', 'FRAME_QUALITY_FILTER': 'acceptance-cpu-worker', 'PRIVACY_PREPROCESS': 'acceptance-cpu-worker', 'GEOMETRIC_CLEANUP': 'acceptance-open3d-worker', 'PLANE_FITTING': 'acceptance-open3d-worker', 'ARTIFACT_GENERATION': 'acceptance-cpu-worker', 'NAVIGATION_BAKING': 'acceptance-cpu-worker'}",
+          "evidence": null
+        },
+        {
+          "id": "3.6",
+          "name": "Stage transitions observed through the persisted status",
+          "expected": "each stage seen SUCCEEDED; at least one RUNNING",
+          "status": "PASS",
+          "actual": "33 transitions: [(0.0, 'INPUT_VALIDATION', 'QUEUED', 0), (0.0, 'FFMPEG_PREPROCESS', 'PENDING', 0), (0.0, 'FRAME_QUALITY_FILTER', 'PENDING', 0), (0.0, 'PRIVACY_PREPROCESS', 'PENDING', 0), (0.0, 'POSE_ESTIMATION', 'PENDING', 0), (0.0, 'SPLAT_RECONSTRUCTION', 'PENDING', 0), (0.0, 'SEMANTIC_SEGMENTATION', 'PENDING', 0), (0.0, 'GEOMETRIC_CLEANUP', 'PENDING', 0), (0.0, 'PLANE_FITTING', 'PENDING', 0), (0.0, 'ARTIFACT_GENERATION', 'PENDING', 0), (0.0, 'SEMANTIC_INDEXING', 'PENDING', 0), (0.0, 'NAVIGATION_BAKING', 'PENDING', 0)]...",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_03_processing.py::test_artifact_manifests_are_complete_checksummed_and_tenant_scoped",
+      "classification": "C",
+      "scenario": "test_03_processing",
+      "name": "Each stage's outputs are recorded with checksum and size under the run's own tenant prefix; the manifest lists them.",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "3.7",
+          "name": "Every artifact has a checksum and a size",
+          "expected": "sha256 (64 hex) and size > 0 for each",
+          "status": "PASS",
+          "actual": "26 artifacts",
+          "evidence": null
+        },
+        {
+          "id": "3.8",
+          "name": "Every object key is under this tenant's prefix",
+          "expected": "org/0f7d6e23-425e-49b6-8dab-ecdff3b9ef76/venue/e48d39a4-92f0-4cd9-8480-fb9e79eb6afb/...",
+          "status": "PASS",
+          "actual": "['sealed/org/0f7d6e23-425e-49b6-8dab-ecdff3b9ef76/venue/e48d39a4-92f0-4cd9-8480-fb9e79eb6afb/scan/96736b0f-0d7f-40a9-b29f-6bcfb0c37671/run/a177d8ab-39fe-49a6-a9a0-15ec63eeaf59/INPUT_VALIDATION/attempt-1/0dbed692-3457-46ee-8c79-45f7f8177555/input-report.json', 'sealed/org/0f7d6e23-425e-49b6-8dab-ecdff3b9ef76/venue/e48d39a4-92f0-4cd9-8480-fb9e79eb6afb/scan/96736b0f-0d7f-40a9-b29f-6bcfb0c37671/run/a177d8ab-39fe-49a6-a9a0-15ec63eeaf59/FFMPEG_PREPROCESS/attempt-1/pii/97eb126a-d2a5-47a5-bf59-a27e55fe7fd4/frames.tar', 'sealed/org/0f7d6e23-425e-49b6-8dab-ecdff3b9ef76/venue/e48d39a4-92f0-4cd9-8480-fb9e79eb6afb/scan/96736b0f-0d7f-40a9-b29f-6bcfb0c37671/run/a177d8ab-39fe-49a6-a9a0-15ec63eeaf59/FFMPEG_PREPROCESS/attempt-1/ec33e431-1952-4a05-9f9f-17ca07c99224/frames-manifest.json']",
+          "evidence": null
+        },
+        {
+          "id": "3.9",
+          "name": "The run produced the viewer, navigation and index outputs",
+          "expected": "['ARTIFACT_MANIFEST', 'DETECTED_OBJECTS', 'KSPLAT', 'NAVIGATION_GRAPH', 'NAVMESH', 'NAVMESH_MANIFEST', 'PLANE_MODEL', 'SPLAT_CLEAN']",
+          "status": "PASS",
+          "actual": "['ARTIFACT_MANIFEST', 'DETECTED_OBJECTS', 'FRAME_ARCHIVE', 'FRAME_ARCHIVE_ANON', 'FRAME_ARCHIVE_SELECTED', 'FRAME_MANIFEST', 'FRAME_QUALITY_REPORT', 'GEOMETRIC_CLEANUP_REPORT', 'GRAVITY_ESTIMATE', 'INPUT_REPORT', 'KSPLAT', 'NAVIGATION_BAKING_REPORT', 'NAVIGATION_GRAPH', 'NAVMESH', 'NAVMESH_INPUT_GEOMETRY', 'NAVMESH_MANIFEST', 'PLANE_MODEL', 'POSES', 'PRIVACY_MASKS', 'PRIVACY_REPORT', 'SEMANTIC_LABELS', 'SEMANTIC_LABELS_CLEAN', 'SPARSE_MODEL', 'SPLAT', 'SPLAT_CLEAN', 'VIEWER_BUNDLE']",
+          "evidence": null
+        },
+        {
+          "id": "3.10",
+          "name": "The navmesh was baked by the real Recast tool",
+          "expected": "NAVIGATION_BAKING command names chaya-navmesh, not a stand-in",
+          "status": "PASS",
+          "actual": "{'argv': ['/usr/local/bin/chaya-navmesh', 'bake', '--input', '/work/1f4dd5a1-23d5-44cf-bc08-55f3190d635a/recast/navmesh-input.recast.obj', '--navmesh', '/work/1f4dd5a1-23d5-44cf-bc08-55f3190d635a/recast/navmesh.bin', '--report', '/work/1f4dd5a1-23d5-44cf-bc08-55f3190d635a/recast/navmesh-tool-report.",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_03_processing.py::test_a_lost_worker_lease_is_detected_failed_and_retried",
+      "classification": "C",
+      "scenario": "test_03_processing",
+      "name": "A job claimed and abandoned (no heartbeat): its lease expires, the control plane fails it WORKER_LOST, a late report from",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "3.11",
+          "name": "The abandoned job failed as a lost worker",
+          "expected": "SPLAT_RECONSTRUCTION FAILED, WORKER_LOST",
+          "status": "PASS",
+          "actual": "state=FAILED code=WORKER_LOST",
+          "evidence": null
+        },
+        {
+          "id": "3.12",
+          "name": "The failure is retryable",
+          "expected": "run.retryable true",
+          "status": "PASS",
+          "actual": "retryable=True blocked=None remaining=3",
+          "evidence": null
+        },
+        {
+          "id": "3.13",
+          "name": "A late report from the lost worker is refused",
+          "expected": "409 (lease no longer held), nothing recorded",
+          "status": "PASS",
+          "actual": "HTTP 409 {\"title\":\"Conflict\",\"status\":409,\"detail\":\"job is FAILED; the report was not applied\",\"instance\":\"/api/v1/internal/jobs/a77f8795-0aeb-47cc-ac3c-91c388b96ff2/report\",\"code\":\"JOB_NOT_RUNNING\"}",
+          "evidence": null
+        },
+        {
+          "id": "3.14",
+          "name": "The operator's retry is accepted",
+          "expected": "202",
+          "status": "PASS",
+          "actual": "HTTP 202",
+          "evidence": null
+        },
+        {
+          "id": "3.15",
+          "name": "Attempt 2 succeeded and the run completed",
+          "expected": "run SUCCEEDED; SPLAT_RECONSTRUCTION attempts 2",
+          "status": "PASS",
+          "actual": "run=SUCCEEDED attempts=2",
+          "evidence": null
+        },
+        {
+          "id": "3.16",
+          "name": "Earlier stages were not repeated by the retry",
+          "expected": "attempts 1",
+          "status": "PASS",
+          "actual": "[('INPUT_VALIDATION', 1), ('POSE_ESTIMATION', 1)]",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_03_processing.py::test_a_real_stage_failure_propagates_and_nothing_after_it_runs",
+      "classification": "C",
+      "scenario": "test_03_processing",
+      "name": "Labels that do not describe their cloud: the first real stage that reads them refuses, with a structured code.",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "3.17",
+          "name": "The run failed at a real stage",
+          "expected": "run FAILED; the failed stage is not a stand-in",
+          "status": "PASS",
+          "actual": "run=FAILED failed=['GEOMETRIC_CLEANUP'] worker=acceptance-open3d-worker",
+          "evidence": null
+        },
+        {
+          "id": "3.18",
+          "name": "The failure names its cause",
+          "expected": "a stable error code and a message",
+          "status": "PASS",
+          "actual": "INPUT_INVALID: SEMANTIC_LABELS has 95615 entries but the splat has 95622 Gaussians",
+          "evidence": null
+        },
+        {
+          "id": "3.19",
+          "name": "No later stage ran",
+          "expected": "every later stage not run",
+          "status": "PASS",
+          "actual": "[('PLANE_FITTING', 'PENDING'), ('ARTIFACT_GENERATION', 'PENDING'), ('SEMANTIC_INDEXING', 'PENDING'), ('NAVIGATION_BAKING', 'PENDING')]",
+          "evidence": null
+        },
+        {
+          "id": "3.20",
+          "name": "The run is not reported as published",
+          "expected": "quality null",
+          "status": "PASS",
+          "actual": "quality=None",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_03_processing.py::test_scan_version_publication_rules",
+      "classification": "C",
+      "scenario": "test_03_processing",
+      "name": "A succeeded run is the floor's current version; a later failed scan publishes nothing and leaves it current.",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "3.21",
+          "name": "Floor 0's latest reconstruction is the succeeded run, not the failed one",
+          "expected": "run a177d8ab-39fe-49a6-a9a0-15ec63eeaf59",
+          "status": "PASS",
+          "actual": "latest=a177d8ab-39fe-49a6-a9a0-15ec63eeaf59 failed=f53bf12e-f768-412b-8e9e-c86f49b3fbfa",
+          "evidence": null
+        },
+        {
+          "id": "3.22",
+          "name": "Exactly one current version, and it is the succeeded run's",
+          "expected": "1 current version, FINALIZED",
+          "status": "PASS",
+          "actual": "[('b6e11860-ceef-45ec-9a10-6ee5e9ae3407', 'DRAFT', False), ('91aee31a-7c99-4e2e-8d97-8a6fdc7468da', 'FINALIZED', True)]",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_04_viewer.py::test_the_generated_model_is_retrieved_by_signed_in_and_public_viewers",
+      "classification": "C",
+      "scenario": "test_04_viewer",
+      "name": "The KSPLAT the real ARTIFACT_GENERATION wrote, served under real authorization, meets the production viewer contract.",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "4.1",
+          "name": "Signed-in manager retrieves the model",
+          "expected": "200 octet-stream; bytes hash to the recorded sha256",
+          "status": "PASS",
+          "actual": "HTTP 200 application/octet-stream 4161756 B sha256=4e1fb1c614bcfaa997934953c078958670285b874e77444dd4967ecc16ff09f4 recorded=4e1fb1c614bcfaa997934953c078958670285b874e77444dd4967ecc16ff09f4 ",
+          "evidence": null
+        },
+        {
+          "id": "4.2",
+          "name": "The served bytes meet the production viewer contract",
+          "expected": "chaya_worker.ksplat.validate_file passes",
+          "status": "PASS",
+          "actual": "{\"format\": \"ksplat\", \"contract\": \"@mkkellogg/gaussian-splats-3d@0.4.7\", \"version\": \"0.1\", \"compressionLevel\": 0, \"sphericalHarmonicsDegree\": 0, \"sectionCount\": 1, \"splatCount\": 94469}",
+          "evidence": null
+        },
+        {
+          "id": "4.3",
+          "name": "A public viewer link yields a viewer token",
+          "expected": "200 with token",
+          "status": "PASS",
+          "actual": "HTTP 200",
+          "evidence": null
+        },
+        {
+          "id": "4.4",
+          "name": "The public viewer receives the same bytes",
+          "expected": "200, same sha256",
+          "status": "PASS",
+          "actual": "HTTP 200 sha256=4e1fb1c614bcfaa997934953c078958670285b874e77444dd4967ecc16ff09f4 ",
+          "evidence": null
+        },
+        {
+          "id": "4.5.no credentials",
+          "name": "Model refused to no credentials",
+          "expected": "401",
+          "status": "PASS",
+          "actual": "HTTP 401",
+          "evidence": null
+        },
+        {
+          "id": "4.5.org B's manager",
+          "name": "Model refused to org B's manager",
+          "expected": "404",
+          "status": "PASS",
+          "actual": "HTTP 404",
+          "evidence": null
+        },
+        {
+          "id": "4.5.operator of another venue",
+          "name": "Model refused to operator of another venue",
+          "expected": "404",
+          "status": "PASS",
+          "actual": "HTTP 404",
+          "evidence": null
+        },
+        {
+          "id": "4.6",
+          "name": "Raw reconstruction kinds are not served to viewers",
+          "expected": "400",
+          "status": "PASS",
+          "actual": "HTTP 400",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_04_viewer.py::test_missing_and_corrupt_models_are_refused_not_served",
+      "classification": "C",
+      "scenario": "test_04_viewer",
+      "name": "An unknown version has no model (404). A stored model whose bytes no longer hash to the record is never delivered",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "4.7",
+          "name": "A version that does not exist has no model",
+          "expected": "404",
+          "status": "PASS",
+          "actual": "HTTP 404",
+          "evidence": null
+        },
+        {
+          "id": "4.8",
+          "name": "Before corruption the model is served intact",
+          "expected": "200, recorded sha256",
+          "status": "PASS",
+          "actual": "HTTP 200",
+          "evidence": null
+        },
+        {
+          "id": "4.9",
+          "name": "A corrupted model is never delivered intact",
+          "expected": "the stream ends early or errors; never the full corrupted bytes as 200",
+          "status": "PASS",
+          "actual": "HTTP -1 received 0 of 4161756 B; ChunkedEncodingError: ('Connection broken: IncompleteRead(4161755 bytes read, 1 more expected)', IncompleteRead(4161755 bytes read, 1 more expected))",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_05_search.py::test_a_query_finds_the_indexed_objects_at_their_positions",
+      "classification": "C",
+      "scenario": "test_05_search",
+      "name": "'red pillar' finds the auto-detected red pillar, at (1, 1) on floor 0, with the real CLIP embedding path.",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "5.1",
+          "name": "SEMANTIC_INDEXING's objects were ingested as POIs on floor 0",
+          "expected": "3 auto-detected POIs (red, green, blue pillar)",
+          "status": "PASS",
+          "actual": "[('blue pillar', None), ('Blue pillar', 'landmark'), ('green pillar', None), ('Green pillar', 'landmark'), ('red pillar', None), ('Red pillar', 'landmark')]",
+          "evidence": null
+        },
+        {
+          "id": "5.2",
+          "name": "The query is embedded by the real vision service",
+          "expected": "200, matchType embedding",
+          "status": "PASS",
+          "actual": "HTTP 200 matchType=embedding",
+          "evidence": null
+        },
+        {
+          "id": "5.3",
+          "name": "The red pillar ranks first",
+          "expected": "first result labelled 'red pillar' (auto or manual)",
+          "status": "PASS",
+          "actual": "[('red pillar', None, 'AUTO_DETECTED'), ('red pillar', None, 'AUTO_DETECTED'), ('Red pillar', None, 'MANUAL'), ('blue pillar', None, 'AUTO_DETECTED'), ('blue pillar', None, 'AUTO_DETECTED'), ('green pillar', None, 'AUTO_DETECTED')]",
+          "evidence": null
+        },
+        {
+          "id": "5.4",
+          "name": "The detected object's position is its canonical position on floor 0",
+          "expected": "(1.0, 1.0) within 0.01 m; floor 0",
+          "status": "PASS",
+          "actual": "position=[1.0, 1.0, 0.05] floor=5eadf160-6844-44e8-a1ee-57ee0b11a6a5 spatialStatus=VALID",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_05_search.py::test_search_is_scoped_to_the_venue",
+      "classification": "C",
+      "scenario": "test_05_search",
+      "name": "A same-named POI in another venue of the same organization never appears; other tenants cannot search at all.",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "5.5",
+          "name": "Venue A's results never include venue A2's POI",
+          "expected": "no result with id 2df2b6cf-7d84-4926-a971-7d7e067b6940",
+          "status": "PASS",
+          "actual": "9 results",
+          "evidence": null
+        },
+        {
+          "id": "5.6.org B manager",
+          "name": "org B manager searches venue A",
+          "expected": "404",
+          "status": "PASS",
+          "actual": "HTTP 404",
+          "evidence": null
+        },
+        {
+          "id": "5.6.operator of venue A2",
+          "name": "operator of venue A2 searches venue A",
+          "expected": "404",
+          "status": "PASS",
+          "actual": "HTTP 404",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_05_search.py::test_a_query_with_no_match_returns_an_empty_result",
+      "classification": "C",
+      "scenario": "test_05_search",
+      "name": "Nothing in the venue is a submarine periscope: 200 with no results, not the nearest unrelated object.",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "5.7a",
+          "name": "Every POI in the venue has been embedded by the real vision service",
+          "expected": "ops search-analytics awaitingEmbedding 0",
+          "status": "PASS",
+          "actual": "awaitingEmbedding=0",
+          "evidence": null
+        },
+        {
+          "id": "5.7",
+          "name": "No relevant result in a venue large enough to judge",
+          "expected": "200, relevance FILTERED, empty results (closest offered separately)",
+          "status": "PASS",
+          "actual": "HTTP 200 relevance=FILTERED [] closest=['Information point', 'Cloakroom', 'Emergency exit']",
+          "evidence": {
+            "query": "submarine periscope",
+            "matchType": "embedding",
+            "results": [],
+            "closestMatches": [
+              {
+                "poiId": "d2770593-bc0f-4358-80b4-188dde52fe05",
+                "floorId": "5eadf160-6844-44e8-a1ee-57ee0b11a6a5",
+                "label": "Information point",
+                "category": "service",
+                "tags": [],
+                "x": 3.0,
+                "y": 0.6,
+                "z": 0.0,
+                "similarity": 0.7635496345355783,
+                "detectionConfidence": null,
+                "source": "MANUAL",
+                "boundingBox": null,
+                "relevanceMargin": 0.034270331577153756,
+                "imageSimilarity": null,
+                "matchedBy": null,
+                "sourceFrame": null,
+                "spatialStatus": "VALID",
+                "localizationStatus": null,
+                "localizationUncertaintyM": null,
+                "lexicalSimilarity": 0.0625,
+                "rankScore": 0.7666746345355784,
+                "scanVersionId": "91aee31a-7c99-4e2e-8d97-8a6fdc7468da",
+                "pipelineRunId": null,
+                "detectionArtifactId": null,
+                "provenance": null,
+                "exactMatch": false,
+                "matchedTerm": "submarine periscope",
+                "distanceMeters": null,
+                "distanceKind": null,
+                "routeStatus": null,
+                "lowConfidence": null,
+                "duplicateIds": [],
+                "accessible": null,
+                "indexStatus": "INDEXED"
+              },
+              {
+                "poiId": "3519ccb7-ac5a-4419-bf29-61996e8b5aab",
+                "floorId": "5eadf160-6844-44e8-a1ee-57ee0b11a6a5",
+                "label": "Cloakroom",
+                "category": "service",
+                "tags": [],
+                "x": 1.8,
+                "y": 3.4,
+                "z": 0.0,
+                "similarity": 0.7503205985021961,
+                "detectionConfidence": null,
+                "source": "MANUAL",
+                "boundingBox": null,
+                "relevanceMargin": 0.021041295543771543,
+                "imageSimilarity": null,
+                "matchedBy": null,
+                "sourceFrame": null,
+                "spatialStatus": "VALID",
+                "localizationStatus": null,
+                "localizationUncertaintyM": null,
+                "lexicalSimilarity": 0.03703703731298447,
+                "rankScore": 0.7521724503678453,
+                "scanVersionId": "91aee31a-7c99-4e2e-8d97-8a6fdc7468da",
+                "pipelineRunId": null,
+                "detectionArtifactId": null,
+                "provenance": null,
+                "exactMatch": false,
+                "matchedTerm": "submarine periscope",
+                "distanceMeters": null,
+                "distanceKind": null,
+                "routeStatus": null,
+                "lowConfidence": null,
+                "duplicateIds": [],
+                "accessible": null,
+                "indexStatus": "INDEXED"
+              },
+              {
+                "poiId": "93cdc691-9c9f-40ad-a535-81ae05cc63d3",
+                "floorId": "5eadf160-6844-44e8-a1ee-57ee0b11a6a5",
+                "label": "Emergency exit",
+                "category": "exit",
+                "tags": [],
+                "x": 0.4,
+                "y": 3.6,
+                "z": 0.0,
+                "similarity": 0.751040145816813,
+                "detectionConfidence": null,
+                "source": "MANUAL",
+                "boundingBox": null,
+                "relevanceMargin": 0.02176084285838842,
+                "imageSimilarity": null,
+                "matchedBy": null,
+                "sourceFrame": null,
+                "spatialStatus": "VALID",
+                "localizationStatus": null,
+                "localizationUncertaintyM": null,
+                "lexicalSimilarity": 0.0,
+                "rankScore": 0.751040145816813,
+                "scanVersionId": "91aee31a-7c99-4e2e-8d97-8a6fdc7468da",
+                "pipelineRunId": null,
+                "detectionArtifactId": null,
+                "provenance": null,
+                "exactMatch": false,
+                "matchedTerm": "submarine periscope",
+                "distanceMeters": null,
+                "distanceKind": null,
+                "routeStatus": null,
+                "lowConfidence": null,
+                "duplicateIds": [],
+                "accessible": null,
+                "indexStatus": "INDEXED"
+              }
+            ],
+            "relevance": "FILTERED",
+            "interpretation": {
+              "normalized": "submarine periscope",
+              "subject": "submarine periscope",
+              "lexicalTerms": [
+                "submarine periscope"
+              ],
+              "synonymGroups": [],
+              "corrections": [],
+              "targetKind": "DESCRIPTION",
+              "spatialModifier": "NONE",
+              "spatialModifierApplied": false,
+              "spatialNote": null,
+              "accessibilityRequired": false
+            },
+            "lowConfidence": false,
+            "accessibilityUnconfirmed": [],
+            "suggestions": [
+              "Information point",
+              "Cloakroom",
+              "Emergency exit"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_06_navigation.py::test_a_route_is_generated_from_this_runs_navmesh_and_avoids_the_obstacles",
+      "classification": "C",
+      "scenario": "test_06_navigation",
+      "name": "From the west side to the east end, around the green pillar. The start is on the walkable floor: a start inside an",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "6.1",
+          "name": "Route found",
+          "expected": "200 with waypoints",
+          "status": "PASS",
+          "actual": "HTTP 200 6 waypoints, 5.6 m",
+          "evidence": null
+        },
+        {
+          "id": "6.2",
+          "name": "Routed on the navmesh this run's real bake produced",
+          "expected": "source RECAST_NAVMESH; navmeshSha256 == the run's NAVMESH artifact",
+          "status": "PASS",
+          "actual": "source=RECAST_NAVMESH navmesh=da8be530e47a260a96bac32ed615459c19984ed1423c18fce062993921c61859 artifact=da8be530e47a260a96bac32ed615459c19984ed1423c18fce062993921c61859 recast=1.6.0 path=STRING_PULLED",
+          "evidence": null
+        },
+        {
+          "id": "6.3",
+          "name": "The path is a plausible walk",
+          "expected": "distance >= straight line (5.10 m) and < 2x it",
+          "status": "PASS",
+          "actual": "5.596467270229121 m",
+          "evidence": null
+        },
+        {
+          "id": "6.4",
+          "name": "No segment passes through a pillar",
+          "expected": "no sampled point inside a pillar footprint",
+          "status": "PASS",
+          "actual": "[]",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_06_navigation.py::test_accessible_routing_uses_the_step_free_graph",
+      "classification": "C",
+      "scenario": "test_06_navigation",
+      "name": "The floor is flat and wide: a STEP_FREE route exists and says which constraints it applied.",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "6.5",
+          "name": "Step-free route",
+          "expected": "200, profile STEP_FREE, constraints listed",
+          "status": "PASS",
+          "actual": "HTTP 200 profile=STEP_FREE constraints=['uses only edges of the STEP_FREE graph baked from the navmesh', 'uses only edges whose measured slope against canonical +Z is at most 4.76 degrees; edges with no measured slope are excluded', \"uses only edges whose measured clear width (the corridor at the Detour portal, measured on the reconstruction's obstacle geometry) is at least 0.9 m; edges with no measured clearance are excluded\", 'crosses floors only by registered elevators or ramps with a registered clear width of at least 0.9 m (and, for a ramp, a registered slope within the limit) whose accessibility was verified on site; never stairs'] ",
+          "evidence": null
+        },
+        {
+          "id": "6.6",
+          "name": "It also avoids the pillars",
+          "expected": "no sampled point inside a pillar",
+          "status": "PASS",
+          "actual": "",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_06_navigation.py::test_unreachable_destinations_are_refused_with_a_reason",
+      "classification": "C",
+      "scenario": "test_06_navigation",
+      "name": "A destination far off the floor, and one fenced in by a reported obstacle: no route, never a made-up one.",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "6.7",
+          "name": "Destination outside the navmesh's footprint",
+          "expected": "422 DESTINATION_OUT_OF_BOUNDS",
+          "status": "PASS",
+          "actual": "HTTP 422 {\"title\":\"Unprocessable Content\",\"status\":422,\"detail\":\"the destination (14.00, 2.00, 0.00) is outside the navigable area of floor 5eadf160-6844-44e8-a1ee-57ee0b11a6a5 (x 0.50..5.50, y 0.50..3.50, wal",
+          "evidence": null
+        },
+        {
+          "id": "6.8",
+          "name": "Destination enclosed by a reported obstacle",
+          "expected": "no 200: a refusal with a code",
+          "status": "PASS",
+          "actual": "HTTP 404 {\"title\":\"Not Found\",\"status\":404,\"detail\":\"no walkable path connects the start point to the destination on this floor; floor 5eadf160-6844-44e8-a1ee-57ee0b11a6a5 (excluded: 1 node(s) inside reported obstacles)\",\"instance\":\"/api/v1/navigati",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_06_navigation.py::test_a_route_crosses_floors_only_through_a_registered_connection",
+      "classification": "C",
+      "scenario": "test_06_navigation",
+      "name": "Floor 0 to floor 1: by the stairs for STANDARD; STEP_FREE refuses until the elevator's accessibility is verified,",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "6.9",
+          "name": "STANDARD crosses to floor 1 through a registered connection",
+          "expected": "200; one transition floor 0 -> floor 1",
+          "status": "PASS",
+          "actual": "HTTP 200 transitions=[('STAIRS', 6.0)] ",
+          "evidence": null
+        },
+        {
+          "id": "6.10",
+          "name": "Each floor's leg is on its own floor's navmesh",
+          "expected": "two routing sources, RECAST_NAVMESH, different floors",
+          "status": "PASS",
+          "actual": "[{'floorId': '5eadf160-6844-44e8-a1ee-57ee0b11a6a5', 'graphId': 'ed4a8567-37f3-4ba6-966a-d1d7ca3e5f13', 'source': 'RECAST_NAVMESH', 'navmeshSha256': 'da8be530e47a260a96bac32ed615459c19984ed1423c18fce062993921c61859', 'recastnavigationVersion': '1.6.0', 'pathMethod': 'STRING_PULLED', 'scanVersionId': '91aee31a-7c99-4e2e-8d97-8a6fdc7468da', 'coordinateFrameId': '9451ba19-a864-4452-8231-019fc26d9cfc'}, {'floorId': '193c73e3-7a30-44e3-b36a-1eec3caffbca', 'graphId': '0b3e969c-55b7-4f6a-8136-9f0b78ad31b9', 'source': 'RECAST_NAVMESH', 'navmeshSha256': 'da8be530e47a260a96bac32ed615459c19984ed1423c18fce062993921c61859', 'recastnavigationVersion': '1.6.0', 'pathMethod': 'STRING_PULLED', 'scanVersionId': '92ece950-e238-44d5-aed0-b153afd81b2d', 'coordinateFrameId': '2b2a5959-0546-408e-b95f-eac82ca0e9d4'}]",
+          "evidence": null
+        },
+        {
+          "id": "6.11",
+          "name": "STEP_FREE fails closed while no step-free connector is verified",
+          "expected": "4xx FLOOR_CONNECTION_UNAVAILABLE (never the stairs)",
+          "status": "PASS",
+          "actual": "HTTP 404 {\"title\":\"Not Found\",\"status\":404,\"detail\":\"no usable registered floor connection joins floor 5eadf160-6844-44e8-a1ee-57ee0b11a6a5 to floor 193c73e3-7a30-44e3-b36a-1eec3caffbca step-free (only elevato",
+          "evidence": null
+        },
+        {
+          "id": "6.12",
+          "name": "After verification, STEP_FREE takes the elevator",
+          "expected": "200; the one transition is the ELEVATOR",
+          "status": "PASS",
+          "actual": "HTTP 200 ['ELEVATOR'] ",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_07_rescan.py::test_a_changed_region_is_aligned_and_spliced_by_the_real_stages",
+      "classification": "C",
+      "scenario": "test_07_rescan",
+      "name": "test_a_changed_region_is_aligned_and_spliced_by_the_real_stages",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "7.1",
+          "name": "The re-scan ran the incremental plan to success",
+          "expected": "SUCCEEDED; plan includes REGION_ALIGNMENT and REGION_SPLICE",
+          "status": "PASS",
+          "actual": "SUCCEEDED ['INPUT_VALIDATION', 'FFMPEG_PREPROCESS', 'FRAME_QUALITY_FILTER', 'PRIVACY_PREPROCESS', 'POSE_ESTIMATION', 'SPLAT_RECONSTRUCTION', 'SEMANTIC_SEGMENTATION', 'GEOMETRIC_CLEANUP', 'REGION_ALIGNMENT', 'REGION_SPLICE', 'PLANE_FITTING', 'ARTIFACT_GENERATION', 'SEMANTIC_INDEXING', 'NAVIGATION_BAKING']",
+          "evidence": null
+        },
+        {
+          "id": "7.2.REGION_ALIGNMENT",
+          "name": "REGION_ALIGNMENT executed by a real worker",
+          "expected": "not a stand-in",
+          "status": "PASS",
+          "actual": "worker=acceptance-open3d-worker",
+          "evidence": null
+        },
+        {
+          "id": "7.2.REGION_SPLICE",
+          "name": "REGION_SPLICE executed by a real worker",
+          "expected": "not a stand-in",
+          "status": "PASS",
+          "actual": "worker=acceptance-cpu-worker",
+          "evidence": null
+        },
+        {
+          "id": "7.2.PLANE_FITTING",
+          "name": "PLANE_FITTING executed by a real worker",
+          "expected": "not a stand-in",
+          "status": "PASS",
+          "actual": "worker=acceptance-open3d-worker",
+          "evidence": null
+        },
+        {
+          "id": "7.2.ARTIFACT_GENERATION",
+          "name": "ARTIFACT_GENERATION executed by a real worker",
+          "expected": "not a stand-in",
+          "status": "PASS",
+          "actual": "worker=acceptance-cpu-worker",
+          "evidence": null
+        },
+        {
+          "id": "7.2.NAVIGATION_BAKING",
+          "name": "NAVIGATION_BAKING executed by a real worker",
+          "expected": "not a stand-in",
+          "status": "PASS",
+          "actual": "worker=acceptance-cpu-worker",
+          "evidence": null
+        },
+        {
+          "id": "7.3",
+          "name": "The alignment passed its own gates with a real method",
+          "expected": "gates_passed; method in the real set",
+          "status": "PASS",
+          "actual": "method=DIRECT_CANONICAL_ICP confidence=0.8100084296180656 failed_gates=[] rmse=0.01360433832288718",
+          "evidence": null
+        },
+        {
+          "id": "7.4",
+          "name": "The splice replaced the region with the re-scan, and the counts add up",
+          "expected": "removed > 0; 0 < added <= aligned region; merged == venue - removed + added; seam measured within its limit",
+          "status": "PASS",
+          "actual": "venue=94469 removed=58053 region=57881 added=57881 merged=94297 seam step=0.0036013154483366624 (max 0.03)",
+          "evidence": null
+        },
+        {
+          "id": "7.5",
+          "name": "The whole floor was re-baked and is identical outside the region",
+          "expected": "manifest sha256 as recorded; rebuild FULL_FLOOR; outside_region consistent",
+          "status": "PASS",
+          "actual": "sha256 ok=True rebuild={'incremental': False, 'obstacle_cells_under_navmesh': {'checked': 'outside the region', 'count': 0, 'examples_xy': []}, 'reason': 'the navmesh is a single Detour tile and Recast partitions and polygonises it globally, so the whole floor is re-baked from the merged scene and checked against the parent scene outside the region', 'rescan': True, 'scope': 'FULL_FLOOR'} outside_region={'cell_m': 0.1, 'cells_compared': 1104, 'cells_differing': 0, 'consistent': True, 'ground_cells_differing': 0, 'level_change_cells_differing': 0, 'margin_m': 0.30000000000000004, 'obstacle_cells_added': 0, 'obstacle_cells_lost': 0, 'obstacle_cells_outside_region': {'merged': 74, 'parent': 74}}",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_07_rescan.py::test_historical_versions_are_preserved_and_the_new_one_is_published_safely",
+      "classification": "C",
+      "scenario": "test_07_rescan",
+      "name": "test_historical_versions_are_preserved_and_the_new_one_is_published_safely",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "7.6",
+          "name": "Two versions; the re-scan's is current and names version 1 as its parent",
+          "expected": "2 versions, 1 current, parent == v1",
+          "status": "PASS",
+          "actual": "[('fbc8773f', 'FINALIZED', True, '91aee31a'), ('b6e11860', 'DRAFT', False, ''), ('91aee31a', 'FINALIZED', False, '')]",
+          "evidence": null
+        },
+        {
+          "id": "7.7",
+          "name": "Version 1's model is still served, unchanged",
+          "expected": "200, the sha256 it was published with",
+          "status": "PASS",
+          "actual": "HTTP 200 sha256=4e1fb1c614bcfaa997934953c078958670285b874e77444dd4967ecc16ff09f4",
+          "evidence": null
+        },
+        {
+          "id": "7.8",
+          "name": "Version 2 has its own, different model",
+          "expected": "200, a different sha256",
+          "status": "PASS",
+          "actual": "HTTP 200 sha256=f2d0e6a3420fbf290f954d9723818264eda40df38bc49bfb606b39210b9c9910",
+          "evidence": null
+        },
+        {
+          "id": "7.9",
+          "name": "Routing now uses the re-scan's navmesh",
+          "expected": "200; navmeshSha256 == version 2's NAVMESH",
+          "status": "PASS",
+          "actual": "HTTP 200 navmesh=0bdfb6c337d89c5d55bac0af10e1941c7a785fc324b1d63997d5c7e18001145b ",
+          "evidence": null
+        },
+        {
+          "id": "7.10",
+          "name": "Version 1 can still be routed on, on its own navmesh",
+          "expected": "200 with scanVersionId=v1; navmeshSha256 == version 1's",
+          "status": "PASS",
+          "actual": "v1 waypoint=2fff43d1-9743-46dd-8653-8cd1c04e8ab8 HTTP 200 navmesh=da8be530e47a260a96bac32ed615459c19984ed1423c18fce062993921c61859 ",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_08_operations.py::test_processing_status_is_persisted_and_honest_about_progress",
+      "classification": "C",
+      "scenario": "test_08_operations",
+      "name": "test_processing_status_is_persisted_and_honest_about_progress",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "8.1",
+          "name": "The snapshot is the persisted state: the same revision when nothing changed",
+          "expected": "revision equal across reads",
+          "status": "PASS",
+          "actual": "revision=1179/1179",
+          "evidence": null
+        },
+        {
+          "id": "8.2",
+          "name": "Progress is counted from completed stages, never estimated",
+          "expected": "basis COMPLETED_STAGES; succeeded == total",
+          "status": "PASS",
+          "actual": "{'stagesTotal': 12, 'stagesSucceeded': 12, 'stagesFailed': 0, 'stagesCancelled': 0, 'stagesNotRun': 0, 'activeStage': None, 'activeStageState': None, 'activeStageSince': None, 'activeStageAttempt': None, 'basis': 'COMPLETED_STAGES'}",
+          "evidence": null
+        },
+        {
+          "id": "8.3",
+          "name": "The operations dashboard lists the venue's jobs",
+          "expected": ">= 12 jobs",
+          "status": "PASS",
+          "actual": "46 jobs",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_08_operations.py::test_failed_workers_and_failed_stages_are_reported",
+      "classification": "C",
+      "scenario": "test_08_operations",
+      "name": "test_failed_workers_and_failed_stages_are_reported",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "8.4",
+          "name": "The lost worker's job is reported",
+          "expected": "a WORKER_LOST failure",
+          "status": "PASS",
+          "actual": "2 failures: [{'source': 'STAGE_RUN', 'jobId': '64c98d55-d596-4fcf-899c-7defbe7e9494', 'runId': 'f53bf12e-f768-412b-8e9e-c86f49b3fbfa', 'captureId': '15997a59-2ca4-4c3e-8762-18a3be7e807c', 'stage': 'GEOMETRIC_CLEANUP', 'attempt': 1, 'errorCode': 'INPUT_INVALID', 'errorMessage': 'SEMANTIC_LABELS has 95615 entries but the splat has 95622 Gaussians', 'errorDetails': None, 'exitStatus': None, 'workerId': 'acceptan",
+          "evidence": null
+        },
+        {
+          "id": "8.5",
+          "name": "The real stage failure is reported with its code",
+          "expected": "a INPUT_INVALID failure",
+          "status": "PASS",
+          "actual": "code=INPUT_INVALID",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_08_operations.py::test_a_retry_re_runs_only_the_failed_stage_and_is_bounded",
+      "classification": "C",
+      "scenario": "test_08_operations",
+      "name": "The failed scan's labels are still inconsistent, so its retry fails again the same way: retries are accounted for.",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "8.6",
+          "name": "The operator may retry a retryable failure",
+          "expected": "202",
+          "status": "PASS",
+          "actual": "HTTP 202 {\"captureId\":\"15997a59-2ca4-4c3e-8762-18a3be7e807c\",\"venueId\":\"e48d39a4-92f0-4cd9-8480-fb9e79eb6afb\",\"captureStatus\":\"PROCESSING\",\"scanId\":\"aa81cee7-bbb8-4052-bfd0-40684c9e4292\",\"run\":{\"id\":\"f53bf12e-",
+          "evidence": null
+        },
+        {
+          "id": "8.7",
+          "name": "Only the failed stage ran again, and failed the same way",
+          "expected": "GEOMETRIC_CLEANUP attempt 2, same code; earlier stages attempt 1",
+          "status": "PASS",
+          "actual": "attempts=2 code=INPUT_INVALID",
+          "evidence": null
+        },
+        {
+          "id": "8.8",
+          "name": "Retries are counted down",
+          "expected": "retriesRemaining decreased by 1",
+          "status": "PASS",
+          "actual": "3 -> 2",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_08_operations.py::test_dashboard_access_is_restricted_by_role_and_venue[viewer-overview-200]",
+      "classification": "C",
+      "scenario": "test_08_operations",
+      "name": "test_dashboard_access_is_restricted_by_role_and_venue[viewer-overview-200]",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "8.9.viewer.overview",
+          "name": "viewer reads ops/overview of venue A",
+          "expected": "200",
+          "status": "PASS",
+          "actual": "HTTP 200 ",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_08_operations.py::test_dashboard_access_is_restricted_by_role_and_venue[viewer-jobs-403]",
+      "classification": "C",
+      "scenario": "test_08_operations",
+      "name": "test_dashboard_access_is_restricted_by_role_and_venue[viewer-jobs-403]",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "8.9.viewer.jobs",
+          "name": "viewer reads ops/jobs of venue A",
+          "expected": "403",
+          "status": "PASS",
+          "actual": "HTTP 403 {\"title\":\"Forbidden\",\"status\":403,\"detail\":\"Your role does not permit reading the jobs section.\",\"instance\":\"/api/v1/venues/e48d39a4-92f0-4cd9-8480-fb9e79eb6afb",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_08_operations.py::test_dashboard_access_is_restricted_by_role_and_venue[viewer-failures-403]",
+      "classification": "C",
+      "scenario": "test_08_operations",
+      "name": "test_dashboard_access_is_restricted_by_role_and_venue[viewer-failures-403]",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "8.9.viewer.failures",
+          "name": "viewer reads ops/failures of venue A",
+          "expected": "403",
+          "status": "PASS",
+          "actual": "HTTP 403 {\"title\":\"Forbidden\",\"status\":403,\"detail\":\"Your role does not permit reading the failures section.\",\"instance\":\"/api/v1/venues/e48d39a4-92f0-4cd9-8480-fb9e79eb",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_08_operations.py::test_dashboard_access_is_restricted_by_role_and_venue[operator-jobs-200]",
+      "classification": "C",
+      "scenario": "test_08_operations",
+      "name": "test_dashboard_access_is_restricted_by_role_and_venue[operator-jobs-200]",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "8.9.operator.jobs",
+          "name": "operator reads ops/jobs of venue A",
+          "expected": "200",
+          "status": "PASS",
+          "actual": "HTTP 200 ",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_08_operations.py::test_dashboard_access_is_restricted_by_role_and_venue[operator-failures-200]",
+      "classification": "C",
+      "scenario": "test_08_operations",
+      "name": "test_dashboard_access_is_restricted_by_role_and_venue[operator-failures-200]",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "8.9.operator.failures",
+          "name": "operator reads ops/failures of venue A",
+          "expected": "200",
+          "status": "PASS",
+          "actual": "HTTP 200 ",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_08_operations.py::test_dashboard_access_is_restricted_by_role_and_venue[operator-search-analytics-403]",
+      "classification": "C",
+      "scenario": "test_08_operations",
+      "name": "test_dashboard_access_is_restricted_by_role_and_venue[operator-search-analytics-403]",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "8.9.operator.search-analytics",
+          "name": "operator reads ops/search-analytics of venue A",
+          "expected": "403",
+          "status": "PASS",
+          "actual": "HTTP 403 {\"title\":\"Forbidden\",\"status\":403,\"detail\":\"Your role does not permit reading the search analytics section.\",\"instance\":\"/api/v1/venues/e48d39a4-92f0-4cd9-8480-",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_08_operations.py::test_dashboard_access_is_restricted_by_role_and_venue[manager-search-analytics-200]",
+      "classification": "C",
+      "scenario": "test_08_operations",
+      "name": "test_dashboard_access_is_restricted_by_role_and_venue[manager-search-analytics-200]",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "8.9.manager.search-analytics",
+          "name": "manager reads ops/search-analytics of venue A",
+          "expected": "200",
+          "status": "PASS",
+          "actual": "HTTP 200 ",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_08_operations.py::test_dashboard_access_is_restricted_by_role_and_venue[manager-audit-200]",
+      "classification": "C",
+      "scenario": "test_08_operations",
+      "name": "test_dashboard_access_is_restricted_by_role_and_venue[manager-audit-200]",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "8.9.manager.audit",
+          "name": "manager reads ops/audit of venue A",
+          "expected": "200",
+          "status": "PASS",
+          "actual": "HTTP 200 ",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_08_operations.py::test_dashboard_access_is_restricted_by_role_and_venue[manager_b-overview-404]",
+      "classification": "C",
+      "scenario": "test_08_operations",
+      "name": "test_dashboard_access_is_restricted_by_role_and_venue[manager_b-overview-404]",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "8.9.manager_b.overview",
+          "name": "manager_b reads ops/overview of venue A",
+          "expected": "404",
+          "status": "PASS",
+          "actual": "HTTP 404 {\"title\":\"Not Found\",\"status\":404,\"detail\":\"venue not found\",\"instance\":\"/api/v1/venues/e48d39a4-92f0-4cd9-8480-fb9e79eb6afb/ops/overview\",\"code\":\"NOT_FOUND\"}",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_08_operations.py::test_dashboard_access_is_restricted_by_role_and_venue[operator_a2-overview-404]",
+      "classification": "C",
+      "scenario": "test_08_operations",
+      "name": "test_dashboard_access_is_restricted_by_role_and_venue[operator_a2-overview-404]",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "8.9.operator_a2.overview",
+          "name": "operator_a2 reads ops/overview of venue A",
+          "expected": "404",
+          "status": "PASS",
+          "actual": "HTTP 404 {\"title\":\"Not Found\",\"status\":404,\"detail\":\"venue not found\",\"instance\":\"/api/v1/venues/e48d39a4-92f0-4cd9-8480-fb9e79eb6afb/ops/overview\",\"code\":\"NOT_FOUND\"}",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "test": "tests/acceptance/test_08_operations.py::test_dashboard_refuses_anonymous_and_service_callers",
+      "classification": "C",
+      "scenario": "test_08_operations",
+      "name": "test_dashboard_refuses_anonymous_and_service_callers",
+      "status": "PASS",
+      "detail": "",
+      "checks": [
+        {
+          "id": "8.10",
+          "name": "No token",
+          "expected": "401",
+          "status": "PASS",
+          "actual": "HTTP 401",
+          "evidence": null
+        },
+        {
+          "id": "8.11",
+          "name": "A worker service token",
+          "expected": "403",
+          "status": "PASS",
+          "actual": "HTTP 403",
+          "evidence": null
+        }
+      ]
+    }
+  ]
+}

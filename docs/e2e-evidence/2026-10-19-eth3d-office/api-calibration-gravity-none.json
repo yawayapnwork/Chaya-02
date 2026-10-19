@@ -1,0 +1,137 @@
+{
+ "status": 201,
+ "response": {
+  "captureId": "157ad845-174d-4198-85ab-03ddf4693dfc",
+  "floorId": "7f1294a4-29d9-4c12-871e-3653853e775e",
+  "captureStatus": "PROCESSING",
+  "captureStage": "PROCESSING",
+  "state": "CALIBRATED",
+  "reconstructionFrame": "METRIC_NOT_ALIGNED",
+  "runId": "0c931922-f2b1-4269-b7c8-6c9ffe1f402a",
+  "activeDistances": 8,
+  "activeControlPoints": 0,
+  "requiredDistances": 2,
+  "requiredControlPoints": 3,
+  "activeFrame": {
+   "id": "b0f5719d-d38e-46a5-be6c-3374f552e295",
+   "sourceRunId": "0c931922-f2b1-4269-b7c8-6c9ffe1f402a",
+   "floorId": "7f1294a4-29d9-4c12-871e-3653853e775e",
+   "version": 1,
+   "status": "ACTIVE",
+   "canonical": false,
+   "metricStatus": "METRIC",
+   "gravityStatus": "NOT_ALIGNED",
+   "horizontalDatum": "NONE",
+   "scale": 0.17364623867153517,
+   "rotation": null,
+   "translation": null,
+   "scaleSource": "MEASURED_DISTANCES",
+   "scaleRelativeSpread": 0.028738755986097306,
+   "gravitySource": "NONE",
+   "gravityUpReconstruction": null,
+   "gravityDisagreementDeg": null,
+   "controlPointRmsM": null,
+   "method": "MEASURED_DISTANCES",
+   "inputs": {
+    "note": "scale-only attempt; ETH3D GT distances",
+    "gravity": {
+     "source": "NONE",
+     "floorPoints": null,
+     "pointAboveFloor": null
+    },
+    "controlPoints": [],
+    "distanceReferences": [
+     {
+      "a": [
+       4.585087277839381,
+       -3.282822179547956,
+       19.170027235445286
+      ],
+      "b": [
+       -4.694740483884848,
+       -2.5537713794987393,
+       17.743580624542933
+      ],
+      "label": "eth3d-gt-registered-distance-1",
+      "measuredMetres": 1.6409
+     },
+     {
+      "a": [
+       4.585087277839381,
+       -3.282822179547956,
+       19.170027235445286
+      ],
+      "b": [
+       3.6327756570644114,
+       2.1100544601656965,
+       8.374472876717052
+      ],
+      "label": "eth3d-gt-registered-distance-2",
+      "measuredMetres": 2.0416
+     },
+     {
+      "a": [
+       7.178604340976736,
+       -3.0982884728196916,
+       16.129237278411903
+      ],
+      "b": [
+       -2.62782980048957,
+       0.5055909125189019,
+       13.54628083337931
+      ],
+      "label": "eth3d-gt-registered-distance-3",
+      "measuredMetres": 1.896
+     },
+     {
+      "a": [
+       9.179562821250599,
+       -1.110240690344182,
+       14.957455880970233
+      ],
+      "b": [
+       0.6047517825641558,
+       -5.909698902503418,
+       17.0953264515879
+      ],
+      "label": "eth3d-gt-registered-distance-4",
+      "measuredMetres": 1.7846
+     }
+    ]
+   },
+   "residuals": {
+    "perReferenceScale": [
+     0.17424714759416535,
+     0.1686558617904503,
+     0.17617154031009688,
+     0.17745782051919845
+    ],
+    "scaleRelativeSpread": 0.028738755986097306
+   },
+   "calibratedBy": "9d24a1be-9b9d-403c-abb4-e7a74f967cfa",
+   "calibratedAt": "2026-10-19T06:20:42.100998Z",
+   "units": "m",
+   "upAxis": "+Z"
+  },
+  "lastAttempt": {
+   "id": "b69fe34a-beeb-4ab5-b1ba-f2d4ca612e3d",
+   "runId": "0c931922-f2b1-4269-b7c8-6c9ffe1f402a",
+   "outcome": "ACCEPTED",
+   "coordinateFrameId": "b0f5719d-d38e-46a5-be6c-3374f552e295",
+   "errorCode": null,
+   "errorMessage": null,
+   "measurementIds": [
+    "996d6aec-25ab-48b3-95f3-780e56f832ef",
+    "6f51319c-f5d1-4158-9e1d-e9417e6cd1c0",
+    "bb2d7fe9-4e7d-42d1-aaa7-b52198eebb18",
+    "66ee707d-10be-446b-969d-d25c7708495b"
+   ],
+   "createdBy": "9d24a1be-9b9d-403c-abb4-e7a74f967cfa",
+   "createdAt": "2026-10-19T06:20:42.100998Z"
+  },
+  "requirements": [
+   "The frame is metric but not gravity-aligned, so POIs, navigation and AR cannot use it. Recalibrate with gravity OPERATOR_FLOOR_POINTS (at least three reconstruction points on the floor and one above it) or with three surveyed control points.",
+   "Until then the reconstruction keeps its arbitrary SfM scale: semantic indexing, navigation baking, POIs and AR anchors refuse it with NOT_CALIBRATED."
+  ]
+ }
+}

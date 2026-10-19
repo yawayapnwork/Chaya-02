@@ -1,0 +1,198 @@
+{
+  "kind": "FORMAT VALIDATION (synthetic fixture; not a venue reconstruction)",
+  "results": [
+    {
+      "id": "A1",
+      "name": "HTTP artifact retrieval by the viewer (real API)",
+      "expected": "200 application/octet-stream; X-Chaya-Viewer-Token only; bytes == stored fixture",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "HTTP 200 application/octet-stream 4154188 B; request auth: X-Chaya-Viewer-Token; sha256=f2d0e6a3420fbf290f954d9723818264eda40df38bc49bfb606b39210b9c9910",
+      "evidence": {
+        "url": "/api/v1/venues/e48d39a4-92f0-4cd9-8480-fb9e79eb6afb/scan-versions/fbc8773f-e4a8-41a2-8d25-887ef5832cf3/artifacts/KSPLAT",
+        "expectedSha256": "f2d0e6a3420fbf290f954d9723818264eda40df38bc49bfb606b39210b9c9910",
+        "failedRequests": [
+          "GET http://localhost:13000/status failed: net::ERR_ABORTED",
+          "GET http://localhost:13000/ failed: net::ERR_ABORTED",
+          "GET http://localhost:13000/viewer failed: net::ERR_ABORTED"
+        ]
+      }
+    },
+    {
+      "id": "A2",
+      "name": "GaussianSplats3D initialises and reports every splat (format compatibility)",
+      "expected": "splat count 94,297, no load error",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "Splats: 94,297; load errors shown: 0"
+    },
+    {
+      "id": "A3",
+      "name": "Rendered scene (pixels read back from the WebGL canvas)",
+      "expected": "> 5 % of sampled pixels differ from the clear colour",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "52.1 % covered on a 1080x751 canvas"
+    },
+    {
+      "id": "A4",
+      "name": "POI overlay on the calibrated scene",
+      "expected": "one marker per POI; the Red pillar marker sits under red rendered splats",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "frame: 'Calibrated, metres (venue datum, v1)'; markers=17 of 17; mean colour above the Red pillar marker rgb(216,38,38), after orbiting 180 degrees (initial view: rgb(152,140,127), the pillar hidden)"
+    },
+    {
+      "id": "A4.1",
+      "name": "Clicking a POI marker selects it",
+      "expected": "POI details show the red pillar",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "Red pillar LANDMARK synthetic fixture landmark pillar 1.00, 1.00, 0.00 Floor: Gr"
+    },
+    {
+      "id": "A5",
+      "name": "Camera interaction (drag orbits the built-in controls)",
+      "expected": "the next frames differ (mean cell difference > 4/255); scene still drawn",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "mean cell difference 26.4; 48.8 % covered after"
+    },
+    {
+      "id": "A6",
+      "name": "No unexpected browser console errors",
+      "expected": "none (a logged route 404/409 is expected)",
+      "status": "FAIL",
+      "blocked_dependency": null,
+      "actual": "1 console errors",
+      "evidence": [
+        "Framing 'http://localhost:18081/' violates the following report-only Content Security Policy directive: \"frame-src 'self'\". The violation has been logged, but no further action has been taken.\n"
+      ]
+    },
+    {
+      "id": "A7",
+      "name": "Route overlay",
+      "expected": "drawn only for a real route; otherwise the API's refusal is shown and nothing is drawn",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "route HTTP 200; panel: "
+    },
+    {
+      "id": "B0",
+      "name": "Operator sign-in through Keycloak (authorization code + PKCE) returns to the viewer",
+      "expected": "back on /viewer",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "http://localhost:13000/viewer"
+    },
+    {
+      "id": "B1",
+      "name": "HTTP artifact retrieval by the viewer (real API)",
+      "expected": "200 application/octet-stream; Authorization: Bearer <Keycloak JWT> only; bytes == stored fixture",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "HTTP 200 application/octet-stream 4154188 B; request auth: Authorization: Bearer; sha256=f2d0e6a3420fbf290f954d9723818264eda40df38bc49bfb606b39210b9c9910",
+      "evidence": {
+        "url": "/api/v1/venues/e48d39a4-92f0-4cd9-8480-fb9e79eb6afb/scan-versions/fbc8773f-e4a8-41a2-8d25-887ef5832cf3/artifacts/KSPLAT",
+        "expectedSha256": "f2d0e6a3420fbf290f954d9723818264eda40df38bc49bfb606b39210b9c9910",
+        "failedRequests": [
+          "GET http://localhost:13000/ failed: net::ERR_ABORTED",
+          "GET http://localhost:13000/capture failed: net::ERR_ABORTED",
+          "GET http://localhost:13000/ar failed: net::ERR_ABORTED",
+          "GET http://localhost:13000/ops failed: net::ERR_ABORTED",
+          "GET http://localhost:13000/ failed: net::ERR_ABORTED",
+          "GET http://localhost:13000/status failed: net::ERR_ABORTED",
+          "GET http://localhost:13000/capture failed: net::ERR_ABORTED",
+          "GET http://localhost:13000/ar failed: net::ERR_ABORTED",
+          "GET http://localhost:13000/status failed: net::ERR_ABORTED",
+          "GET http://localhost:13000/ops failed: net::ERR_ABORTED",
+          "GET http://localhost:13000/ar failed: net::ERR_ABORTED",
+          "GET http://localhost:13000/capture failed: net::ERR_ABORTED",
+          "GET http://localhost:13000/ar failed: net::ERR_ABORTED",
+          "GET http://localhost:13000/ops failed: net::ERR_ABORTED",
+          "GET http://localhost:13000/status failed: net::ERR_ABORTED",
+          "GET http://localhost:13000/ar failed: net::ERR_ABORTED",
+          "GET http://localhost:13000/ failed: net::ERR_ABORTED",
+          "GET http://localhost:13000/ops failed: net::ERR_ABORTED",
+          "GET http://localhost:13000/viewer failed: net::ERR_ABORTED",
+          "GET http://localhost:13000/status failed: net::ERR_ABORTED"
+        ]
+      }
+    },
+    {
+      "id": "B2",
+      "name": "GaussianSplats3D initialises and reports every splat (format compatibility)",
+      "expected": "splat count 94,297, no load error",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "Splats: 94,297; load errors shown: 0"
+    },
+    {
+      "id": "B3",
+      "name": "Rendered scene (pixels read back from the WebGL canvas)",
+      "expected": "> 5 % of sampled pixels differ from the clear colour",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "52.1 % covered on a 1080x751 canvas"
+    },
+    {
+      "id": "B4",
+      "name": "POI overlay on the calibrated scene",
+      "expected": "one marker per POI; the Red pillar marker sits under red rendered splats",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "frame: 'Calibrated, metres (venue datum, v1)'; markers=17 of 17; mean colour above the Red pillar marker rgb(216,38,38), after orbiting 180 degrees (initial view: rgb(152,140,127), the pillar hidden)"
+    },
+    {
+      "id": "B4.1",
+      "name": "Clicking a POI marker selects it",
+      "expected": "POI details show the red pillar",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "Red pillar LANDMARK synthetic fixture landmark pillar 1.00, 1.00, 0.00 Floor: Gr"
+    },
+    {
+      "id": "B5",
+      "name": "Camera interaction (drag orbits the built-in controls)",
+      "expected": "the next frames differ (mean cell difference > 4/255); scene still drawn",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "mean cell difference 26.4; 48.8 % covered after"
+    },
+    {
+      "id": "B6",
+      "name": "No unexpected browser console errors",
+      "expected": "none (a logged route 404/409 is expected)",
+      "status": "FAIL",
+      "blocked_dependency": null,
+      "actual": "1 console errors",
+      "evidence": [
+        "Framing 'http://localhost:18081/' violates the following report-only Content Security Policy directive: \"frame-src 'self'\". The violation has been logged, but no further action has been taken.\n"
+      ]
+    },
+    {
+      "id": "C1",
+      "name": "The floor opens on version 2 (the re-scan, now current)",
+      "expected": "the shown model is version 2's, by SHA-256; scene initialised",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "shown sha256=f2d0e6a3420f; version 2=f2d0e6a3420f; splats 94,297"
+    },
+    {
+      "id": "C2",
+      "name": "Switch to version 1 in the viewer's version selector",
+      "expected": "version 1's model, by SHA-256, and drawn",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "selected a177d8ab; version 1 bytes received: true; 50.2 % covered"
+    },
+    {
+      "id": "D1",
+      "name": "A corrupted model is not displayed",
+      "expected": "no scene loaded; the page says the model could not be loaded",
+      "status": "PASS",
+      "blocked_dependency": null,
+      "actual": "splat count shown: false; model responses: [[200,null]]; alert: 'Could not load the reconstruction network error Retry Digital twin viewer · Chaya 02'"
+    }
+  ]
+}

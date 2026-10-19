@@ -1,0 +1,371 @@
+{
+  "detectors": {
+    "faces": "opencv-haar-faces",
+    "screens_documents": "heuristic-quad"
+  },
+  "frames": 21,
+  "masks": {
+    "artifact": "privacy-masks.tar",
+    "codec_block_px": 16,
+    "convention": "<frame>.png, 255 = reconstruction-valid, 0 = privacy-masked",
+    "masked_fraction": 0.077717,
+    "note": "masked pixels were rewritten by anonymisation and are excluded from SfM, splat training and semantic stages; they are not scene content"
+  },
+  "note": "Detection is classical CV (Haar faces, quadrilateral screens/documents), not a guarantee; see docs/pipeline.md.",
+  "per_frame": [
+    {
+      "anonymisation_rounds": 1,
+      "covered_regions": [
+        {
+          "h": 269,
+          "label": "face",
+          "w": 269,
+          "x": 699,
+          "y": 381
+        }
+      ],
+      "escalated_to_solid_fill": false,
+      "frame": "i0000.jpg",
+      "masked_fraction": 0.114643,
+      "regions": [
+        {
+          "h": 269,
+          "label": "face",
+          "w": 269,
+          "x": 699,
+          "y": 381
+        }
+      ]
+    },
+    {
+      "anonymisation_rounds": 0,
+      "covered_regions": [],
+      "escalated_to_solid_fill": false,
+      "frame": "i0001.jpg",
+      "masked_fraction": 0.0,
+      "regions": []
+    },
+    {
+      "anonymisation_rounds": 1,
+      "covered_regions": [
+        {
+          "h": 862,
+          "label": "face",
+          "w": 862,
+          "x": 438,
+          "y": 89
+        }
+      ],
+      "escalated_to_solid_fill": false,
+      "frame": "i0002.jpg",
+      "masked_fraction": 0.829118,
+      "regions": [
+        {
+          "h": 862,
+          "label": "face",
+          "w": 862,
+          "x": 438,
+          "y": 89
+        }
+      ]
+    },
+    {
+      "anonymisation_rounds": 0,
+      "covered_regions": [],
+      "escalated_to_solid_fill": false,
+      "frame": "i0006.jpg",
+      "masked_fraction": 0.0,
+      "regions": []
+    },
+    {
+      "anonymisation_rounds": 0,
+      "covered_regions": [],
+      "escalated_to_solid_fill": false,
+      "frame": "i0007.jpg",
+      "masked_fraction": 0.0,
+      "regions": []
+    },
+    {
+      "anonymisation_rounds": 0,
+      "covered_regions": [],
+      "escalated_to_solid_fill": false,
+      "frame": "i0010.jpg",
+      "masked_fraction": 0.0,
+      "regions": []
+    },
+    {
+      "anonymisation_rounds": 0,
+      "covered_regions": [],
+      "escalated_to_solid_fill": false,
+      "frame": "i0011.jpg",
+      "masked_fraction": 0.0,
+      "regions": []
+    },
+    {
+      "anonymisation_rounds": 1,
+      "covered_regions": [
+        {
+          "h": 113,
+          "label": "face",
+          "w": 113,
+          "x": 683,
+          "y": 448
+        }
+      ],
+      "escalated_to_solid_fill": false,
+      "frame": "i0012.jpg",
+      "masked_fraction": 0.026614,
+      "regions": [
+        {
+          "h": 113,
+          "label": "face",
+          "w": 113,
+          "x": 683,
+          "y": 448
+        }
+      ]
+    },
+    {
+      "anonymisation_rounds": 0,
+      "covered_regions": [],
+      "escalated_to_solid_fill": false,
+      "frame": "i0013.jpg",
+      "masked_fraction": 0.0,
+      "regions": []
+    },
+    {
+      "anonymisation_rounds": 0,
+      "covered_regions": [],
+      "escalated_to_solid_fill": false,
+      "frame": "i0014.jpg",
+      "masked_fraction": 0.0,
+      "regions": []
+    },
+    {
+      "anonymisation_rounds": 0,
+      "covered_regions": [],
+      "escalated_to_solid_fill": false,
+      "frame": "i0015.jpg",
+      "masked_fraction": 0.0,
+      "regions": []
+    },
+    {
+      "anonymisation_rounds": 0,
+      "covered_regions": [],
+      "escalated_to_solid_fill": false,
+      "frame": "i0016.jpg",
+      "masked_fraction": 0.0,
+      "regions": []
+    },
+    {
+      "anonymisation_rounds": 1,
+      "covered_regions": [
+        {
+          "h": 98,
+          "label": "face",
+          "w": 98,
+          "x": 390,
+          "y": 158
+        },
+        {
+          "h": 77,
+          "label": "face",
+          "w": 77,
+          "x": 340,
+          "y": 25
+        }
+      ],
+      "escalated_to_solid_fill": false,
+      "frame": "i0017.jpg",
+      "masked_fraction": 0.031878,
+      "regions": [
+        {
+          "h": 98,
+          "label": "face",
+          "w": 98,
+          "x": 390,
+          "y": 158
+        },
+        {
+          "h": 77,
+          "label": "face",
+          "w": 77,
+          "x": 340,
+          "y": 25
+        }
+      ]
+    },
+    {
+      "anonymisation_rounds": 0,
+      "covered_regions": [],
+      "escalated_to_solid_fill": false,
+      "frame": "i0018.jpg",
+      "masked_fraction": 0.0,
+      "regions": []
+    },
+    {
+      "anonymisation_rounds": 0,
+      "covered_regions": [],
+      "escalated_to_solid_fill": false,
+      "frame": "i0019.jpg",
+      "masked_fraction": 0.0,
+      "regions": []
+    },
+    {
+      "anonymisation_rounds": 1,
+      "covered_regions": [
+        {
+          "h": 108,
+          "label": "face",
+          "w": 108,
+          "x": 1157,
+          "y": 320
+        },
+        {
+          "h": 69,
+          "label": "face",
+          "w": 69,
+          "x": 861,
+          "y": 629
+        }
+      ],
+      "escalated_to_solid_fill": false,
+      "frame": "i0020.jpg",
+      "masked_fraction": 0.037873,
+      "regions": [
+        {
+          "h": 108,
+          "label": "face",
+          "w": 108,
+          "x": 1157,
+          "y": 320
+        },
+        {
+          "h": 69,
+          "label": "face",
+          "w": 69,
+          "x": 861,
+          "y": 629
+        }
+      ]
+    },
+    {
+      "anonymisation_rounds": 2,
+      "covered_regions": [
+        {
+          "h": 363,
+          "label": "face",
+          "w": 622,
+          "x": 540,
+          "y": 107
+        },
+        {
+          "h": 116,
+          "label": "face",
+          "w": 116,
+          "x": 1208,
+          "y": 327
+        }
+      ],
+      "escalated_to_solid_fill": true,
+      "frame": "i0021.jpg",
+      "masked_fraction": 0.369813,
+      "regions": [
+        {
+          "h": 338,
+          "label": "face",
+          "w": 338,
+          "x": 540,
+          "y": 108
+        }
+      ]
+    },
+    {
+      "anonymisation_rounds": 1,
+      "covered_regions": [
+        {
+          "h": 112,
+          "label": "face",
+          "w": 112,
+          "x": 972,
+          "y": 319
+        }
+      ],
+      "escalated_to_solid_fill": false,
+      "frame": "i0022.jpg",
+      "masked_fraction": 0.024713,
+      "regions": [
+        {
+          "h": 112,
+          "label": "face",
+          "w": 112,
+          "x": 972,
+          "y": 319
+        }
+      ]
+    },
+    {
+      "anonymisation_rounds": 0,
+      "covered_regions": [],
+      "escalated_to_solid_fill": false,
+      "frame": "i0023.jpg",
+      "masked_fraction": 0.0,
+      "regions": []
+    },
+    {
+      "anonymisation_rounds": 0,
+      "covered_regions": [],
+      "escalated_to_solid_fill": false,
+      "frame": "i0024.jpg",
+      "masked_fraction": 0.0,
+      "regions": []
+    },
+    {
+      "anonymisation_rounds": 1,
+      "covered_regions": [
+        {
+          "h": 358,
+          "label": "face",
+          "w": 358,
+          "x": 815,
+          "y": 91
+        },
+        {
+          "h": 70,
+          "label": "face",
+          "w": 70,
+          "x": 1048,
+          "y": 764
+        }
+      ],
+      "escalated_to_solid_fill": false,
+      "frame": "i0025.jpg",
+      "masked_fraction": 0.197409,
+      "regions": [
+        {
+          "h": 358,
+          "label": "face",
+          "w": 358,
+          "x": 815,
+          "y": 91
+        },
+        {
+          "h": 70,
+          "label": "face",
+          "w": 70,
+          "x": 1048,
+          "y": 764
+        }
+      ]
+    }
+  ],
+  "policy": "fail-closed",
+  "totals": {
+    "escalated_frames": 1,
+    "face": 11,
+    "frames_with_regions": 8,
+    "masked_pixels": 2857216,
+    "pixels": 36764280,
+    "screen_or_document": 0
+  }
+}

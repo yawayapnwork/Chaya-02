@@ -1,0 +1,164 @@
+{
+  "camera_calibration": "CAPTURE_METADATA",
+  "count": 26,
+  "frames": [
+    "i0000.jpg",
+    "i0001.jpg",
+    "i0002.jpg",
+    "i0003.jpg",
+    "i0004.jpg",
+    "i0005.jpg",
+    "i0006.jpg",
+    "i0007.jpg",
+    "i0008.jpg",
+    "i0009.jpg",
+    "i0010.jpg",
+    "i0011.jpg",
+    "i0012.jpg",
+    "i0013.jpg",
+    "i0014.jpg",
+    "i0015.jpg",
+    "i0016.jpg",
+    "i0017.jpg",
+    "i0018.jpg",
+    "i0019.jpg",
+    "i0020.jpg",
+    "i0021.jpg",
+    "i0022.jpg",
+    "i0023.jpg",
+    "i0024.jpg",
+    "i0025.jpg"
+  ],
+  "sources": [
+    {
+      "artifact_id": "2ccdb939-27aa-4f60-97d7-61e714678d3c",
+      "frames": 1,
+      "kind": "RAW_IMAGE"
+    },
+    {
+      "artifact_id": "9a255ce2-12e1-475e-849f-4c0faa61541b",
+      "frames": 1,
+      "kind": "RAW_IMAGE"
+    },
+    {
+      "artifact_id": "32326f46-80c0-4a62-bbc9-cc794a6163e5",
+      "frames": 1,
+      "kind": "RAW_IMAGE"
+    },
+    {
+      "artifact_id": "5663072c-fc6d-4959-81ce-a7c016a5971f",
+      "frames": 1,
+      "kind": "RAW_IMAGE"
+    },
+    {
+      "artifact_id": "9b282efd-928e-45d4-885c-2b9e47bc41e6",
+      "frames": 1,
+      "kind": "RAW_IMAGE"
+    },
+    {
+      "artifact_id": "3019bf64-5a16-4fbc-a830-440149f84423",
+      "frames": 1,
+      "kind": "RAW_IMAGE"
+    },
+    {
+      "artifact_id": "f95d8838-f4d4-43b1-aef8-ea2c8dba8ab0",
+      "frames": 1,
+      "kind": "RAW_IMAGE"
+    },
+    {
+      "artifact_id": "3202166b-26d2-4653-afc3-e3da59653e8a",
+      "frames": 1,
+      "kind": "RAW_IMAGE"
+    },
+    {
+      "artifact_id": "f71a36d6-cadd-456e-9f7c-35da6e93173c",
+      "frames": 1,
+      "kind": "RAW_IMAGE"
+    },
+    {
+      "artifact_id": "f79724c0-2c7f-4ac5-8c7e-c23f31017adf",
+      "frames": 1,
+      "kind": "RAW_IMAGE"
+    },
+    {
+      "artifact_id": "52b3644b-0a3b-4c1d-9d43-02f414eb1da4",
+      "frames": 1,
+      "kind": "RAW_IMAGE"
+    },
+    {
+      "artifact_id": "8222454b-9912-4894-8aee-caa4e317f282",
+      "frames": 1,
+      "kind": "RAW_IMAGE"
+    },
+    {
+      "artifact_id": "62d26047-ba2d-4a8d-93a7-d01fce2ee75e",
+      "frames": 1,
+      "kind": "RAW_IMAGE"
+    },
+    {
+      "artifact_id": "de7172ab-24f3-4725-a21a-64aed250dd6d",
+      "frames": 1,
+      "kind": "RAW_IMAGE"
+    },
+    {
+      "artifact_id": "7bd69780-8c88-4b91-8e13-3837ca5cd0f6",
+      "frames": 1,
+      "kind": "RAW_IMAGE"
+    },
+    {
+      "artifact_id": "dc9ff5ca-cfc1-4ce0-bf73-a5052742ff90",
+      "frames": 1,
+      "kind": "RAW_IMAGE"
+    },
+    {
+      "artifact_id": "31407b50-eef6-457d-a9e1-a78bd90baaa0",
+      "frames": 1,
+      "kind": "RAW_IMAGE"
+    },
+    {
+      "artifact_id": "b4841a31-cde1-4bff-890f-4ed7ac6e3aac",
+      "frames": 1,
+      "kind": "RAW_IMAGE"
+    },
+    {
+      "artifact_id": "60f0306e-6368-472a-a525-cf99581a1d80",
+      "frames": 1,
+      "kind": "RAW_IMAGE"
+    },
+    {
+      "artifact_id": "6d50597b-4f9d-4b47-bf8a-60845f351d17",
+      "frames": 1,
+      "kind": "RAW_IMAGE"
+    },
+    {
+      "artifact_id": "fdc1cb71-663e-4363-84f8-f54b596070cc",
+      "frames": 1,
+      "kind": "RAW_IMAGE"
+    },
+    {
+      "artifact_id": "5e97b57d-7e0e-47f7-b415-fcb56d7d0e99",
+      "frames": 1,
+      "kind": "RAW_IMAGE"
+    },
+    {
+      "artifact_id": "7148cecb-85df-4401-a1d8-e162ff96417a",
+      "frames": 1,
+      "kind": "RAW_IMAGE"
+    },
+    {
+      "artifact_id": "8ddd17fe-32ec-497a-b118-eacaf7afc5d7",
+      "frames": 1,
+      "kind": "RAW_IMAGE"
+    },
+    {
+      "artifact_id": "31bbde62-437b-4991-85d6-c1806769c7d7",
+      "frames": 1,
+      "kind": "RAW_IMAGE"
+    },
+    {
+      "artifact_id": "42bdc59d-8a74-4d1f-9519-e48cba4d7f32",
+      "frames": 1,
+      "kind": "RAW_IMAGE"
+    }
+  ]
+}
