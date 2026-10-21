@@ -113,7 +113,8 @@ export function summarizeRun(run: RunLike): RunSummary {
         tone: "warning",
         headline: "Partial-quality reconstruction. It is NOT finalized.",
         detail: run.failureMessage ?? "The time budget ran out before processing completed.",
-        canRetry: false,
+        // The server reopens a PARTIAL run only to resume splat training the time budget stopped (PipelineService#retry).
+        canRetry: run.retryable,
         canCancel: false,
       };
     case "FAILED":

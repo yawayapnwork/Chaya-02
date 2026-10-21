@@ -18,9 +18,10 @@ Time budget: the loop stops before the work order's deadline, leaving `gsplat_st
   * If not a single iteration ran, there is no splat, only the report.
 
 Either way a `SPLAT_CHECKPOINT` is published. It holds the iteration, parameters, Adam state, density-control state,
-configuration and the identity of the inputs. A later SPLAT_RECONSTRUCTION job given it as input resumes from it, but
-only for the same inputs and compatible settings (CHECKPOINT_MISMATCH otherwise). The control plane does not yet offer
-a previous job's checkpoint to a new job (docs/pipeline.md).
+configuration and the identity of the inputs. A retry of this run's SPLAT_RECONSTRUCTION is offered the checkpoint of
+the latest attempt the time budget stopped (dev.chaya.api.pipeline.PipelineService#resumableCheckpoint; a PARTIAL run
+is reopened for it) and resumes from it (`resume_state`), but only for the same inputs and compatible settings
+(CHECKPOINT_MISMATCH otherwise). A checkpoint a job refuses is not offered again (docs/pipeline.md, "Resuming training").
 
 Lens distortion (review G-1): gsplat renders a pinhole camera, so every frame of a camera with non-zero distortion
 coefficients is undistorted first (chaya_worker.camera_model.FrameRectifier) with the camera the SfM model holds, and
@@ -207,6 +208,40 @@ def training_source(order: dict[str, Any], inputs: list) -> dict[str, Any]:
                                          key=lambda d: d["kind"]))
 
 
+def resume_state(ctx: StageContext, *, config, source: dict[str, Any], device) -> tuple[tuple | None, dict[str, Any] | None]:
+    """The training state to resume from and its provenance, or (None, None) when the job was offered no SPLAT_CHECKPOINT.
+
+    The orchestrator has already checked the download against the checksum the control plane recorded, so a checkpoint
+    without one is refused here. load_checkpoint then refuses one of other inputs (the identity binds the run, scan,
+    scan version and input artifacts, so a checkpoint never crosses a scan or tenant) or of other settings
+    (CHECKPOINT_MISMATCH), and an unreadable or malformed one (CHECKPOINT_CORRUPT). Both name the artifact in
+    `details.checkpoint`, which is how the control plane knows not to offer it again. Runs before any frame is prepared,
+    so a bad checkpoint fails in seconds."""
+    from .. import splat_training as st  # noqa: PLC0415
+
+    checkpoints = ctx.inputs_of("SPLAT_CHECKPOINT")
+    if not checkpoints:
+        return None, None
+    if len(checkpoints) > 1:
+        raise StageError(f"{len(checkpoints)} SPLAT_CHECKPOINT inputs were offered; a job resumes from exactly one",
+                         code="INPUT_INVALID", details={"checkpoints": [c.artifact_id for c in checkpoints]})
+    checkpoint = checkpoints[0]
+    details = {"checkpoint": checkpoint.artifact_id}
+    if not checkpoint.ref.get("sha256"):
+        raise StageError("the offered checkpoint has no recorded checksum, so its integrity cannot be verified",
+                         code="CHECKPOINT_CORRUPT", details=details)
+    try:
+        resume = st.load_checkpoint(checkpoint.path, config=config, source=source, device=device)
+    except st.CheckpointCorrupt as exc:
+        raise StageError(f"{exc}. It is not offered again: a retry resumes from the previous valid checkpoint, or starts from "
+                         "the SfM seed", code="CHECKPOINT_CORRUPT", details=details) from exc
+    except st.CheckpointMismatch as exc:
+        raise StageError(str(exc), code="CHECKPOINT_MISMATCH", details=details) from exc
+    ctx.logger.info("resuming from checkpoint", extra={"artifact_id": checkpoint.artifact_id, "iteration": resume[0],
+                                                       "gaussians": len(resume[1]["means"])})
+    return resume, {"artifact_id": checkpoint.artifact_id, "sha256": checkpoint.ref["sha256"], "iteration": resume[0]}
+
+
 def privacy_mask_summary(cams: list[dict[str, Any]]) -> dict[str, Any]:
     """Pure: how much of the training signal the privacy masks excluded."""
     fractions = [c["masked_fraction"] for c in cams if "valid" in c]
@@ -230,7 +265,7 @@ def export_mismatch(cloud, ply_path: Path) -> str | None:
 
 def publish_outcome(ctx: StageContext, outcome, *, source: dict[str, Any], cameras_used: int, versions: dict[str, Any],
                     keyframes_tar=None, training_cameras: dict[str, Any] | None = None,
-                    privacy: dict[str, Any] | None = None) -> StageResult:
+                    privacy: dict[str, Any] | None = None, resumed_from: dict[str, Any] | None = None) -> StageResult:
     """Turns a training outcome into the stage result: COMPLETED -> SUCCEEDED with SPLAT; PARTIAL -> FAILED with
     TIME_LIMIT_EXCEEDED and SPLAT_PARTIAL (partial=True). The report and checkpoint go out either way. Pure apart from
     writing files into ctx.workdir, so it is tested without a GPU (tests/splat).
@@ -294,7 +329,7 @@ def publish_outcome(ctx: StageContext, outcome, *, source: dict[str, Any], camer
         **summary,
         "provenance": {"source": source, "splat": {"artifact": splat_name, "sha256": splat_sha},
                        "checkpoint": {"artifact": "splat-checkpoint.pt" if checkpoint_sha else None, "sha256": checkpoint_sha},
-                       "versions": versions},
+                       "resumed_from": resumed_from, "versions": versions},
         "cameras_used": cameras_used,
         "privacy_masks": privacy if privacy is not None else {"applied": False},
         "camera_calibration": None if training_cameras is None else {
@@ -363,17 +398,7 @@ class SplatReconstruction:
         device = torch.device("cuda", index)
         torch.cuda.set_device(device)
         source = training_source(ctx.order, ctx.inputs)
-        resume = None
-        checkpoints = ctx.inputs_of("SPLAT_CHECKPOINT")
-        if checkpoints:  # checked before any frame is prepared: a checkpoint of another job fails in seconds
-            try:
-                resume = st.load_checkpoint(checkpoints[0].path, config=config, source=source, device=device)
-            except st.CheckpointCorrupt as exc:
-                raise StageError(f"{exc}. Retry without it (the run starts from the SfM seed)", code="CHECKPOINT_CORRUPT",
-                                 details={"checkpoint": checkpoints[0].artifact_id}) from exc
-            except st.CheckpointMismatch as exc:
-                raise StageError(str(exc), code="CHECKPOINT_MISMATCH", details={"checkpoint": checkpoints[0].artifact_id}) from exc
-            ctx.logger.info("resuming from checkpoint", extra={"iteration": resume[0], "gaussians": len(resume[1]["means"])})
+        resume, resumed_from = resume_state(ctx, config=config, source=source, device=device)
 
         sparse_dir = ctx.workdir / "sparse-bin"
         archive.unpack(sparse_archives[0].path, sparse_dir)
@@ -438,4 +463,5 @@ class SplatReconstruction:
                     "cuda_devices": ctx.toolchain.cuda_devices(), "training_device": preflight["selected_device"],
                     "training_seconds": training_seconds, "lock": preflight["lock"]}
         return publish_outcome(ctx, outcome, source=source, cameras_used=len(cams), versions=versions, keyframes_tar=keyframes_tar,
-                               training_cameras=training_cameras_doc(rectifier, poses_doc), privacy=privacy_mask_summary(cams))
+                               training_cameras=training_cameras_doc(rectifier, poses_doc), privacy=privacy_mask_summary(cams),
+                               resumed_from=resumed_from)

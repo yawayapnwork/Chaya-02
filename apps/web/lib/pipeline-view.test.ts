@@ -10,6 +10,15 @@ test("a partial-quality result is never presented as finalized", () => {
   assert.equal(s.tone, "warning");
   assert.match(s.headline, /NOT finalized/);
   assert.notEqual(s.badge, "Finalized");
+  assert.equal(s.canRetry, false);
+});
+
+test("a partial result offers a retry only when the server says its training can be resumed", () => {
+  const partial = { ...base, status: "PARTIAL", quality: "PARTIAL", failureStage: "SPLAT_RECONSTRUCTION", failureCode: "TIME_LIMIT_EXCEEDED" } as const;
+  const resumable = summarizeRun({ ...partial, retryable: true });
+  assert.equal(resumable.canRetry, true);
+  assert.match(resumable.headline, /NOT finalized/);
+  assert.equal(summarizeRun({ ...partial, retryable: false }).canRetry, false);
 });
 
 test("only a FINAL success is presented as finalized; success without FINAL quality is flagged as inconsistent", () => {

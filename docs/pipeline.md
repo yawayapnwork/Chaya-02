@@ -553,8 +553,32 @@ parameters) fails with `CHECKPOINT_CORRUPT`, before any frame is prepared, inste
 from (seed, iteration), so a resumed run takes the same steps an uninterrupted one would have. The test asserts the
 parameters are bit-identical on CPU.
 
-**Not done yet:** the control plane does not offer a previous job's checkpoint to a new job, and a PARTIAL run cannot
-be retried. So in production a checkpoint is recorded, but nothing resumes it automatically.
+**Resuming training.** A checkpoint is resumed by retrying the run (`POST .../captures/{c}/processing/retry`):
+
+- The time-boxed attempt's stage run is FAILED (`TIME_LIMIT_EXCEEDED`), but its `SPLAT_CHECKPOINT` is registered and
+  sealed like any other output. A retry's SPLAT_RECONSTRUCTION job is offered, as its one `SPLAT_CHECKPOINT` input, the
+  checkpoint of the **latest attempt of the same run** that the time budget stopped
+  (`PipelineService#resumableCheckpoint`). It is only ever a sealed, non-PII artifact of that run, so of that scan and
+  tenant. Checkpoints of attempts that failed any other way, and of other runs or scans, are never offered.
+- A run that ended **PARTIAL because the time budget stopped training** (failure stage SPLAT_RECONSTRUCTION,
+  `TIME_LIMIT_EXCEEDED`) can be retried when such a checkpoint exists. It goes back to RUNNING with a fresh time budget,
+  and `retryable` in the run view says so. This is the only PARTIAL → RUNNING transition; the run guard (migration V43)
+  enforces it. A run that ran out of time *between* stages, or has no checkpoint, stays terminal. Its capture stays
+  COMPLETED: it already holds a kept partial result.
+- A FAILED run (for example the control plane ended the attempt, or no iteration ran) is retried as before. Its retry
+  is offered the latest valid checkpoint if there is one, and otherwise trains from the SfM seed.
+- The worker resumes from the checkpoint's iteration with its parameters, Adam state and density-control state
+  (`resume_state`), and records `provenance.resumed_from` (artifact id, SHA-256, iteration) in the training report. It
+  refuses a checkpoint without a recorded checksum, or of other inputs or settings, with `CHECKPOINT_CORRUPT` /
+  `CHECKPOINT_MISMATCH`, and names it in `details.checkpoint`. A download that does not match its checksum is
+  `INPUT_CHECKSUM_MISMATCH` with `details.artifact_id`. The control plane **never offers a refused checkpoint again**, so
+  the next retry resumes from the previous valid checkpoint, or from the seed.
+- Each attempt writes under its own `attempt-N/` prefix, and artifacts are write-once. A resumed attempt publishes a new
+  checkpoint rather than replacing one, and later stages only read SUCCEEDED attempts' outputs, so a superseded
+  `SPLAT_PARTIAL` never reaches them. Retries stay bounded by the job's `max_retries`.
+
+The identity a checkpoint is bound to includes the run, so a checkpoint never crosses runs. A new run of the same
+capture trains from the seed.
 
 **What has been validated, at three levels:**
 

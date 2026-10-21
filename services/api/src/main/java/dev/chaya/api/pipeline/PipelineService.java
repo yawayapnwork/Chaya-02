@@ -243,20 +243,27 @@ public class PipelineService {
      * produces a second navmesh and set of graphs for the same version (which the version's own consistency check would
      * then refuse forever) and is idempotent. A re-scan whose parent is no longer what its floor publishes is refused: its
      * version could never be published (PARENT_NOT_CURRENT).
+     *
+     * <p>A retry of SPLAT_RECONSTRUCTION resumes training from {@link #resumableCheckpoint} when there is one. That is also
+     * the one way a PARTIAL run can be retried: when the time budget stopped its training ({@link #resumesPartial}), the
+     * run goes back to RUNNING and the training continues from the checkpoint with a fresh budget. Its capture stays
+     * COMPLETED (it already has a kept partial result).
      */
     public RunView retry(Actor actor, UUID venueId, UUID scanId) {
         Runnable afterCommit = tx.execute(s -> {
             RunRow run = lockRunByScan(scanId, venueId);
-            if (!run.status().equals("FAILED")) {
-                throw new ApiException(HttpStatus.CONFLICT, "RUN_NOT_RETRYABLE", "the pipeline run is " + run.status() + "; only a FAILED run can be retried");
+            String failureCode = (String) jdbc.sql("SELECT failure_code FROM pipeline_run WHERE id = :r").param("r", run.id())
+                .query().singleRow().get("failure_code"); // NULL unless the run ended FAILED or PARTIAL
+            boolean resumePartial = run.status().equals("PARTIAL") && resumesPartial(run, failureCode);
+            if (!run.status().equals("FAILED") && !resumePartial) {
+                throw new ApiException(HttpStatus.CONFLICT, "RUN_NOT_RETRYABLE", "the pipeline run is " + run.status() + "; only a "
+                    + "FAILED run, or a PARTIAL run whose splat training the time budget stopped with a resumable checkpoint, can be retried");
             }
             if (run.scanVersionId() != null && "ALIGNMENT_REJECTED".equals(jdbc.sql("SELECT status FROM scan_version WHERE id = :v")
                     .param("v", run.scanVersionId()).query(String.class).single())) {
                 throw new ApiException(HttpStatus.CONFLICT, "RUN_NOT_RETRYABLE", "this re-scan's alignment was rejected and its "
                     + "version is final; start a new re-scan (and re-capture or re-calibrate the region) instead");
             }
-            String failureCode = jdbc.sql("SELECT failure_code FROM pipeline_run WHERE id = :r").param("r", run.id())
-                .query(String.class).single();
             if (ScanVersionService.VERSION_SUPERSEDED.equals(failureCode)) {
                 throw new ApiException(HttpStatus.CONFLICT, "RUN_NOT_RETRYABLE", "this run's version was created before the one its "
                     + "floor now publishes and can never be published; reconstruct or re-scan again instead");
@@ -293,14 +300,63 @@ public class PipelineService {
             } else {
                 jobs.enqueueForRun(run.orgId(), run.venueId(), run.scanId(), run.scanVersionId(), run.id(), stage);
             }
-            jdbc.sql("UPDATE pipeline_run SET status = 'RUNNING', finished_at = NULL, failure_stage = NULL, failure_code = NULL, "
-                    + "failure_message = NULL, deadline_at = now() + make_interval(secs => time_budget_seconds) WHERE id = :r")
+            jdbc.sql("UPDATE pipeline_run SET status = 'RUNNING', quality = NULL, finished_at = NULL, failure_stage = NULL, "
+                    + "failure_code = NULL, failure_message = NULL, deadline_at = now() + make_interval(secs => time_budget_seconds) "
+                    + "WHERE id = :r")
                 .param("r", run.id()).update();
-            audit.success(actor, venueId, "pipeline.retry", "pipeline_run", run.id(), Map.of("stage", stage.name()));
+            Map<String, Object> meta = new LinkedHashMap<>();
+            meta.put("stage", stage.name());
+            if (stage == JobStage.SPLAT_RECONSTRUCTION) {
+                resumableCheckpoint(run).ifPresent(c -> meta.put("resumeCheckpointId", c.artifactId().toString()));
+            }
+            if (resumePartial) {
+                meta.put("reopenedPartial", true);
+            }
+            audit.success(actor, venueId, "pipeline.retry", "pipeline_run", run.id(), meta);
             return () -> { };
         });
         afterCommit.run();
         return runView(scanId).orElseThrow();
+    }
+
+    /**
+     * The checkpoint a SPLAT_RECONSTRUCTION attempt of this run resumes from, offered as its SPLAT_CHECKPOINT input: the one
+     * published by the latest attempt the time budget stopped (FAILED with TIME_LIMIT_EXCEEDED; an attempt that failed any
+     * other way publishes none). Only a sealed artifact of this run, so of this scan and tenant, that is not PII and not
+     * purged. A checkpoint a later attempt refused (CHECKPOINT_CORRUPT / CHECKPOINT_MISMATCH naming it, or its download did
+     * not match its checksum) is never offered again: the retry after that resumes from the previous valid one, or starts
+     * from the SfM seed when there is none. The worker still checks the checkpoint is of exactly these inputs and settings
+     * (chaya_worker.stages.splat_reconstruction.resume_state).
+     */
+    private Optional<InputRef> resumableCheckpoint(RunRow run) {
+        return jdbc.sql("""
+                SELECT a.id, a.kind, a.stage, a.bucket, a.object_key, a.checksum_sha256, a.content_type, a.size_bytes, a.contains_pii
+                  FROM processing_artifact a
+                  JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id
+                 WHERE sr.run_id = :r AND sr.stage = 'SPLAT_RECONSTRUCTION' AND sr.status = 'FAILED'
+                   AND sr.error_code = :timeLimit AND a.kind = 'SPLAT_CHECKPOINT' AND a.sealed AND NOT a.contains_pii
+                   AND a.organization_id = :o AND a.venue_id = :v AND a.scan_id = :s
+                   AND NOT EXISTS (SELECT 1 FROM pii_staging_purge p WHERE p.artifact_id = a.id)
+                   AND NOT EXISTS (
+                       SELECT 1 FROM pipeline_stage_run later
+                        WHERE later.run_id = sr.run_id AND later.stage = 'SPLAT_RECONSTRUCTION' AND later.created_at > sr.created_at
+                          AND ((later.error_code IN ('CHECKPOINT_CORRUPT', 'CHECKPOINT_MISMATCH')
+                                AND later.error_details ->> 'checkpoint' = a.id::text)
+                            OR (later.error_code = 'INPUT_CHECKSUM_MISMATCH' AND later.error_details ->> 'artifact_id' = a.id::text)))
+                 ORDER BY sr.created_at DESC, a.created_at DESC
+                 LIMIT 1
+                """).param("r", run.id()).param("timeLimit", PipelineDefinition.TIME_LIMIT_EXCEEDED)
+            .param("o", run.orgId()).param("v", run.venueId()).param("s", run.scanId())
+            .query((rs, i) -> new InputRef(rs.getObject("id", UUID.class), rs.getString("kind"), rs.getString("stage"),
+                rs.getString("bucket"), rs.getString("object_key"), rs.getString("checksum_sha256"),
+                rs.getString("content_type"), rs.getLong("size_bytes"), rs.getBoolean("contains_pii"))).optional();
+    }
+
+    /** A PARTIAL run that {@link #retry} reopens: the time budget stopped its splat training, which left a checkpoint to
+     * resume (the V43 run guard allows exactly this PARTIAL -> RUNNING transition). */
+    private boolean resumesPartial(RunRow run, String failureCode) {
+        return JobStage.SPLAT_RECONSTRUCTION.name().equals(run.failureStage())
+            && PipelineDefinition.TIME_LIMIT_EXCEEDED.equals(failureCode) && resumableCheckpoint(run).isPresent();
     }
 
     /** The run stopped at its last stage, and that stage succeeded: what failed was the publication of its version. */
@@ -509,6 +565,10 @@ public class PipelineService {
         if (run.incremental() && stage == JobStage.NAVIGATION_BAKING) {
             globalCloudInput(run.scanVersionId()).ifPresent(inputs::add);
             globalLabelsInput(run.scanVersionId()).ifPresent(inputs::add);
+        }
+        // A time-boxed attempt's stage run is FAILED, so its checkpoint is not among the inputs above; a retry resumes it.
+        if (stage == JobStage.SPLAT_RECONSTRUCTION) {
+            resumableCheckpoint(run).ifPresent(inputs::add);
         }
         return inputs;
     }
@@ -2285,7 +2345,8 @@ public class PipelineService {
         // the server refuses. retriesRemaining: for a stage whose job failed, how many more times it may be re-queued.
         Integer retriesRemaining = null;
         String retryBlockedReason = null;
-        if (status.equals("FAILED")) {
+        boolean resumablePartial = status.equals("PARTIAL") && resumesPartial(loadRun(runId), failureCode);
+        if (status.equals("FAILED") || resumablePartial) {
             if (failureCode != null && PERMANENT_FAILURES.contains(failureCode)) {
                 retryBlockedReason = failureCode;
             } else if (failureStage != null) {
@@ -2307,7 +2368,7 @@ public class PipelineService {
         return Optional.of(new RunView(runId, status, (String) r.get("quality"), (Boolean) r.get("privacy_enabled"),
             ((Number) r.get("time_budget_seconds")).intValue(), instant(r.get("started_at")), instant(r.get("deadline_at")),
             instant(r.get("finished_at")), failureStage, failureCode, (String) r.get("failure_message"),
-            status.equals("FAILED") && retryBlockedReason == null, retriesRemaining, retryBlockedReason, stages));
+            (status.equals("FAILED") || resumablePartial) && retryBlockedReason == null, retriesRemaining, retryBlockedReason, stages));
     }
 
     private StageRunView stageRunView(Map<String, Object> sr) {

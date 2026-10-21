@@ -39,8 +39,16 @@ NVIDIA GPU, so no GPU evidence could be produced here. GPU training status: **NO
   `tests/splat/test_gsplat_adapter.py`.
 - **D-7** found and fixed: `from_colmap_project` returned no cameras, so the PSNR gate never ran on real data, and it
   re-encoded frames. Verified with real COLMAP.
-- **D-3 to D-6** are open. All GPU runtime verification is still blocked. Evidence:
+- **D-4 to D-6** are open. All GPU runtime verification is still blocked. Evidence:
   `docs/gaussian-splatting-test-baseline.md` §7.
+
+**Status update (2026-10-21):**
+- **D-3** fixed. A retry of SPLAT_RECONSTRUCTION is offered the checkpoint of the run's latest time-boxed attempt, unless
+  a later attempt refused it (`PipelineService#resumableCheckpoint`). A PARTIAL run whose training the time budget
+  stopped can be retried to resume it; migration V43 allows exactly that PARTIAL → RUNNING transition. The worker's
+  checkpoint handling is `resume_state`. Covered by `SplatResumeControlPlaneTest` (control plane, real PostgreSQL/MinIO)
+  and `tests/splat/test_checkpoint_resume.py` (worker, CPU test renderer). Resume on CUDA is still unverified (P-1).
+  See `docs/pipeline.md`, "Resuming training".
 
 ## 1. Confirmed working behaviour
 

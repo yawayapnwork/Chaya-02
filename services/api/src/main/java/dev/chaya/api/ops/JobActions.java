@@ -10,7 +10,8 @@ import java.util.UUID;
  *   <li>A job of a pipeline run is controlled through its run ({@code POST .../captures/{c}/processing/retry|cancel},
  *       PipelineService#retry/#cancel). The run is retryable only while it is FAILED, and the retry re-queues the
  *       latest job of the stage the run failed at -- bounded by that job's max_retries
- *       (ProcessingJobRepository#retry).</li>
+ *       (ProcessingJobRepository#retry). The capture endpoint also resumes a PARTIAL run whose splat training the time
+ *       budget stopped (RunView#retryable says when); this dashboard does not offer that.</li>
  *   <li>A legacy job without a run is controlled directly ({@code POST .../jobs/{j}/retry|cancel}).</li>
  * </ul>
  */
