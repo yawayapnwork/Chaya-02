@@ -117,6 +117,45 @@ public final class PipelineDefinition {
         Map.entry(JobStage.SEMANTIC_INDEXING, List.of("DETECTED_OBJECTS")),
         Map.entry(JobStage.NAVIGATION_BAKING, List.of("NAVMESH", "NAVMESH_MANIFEST", "NAVIGATION_GRAPH")));
 
+    /**
+     * The artifact kinds each stage reads (packages/contracts/pipeline/stage-artifacts.json, every kind of "requiredInputs"
+     * plus "optionalInputs"; PipelineArtifactContractTest keeps the two equal, and the worker's
+     * tests/unit/test_stage_artifact_contract.py checks each stage really reads exactly these). A work order offers a stage
+     * only these kinds: nothing else an earlier stage published, such as the splat training's SPLAT_CHECKPOINT and
+     * KEYFRAME_RENDERS, is downloaded by every later stage (audit D-4). SPLAT_RECONSTRUCTION itself reads SPLAT_CHECKPOINT,
+     * which is how a retry resumes training.
+     */
+    public static final Map<JobStage, Set<String>> INPUTS = Map.ofEntries(
+        Map.entry(JobStage.INPUT_VALIDATION, Set.of("RAW_VIDEO", "RAW_IMAGE", "RAW_METADATA")),
+        Map.entry(JobStage.FFMPEG_PREPROCESS, Set.of("RAW_VIDEO", "RAW_IMAGE", "RAW_METADATA")),
+        Map.entry(JobStage.FRAME_QUALITY_FILTER, Set.of("FRAME_ARCHIVE")),
+        Map.entry(JobStage.PRIVACY_PREPROCESS, Set.of("FRAME_ARCHIVE_SELECTED")),
+        Map.entry(JobStage.POSE_ESTIMATION, Set.of("FRAME_ARCHIVE_ANON", "FRAME_ARCHIVE_SELECTED", "CAMERA_CALIBRATION", "PRIVACY_MASKS")),
+        Map.entry(JobStage.SPLAT_RECONSTRUCTION, Set.of("SPARSE_MODEL", "POSES", "FRAME_ARCHIVE_ANON", "FRAME_ARCHIVE_SELECTED",
+            "SPLAT_CHECKPOINT", "PRIVACY_MASKS")),
+        Map.entry(JobStage.SEMANTIC_SEGMENTATION, Set.of("SPLAT", "SPARSE_MODEL", "POSES", "FRAME_ARCHIVE_ANON",
+            "FRAME_ARCHIVE_SELECTED", "PRIVACY_MASKS")),
+        Map.entry(JobStage.GEOMETRIC_CLEANUP, Set.of("SPLAT", "SEMANTIC_LABELS")),
+        Map.entry(JobStage.REGION_ALIGNMENT, Set.of("GLOBAL_CLOUD", "SPLAT_CLEAN")),
+        Map.entry(JobStage.REGION_SPLICE, Set.of("GLOBAL_CLOUD", "SPLAT_ALIGNED", "GLOBAL_LABELS", "SEMANTIC_LABELS_CLEAN")),
+        Map.entry(JobStage.ROOM_REGISTRATION, Set.of("ROOM_CLOUD", "ROOM_LABELS")),
+        Map.entry(JobStage.ROOM_STITCH, Set.of("ROOM_CLOUD", "ROOM_LABELS", "ROOM_REGISTRATION_REPORT")),
+        Map.entry(JobStage.PLANE_FITTING, Set.of("SPLAT_MERGED", "SPLAT_CLEAN", "POSES", "SEMANTIC_LABELS_MERGED",
+            "SEMANTIC_LABELS_CLEAN")),
+        Map.entry(JobStage.ARTIFACT_GENERATION, Set.of("SPLAT_MERGED", "SPLAT_CLEAN", "SPLAT", "PLANE_MODEL",
+            "SEMANTIC_LABELS_MERGED", "SEMANTIC_LABELS_CLEAN", "SEMANTIC_LABELS")),
+        Map.entry(JobStage.SEMANTIC_INDEXING, Set.of("SPLAT_MERGED", "SPLAT_CLEAN", "SPLAT", "SPARSE_MODEL", "POSES",
+            "FRAME_ARCHIVE_ANON", "FRAME_ARCHIVE_SELECTED", "ALIGNMENT_REPORT", "PRIVACY_MASKS", "SEMANTIC_LABELS_MERGED",
+            "SEMANTIC_LABELS_CLEAN", "SEMANTIC_LABELS")),
+        Map.entry(JobStage.NAVIGATION_BAKING, Set.of("SPLAT_MERGED", "SPLAT_CLEAN", "SPLAT", "SEMANTIC_LABELS_MERGED",
+            "SEMANTIC_LABELS_CLEAN", "SEMANTIC_LABELS", "PLANE_MODEL", "GLOBAL_CLOUD", "GLOBAL_LABELS", "SPLICE_REPORT",
+            "STITCH_REPORT")));
+
+    /** Whether `stage` reads artifacts of `kind` ({@link #INPUTS}). */
+    public static boolean reads(JobStage stage, String kind) {
+        return INPUTS.getOrDefault(stage, Set.of()).contains(kind);
+    }
+
     /** The required outputs of `stage` that `published` lacks, in contract order. */
     public static List<String> missingOutputs(JobStage stage, Set<String> published) {
         return REQUIRED_OUTPUTS.getOrDefault(stage, List.of()).stream().filter(k -> !published.contains(k)).toList();

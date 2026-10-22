@@ -50,6 +50,15 @@ NVIDIA GPU, so no GPU evidence could be produced here. GPU training status: **NO
   and `tests/splat/test_checkpoint_resume.py` (worker, CPU test renderer). Resume on CUDA is still unverified (P-1).
   See `docs/pipeline.md`, "Resuming training".
 
+**Status update (2026-10-22):**
+- **D-4** fixed. A work order offers a stage only the kinds its contract entry declares (`PipelineDefinition.INPUTS`,
+  kept equal to `stage-artifacts.json` by `PipelineArtifactContractTest`), so SPLAT_CHECKPOINT and KEYFRAME_RENDERS reach
+  no stage after SPLAT_RECONSTRUCTION. A retry of SPLAT_RECONSTRUCTION is still offered its resume checkpoint. The worker
+  filters the same way before downloading (`chaya_worker.stage_inputs`, checked against the contract). A stage that
+  crashes while a required input is missing fails as `INPUT_INVALID` naming it; stages' own codes are unchanged. Covered by
+  `SplatResumeControlPlaneTest#aCompletedTrainingsCheckpointAndKeyframesAreOfferedToNoLaterStage`,
+  `tests/orchestration/test_stage_inputs.py` and `tests/smoke/test_splat_artifact_smoke.py`.
+
 ## 1. Confirmed working behaviour
 
 Confirmed by code reading and/or the CPU test run in section 6. "Working" here means CPU-verified mechanics, not GPU execution.

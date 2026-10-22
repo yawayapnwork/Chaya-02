@@ -26,7 +26,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import __version__
+from . import __version__, stage_inputs
 from .api_client import ApiError, ControlPlane
 from .contract import ArtifactSpec, InputFile, Stage, StageContext, StageResult
 from .errors import StageError
@@ -197,6 +197,14 @@ class Orchestrator:
             logger.exception("stage crashed")
             with open(runner.stderr_path, "a", encoding="utf-8") as f:
                 f.write(traceback.format_exc())
+            # A stage reports a missing input with its own structured code (INPUT_INVALID, NAVMESH_LABELS_UNAVAILABLE, ...),
+            # after its dependency checks; one that crashed instead is named as the input failure it is.
+            missing = stage_inputs.missing(name, stage_inputs.offered(name, order["inputs"]))
+            if missing:
+                return StageResult("FAILED", command_record(ctx), runner.last_exit_status(), [], "INPUT_INVALID",
+                                   f"{name} needs " + " and ".join(" or ".join(g) for g in missing) + ", which the work "
+                                   f"order does not offer ({type(exc).__name__}: {exc})",
+                                   {"missing_inputs": missing, "offered_kinds": sorted({i.kind for i in ctx.inputs})})
             return StageResult("FAILED", command_record(ctx), runner.last_exit_status(), [], "INTERNAL_ERROR",
                                f"{type(exc).__name__}: {exc}", None)
 
@@ -206,8 +214,13 @@ class Orchestrator:
                            runner.last_exit_status(), [], code, message, details)
 
     def _download_inputs(self, order: dict[str, Any], workdir: Path, logger) -> list[InputFile]:
+        """Downloads and verifies the inputs the stage reads (stage_inputs). Nothing else on the work order is downloaded."""
+        refs = stage_inputs.offered(order["stage"], order["inputs"])
+        skipped = [r["artifactId"] for r in order["inputs"] if r not in refs]
+        if skipped:
+            logger.info("inputs the stage does not read were not downloaded", extra={"artifact_ids": skipped})
         files: list[InputFile] = []
-        for ref in order["inputs"]:
+        for ref in refs:
             dest = workdir / "inputs" / f"{ref['artifactId']}-{Path(ref['key']).name}"
             try:
                 self.storage.download(ref["bucket"], ref["key"], dest)
@@ -256,7 +269,7 @@ class Orchestrator:
             "startedAt": _iso(started),
             "finishedAt": _iso(finished),
             "command": command,
-            "inputArtifactIds": [i["artifactId"] for i in order["inputs"]],
+            "inputArtifactIds": [i["artifactId"] for i in stage_inputs.offered(order["stage"], order["inputs"])],
             "exitStatus": result.exit_status,
             "stdout": self._log_artifact(order, stdout, "stdout.log"),
             "stderr": self._log_artifact(order, stderr, "stderr.log"),

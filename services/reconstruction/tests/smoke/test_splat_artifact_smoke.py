@@ -11,6 +11,7 @@ venue. That is tests/gpu/test_splat_acceptance.py, which runs the real SPLAT_REC
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
 import numpy as np
@@ -21,6 +22,7 @@ torch = pytest.importorskip("torch", reason="torch is not installed: pip install
 from chaya_worker.splat_color import rgb_to_sh0  # noqa: E402
 from chaya_worker.splat_training import TrainingConfig, init_params, l1_dssim_loss, source_identity, train  # noqa: E402
 from chaya_worker.stages.splat_reconstruction import initial_scale_log, publish_outcome  # noqa: E402
+from tests.conftest import DERIVED_BUCKET  # noqa: E402
 from tests.splat.renderer import cpu_rasterizer, plane_points, rig  # noqa: E402
 from tests.splat.viewer_artifacts import generate_and_verify, viewer_library_available, viewer_library_check  # noqa: E402
 
@@ -64,6 +66,24 @@ def test_a_trained_splat_becomes_a_valid_viewer_artifact_with_matching_checksums
     summary = generate_and_verify(harness, trained)
     assert summary["gaussian_count"] != 16, "density control changed the seed's 16 Gaussians: the cloud was trained"
     assert summary["ksplat_bytes"] == 4096 + 1024 + 44 * summary["gaussian_count"]
+
+
+def test_artifact_generation_offered_every_training_output_reads_only_the_splat_and_succeeds(harness, trained, tmp_path):
+    """Audit D-4: offered everything training published (its checkpoint, and keyframes as a completed GPU training
+    publishes them), the real ARTIFACT_GENERATION downloads and names only the SPLAT, and still writes the viewer asset."""
+    keyframes = tmp_path / "keyframes.tar"
+    keyframes.write_bytes(b"fixture keyframes")  # FIXTURE CONTENT: never read
+    inputs = harness.outputs_as_inputs(trained) + [{**harness.raw_input("KEYFRAME_RENDERS", keyframes), "containsPii": False}]
+    downloaded, real = [], harness.storage.download
+    harness.storage.download = lambda bucket, key, dest: downloaded.append(key) or real(bucket, key, dest)
+
+    report = harness.run(harness.order("ARTIFACT_GENERATION", inputs))
+    assert report["status"] == "SUCCEEDED", report["errorMessage"]
+    splat = next(i for i in inputs if i["kind"] == "SPLAT")
+    assert downloaded == [splat["key"]] and report["inputArtifactIds"] == [splat["artifactId"]]
+    manifest_ref = next(a for a in report["artifacts"] if a["kind"] == "ARTIFACT_MANIFEST")
+    manifest = json.loads((harness.storage.root / DERIVED_BUCKET / manifest_ref["key"]).read_text(encoding="utf-8"))
+    assert sorted(a["kind"] for a in manifest["artifacts"]) == ["KSPLAT", "SPLAT"], "the manifest names only what was read"
 
 
 def test_the_pinned_viewer_library_loads_the_trained_artifact(harness, trained, tmp_path):

@@ -321,13 +321,24 @@ def test_a_stage_that_outlives_the_time_budget_is_stopped_and_reported_as_time_l
     assert report["command"]["commands"][0][0] == sys.executable
 
 
-def test_a_crashing_stage_becomes_an_internal_error_with_the_traceback_kept_in_the_log(harness):
+def test_a_crashing_stage_becomes_an_internal_error_with_the_traceback_kept_in_the_log(harness, tmp_path):
     def boom(ctx):
         raise RuntimeError("kaboom")
 
-    report = harness.run(harness.order("POSE_ESTIMATION", []), registry={"POSE_ESTIMATION": _Stage("POSE_ESTIMATION", boom)})
+    frames = frame_archive(harness, tmp_path, shaken_face_frames(1), "FRAME_ARCHIVE_ANON", pii=False)  # its required input
+    report = harness.run(harness.order("POSE_ESTIMATION", [frames]), registry={"POSE_ESTIMATION": _Stage("POSE_ESTIMATION", boom)})
     assert report["status"] == "FAILED" and report["errorCode"] == "INTERNAL_ERROR" and "kaboom" in report["errorMessage"]
     assert "Traceback" in (harness.storage.root / DERIVED_BUCKET / report["stderr"]["key"]).read_text()
+
+
+def test_a_crash_while_a_required_input_is_missing_is_reported_as_the_input_failure(harness):
+    def boom(ctx):
+        raise IndexError("list index out of range")
+
+    report = harness.run(harness.order("POSE_ESTIMATION", []), registry={"POSE_ESTIMATION": _Stage("POSE_ESTIMATION", boom)})
+    assert report["status"] == "FAILED" and report["errorCode"] == "INPUT_INVALID"
+    assert report["errorDetails"] == {"missing_inputs": [["FRAME_ARCHIVE_ANON", "FRAME_ARCHIVE_SELECTED"]], "offered_kinds": []}
+    assert "Traceback" in (harness.storage.root / DERIVED_BUCKET / report["stderr"]["key"]).read_text(), "the crash is still logged"
 
 
 def test_an_unknown_stage_fails_explicitly(harness):

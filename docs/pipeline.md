@@ -151,10 +151,19 @@ undistortion, and no accuracy improvement on real data has been measured.
 `packages/contracts/pipeline/stage-artifacts.json` says what every stage reads and publishes. Both sides are tested
 against it:
 
-- `PipelineArtifactContractTest` checks `PipelineDefinition`'s plans and `REQUIRED_OUTPUTS`.
+- `PipelineArtifactContractTest` checks `PipelineDefinition`'s plans, `REQUIRED_OUTPUTS` and `INPUTS`.
 - `tests/unit/test_stage_artifact_contract.py` reads each worker stage's source and checks what it really reads and
   writes. It also checks that every plan (full or incremental, with or without privacy preprocessing or navigation
-  baking) satisfies every stage's inputs from the stages before it, and that a shipped worker claims every planned stage.
+  baking) satisfies every stage's inputs from the stages before it, that a shipped worker claims every planned stage,
+  and that `chaya_worker.stage_inputs` mirrors the contract's inputs.
+
+A work order offers a stage only the kinds it declares (`requiredInputs` and `optionalInputs`;
+`PipelineDefinition.INPUTS`), not every earlier output. So the training's `SPLAT_CHECKPOINT` and `KEYFRAME_RENDERS`
+reach no later stage, while a retried SPLAT_RECONSTRUCTION is still offered the checkpoint it resumes from (see
+"Resuming training"). The worker applies the same filter before it downloads anything (`chaya_worker.stage_inputs`).
+A stage reports a missing input with its own structured code, after its dependency checks (`INPUT_INVALID`,
+`NAVMESH_LABELS_UNAVAILABLE`, ...). A stage that crashes instead while a required group is missing fails as
+`INPUT_INVALID`, not `INTERNAL_ERROR`, and `errorDetails.missing_inputs` names the groups.
 
 A `SUCCEEDED` report is accepted as a success only if its outputs keep the contract. Otherwise the stage run is recorded
 as **FAILED** and the run fails at that stage, retryably, before anything downstream runs:

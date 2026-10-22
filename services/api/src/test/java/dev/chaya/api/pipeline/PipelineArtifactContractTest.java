@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 
@@ -60,6 +61,28 @@ class PipelineArtifactContractTest {
                 .isEqualTo(strings(stages.get(stage).get("requiredOutputs")));
         }
         assertThat(PipelineDefinition.REQUIRED_OUTPUTS.keySet().stream().map(Enum::name)).containsExactlyInAnyOrderElementsOf(planned);
+    }
+
+    @Test
+    void everyStagesInputsAreTheContractsRequiredAndOptionalInputs() throws Exception {
+        JsonNode stages = contract().get("stages");
+        for (JobStage stage : PipelineDefinition.REQUIRED_OUTPUTS.keySet()) {
+            JsonNode c = stages.get(stage.name());
+            Set<String> declared = new LinkedHashSet<>(strings(c.get("optionalInputs")));
+            c.get("requiredInputs").forEach(group -> declared.addAll(strings(group)));
+            assertThat(PipelineDefinition.INPUTS.get(stage)).as(stage.name()).containsExactlyInAnyOrderElementsOf(declared);
+        }
+        assertThat(PipelineDefinition.INPUTS.keySet()).isEqualTo(PipelineDefinition.REQUIRED_OUTPUTS.keySet());
+    }
+
+    @Test
+    void onlySplatReconstructionReadsTheTrainingsCheckpointAndNoStageReadsItsKeyframes() {
+        assertThat(PipelineDefinition.INPUTS.entrySet().stream().filter(e -> e.getValue().contains("SPLAT_CHECKPOINT")).map(Map.Entry::getKey))
+            .containsExactly(JobStage.SPLAT_RECONSTRUCTION);
+        assertThat(PipelineDefinition.INPUTS.values()).noneMatch(kinds -> kinds.contains("KEYFRAME_RENDERS")
+            || kinds.contains("TRAINING_CAMERAS") || kinds.contains("SPLAT_TRAINING_REPORT"));
+        assertThat(PipelineDefinition.reads(JobStage.SEMANTIC_SEGMENTATION, "SPLAT")).isTrue();
+        assertThat(PipelineDefinition.reads(JobStage.SEMANTIC_SEGMENTATION, "SPLAT_CHECKPOINT")).isFalse();
     }
 
     @Test

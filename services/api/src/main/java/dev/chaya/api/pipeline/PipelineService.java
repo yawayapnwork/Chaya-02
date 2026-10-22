@@ -526,7 +526,8 @@ public class PipelineService {
     /**
      * What a stage may read. The first two stages (validation and frame extraction) read the accepted raw
      * capture media. Every later stage reads the outputs of earlier successful stages; once privacy
-     * preprocessing has run, anything that may contain PII is withheld.
+     * preprocessing has run, anything that may contain PII is withheld. Only the kinds the stage declares
+     * ({@link PipelineDefinition#INPUTS}) are offered: the worker downloads every input of its work order.
      */
     private List<InputRef> inputs(RunRow run, JobStage stage) {
         int idx = run.stages().indexOf(stage);
@@ -570,6 +571,7 @@ public class PipelineService {
         if (stage == JobStage.SPLAT_RECONSTRUCTION) {
             resumableCheckpoint(run).ifPresent(inputs::add);
         }
+        inputs.removeIf(in -> !PipelineDefinition.reads(stage, in.kind()));
         return inputs;
     }
 

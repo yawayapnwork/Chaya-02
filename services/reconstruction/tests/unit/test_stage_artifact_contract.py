@@ -1,9 +1,9 @@
 """The worker side of the stage artifact contract (packages/contracts/pipeline/stage-artifacts.json).
 
-The control plane hands each stage every earlier successful output (dev.chaya.api PipelineService#inputs) and refuses a
-SUCCEEDED report that lacks the stage's requiredOutputs. So a stage that reads a kind nothing upstream publishes, or
-publishes under another name than the contract says, breaks a real run only when that run reaches it -- after hours of
-GPU work. These tests read what every stage really reads and writes (its source) and check:
+The control plane hands each stage the earlier successful outputs of the kinds it declares (dev.chaya.api
+PipelineService#inputs) and refuses a SUCCEEDED report that lacks the stage's requiredOutputs. So a stage that reads a
+kind nothing upstream publishes, or publishes under another name than the contract says, breaks a real run only when
+that run reaches it -- after hours of GPU work. These tests read what every stage really reads and writes (its source) and check:
 
   * every kind a stage reads or writes is declared, and every declared kind is really read or written;
   * every plan the control plane creates -- full, incremental, a room capture's and a multi-room stitch's, with and without
@@ -75,6 +75,18 @@ def test_a_stage_reads_and_writes_exactly_what_the_contract_declares(stage):
     reads, writes = scanned(stage)
     assert writes == declared_outputs(stage), f"{stage} writes {sorted(writes)}; the contract declares {sorted(declared_outputs(stage))}"
     assert reads == declared_inputs(stage), f"{stage} reads {sorted(reads)}; the contract declares {sorted(declared_inputs(stage))}"
+
+
+@pytest.mark.parametrize("stage", sorted(STAGES))
+def test_the_orchestrators_input_filter_is_the_contracts_inputs(stage):
+    """chaya_worker.stage_inputs mirrors the contract (it is not shipped in the image): the orchestrator downloads only
+    these kinds and names the missing required groups of a stage that crashed, so a mismatch would starve or overfeed a
+    stage."""
+    from chaya_worker import stage_inputs
+
+    assert stage_inputs.REQUIRED[stage] == STAGES[stage]["requiredInputs"]
+    assert sorted(stage_inputs.OPTIONAL[stage]) == sorted(STAGES[stage]["optionalInputs"])
+    assert set(stage_inputs.REQUIRED) == set(stage_inputs.OPTIONAL) == set(STAGES)
 
 
 def plans() -> list[tuple[str, list[str]]]:

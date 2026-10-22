@@ -33,7 +33,7 @@ from typing import Any
 import numpy as np
 import pytest
 
-from chaya_worker import ksplat
+from chaya_worker import ksplat, stage_inputs
 from chaya_worker.orchestrator import Orchestrator
 from chaya_worker.ply import GaussianCloud, read_ply, write_ply
 from chaya_worker.settings import Settings
@@ -82,7 +82,8 @@ def test_every_pipeline_stage_is_either_run_or_explicitly_excluded():
 class SequencingControlPlane(FakeControlPlane):
     """Queues the next stage of the plan when a stage reports success, offering it the inputs the real control plane
     would: accepted raw media to the first two stages, earlier successful non-log outputs after that, and nothing that
-    may contain PII once privacy preprocessing has run. Stops at the first failure, as PipelineService#advance does."""
+    may contain PII once privacy preprocessing has run; of those, only the kinds the stage reads (PipelineDefinition#INPUTS).
+    Stops at the first failure, as PipelineService#advance does."""
 
     def __init__(self, plan: list[str], raw_inputs: list[dict[str, Any]], extra_inputs: dict[str, list[dict[str, Any]]]):
         super().__init__()
@@ -98,6 +99,7 @@ class SequencingControlPlane(FakeControlPlane):
         inputs = list(self.raw) if idx <= 1 else []
         inputs += [o for o in self.outputs if not (after_privacy and o["containsPii"])]
         inputs += self.extra.get(stage, [])
+        inputs = stage_inputs.offered(stage, inputs)
         self.queue.append({"id": str(uuid.uuid4()), "organizationId": "o", "venueId": "v", "scanId": "s", "scanVersionId": None,
                            "stage": stage, "runId": self.run_id, "attempt": 1, "deadlineAt": None, "privacyEnabled": True,
                            "derivedBucket": DERIVED_BUCKET,

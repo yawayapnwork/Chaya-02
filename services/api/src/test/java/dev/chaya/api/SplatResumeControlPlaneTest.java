@@ -8,6 +8,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.fasterxml.jackson.databind.JsonNode;
 import dev.chaya.api.pipeline.PipelineDefinition;
 import dev.chaya.api.pipeline.PipelineService;
+import dev.chaya.api.processing.JobStage;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -92,6 +93,57 @@ class SplatResumeControlPlaneTest extends PipelineTestSupport {
             + "WHERE sr.run_id = :r AND a.kind = 'SPLAT' AND sr.status = 'SUCCEEDED'", s.run())).isEqualTo(1);
         assertThat(auditCount(s.c().org(), "pipeline.partial")).isEqualTo(1);
         assertThat(auditCount(s.c().org(), "pipeline.succeeded")).isEqualTo(1);
+    }
+
+    /** Audit D-4: a completed training's checkpoint and keyframes stay registered but are offered to no later stage, and
+     * every stage is offered only the kinds it declares, with everything it needs, down to a FINAL run. */
+    @Test
+    void aCompletedTrainingsCheckpointAndKeyframesAreOfferedToNoLaterStage() throws Exception {
+        var s = startRun();
+        for (JsonNode earlier : runThrough("POSE_ESTIMATION")) {
+            assertOnlyDeclaredInputs(earlier);
+        }
+        JsonNode splat = claimExpecting("SPLAT_RECONSTRUCTION");
+        assertOnlyDeclaredInputs(splat);
+        send(splat, report("SUCCEEDED", List.of(artifact(splat, "splat.ply", "SPLAT", false, false, "splat-bytes"),
+            artifact(splat, "splat-checkpoint.pt", "SPLAT_CHECKPOINT", false, false, "final-state"),
+            artifact(splat, "keyframes.tar", "KEYFRAME_RENDERS", false, false, "keyframe-bytes"),
+            artifact(splat, "training-cameras.json", "TRAINING_CAMERAS", false, false, "{}"),
+            artifact(splat, "splat-training-report.json", "SPLAT_TRAINING_REPORT", false, false, "{\"status\":\"COMPLETED\"}")),
+            null, null), svc).andExpect(status().isOk());
+        assertThat(count("SELECT count(*) FROM processing_artifact a JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id "
+            + "WHERE sr.run_id = :r AND a.kind IN ('SPLAT_CHECKPOINT', 'KEYFRAME_RENDERS') AND sr.status = 'SUCCEEDED'", s.run()))
+            .as("still registered, only not handed out").isEqualTo(2);
+
+        List<String> later = PipelineDefinition.STAGES.stream().map(Enum::name).toList();
+        for (String stage : later.subList(later.indexOf("SEMANTIC_SEGMENTATION"), later.size())) {
+            JsonNode order = claimExpecting(stage);
+            if (METRIC_STAGES.contains(stage) && frameOf(order) == null) {
+                send(order, report("FAILED", List.of(), "NOT_CALIBRATED", "the reconstruction has no canonical coordinate frame"), svc)
+                    .andExpect(status().isOk());
+                calibrateRun(order);
+                retryRun(order);
+                order = claimExpecting(stage);
+            }
+            assertOnlyDeclaredInputs(order);
+            assertThat(kinds(order)).as(stage).doesNotContain("SPLAT_CHECKPOINT", "KEYFRAME_RENDERS", "TRAINING_CAMERAS",
+                "SPLAT_TRAINING_REPORT");
+            switch (stage) {
+                case "SEMANTIC_SEGMENTATION" -> assertThat(kinds(order)).containsExactlyInAnyOrder("SPLAT", "SPARSE_MODEL", "POSES",
+                    "FRAME_ARCHIVE_ANON", "PRIVACY_MASKS");
+                case "GEOMETRIC_CLEANUP" -> assertThat(kinds(order)).containsExactlyInAnyOrder("SPLAT", "SEMANTIC_LABELS");
+                case "PLANE_FITTING" -> assertThat(kinds(order)).containsExactlyInAnyOrder("SPLAT_CLEAN", "POSES", "SEMANTIC_LABELS_CLEAN");
+                case "ARTIFACT_GENERATION" -> assertThat(kinds(order)).containsExactlyInAnyOrder("SPLAT", "SPLAT_CLEAN", "PLANE_MODEL",
+                    "SEMANTIC_LABELS", "SEMANTIC_LABELS_CLEAN");
+                case "NAVIGATION_BAKING" -> assertThat(kinds(order)).contains("SPLAT_CLEAN", "SEMANTIC_LABELS_CLEAN", "PLANE_MODEL");
+                default -> { }
+            }
+            succeed(order);
+        }
+        assertThat(claim()).as("nothing left to do").isNull();
+        JsonNode done = processing(s).get("run");
+        assertThat(done.get("status").asText()).isEqualTo("SUCCEEDED");
+        assertThat(done.get("quality").asText()).isEqualTo("FINAL");
     }
 
     @Test
@@ -309,6 +361,12 @@ class SplatResumeControlPlaneTest extends PipelineTestSupport {
 
     private static List<String> kinds(JsonNode order) {
         return order.get("inputs").findValuesAsText("kind");
+    }
+
+    private static void assertOnlyDeclaredInputs(JsonNode order) {
+        String stage = order.get("stage").asText();
+        assertThat(kinds(order)).as("%s is offered only the kinds it reads", stage)
+            .isSubsetOf(PipelineDefinition.INPUTS.get(JobStage.valueOf(stage)));
     }
 
     private static List<JsonNode> inputsOf(JsonNode order, String kind) {
