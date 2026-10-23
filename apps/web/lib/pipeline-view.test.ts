@@ -54,6 +54,7 @@ test("dependency errors name what is missing", () => {
 test("a refused or unmeasured reconstruction says nothing was published", () => {
   assert.match(explainStageError("SPLAT_QUALITY_INSUFFICIENT", "x", null), /held out of training.*Nothing was published/);
   assert.match(explainStageError("SPLAT_QUALITY_UNVERIFIED", "x", null), /could not be measured.*not published/);
+  assert.match(explainStageError("SPLAT_IO_FAILED", "x", null), /file operation.*Nothing was published/);
 });
 
 test("labels and formatting helpers", () => {

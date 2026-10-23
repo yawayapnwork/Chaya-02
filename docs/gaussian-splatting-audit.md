@@ -68,6 +68,26 @@ NVIDIA GPU, so no GPU evidence could be produced here. GPU training status: **NO
   Their configs were changed (see the tests). What PSNR gsplat reaches on held-out views of a real capture is
   unmeasured: `tests/gpu/test_splat_acceptance.py` now also asserts the gate on CUDA, but has never run (D-1, P-3).
 
+**Status update (2026-10-23):**
+- **D-6** fixed. A failed checkpoint write no longer fails the job. `train()` catches only a storage error from the
+  checkpoint write, records it (`checkpoint_failures`), keeps training, and reports the last complete checkpoint
+  (`checkpoint_path`, `checkpoint_iteration`). `publish_outcome` decides by status (`checkpoint_record`):
+  - COMPLETED (never resumed by the control plane): the SPLAT is published on its own validation, with a checkpoint
+    only if that checkpoint is the final state.
+  - PARTIAL: the last complete checkpoint is published as the resume point, and the message names its iteration.
+
+  The report's `checkpoint` records every failure. Two defects found along the way are fixed too:
+  - `torch.save(path)` reports I/O errors as RuntimeError, and so does a file object when ENOSPC strikes mid-archive
+    (the zip writer's `__exit__` raises "unexpected pos"). So a real full disk was reported as INTERNAL_ERROR, not as
+    the documented code. `save_checkpoint` now writes through a file object, recovers the OSError from the chain, and
+    removes the temporary file on any failure.
+  - Any other OSError during training is `SPLAT_IO_FAILED` (with errno and file name), no longer labelled a
+    checkpoint failure. `SPLAT_CHECKPOINT_WRITE_FAILED` is now only a `failure_code` in the report.
+
+  PLY export and read-back failures, and the orchestrator's all-or-nothing upload (`STORAGE_ERROR`), are unchanged:
+  the result's own storage is never optional. Covered by `tests/splat/test_checkpoint_persistence.py`, using a real
+  torch serializer writing into a file that runs out of space. Never run on CUDA or on a real full disk.
+
 ## 1. Confirmed working behaviour
 
 Confirmed by code reading and/or the CPU test run in section 6. "Working" here means CPU-verified mechanics, not GPU execution.

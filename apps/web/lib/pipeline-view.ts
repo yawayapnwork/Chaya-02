@@ -77,6 +77,8 @@ export function explainStageError(code: string | null, message: string | null, d
       return "Some detected objects could not become searchable points of interest (missing position or embedding). Nothing was dropped silently; retry on an up-to-date worker.";
     case "NAVIGATION_GRAPH_INVALID":
       return "Navigation baking produced no routable graph. Retry the stage; if it repeats, check the floor's walkable surface in the capture.";
+    case "SPLAT_IO_FAILED":
+      return "A file operation on the worker failed during training. Nothing was published. Check the worker's free disk space and permissions, then retry.";
     case "SPLAT_QUALITY_INSUFFICIENT":
       return "Training finished, but the result does not reproduce the captured views: it renders the views held out of training no better than its starting point, or its training loss did not fall. Nothing was published. Capture again with more overlap and steadier lighting, or train longer.";
     case "SPLAT_QUALITY_UNVERIFIED":

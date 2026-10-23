@@ -508,8 +508,11 @@ the job's lease:
 - `SPLAT_GPU_OUT_OF_MEMORY` (lower `GSPLAT_MAX_GAUSSIANS` or the frame resolution);
 - `GPU_RUNTIME_ERROR` (a CUDA error);
 - `GSPLAT_INCOMPATIBLE`;
-- `SPLAT_CHECKPOINT_WRITE_FAILED` (disk);
+- `SPLAT_IO_FAILED`: a file operation of training other than a checkpoint write failed; `details` has the errno and
+  file name;
 - `CANCELLED`, `CAMERA_CONVENTION_INVALID`, `SPLAT_TRAINING_DIVERGED`.
+
+A failed checkpoint write is not a training failure (see "Checkpoints" below).
 
 GPU memory is released before the report. Any other exception is a bug and is reported as `INTERNAL_ERROR` with its
 traceback; it is not relabelled as a GPU failure.
@@ -571,6 +574,27 @@ always at the end, atomically. They hold:
 - the configuration, including the position learning-rate schedule;
 - the format (`chaya-splat-checkpoint/2`) and the SH degree;
 - the source identity: the run, scan, scan version, and the input artifacts with their SHA-256, plus a digest.
+
+A checkpoint is written to `splat-checkpoint.pt.tmp` and renamed into place only when it is complete. A failed write
+removes the temporary file and leaves the previous complete checkpoint where it was.
+
+**A checkpoint is a resume point, not the result** (audit D-6). A checkpoint write that fails with a storage error
+(disk full, permission denied) does not stop training or fail the stage. The cloud in memory is unaffected, and the PLY
+needs about a third of a checkpoint's space. The report's `checkpoint` field records each failed write (iteration,
+errno, `failure_code: SPLAT_CHECKPOINT_WRITE_FAILED`), which checkpoint was published, at which iteration, and its role.
+Any other error while writing (a serializer fault) is not a storage failure and fails the job.
+
+- **COMPLETED.** The control plane never resumes a completed training, so its checkpoint is auxiliary. The `SPLAT` is
+  published on its own checks (valid state, quality gate, PLY read-back). A checkpoint goes with it only if it holds
+  the final state; an earlier one is not published beside a finished splat.
+- **PARTIAL.** The checkpoint is what a retry resumes. If the final write fails, the last complete checkpoint is
+  published instead. The `TIME_LIMIT_EXCEEDED` message names the iteration a retry resumes from, and
+  `details.checkpoint_iteration` holds it. If none was written, the message says this attempt cannot be resumed; a retry
+  then gets an earlier attempt's checkpoint, if any, or trains from the seed.
+
+A storage failure of the result itself is never tolerated. A PLY that cannot be written (`SPLAT_EXPORT_FAILED`) or
+does not read back (`SPLAT_EXPORT_INVALID`) fails the stage with the report only. If any output cannot be uploaded,
+the checkpoint included, the orchestrator fails the stage with `STORAGE_ERROR` and registers none of its outputs.
 
 A SPLAT_RECONSTRUCTION job given a `SPLAT_CHECKPOINT` input resumes from it. Only the iteration target and checkpoint
 cadence may differ. The stage refuses with `CHECKPOINT_MISMATCH`: different inputs or other settings; a format-1

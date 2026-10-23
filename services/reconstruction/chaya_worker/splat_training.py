@@ -60,6 +60,7 @@ checkpoint takes exactly the steps an uninterrupted run would have taken, withou
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import math
@@ -399,7 +400,12 @@ def source_identity(**parts: Any) -> dict[str, Any]:
 def save_checkpoint(path: Path, *, iteration: int, params: dict, optimizer: torch.optim.Optimizer, density: DensityControl,
                     config: TrainingConfig, source: dict[str, Any], scene_extent: float, history: list[dict[str, Any]]) -> Path:
     """Everything a resume needs, as plain tensors (no pickled classes): completed iterations, parameters, Adam moments and
-    step counts per parameter, the density-control accumulators, the config, the source identity and the history."""
+    step counts per parameter, the density-control accumulators, the config, the source identity and the history.
+
+    Atomic: the payload is written to `<path>.tmp` and renamed over `path` only once it is complete, so `path` is either
+    the previous complete checkpoint or this one, never a truncated file. On any failure the temporary file is removed and
+    the exception propagates. The file is written through a Python file object so that a storage failure (disk full,
+    permission denied) raises OSError with its errno; torch.save given a path reports those as RuntimeError."""
     optim_state = {}
     for name in PARAM_NAMES:
         st = optimizer.state.get(params[name], {})
@@ -413,9 +419,32 @@ def save_checkpoint(path: Path, *, iteration: int, params: dict, optimizer: torc
         "history": history,
     }
     tmp = path.with_suffix(path.suffix + ".tmp")
-    torch.save(payload, tmp)
-    tmp.replace(path)  # atomic: a crash mid-write never leaves a truncated checkpoint in place
+    try:
+        with open(tmp, "wb") as f:
+            torch.save(payload, f)
+        tmp.replace(path)  # atomic: a crash mid-write never leaves a truncated checkpoint in place
+    except BaseException as exc:
+        with contextlib.suppress(OSError):  # best effort: the failure being raised is the one to report
+            tmp.unlink(missing_ok=True)
+        storage = _storage_failure(exc)
+        if storage is not None and storage is not exc:
+            raise OSError(storage.errno, storage.strerror or str(storage), storage.filename) from exc
+        raise
     return path
+
+
+def _storage_failure(exc: BaseException) -> OSError | None:
+    """The OSError behind a failed write, or None. torch's zip writer turns one into a RuntimeError: when write() raises
+    ENOSPC mid-archive, its __exit__ still finalises the archive and raises "unexpected pos", with the OSError only as the
+    context. A RuntimeError without an OSError in its chain is a serializer fault, not storage, and is not converted."""
+    seen = 0
+    while exc is not None and seen < 8:
+        if isinstance(exc, OSError):
+            return exc
+        if not isinstance(exc, RuntimeError):
+            return None
+        exc, seen = exc.__cause__ or exc.__context__, seen + 1
+    return None
 
 
 class CheckpointMismatch(ValueError):
@@ -554,9 +583,14 @@ class TrainingOutcome:
     history: list[dict[str, Any]]
     densify_events: list[DensifyEvent]
     opacity_resets: list[int]
-    checkpoint_path: Path | None
+    checkpoint_path: Path | None  # the last checkpoint this training wrote completely, or None when no write succeeded
     params: dict = field(repr=False, default_factory=dict)
     config: dict[str, Any] = field(default_factory=dict)  # the TrainingConfig this outcome was trained with
+    checkpoint_iteration: int | None = None  # the iteration `checkpoint_path` holds; == completed_iterations if the final write succeeded
+    checkpoint_failures: list[dict[str, Any]] = field(default_factory=list)  # checkpoint writes that failed: iteration, errno, error
+
+
+MAX_RECORDED_CHECKPOINT_FAILURES = 20
 
 
 def scene_extent_of(cams: Sequence[dict[str, Any]]) -> float:
@@ -575,6 +609,12 @@ def train(*, params: dict, cams: Sequence[dict[str, Any]], rasterize: Rasterizer
     slowest iteration seen so far, training stops. `stop_margin_seconds` is time reserved to write the checkpoint and
     outputs and upload them. A checkpoint is written every `checkpoint_every` iterations and always at the end, whatever
     the status, so an early stop leaves a resumable state. Cancellation raises; nothing is returned for a cancelled job.
+
+    A checkpoint is a resume point, not the result: a write that fails with OSError (disk full, permission denied) is
+    recorded in `checkpoint_failures` and training goes on. The trained parameters are unaffected, and the PLY export
+    needs about a third of a checkpoint's space (no Adam moments). `checkpoint_path` / `checkpoint_iteration` name the
+    last complete one; the stage decides what that means for publication. Only the checkpoint write is handled so: any
+    other exception, OSError included, propagates.
     """
     for cam in cams:
         validate_camera(cam)
@@ -591,9 +631,18 @@ def train(*, params: dict, cams: Sequence[dict[str, Any]], rasterize: Rasterizer
     it = start
     stop_reason = "iterations completed"
 
-    def checkpoint(done: int) -> Path:
-        return save_checkpoint(checkpoint_path, iteration=done, params=params, optimizer=optimizer, density=density, config=config,
-                               source=source, scene_extent=scene_extent, history=history)
+    saved: dict[str, Any] = {"path": None, "iteration": None}
+    failures: list[dict[str, Any]] = []
+
+    def checkpoint(done: int) -> None:
+        try:
+            save_checkpoint(checkpoint_path, iteration=done, params=params, optimizer=optimizer, density=density, config=config,
+                            source=source, scene_extent=scene_extent, history=history)
+        except OSError as exc:
+            if len(failures) < MAX_RECORDED_CHECKPOINT_FAILURES:
+                failures.append({"iteration": done, "errno": exc.errno, "error": f"{type(exc).__name__}: {exc}"[:500]})
+            return
+        saved.update(path=checkpoint_path, iteration=done)
 
     while it < config.iterations:
         if is_cancelled():
@@ -634,11 +683,11 @@ def train(*, params: dict, cams: Sequence[dict[str, Any]], rasterize: Rasterizer
         if config.checkpoint_every > 0 and it % config.checkpoint_every == 0 and it < config.iterations:
             checkpoint(it)
 
-    path = checkpoint(it)
+    checkpoint(it)
     status = STATUS_COMPLETED if it >= config.iterations else STATUS_PARTIAL
     return TrainingOutcome(status, it, config.iterations, start, len(params["means"]), initial_count, stop_reason, history,
-                           list(density.events), list(density.resets), path, params,
-                           config.as_dict())
+                           list(density.events), list(density.resets), saved["path"], params,
+                           config.as_dict(), saved["iteration"], failures)
 
 
 # ---- the photometric loss ----------------------------------------------------------------------------------------------

@@ -278,7 +278,8 @@ def test_training_interrupted_mid_run_resumes_from_its_last_periodic_checkpoint_
     (torch.cuda.OutOfMemoryError("CUDA out of memory. Tried to allocate 2.00 GiB"), "SPLAT_GPU_OUT_OF_MEMORY"),
     (RuntimeError("CUDA error: an illegal memory access was encountered"), "GPU_RUNTIME_ERROR"),
     (GsplatContractError("gsplat 1.6.0 returned renders (1, 2, 3)"), "GSPLAT_INCOMPATIBLE"),
-    (OSError(28, "No space left on device"), "SPLAT_CHECKPOINT_WRITE_FAILED"),
+    # train() handles a failed checkpoint write itself (D-6), so an OSError reaching the stage is some other file operation
+    (OSError(28, "No space left on device"), "SPLAT_IO_FAILED"),
     (InterruptedError("cancelled"), "CANCELLED"),
 ])
 def test_gpu_and_io_failures_map_to_actionable_codes(exc, code):

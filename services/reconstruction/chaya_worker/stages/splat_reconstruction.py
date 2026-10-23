@@ -55,9 +55,20 @@ COLMAP), the settings, and any offered checkpoint. Every environment problem is 
 
 Failures during training become structured stage failures, never a crashed worker (the orchestrator reports them and the
 lease ends with the report): CANCELLED, CAMERA_CONVENTION_INVALID, SPLAT_TRAINING_DIVERGED, GSPLAT_INCOMPATIBLE,
-SPLAT_GPU_OUT_OF_MEMORY, GPU_RUNTIME_ERROR, SPLAT_CHECKPOINT_WRITE_FAILED (`training_failure`). Exporting the cloud is
-checked too: SPLAT_EXPORT_FAILED (the PLY could not be written), SPLAT_EXPORT_INVALID (it does not read back), and
-SPLAT_INVALID for a cloud the viewer contract would refuse (packages/contracts/viewer/ksplat-contract.json).
+SPLAT_GPU_OUT_OF_MEMORY, GPU_RUNTIME_ERROR, SPLAT_IO_FAILED (`training_failure`). Exporting the cloud is checked too:
+SPLAT_EXPORT_FAILED (the PLY could not be written), SPLAT_EXPORT_INVALID (it does not read back), and SPLAT_INVALID for
+a cloud the viewer contract would refuse (packages/contracts/viewer/ksplat-contract.json).
+
+Checkpoints are kept apart from the result (gaussian-splatting-audit D-6). A checkpoint write that fails does not stop
+training or fail the stage; the report's `checkpoint` records each failure. What the final checkpoint is for decides
+what a failed one means:
+  * COMPLETED: the control plane never resumes a completed training (it resumes only TIME_LIMIT_EXCEEDED attempts), so
+    the checkpoint is auxiliary. The SPLAT is published on its own validation (state, quality, PLY read-back); a
+    checkpoint goes with it only if it holds the final state.
+  * PARTIAL: the checkpoint is what a retry resumes. The last one written completely is published, with its iteration,
+    and the failure message says where a retry resumes, or that it cannot resume this attempt.
+A storage failure of the result itself is not tolerated: an unwritable or mismatching PLY fails the stage, and the
+orchestrator fails it with STORAGE_ERROR, registering nothing, when any output cannot be uploaded.
 """
 
 from __future__ import annotations
@@ -102,8 +113,11 @@ def training_failure(exc: BaseException) -> StageError | None:
                           "(FFMPEG_PREPROCESS), or run on a GPU with more memory, then retry", code="SPLAT_GPU_OUT_OF_MEMORY",
                           details={"error": str(exc)[:500]})
     if isinstance(exc, OSError):
-        return StageError(f"the training checkpoint could not be written: {exc}. Check the worker's free disk space, then retry",
-                          code="SPLAT_CHECKPOINT_WRITE_FAILED")
+        # Not a checkpoint write: train() handles those itself (a checkpoint is a resume point, not the result). This is
+        # some other file operation of training or evaluation, so the job fails and says what it knows.
+        return StageError(f"a file operation failed during training: {exc}. Check the worker's disk and its permissions, then "
+                          "retry", code="SPLAT_IO_FAILED",
+                          details={"errno": exc.errno, "filename": None if exc.filename is None else str(exc.filename)})
     text = str(exc)
     if isinstance(exc, RuntimeError) and any(m in text for m in ("CUDA", "cuda", "CUBLAS", "cudaError", "device-side")):
         return StageError(f"the GPU failed during training: {text[:300]}. The worker keeps running; if this repeats, restart "
@@ -271,11 +285,32 @@ def export_mismatch(cloud, ply_path: Path) -> str | None:
     return None
 
 
+def checkpoint_record(outcome) -> dict[str, Any]:
+    """Pure apart from one stat: what this training's checkpoint is for, which one it wrote, and whether that one may be
+    published (gaussian-splatting-audit D-6). A COMPLETED training's checkpoint is auxiliary (never resumed) and goes out
+    only when it holds the final state; a PARTIAL training's is the resume point, so the last complete one goes out even
+    when the final write failed. The caller also withholds it whenever the trained state itself is refused."""
+    from ..splat_training import STATUS_COMPLETED  # noqa: PLC0415
+
+    iteration = outcome.checkpoint_iteration
+    written = iteration is not None and outcome.checkpoint_path is not None and outcome.checkpoint_path.is_file()
+    final = written and iteration == outcome.completed_iterations
+    completed = outcome.status == STATUS_COMPLETED
+    return {
+        "role": ("auxiliary: a completed training is never resumed, so its SPLAT does not depend on it" if completed
+                 else "the resume point of a retry of this time-boxed attempt"),
+        "iteration": iteration if written else None, "final": final, "publishable": final if completed else written,
+        "write_failures": list(outcome.checkpoint_failures),
+        "failure_code": "SPLAT_CHECKPOINT_WRITE_FAILED" if outcome.checkpoint_failures else None,
+    }
+
+
 def publish_outcome(ctx: StageContext, outcome, *, source: dict[str, Any], cameras_used: int, versions: dict[str, Any],
                     quality: dict[str, Any] | None, keyframes_tar=None, training_cameras: dict[str, Any] | None = None,
                     privacy: dict[str, Any] | None = None, resumed_from: dict[str, Any] | None = None) -> StageResult:
     """Turns a training outcome into the stage result: COMPLETED -> SUCCEEDED with SPLAT; PARTIAL -> FAILED with
-    TIME_LIMIT_EXCEEDED and SPLAT_PARTIAL (partial=True). The report and checkpoint go out either way. Pure apart from
+    TIME_LIMIT_EXCEEDED and SPLAT_PARTIAL (partial=True). The report goes out either way, the checkpoint as
+    checkpoint_record decides; a failed checkpoint write never decides the SPLAT. Pure apart from
     writing files into ctx.workdir, so it is tested without a GPU (tests/splat).
 
     Nothing is published as a splat unless it is a valid trained state: at least one iteration ran, every configured
@@ -327,9 +362,14 @@ def publish_outcome(ctx: StageContext, outcome, *, source: dict[str, Any], camer
                 artifacts.append(ArtifactSpec("SPLAT_PARTIAL" if partial else "SPLAT", ply_path, splat_name, "application/octet-stream",
                                               partial=partial))
     checkpoint_sha = None
-    if invalid is None and outcome.checkpoint_path is not None and outcome.checkpoint_path.is_file():
+    checkpoint = checkpoint_record(outcome)
+    if invalid is None and checkpoint["publishable"]:
         checkpoint_sha = sha256_file(outcome.checkpoint_path)
         artifacts.append(ArtifactSpec("SPLAT_CHECKPOINT", outcome.checkpoint_path, "splat-checkpoint.pt", "application/octet-stream"))
+    checkpoint["published"] = checkpoint_sha is not None
+    if outcome.checkpoint_failures:
+        ctx.logger.warning("splat checkpoint write failed", extra={"failures": outcome.checkpoint_failures,
+                                                                    "published": checkpoint["published"]})
     if keyframes_tar is not None:
         artifacts.append(ArtifactSpec("KEYFRAME_RENDERS", keyframes_tar, "keyframes.tar", "application/x-tar"))
     if training_cameras is not None:
@@ -345,7 +385,8 @@ def publish_outcome(ctx: StageContext, outcome, *, source: dict[str, Any], camer
     report = write_json(ctx.workdir / "splat-training-report.json", {
         **summary,
         "provenance": {"source": source, "splat": {"artifact": splat_name, "sha256": splat_sha},
-                       "checkpoint": {"artifact": "splat-checkpoint.pt" if checkpoint_sha else None, "sha256": checkpoint_sha},
+                       "checkpoint": {"artifact": "splat-checkpoint.pt" if checkpoint_sha else None, "sha256": checkpoint_sha,
+                                      "iteration": checkpoint["iteration"] if checkpoint_sha else None},
                        "resumed_from": resumed_from, "versions": versions},
         "cameras_used": cameras_used,
         "privacy_masks": privacy if privacy is not None else {"applied": False},
@@ -363,6 +404,7 @@ def publish_outcome(ctx: StageContext, outcome, *, source: dict[str, Any], camer
         "validation": {"valid": invalid is None, "code": invalid[0] if invalid else None,
                        "message": invalid[1] if invalid else None},
         "quality": quality if quality is not None else {"passed": None, "reason": "not evaluated"},
+        "checkpoint": {k: v for k, v in checkpoint.items() if k != "publishable"},
     })
     artifacts.append(ArtifactSpec("SPLAT_TRAINING_REPORT", report, "splat-training-report.json", "application/json"))
     command = command_record(ctx, {**summary, "cameras_used": cameras_used})
@@ -378,8 +420,15 @@ def publish_outcome(ctx: StageContext, outcome, *, source: dict[str, Any], camer
     message = (f"the time budget stopped training after {outcome.completed_iterations} of {outcome.target_iterations} iterations; "
                + ("the partial cloud is published as SPLAT_PARTIAL, not as a finished reconstruction"
                   if splat_name else "no iteration ran, so no splat was produced"))
+    if not checkpoint_sha:
+        message += "; no checkpoint could be written, so a retry cannot resume this attempt"
+    elif checkpoint["iteration"] != outcome.completed_iterations:
+        message += (f"; the final checkpoint could not be written, so a retry resumes from the last one written, at iteration "
+                    f"{checkpoint['iteration']}")
     return StageResult("FAILED", command, ctx.runner.last_exit_status(), artifacts, "TIME_LIMIT_EXCEEDED", message,
-                       {**summary, "checkpoint": "splat-checkpoint.pt" if checkpoint_sha else None})
+                       {**summary, "checkpoint": "splat-checkpoint.pt" if checkpoint_sha else None,
+                        "checkpoint_iteration": checkpoint["iteration"] if checkpoint_sha else None,
+                        "checkpoint_write_failures": len(outcome.checkpoint_failures)})
 
 
 class SplatReconstruction:
