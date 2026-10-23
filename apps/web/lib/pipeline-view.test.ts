@@ -51,6 +51,11 @@ test("dependency errors name what is missing", () => {
   assert.match(explainStageError("STAGE_NOT_IMPLEMENTED", null, null), /not implemented/);
 });
 
+test("a refused or unmeasured reconstruction says nothing was published", () => {
+  assert.match(explainStageError("SPLAT_QUALITY_INSUFFICIENT", "x", null), /held out of training.*Nothing was published/);
+  assert.match(explainStageError("SPLAT_QUALITY_UNVERIFIED", "x", null), /could not be measured.*not published/);
+});
+
 test("labels and formatting helpers", () => {
   assert.equal(stageLabel("PRIVACY_PREPROCESS"), "Privacy preprocessing");
   assert.equal(stageLabel("UNKNOWN"), "UNKNOWN");

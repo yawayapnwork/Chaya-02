@@ -24,15 +24,17 @@ torch = pytest.importorskip("torch", reason="torch is not installed: pip install
 
 from chaya_worker.ply import read_ply  # noqa: E402
 from chaya_worker.splat_color import rgb_to_sh0  # noqa: E402
+from chaya_worker.splat_quality import snapshot  # noqa: E402
 from chaya_worker.splat_training import PARAM_NAMES, TrainingConfig, init_params, l1_dssim_loss, train  # noqa: E402
 from chaya_worker.stages.splat_reconstruction import initial_scale_log, publish_outcome, resume_state, training_source  # noqa: E402
 from tests.conftest import DERIVED_BUCKET, Harness  # noqa: E402
-from tests.splat.renderer import cpu_rasterizer, plane_points, rig  # noqa: E402
+from tests.splat.renderer import cpu_quality, cpu_rasterizer, plane_points, rig  # noqa: E402
 
 CPU = torch.device("cpu")
 # Densification and an opacity reset fall on both sides of where the budget stops the first attempt, so a resume that
-# lost any of the density-control or Adam state would not reproduce the uninterrupted run.
-CONFIG = TrainingConfig(iterations=40, densify_start=10, densify_stop=35, densify_every=10, densify_grad_threshold=1e-5,
+# lost any of the density-control or Adam state would not reproduce the uninterrupted run. 100 iterations leave the
+# cloud time to recover its opacity after the reset: at 40 it ends worse than its SfM seed and the quality gate refuses it.
+CONFIG = TrainingConfig(iterations=100, densify_start=10, densify_stop=35, densify_every=10, densify_grad_threshold=1e-5,
                         opacity_reset_every=30, lr_position_decay_steps=30, checkpoint_every=0)
 
 
@@ -66,13 +68,14 @@ class CpuResumableSplat:
         resume, resumed_from = resume_state(ctx, config=self.config, source=source, device=CPU)
         points = plane_points(4, half=3.0)
         params = init_params(points, rgb_to_sh0(np.full(points.shape, 0.5, np.float32)), initial_scale_log(points), CPU)
+        seed = snapshot(params)  # as the stage keeps it: the SfM seed, also on a resumed job
         clock = FakeClock()
         outcome = train(params=params, cams=rig(_checker), rasterize=cpu_rasterizer, config=self.config, loss_fn=l1_dssim_loss,
                         checkpoint_path=ctx.workdir / "splat-checkpoint.pt", source=source,
                         deadline=None if self.budget is None else clock.t + self.budget, stop_margin_seconds=10, clock=clock,
                         resume=resume)
         return publish_outcome(ctx, outcome, source=source, cameras_used=4, versions={"rasterizer": "CPU TEST RENDERER, not gsplat"},
-                               resumed_from=resumed_from)
+                               quality=cpu_quality(outcome, seed, rig(_checker)), resumed_from=resumed_from)
 
 
 @pytest.fixture()
@@ -222,8 +225,8 @@ def test_a_checkpoint_trained_with_other_settings_is_refused(harness, scan):
 
 def test_more_iterations_is_a_setting_a_resume_may_change(harness, scan):
     checkpoint = _stopped_checkpoint(harness, scan)
-    report = _run(harness, scan + checkpoint, 2, CpuResumableSplat(config=replace(CONFIG, iterations=50)))
-    assert report["status"] == "SUCCEEDED" and _training_report(harness, report)["completed_iterations"] == 50
+    report = _run(harness, scan + checkpoint, 2, CpuResumableSplat(config=replace(CONFIG, iterations=120)))
+    assert report["status"] == "SUCCEEDED" and _training_report(harness, report)["completed_iterations"] == 120
 
 
 def _tampered(harness, checkpoint, body: bytes, *, record_new_checksum: bool):

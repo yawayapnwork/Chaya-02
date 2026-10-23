@@ -39,7 +39,7 @@ from chaya_worker.splat_training import (
 from chaya_worker.stages.base import sha256_file
 from chaya_worker.stages.splat_reconstruction import initial_scale_log, publish_outcome
 from chaya_worker.toolchain import Toolchain
-from tests.splat.renderer import cpu_rasterizer, plane_points, rig
+from tests.splat.renderer import cpu_quality, cpu_rasterizer, plane_points, rig
 
 CPU = torch.device("cpu")
 SOURCE = source_identity(run_id="run-1", scan_version_id="v1", inputs=[{"kind": "SPARSE_MODEL", "sha256": "a" * 64}])
@@ -85,7 +85,8 @@ def test_a_converged_single_colour_fit_exports_its_colour(tmp_path, target):
     outcome = train(params=_params(points, np.full(3, 0.5, np.float32)), cams=cams, rasterize=cpu_rasterizer, config=config,
                     loss_fn=l1_dssim_loss, checkpoint_path=tmp_path / "c.pt", source=SOURCE)
     assert outcome.status == STATUS_COMPLETED
-    result = publish_outcome(_ctx(tmp_path), outcome, source=SOURCE, cameras_used=len(cams), versions={})
+    result = publish_outcome(_ctx(tmp_path), outcome, source=SOURCE, cameras_used=len(cams), versions={},
+                             quality=cpu_quality(outcome, _params(points, np.full(3, 0.5, np.float32)), cams))
     cloud = read_ply(next(a.path for a in result.artifacts if a.kind == "SPLAT"))
     viewer = ksplat.decode(ksplat.encode(cloud))
     rgba = torch.tensor(viewer["rgba"].astype(np.float32) / 255.0)
@@ -289,8 +290,9 @@ def _outcome(tmp_path, *, iterations: int, deadline_after: float | None):
 
 def test_a_completed_run_succeeds_with_a_splat_and_full_provenance(tmp_path):
     ctx = _ctx(tmp_path)
-    result = publish_outcome(ctx, _outcome(tmp_path, iterations=8, deadline_after=None), source=SOURCE, cameras_used=4,
-                             versions={"torch": torch.__version__})
+    outcome = _outcome(tmp_path, iterations=8, deadline_after=None)
+    result = publish_outcome(ctx, outcome, source=SOURCE, cameras_used=4, versions={"torch": torch.__version__},
+                             quality=cpu_quality(outcome, _params(plane_points(3), np.full(3, 0.5, np.float32)), rig(_checker)))
     assert isinstance(result, StageResult) and result.status == "SUCCEEDED" and result.error_code is None
     kinds = {a.kind: a for a in result.artifacts}
     assert set(kinds) == {"SPLAT", "SPLAT_CHECKPOINT", "SPLAT_TRAINING_REPORT"} and not kinds["SPLAT"].partial
@@ -304,8 +306,9 @@ def test_a_completed_run_succeeds_with_a_splat_and_full_provenance(tmp_path):
 
 
 def test_an_early_stop_is_partial_never_completed(tmp_path):
-    result = publish_outcome(_ctx(tmp_path), _outcome(tmp_path, iterations=1000, deadline_after=12), source=SOURCE, cameras_used=4,
-                             versions={})
+    outcome = _outcome(tmp_path, iterations=1000, deadline_after=12)
+    result = publish_outcome(_ctx(tmp_path), outcome, source=SOURCE, cameras_used=4, versions={},
+                             quality=cpu_quality(outcome, _params(plane_points(3), np.full(3, 0.5, np.float32)), rig(_checker)))
     assert result.status == "FAILED" and result.error_code == "TIME_LIMIT_EXCEEDED"
     kinds = {a.kind: a for a in result.artifacts}
     assert "SPLAT" not in kinds, "a partial cloud is never published as the finished SPLAT"
@@ -320,7 +323,7 @@ def test_an_early_stop_is_partial_never_completed(tmp_path):
 
 def test_no_iteration_means_no_splat_at_all(tmp_path):
     result = publish_outcome(_ctx(tmp_path), _outcome(tmp_path, iterations=100, deadline_after=0), source=SOURCE, cameras_used=4,
-                             versions={})
+                             versions={}, quality=None)  # the stage evaluates nothing when no iteration ran
     assert result.status == "FAILED" and result.error_code == "TIME_LIMIT_EXCEEDED"
     assert not {"SPLAT", "SPLAT_PARTIAL"} & {a.kind for a in result.artifacts}
     assert "no iteration ran" in result.error_message
@@ -341,7 +344,8 @@ class CpuTimeBoxedSplat:
                         config=replace(NO_DENSIFY, iterations=10**7), loss_fn=l1_dssim_loss,
                         checkpoint_path=ctx.workdir / "splat-checkpoint.pt", source=SOURCE, deadline=ctx.deadline,
                         stop_margin_seconds=1.0)
-        return publish_outcome(ctx, outcome, source=SOURCE, cameras_used=4, versions={})
+        quality = cpu_quality(outcome, _params(plane_points(3), np.full(3, 0.5, np.float32)), rig(_checker))
+        return publish_outcome(ctx, outcome, source=SOURCE, cameras_used=4, versions={}, quality=quality)
 
 
 def test_the_control_plane_receives_a_partial_splat_when_the_budget_runs_out(harness):

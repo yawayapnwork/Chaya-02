@@ -62,3 +62,14 @@ def rig(image_fn) -> list[dict]:
 def plane_points(n_side: int, depth: float = 5.0, half: float = 2.0) -> np.ndarray:
     xs, ys = np.meshgrid(np.linspace(-half, half, n_side), np.linspace(-half, half, n_side))
     return np.stack([xs.ravel(), ys.ravel(), np.full(xs.size, depth)], axis=1).astype(np.float32)
+
+
+def cpu_quality(outcome, seed: dict, cams: list[dict], **thresholds) -> dict:
+    """The real reconstruction quality gate (chaya_worker.splat_quality.evaluate), measured with the CPU TEST RENDERER on
+    `cams`. With a four-camera rig nothing is held out (too few views), so the basis is TRAINING_VIEWS, which the report
+    says. A TEST measurement: the report names the renderer, and it is never a real-scene result."""
+    from chaya_worker.splat_quality import QualityThresholds, evaluate
+
+    return evaluate(params=outcome.params, seed=seed, eval_cams=[], train_cams=cams, rasterize=cpu_rasterizer,
+                    history=outcome.history, thresholds=QualityThresholds(**thresholds), renderer="CPU TEST RENDERER, not gsplat",
+                    holdout_every=0)

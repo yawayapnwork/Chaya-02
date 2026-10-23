@@ -35,7 +35,7 @@ from chaya_worker.stages import splat_reconstruction  # noqa: E402
 from chaya_worker.stages.splat_reconstruction import initial_scale_log, publish_outcome, training_failure  # noqa: E402
 from chaya_worker.toolchain import Toolchain, ToolStatus  # noqa: E402
 from tests.conftest import DERIVED_BUCKET  # noqa: E402
-from tests.splat.renderer import cpu_rasterizer, plane_points, rig  # noqa: E402
+from tests.splat.renderer import cpu_quality, cpu_rasterizer, plane_points, rig  # noqa: E402
 
 CPU = torch.device("cpu")
 SOURCE = source_identity(run_id="run-failures", inputs=[])
@@ -317,13 +317,15 @@ def _ctx(tmp_path) -> StageContext:
 
 
 def test_an_export_that_cannot_be_written_publishes_no_splat_and_no_checkpoint(tmp_path, monkeypatch):
-    outcome = _train(tmp_path)
+    # A cloud that passes every check before the export (CONFIG densifies nearly every Gaussian and ends below its seed).
+    outcome = _train(tmp_path, config=replace(CONFIG, densify_start=10**9, densify_stop=10**9))
 
     def disk_full(*_a, **_k):
         raise OSError(28, "No space left on device")
 
     monkeypatch.setattr(splat_reconstruction, "write_ply", disk_full)
-    result = publish_outcome(_ctx(tmp_path), outcome, source=SOURCE, cameras_used=4, versions={})
+    result = publish_outcome(_ctx(tmp_path), outcome, source=SOURCE, cameras_used=4, versions={},
+                             quality=cpu_quality(outcome, _params(), rig(_checker)))
     assert result.status == "FAILED" and result.error_code == "SPLAT_EXPORT_FAILED" and "free disk space" in result.error_message
     assert [a.kind for a in result.artifacts] == ["SPLAT_TRAINING_REPORT"]
 
@@ -337,6 +339,7 @@ def test_a_cloud_the_viewer_contract_would_refuse_is_never_published(tmp_path, m
                     clock=lambda: float(next(clock)))
     assert outcome.status == ("PARTIAL" if partial else "COMPLETED")
     monkeypatch.setattr(ksplat, "MAX_BYTES", ksplat.encoded_size(outcome.gaussian_count - 1))
-    result = publish_outcome(_ctx(tmp_path), outcome, source=SOURCE, cameras_used=4, versions={})
+    result = publish_outcome(_ctx(tmp_path), outcome, source=SOURCE, cameras_used=4, versions={},
+                             quality=cpu_quality(outcome, _params(), rig(_checker)))
     assert result.status == "FAILED" and result.error_code == "SPLAT_INVALID" and "viewer contract" in result.error_message
     assert not {"SPLAT", "SPLAT_PARTIAL", "SPLAT_CHECKPOINT"} & {a.kind for a in result.artifacts}

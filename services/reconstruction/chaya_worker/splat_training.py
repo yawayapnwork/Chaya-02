@@ -108,6 +108,9 @@ class TrainingConfig:
     max_gaussians: int = 3_000_000
     checkpoint_every: int = 1000
     seed: int = 0
+    # Which views SPLAT_RECONSTRUCTION holds out of training for evaluation (chaya_worker.splat_quality.split_views). train()
+    # never sees them; it is here so a checkpoint is only resumed with the same training views.
+    eval_holdout_every: int = 0
 
     @classmethod
     def from_settings(cls, s: Any) -> TrainingConfig:
@@ -119,7 +122,8 @@ class TrainingConfig:
                    densify_every=s.gsplat_densify_every, densify_grad_threshold=s.gsplat_densify_grad_threshold,
                    percent_dense=s.gsplat_percent_dense, prune_opacity=s.gsplat_prune_opacity,
                    prune_scale_fraction=s.gsplat_prune_scale_fraction, opacity_reset_every=s.gsplat_opacity_reset_every,
-                   max_gaussians=s.gsplat_max_gaussians, checkpoint_every=s.gsplat_checkpoint_every, seed=s.gsplat_seed)
+                   max_gaussians=s.gsplat_max_gaussians, checkpoint_every=s.gsplat_checkpoint_every, seed=s.gsplat_seed,
+                   eval_holdout_every=s.gsplat_eval_holdout_every)
 
     def __post_init__(self) -> None:
         if not 0 < self.lr_position_final <= self.lr_position:

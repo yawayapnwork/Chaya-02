@@ -100,6 +100,18 @@ class Settings:
     gsplat_keyframe_every: int = 500
     gsplat_min_compute_capability: float = 7.0
     gsplat_min_training_frames: int = 3  # posed frames with images below which training is refused (INSUFFICIENT_FRAMES)
+    # Reconstruction quality gate (chaya_worker.splat_quality; gaussian-splatting-audit D-5). Every Nth posed view (sorted by
+    # name) is held out of training and only rendered for evaluation: 8 is the 3DGS / Mip-NeRF 360 evaluation protocol.
+    # 0 trains on every view, and the gate then measures on training views and says so. Part of the checkpoint's config.
+    gsplat_eval_holdout_every: int = 8
+    # A COMPLETED training is published as SPLAT only if its mean PSNR on the evaluation views beats the untrained SfM seed's
+    # by MORE than this. The default 0 is the weakest evidence-based floor (it must render unseen views better than where it
+    # started); no real-capture distribution has been measured yet to justify a stricter one.
+    gsplat_quality_min_psnr_gain_db: float = 0.0
+    gsplat_quality_min_psnr_db: float = 0.0  # absolute floor on that mean PSNR; 0 = off (it depends on the scene and exposure)
+    # ... and only if the mean training loss of the last tenth of iterations is below this fraction of the first tenth's.
+    gsplat_quality_max_loss_ratio: float = 1.0
+    gsplat_quality_require_held_out: bool = False  # true: too few views to hold any out fails the gate instead of falling back
     # gsplat's PyPI wheel compiles its CUDA kernels with nvcc on first use. Production images carry them prebuilt
     # (Dockerfile.gpu); allowing JIT is for development hosts with the CUDA toolkit (chaya_worker.splat_preflight).
     gsplat_allow_jit_backend: bool = False
@@ -382,6 +394,11 @@ class Settings:
             gsplat_keyframe_every=_int(e, "GSPLAT_KEYFRAME_EVERY", d.gsplat_keyframe_every),
             gsplat_min_compute_capability=_float(e, "GSPLAT_MIN_COMPUTE_CAPABILITY", d.gsplat_min_compute_capability),
             gsplat_min_training_frames=_int(e, "GSPLAT_MIN_TRAINING_FRAMES", d.gsplat_min_training_frames),
+            gsplat_eval_holdout_every=_int(e, "GSPLAT_EVAL_HOLDOUT_EVERY", d.gsplat_eval_holdout_every),
+            gsplat_quality_min_psnr_gain_db=_float(e, "GSPLAT_QUALITY_MIN_PSNR_GAIN_DB", d.gsplat_quality_min_psnr_gain_db),
+            gsplat_quality_min_psnr_db=_float(e, "GSPLAT_QUALITY_MIN_PSNR_DB", d.gsplat_quality_min_psnr_db),
+            gsplat_quality_max_loss_ratio=_float(e, "GSPLAT_QUALITY_MAX_LOSS_RATIO", d.gsplat_quality_max_loss_ratio),
+            gsplat_quality_require_held_out=_bool(e, "GSPLAT_QUALITY_REQUIRE_HELD_OUT", d.gsplat_quality_require_held_out),
             gsplat_allow_jit_backend=e.get("GSPLAT_ALLOW_JIT_BACKEND", "false").strip().lower() == "true",
             semantic_confidence_min=_float(e, "SEMANTIC_CONFIDENCE_MIN", d.semantic_confidence_min),
             semantic_min_vote_share=_float(e, "SEMANTIC_MIN_VOTE_SHARE", d.semantic_min_vote_share),
@@ -536,6 +553,11 @@ class Settings:
             "gsplat_keyframe_every": self.gsplat_keyframe_every,
             "gsplat_min_compute_capability": self.gsplat_min_compute_capability,
             "gsplat_min_training_frames": self.gsplat_min_training_frames,
+            "gsplat_eval_holdout_every": self.gsplat_eval_holdout_every,
+            "gsplat_quality_min_psnr_gain_db": self.gsplat_quality_min_psnr_gain_db,
+            "gsplat_quality_min_psnr_db": self.gsplat_quality_min_psnr_db,
+            "gsplat_quality_max_loss_ratio": self.gsplat_quality_max_loss_ratio,
+            "gsplat_quality_require_held_out": self.gsplat_quality_require_held_out,
             "gsplat_allow_jit_backend": self.gsplat_allow_jit_backend,
             "semantic_confidence_min": self.semantic_confidence_min, "semantic_min_vote_share": self.semantic_min_vote_share, "semantic_sample_every": self.semantic_sample_every,
             "semantic_segmentation_model": self.semantic_segmentation_model,

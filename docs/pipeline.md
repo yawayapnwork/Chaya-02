@@ -535,6 +535,25 @@ so far.
   `SPLAT`; and the PLY was written and reads back bit-identical to the trained cloud. Otherwise the stage fails with
   `SPLAT_NOT_TRAINED`, `SPLAT_INVALID`, `SPLAT_EXPORT_FAILED` (the PLY could not be written) or `SPLAT_EXPORT_INVALID`.
   It then publishes only the report, with no splat and no checkpoint, and the report's `validation` field says why.
+- **Reconstruction quality** (`chaya_worker.splat_quality`). A valid COMPLETED cloud is published as `SPLAT` only if
+  it is shown to reproduce the scene. Every `GSPLAT_EVAL_HOLDOUT_EVERY`th posed view by name (default 8, the 3DGS /
+  Mip-NeRF 360 protocol) is held out: train() never receives it, so its frame supervises no loss, gradient or
+  densification. The SfM poses and seed points still come from every frame, as in that protocol. After training, the
+  cloud and the untrained SfM seed are rendered with gsplat on the held-out views. PSNR counts valid pixels only, since
+  privacy-masked pixels were never ground truth. The gate requires:
+  - mean PSNR above the seed's by more than `GSPLAT_QUALITY_MIN_PSNR_GAIN_DB` (default 0: better than its starting point);
+  - at least `GSPLAT_QUALITY_MIN_PSNR_DB` mean PSNR (default 0, off: absolute PSNR depends on the scene);
+  - a training loss over the last tenth of iterations below `GSPLAT_QUALITY_MAX_LOSS_RATIO` (default 1.0) times the
+    first tenth's. This is the training objective, reported as progress evidence and never as quality.
+
+  When holding out a view would leave fewer than `GSPLAT_MIN_TRAINING_FRAMES` to train on, nothing is held out. The
+  gate then measures the training views, and `quality.basis` says `TRAINING_VIEWS`. `GSPLAT_QUALITY_REQUIRE_HELD_OUT=true`
+  makes that a failure instead. A refused cloud fails the stage with `SPLAT_QUALITY_INSUFFICIENT`. No valid measurement
+  fails it with `SPLAT_QUALITY_UNVERIFIED`: no pixel to measure, a non-finite render or loss, or no evaluation at all.
+  Either way only the report is published, with no splat and no checkpoint. A PARTIAL result is measured too and stays
+  `SPLAT_PARTIAL` (`TIME_LIMIT_EXCEEDED`). The report's `quality` field holds every per-view PSNR, the means, the loss
+  windows, the thresholds, the renderer and the reasons. The defaults are floors that catch a cloud that did not learn:
+  they do not certify visual quality, and should be raised once real captures have been measured on a GPU.
 - `SPLAT_PARTIAL` is never a viewer source: ARTIFACT_GENERATION takes only `SPLAT` (or the cleaned/merged clouds), so a
   partial result never becomes the published `.ksplat` (`tests/smoke/test_splat_artifact_smoke.py`).
 

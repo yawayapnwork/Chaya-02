@@ -58,6 +58,15 @@ NVIDIA GPU, so no GPU evidence could be produced here. GPU training status: **NO
   crashes while a required input is missing fails as `INPUT_INVALID` naming it; stages' own codes are unchanged. Covered by
   `SplatResumeControlPlaneTest#aCompletedTrainingsCheckpointAndKeyframesAreOfferedToNoLaterStage`,
   `tests/orchestration/test_stage_inputs.py` and `tests/smoke/test_splat_artifact_smoke.py`.
+- **D-5** fixed (the CPU-verified mechanics; the thresholds are unmeasured on real data). A COMPLETED cloud is
+  published as SPLAT only if `chaya_worker.splat_quality` shows two things. First, its mean PSNR on held-out views (every
+  8th view, never given to train()) beats the untrained SfM seed's. Second, its training loss fell. Otherwise the stage
+  fails with SPLAT_QUALITY_INSUFFICIENT, or SPLAT_QUALITY_UNVERIFIED when there is no valid measurement, and publishes
+  only the report. `GSPLAT_ITERATIONS=1` is now refused on loss progress. The report's `quality` records the evidence.
+  PARTIAL is unchanged. Covered by `tests/splat/test_reconstruction_quality.py` (CPU test renderer, synthetic scene).
+  Two existing CPU tests' trainings turned out to end *below* their seed; the old gate had published them as SPLAT.
+  Their configs were changed (see the tests). What PSNR gsplat reaches on held-out views of a real capture is
+  unmeasured: `tests/gpu/test_splat_acceptance.py` now also asserts the gate on CUDA, but has never run (D-1, P-3).
 
 ## 1. Confirmed working behaviour
 

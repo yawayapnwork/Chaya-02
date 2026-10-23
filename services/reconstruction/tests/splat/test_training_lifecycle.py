@@ -43,7 +43,7 @@ from chaya_worker.splat_training import (
 from chaya_worker.stages import splat_reconstruction
 from chaya_worker.stages.splat_reconstruction import initial_scale_log, publish_outcome
 from chaya_worker.toolchain import Toolchain
-from tests.splat.renderer import camera, cpu_rasterizer, plane_points, rig
+from tests.splat.renderer import camera, cpu_quality, cpu_rasterizer, plane_points, rig
 
 CPU = torch.device("cpu")
 SOURCE = source_identity(run_id="run-lifecycle", inputs=[])
@@ -303,7 +303,8 @@ def _report(result):
 
 def test_a_valid_completed_run_publishes_a_splat_that_reads_back_exactly(tmp_path):
     outcome = _trained(tmp_path)
-    result = publish_outcome(_ctx(tmp_path), outcome, source=SOURCE, cameras_used=4, versions={})
+    result = publish_outcome(_ctx(tmp_path), outcome, source=SOURCE, cameras_used=4, versions={},
+                             quality=cpu_quality(outcome, _params(), rig(_checker)))
     assert result.status == "SUCCEEDED"
     splat = next(a for a in result.artifacts if a.kind == "SPLAT")
     back = read_ply(splat.path)
@@ -334,7 +335,8 @@ def test_an_invalid_trained_state_is_never_published(tmp_path, damage, code):
         outcome = replace(outcome, target_iterations=outcome.completed_iterations + 5)
     else:  # 0 configured iterations: "completed" without training
         outcome = replace(outcome, completed_iterations=0, target_iterations=0)
-    result = publish_outcome(_ctx(tmp_path), outcome, source=SOURCE, cameras_used=4, versions={})
+    result = publish_outcome(_ctx(tmp_path), outcome, source=SOURCE, cameras_used=4, versions={},
+                             quality=cpu_quality(outcome, _params(), rig(_checker)))
     assert result.status == "FAILED" and result.error_code == code
     assert {a.kind for a in result.artifacts} == {"SPLAT_TRAINING_REPORT"}, "no splat and no checkpoint of an invalid state"
     assert _report(result)["validation"]["valid"] is False
@@ -349,7 +351,9 @@ def test_a_ply_that_does_not_read_back_as_the_trained_cloud_is_not_published(tmp
         return cloud
 
     monkeypatch.setattr(splat_reconstruction, "read_ply", lossy)
-    result = publish_outcome(_ctx(tmp_path), _trained(tmp_path), source=SOURCE, cameras_used=4, versions={})
+    outcome = _trained(tmp_path)
+    result = publish_outcome(_ctx(tmp_path), outcome, source=SOURCE, cameras_used=4, versions={},
+                             quality=cpu_quality(outcome, _params(), rig(_checker)))
     assert result.status == "FAILED" and result.error_code == "SPLAT_EXPORT_INVALID" and "colors_dc" in result.error_message
     assert {a.kind for a in result.artifacts} == {"SPLAT_TRAINING_REPORT"}
 

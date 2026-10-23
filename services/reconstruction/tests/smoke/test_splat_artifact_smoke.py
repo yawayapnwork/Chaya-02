@@ -20,10 +20,11 @@ import pytest
 torch = pytest.importorskip("torch", reason="torch is not installed: pip install torch (CPU is enough for this test)")
 
 from chaya_worker.splat_color import rgb_to_sh0  # noqa: E402
+from chaya_worker.splat_quality import snapshot  # noqa: E402
 from chaya_worker.splat_training import TrainingConfig, init_params, l1_dssim_loss, source_identity, train  # noqa: E402
 from chaya_worker.stages.splat_reconstruction import initial_scale_log, publish_outcome  # noqa: E402
 from tests.conftest import DERIVED_BUCKET  # noqa: E402
-from tests.splat.renderer import cpu_rasterizer, plane_points, rig  # noqa: E402
+from tests.splat.renderer import cpu_quality, cpu_rasterizer, plane_points, rig  # noqa: E402
 from tests.splat.viewer_artifacts import generate_and_verify, viewer_library_available, viewer_library_check  # noqa: E402
 
 pytestmark = pytest.mark.smoke
@@ -47,10 +48,12 @@ class CpuTrainedSplat:
         points = plane_points(4)
         params = init_params(points, rgb_to_sh0(np.full(points.shape, 0.5, np.float32)), initial_scale_log(points), torch.device("cpu"))
         source = source_identity(run_id=ctx.order["runId"], inputs=[])
+        seed = snapshot(params)
         outcome = train(params=params, cams=rig(_checker), rasterize=cpu_rasterizer, config=CONFIG, loss_fn=l1_dssim_loss,
                         checkpoint_path=ctx.workdir / "splat-checkpoint.pt", source=source)
         return publish_outcome(ctx, outcome, source=source, cameras_used=4, versions={"torch": torch.__version__,
-                                                                                     "rasterizer": "CPU TEST RENDERER, not gsplat"})
+                                                                                     "rasterizer": "CPU TEST RENDERER, not gsplat"},
+                               quality=cpu_quality(outcome, seed, rig(_checker)))
 
 
 @pytest.fixture()
@@ -102,11 +105,12 @@ def test_a_partial_result_is_never_turned_into_the_viewer_asset(harness):
             params = init_params(points, rgb_to_sh0(np.full(points.shape, 0.5, np.float32)), initial_scale_log(points),
                                  torch.device("cpu"))
             clock = iter(range(1_000, 10_000, 1))
+            seed = snapshot(params)
             outcome = train(params=params, cams=rig(_checker), rasterize=cpu_rasterizer, config=replace(CONFIG, iterations=1000),
                             loss_fn=l1_dssim_loss, checkpoint_path=ctx.workdir / "splat-checkpoint.pt",
                             source=source_identity(run_id="r", inputs=[]), deadline=1_010, stop_margin_seconds=2,
                             clock=lambda: float(next(clock)))
-            return publish_outcome(ctx, outcome, source={}, cameras_used=4, versions={})
+            return publish_outcome(ctx, outcome, source={}, cameras_used=4, versions={}, quality=cpu_quality(outcome, seed, rig(_checker)))
 
     report = harness.run(harness.order("SPLAT_RECONSTRUCTION", []), registry={"SPLAT_RECONSTRUCTION": CpuPartialSplat()})
     assert report["status"] == "FAILED" and report["errorCode"] == "TIME_LIMIT_EXCEEDED"

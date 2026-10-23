@@ -17,6 +17,13 @@ Time budget: the loop stops before the work order's deadline, leaving `gsplat_st
     configured result.
   * If not a single iteration ran, there is no splat, only the report.
 
+Reconstruction quality (gaussian-splatting-audit D-5; chaya_worker.splat_quality). Every `gsplat_eval_holdout_every`th
+posed view is held out of training. After training, the cloud and the untrained SfM seed are rendered with gsplat on
+those views (on the training views when too few exist to hold any out, and the report says so), and a COMPLETED cloud is
+published as SPLAT only if it beats the seed's PSNR and its training loss decreased. Otherwise the stage FAILS with
+SPLAT_QUALITY_INSUFFICIENT (measured and refused) or SPLAT_QUALITY_UNVERIFIED (no valid measurement), publishing the
+report only. SPLAT_TRAINING_REPORT's `quality` records the measurement, thresholds and reasons for every outcome.
+
 Either way a `SPLAT_CHECKPOINT` is published. It holds the iteration, parameters, Adam state, density-control state,
 configuration and the identity of the inputs. A retry of this run's SPLAT_RECONSTRUCTION is offered the checkpoint of
 the latest attempt the time budget stopped (dev.chaya.api.pipeline.PipelineService#resumableCheckpoint; a PARTIAL run
@@ -70,6 +77,7 @@ from ..errors import DependencyError
 from ..ply import read_ply, write_ply
 from ..privacy import masks as privacy_masks
 from ..splat_color import rgb_bytes_to_sh0
+from ..splat_quality import INSUFFICIENT, UNVERIFIED
 from .base import FRAMES_ANON, FRAMES_UNANONYMISED, command_record, frame_archives, sha256_file, write_json
 
 
@@ -264,7 +272,7 @@ def export_mismatch(cloud, ply_path: Path) -> str | None:
 
 
 def publish_outcome(ctx: StageContext, outcome, *, source: dict[str, Any], cameras_used: int, versions: dict[str, Any],
-                    keyframes_tar=None, training_cameras: dict[str, Any] | None = None,
+                    quality: dict[str, Any] | None, keyframes_tar=None, training_cameras: dict[str, Any] | None = None,
                     privacy: dict[str, Any] | None = None, resumed_from: dict[str, Any] | None = None) -> StageResult:
     """Turns a training outcome into the stage result: COMPLETED -> SUCCEEDED with SPLAT; PARTIAL -> FAILED with
     TIME_LIMIT_EXCEEDED and SPLAT_PARTIAL (partial=True). The report and checkpoint go out either way. Pure apart from
@@ -273,7 +281,11 @@ def publish_outcome(ctx: StageContext, outcome, *, source: dict[str, Any], camer
     Nothing is published as a splat unless it is a valid trained state: at least one iteration ran, every configured
     iteration for SPLAT, the parameters pass validate_trained_state, and the written PLY reads back bit-identical. A
     COMPLETED outcome that fails any of that is FAILED (SPLAT_NOT_TRAINED / SPLAT_INVALID / SPLAT_EXPORT_INVALID) with
-    the report only: no splat and no checkpoint of an invalid state."""
+    the report only: no splat and no checkpoint of an invalid state.
+
+    A valid COMPLETED state is published as SPLAT only if `quality` (chaya_worker.splat_quality.evaluate) passed: else it
+    is FAILED with SPLAT_QUALITY_INSUFFICIENT or SPLAT_QUALITY_UNVERIFIED, also with the report only. No evaluation at all
+    (`quality` None) is UNVERIFIED, never a pass. A PARTIAL outcome's measurement is recorded; it stays SPLAT_PARTIAL."""
     from ..ksplat import MAX_BYTES, MIN_SPLAT_COUNT, encoded_size  # noqa: PLC0415
     from ..splat_training import SH_DEGREE, STATUS_COMPLETED, STATUS_PARTIAL, to_cloud, validate_trained_state  # noqa: PLC0415
 
@@ -292,6 +304,11 @@ def publish_outcome(ctx: StageContext, outcome, *, source: dict[str, Any], camer
         elif not MIN_SPLAT_COUNT <= outcome.gaussian_count or encoded_size(outcome.gaussian_count) > MAX_BYTES:
             invalid = ("SPLAT_INVALID", f"{outcome.gaussian_count} Gaussians would make a {encoded_size(outcome.gaussian_count)}-byte "
                                         f".ksplat; the viewer contract allows {MIN_SPLAT_COUNT} splat(s) to {MAX_BYTES} bytes")
+        elif outcome.status == STATUS_COMPLETED and quality is None:
+            invalid = (UNVERIFIED, "the trained cloud was not evaluated against the captured frames, so it is not shown to be a "
+                                   "reconstruction")
+        elif outcome.status == STATUS_COMPLETED and not quality["passed"]:
+            invalid = (quality["code"], "the trained cloud does not pass the reconstruction quality gate: " + "; ".join(quality["reasons"]))
     if invalid is None and outcome.completed_iterations > 0:  # a cloud that was never optimised is the SfM seed, not a reconstruction
         cloud = to_cloud(outcome.params)
         partial = outcome.status == STATUS_PARTIAL
@@ -345,12 +362,17 @@ def publish_outcome(ctx: StageContext, outcome, *, source: dict[str, Any], camer
                                  "form": "log-linear (INRIA get_expon_lr_func), times the scene extent, held after decay_steps"},
         "validation": {"valid": invalid is None, "code": invalid[0] if invalid else None,
                        "message": invalid[1] if invalid else None},
+        "quality": quality if quality is not None else {"passed": None, "reason": "not evaluated"},
     })
     artifacts.append(ArtifactSpec("SPLAT_TRAINING_REPORT", report, "splat-training-report.json", "application/json"))
     command = command_record(ctx, {**summary, "cameras_used": cameras_used})
 
     if invalid is not None:
-        return StageResult("FAILED", command, ctx.runner.last_exit_status(), artifacts, invalid[0], invalid[1], summary)
+        details = summary
+        if invalid[0] in (INSUFFICIENT, UNVERIFIED) and quality is not None:
+            details = {**summary, "quality": {k: quality[k] for k in ("basis", "reasons")},
+                       "psnr_gain_db": quality["psnr"].get("gain_db"), "loss_ratio": quality["training_loss"]["ratio"]}
+        return StageResult("FAILED", command, ctx.runner.last_exit_status(), artifacts, invalid[0], invalid[1], details)
     if outcome.status == STATUS_COMPLETED:
         return StageResult("SUCCEEDED", command, ctx.runner.last_exit_status(), artifacts)
     message = (f"the time budget stopped training after {outcome.completed_iterations} of {outcome.target_iterations} iterations; "
@@ -377,11 +399,14 @@ class SplatReconstruction:
         import gsplat
         import torch
 
-        from .. import ksplat
+        from .. import ksplat, splat_quality
         from .. import splat_training as st
 
         config = st.TrainingConfig.from_settings(s)
+        thresholds = splat_quality.QualityThresholds.from_settings(s)
         bad_config = splat_preflight.config_problems(config, max_ksplat_bytes=ksplat.MAX_BYTES, encoded_size=ksplat.encoded_size)
+        bad_config += [splat_preflight.Problem("CONFIG_INVALID", m, "fix the GSPLAT_EVAL_* / GSPLAT_QUALITY_* setting")
+                       for m in splat_quality.holdout_problems(config.eval_holdout_every) + thresholds.problems()]
         if bad_config:
             raise StageError("; ".join(p.message for p in bad_config), code="CONFIG_INVALID",
                              details={"problems": [p.as_dict() for p in bad_config]})
@@ -430,9 +455,13 @@ class SplatReconstruction:
             raise StageError(too_few[0].message, code="SPLAT_INIT_INSUFFICIENT",
                              details={"posed_frames_with_images": len(cams), "problems": [p.as_dict() for p in too_few]})
 
+        # The held-out views are never given to train(): they are only rendered by the quality gate (splat_quality).
+        train_cams, eval_cams = splat_quality.split_views(cams, config.eval_holdout_every, min_training=s.gsplat_min_training_frames)
+
         torch.manual_seed(config.seed)
         xyz = np.array(points["xyz"], dtype=np.float32)
         params = st.init_params(xyz, rgb_bytes_to_sh0(np.array(points["rgb"])), initial_scale_log(xyz), device)
+        seed = splat_quality.snapshot(params)  # the untrained SfM seed, the quality gate's reference
 
         keyframes_dir = ctx.workdir / "keyframes"
         keyframes_dir.mkdir()
@@ -443,18 +472,23 @@ class SplatReconstruction:
                 cv2.imwrite(str(keyframes_dir / f"iter-{it:06d}.png"), cv2.cvtColor(frame_uint8, cv2.COLOR_RGB2BGR))
 
         started = time.time()
+        rasterize = st.gsplat_rasterizer(device)
         try:
-            outcome = st.train(params=params, cams=cams, rasterize=st.gsplat_rasterizer(device), config=config,
+            outcome = st.train(params=params, cams=train_cams, rasterize=rasterize, config=config,
                                loss_fn=st.l1_dssim_loss, checkpoint_path=ctx.workdir / "splat-checkpoint.pt", source=source,
                                deadline=ctx.deadline, stop_margin_seconds=s.gsplat_stop_margin_seconds, clock=time.time,
                                is_cancelled=ctx.cancelled.is_set, resume=resume, on_iteration=keyframe)
+            training_seconds = round(time.time() - started, 3)
+            quality = None if outcome.completed_iterations == 0 else splat_quality.evaluate(
+                params=outcome.params, seed=seed, eval_cams=eval_cams, train_cams=train_cams, rasterize=rasterize,
+                history=outcome.history, thresholds=thresholds, renderer=f"gsplat {getattr(gsplat, '__version__', '?')} (CUDA)",
+                holdout_every=config.eval_holdout_every)
         except Exception as exc:
             failure = training_failure(exc)
             if failure is None:
                 raise
             _release_gpu_memory()
             raise failure from exc
-        training_seconds = round(time.time() - started, 3)
 
         keyframes_tar = ctx.workdir / "keyframes.tar"
         archive.pack(keyframes_dir, keyframes_tar)
@@ -462,6 +496,7 @@ class SplatReconstruction:
                     "gsplat_validated": st.GSPLAT_VALIDATED_VERSION, "gsplat_backend": preflight["versions"].get("gsplat_backend"),
                     "cuda_devices": ctx.toolchain.cuda_devices(), "training_device": preflight["selected_device"],
                     "training_seconds": training_seconds, "lock": preflight["lock"]}
-        return publish_outcome(ctx, outcome, source=source, cameras_used=len(cams), versions=versions, keyframes_tar=keyframes_tar,
+        return publish_outcome(ctx, outcome, source=source, cameras_used=len(train_cams), versions=versions, quality=quality,
+                               keyframes_tar=keyframes_tar,
                                training_cameras=training_cameras_doc(rectifier, poses_doc), privacy=privacy_mask_summary(cams),
                                resumed_from=resumed_from)

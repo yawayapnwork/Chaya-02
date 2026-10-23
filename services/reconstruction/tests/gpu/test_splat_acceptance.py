@@ -19,8 +19,10 @@ or unrun acceptance test means GPU training is NOT VALIDATED.
 
 It asserts:
   * training ran on a CUDA device chosen by preflight, with the pinned gsplat, every iteration, and density control;
-  * it learned: the mean PSNR of the trained cloud over all training views, rendered with gsplat, beats the untrained
-    SfM seed by at least MIN_PSNR_GAIN_DB;
+  * it learned: the mean PSNR of the trained cloud over every view of the dataset, rendered with gsplat, beats the
+    untrained SfM seed by at least MIN_PSNR_GAIN_DB;
+  * the production quality gate passed on held-out views (every 8th view is never trained on), with its measurement in
+    the training report;
   * a second job resumes exactly from the first job's checkpoint;
   * a corrupt checkpoint fails fast with CHECKPOINT_CORRUPT and publishes nothing;
   * the published SPLAT becomes a .ksplat that passes the viewer contract, with matching checksums, manifest and bundle
@@ -152,6 +154,10 @@ def test_gsplat_training_on_cuda_produces_a_validated_viewer_artifact(preflight,
     versions = training["provenance"]["versions"]
     assert training["status"] == "COMPLETED" and training["completed_iterations"] == ITERATIONS
     assert training["validation"]["valid"] and training["densification"]
+    # The production quality gate (chaya_worker.splat_quality): measured with gsplat on views the training never saw.
+    gate = training["quality"]
+    assert gate["passed"] and gate["basis"] == "HELD_OUT_VIEWS" and gate["renderer"].startswith("gsplat"), gate
+    assert gate["psnr"]["views"] >= 1 and gate["psnr"]["gain_db"] > 0 and gate["training_loss"]["ratio"] < 1
     assert versions["training_device"]["index"] == preflight["selected_device"]["index"]
     assert versions["gsplat"] == splat_preflight.GSPLAT_VALIDATED_VERSION and versions["torch_cuda"]
     losses = [e["loss"] for e in training["loss_history"]]
@@ -173,7 +179,11 @@ def test_gsplat_training_on_cuda_produces_a_validated_viewer_artifact(preflight,
     seed = st.init_params(txt_points["xyz"], rgb_bytes_to_sh0(txt_points["rgb"]), initial_scale_log(txt_points["xyz"]), device)
     psnr_trained, psnr_seed = _mean_psnr(trained, dataset, cams, device), _mean_psnr(seed, dataset, cams, device)
     summary["quality"] = {"mean_psnr_trained_db": round(psnr_trained, 3), "mean_psnr_sfm_seed_db": round(psnr_seed, 3),
-                          "views": len(cams), "note": "training views of the dataset; not a held-out evaluation"}
+                          "views": len(cams), "note": "every view of the dataset, the held-out ones included; see quality_gate",
+                          "quality_gate": {"basis": gate["basis"], "views": gate["evaluation_views"],
+                                           "trained_mean_db": gate["psnr"]["trained_mean_db"],
+                                           "seed_mean_db": gate["psnr"]["seed_mean_db"], "gain_db": gate["psnr"]["gain_db"],
+                                           "loss_ratio": gate["training_loss"]["ratio"]}}
     assert psnr_trained >= psnr_seed + MIN_PSNR_GAIN_DB, summary["quality"]
 
     # 3. resume from the first job's checkpoint
