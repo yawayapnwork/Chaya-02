@@ -127,3 +127,54 @@ On this host the in-image run would stop at `CUDA_UNAVAILABLE` even if the image
    That yields the same evidence (build log, preflight, `gpu.xml`, `gpu-acceptance.json`) as CI artifacts.
 5. **Record** in this document: the build log's exit code and duration, image size, `gpu-lock.json`, the preflight
    JSON, and the pytest results. Leave "operational" unclaimed until the acceptance test passes on real data.
+
+## 7. Re-check (2026-10-23, after D-3 to D-6)
+
+**GPU runtime verification: BLOCKED BY HARDWARE.** Nothing in this section is GPU evidence.
+
+| Check | Result |
+|---|---|
+| Display adapters (`Win32_VideoController`) | **Intel(R) Graphics** only, driver 32.0.101.8331 |
+| `nvidia-smi` | not found |
+| Free disk on C: | **4.9 GB** at the start. It fell to 2.4 GB while the Java suite and a 1 GB scratch venv were on disk, and was 4.0 GB after deleting the venv. Nothing was pruned |
+| Docker | Desktop 29.6.2, 8.1 GB VM memory. `docker system df`: images 49.4 GB, build cache 58.6 GB, volumes 7.8 GB |
+| `docker build --check -f Dockerfile.gpu` | "Check complete, no warnings found". Both pinned CUDA base digests resolved. The plain `Dockerfile` also has no warnings |
+| gsplat 1.5.3 sdist | downloaded; `sha256sum -c` against the Dockerfile's pin: **OK** |
+| torch 2.7.1+cu126 / torchvision 0.22.1+cu126 wheels | HTTP 200, 821,992,268 and 7,485,993 bytes (HEAD only; not downloaded or hash-checked today) |
+| Image build | **Not attempted**: it needs ≥ 30–40 GB (§1), and 4.9 GB was free |
+| Dependency changes since 2026-10-19 | None. D-3 to D-6 add no packages; `requirements-gpu.txt` and `constraints-gpu.txt` are unchanged |
+
+**What D-5 adds to a GPU run.** `tests/gpu/test_splat_acceptance.py` now also asserts the production quality gate:
+- `quality.passed` is true;
+- `basis` is `HELD_OUT_VIEWS`, and `renderer` starts with `gsplat`;
+- the held-out PSNR gain over the SfM seed is > 0;
+- the loss ratio is < 1.
+
+It adds a `quality_gate` block to `gpu-acceptance.json`. Its own 3 dB gain over the seed is unchanged, but it now
+covers views the training never saw (audit V-4). On a real dataset, every 8th registered image (by name) is held out.
+
+**Running the acceptance tests on a compatible NVIDIA GPU host:**
+1. Prepare the host and image as in §6, steps 1–3: driver ≥ 560, Container Toolkit, ≥ 80 GB disk, then build
+   `chaya-worker-gpu` and check that `python -m chaya_worker.splat_preflight` exits 0.
+2. Run every GPU test, first on the synthetic scene:
+   ```sh
+   mkdir -p gpu-out
+   docker run --rm --gpus all --user 0 -e CHAYA_REQUIRE_GPU=1 -e CHAYA_GPU_ACCEPTANCE_REPORT=/out/gpu-acceptance.json \
+     -v "$PWD/services/reconstruction/tests:/src/tests:ro" -v "$PWD/gpu-out:/out" -w /src chaya-worker-gpu \
+     sh -c "pip install -q pytest==8.4.1 && python -m pytest -p no:cacheprovider -m gpu tests/gpu -rA --junitxml=/out/gpu.xml"
+   ```
+   With `CHAYA_REQUIRE_GPU=1`, `test_splat_acceptance.py` fails with the preflight report when the worker cannot
+   train, and does not skip. The other GPU tests still **skip** when their requirements are missing. A "passed" count
+   therefore proves nothing until every GPU test in `gpu.xml` shows passed, not skipped.
+3. Repeat on real data: add `-e CHAYA_SPLAT_DATASET=/data/splat -v <COLMAP project with images/ and sparse/0>:/data/splat:ro`.
+   It needs ≥ 4 registered images, so that one is held out and ≥ 3 train. In practice, use tens of images.
+4. Alternatively, dispatch `.github/workflows/gpu.yml` on a self-hosted runner labelled `gpu`.
+5. Record, in this document and the audit (P-1 to P-6):
+   - the build log's exit code and duration;
+   - `gpu-lock.json` and the preflight JSON;
+   - `gpu.xml` with pass, fail and skip counts;
+   - from `gpu-acceptance.json`: `quality_gate.gain_db`, `trained_mean_db`, `seed_mean_db`, `loss_ratio`, the
+     evaluation views, `training_seconds` and the Gaussian count.
+
+   The quality thresholds (`GSPLAT_QUALITY_*`) should be raised only after such measurements, never lowered to get a
+   run through.

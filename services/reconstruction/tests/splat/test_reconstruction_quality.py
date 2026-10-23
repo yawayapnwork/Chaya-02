@@ -294,3 +294,23 @@ def test_thresholds_come_from_the_environment_and_meaningless_ones_are_refused()
     assert (d.gsplat_eval_holdout_every, sq.QualityThresholds.from_settings(d)) == (8, sq.QualityThresholds())
     assert len(sq.QualityThresholds(min_psnr_gain_db=float("nan"), min_psnr_db=-1, max_loss_ratio=0).problems()) == 3
     assert sq.QualityThresholds().problems() == []
+
+
+def test_the_seed_waits_in_host_memory_and_is_rendered_on_the_training_device():
+    """The SfM seed is only rendered after training, so it holds no training-device memory meanwhile; evaluate() renders
+    it where the trained cloud lives. The `meta` device stands in for CUDA: a CPU tensor reaching the rasteriser fails."""
+    from chaya_worker.splat_training import RenderOutput
+
+    seed = sq.snapshot(_seed())
+    assert {v.device.type for v in seed.values()} == {"cpu"} and all(not v.requires_grad for v in seed.values())
+    trained = {k: v.detach().to("meta") for k, v in _seed().items()}
+    cams = _views(2)[:1]
+    seen = []
+
+    def spy(*args):
+        seen.append({a.device.type for a in args if torch.is_tensor(a)})
+        return RenderOutput(torch.as_tensor(cams[0]["image"]), None, None)
+
+    sq.evaluate(params=trained, seed=seed, eval_cams=cams, train_cams=cams, rasterize=spy, history=[{"loss": 1.0}, {"loss": 0.5}],
+                thresholds=sq.QualityThresholds(), renderer=RENDERER, holdout_every=8)
+    assert seen == [{"meta"}, {"meta"}], "the trained cloud and the seed are both rendered on the training device"

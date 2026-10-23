@@ -13,6 +13,58 @@ Companion documents (same day):
 - `gaussian-splatting-test-baseline.md`: CPU baseline and post-fix results
 - `gaussian-splatting-gpu-environment.md`: GPU image and host
 
+## Re-verification after D-3 to D-6 (2026-10-23)
+
+HEAD `6929948`, plus the V-2 fix (audit, "Verification pass"). Exact counts are in `gaussian-splatting-test-baseline.md`
+§8. **The answer above is unchanged: real-scene reconstruction is NOT verified, and GPU runtime verification is
+BLOCKED BY HARDWARE** (Intel graphics only, no `nvidia-smi`). Sections 1–11 below are the 2026-10-19 record. Where
+they say D-3 to D-6 are open, this section supersedes them.
+
+**1. CPU-verified.** Worker suite, torch 2.14: 731 passed, 0 failed, 0 errors, 64 skipped (not run). Splat suites
+re-run on the pinned torch 2.7.1 CPU build: 149 passed, 0 skipped. With the CPU test renderer and synthetic scenes:
+- Resume on the worker side (D-3): `resume_state`, refusal of a corrupt or mismatched checkpoint, bit-exact resume.
+- The worker downloading only the declared inputs (D-4).
+- The quality gate (D-5):
+  - the held-out split, and that training never renders a held-out frame;
+  - PSNR over valid pixels, compared with the SfM seed;
+  - loss progress, the UNVERIFIED and INSUFFICIENT verdicts, and no SPLAT on refusal;
+  - PARTIAL staying PARTIAL;
+  - the seed kept in host memory (V-2).
+- Checkpoint persistence (D-6):
+  - disk full and permission denied, using torch's real serializer;
+  - atomic writes, temporary-file cleanup and the fallback checkpoint for PARTIAL;
+  - export and read-back failures publishing nothing.
+
+**2. Integration-verified.**
+- Java control plane on real PostgreSQL and MinIO (Testcontainers), full `mvn verify`: 668 tests, 0 failures,
+  0 errors, 4 skipped (opt-in ClamAV and Keycloak live tests). This covers:
+  - a time-boxed attempt registered PARTIAL, and its retry resuming the checkpoint to a FINAL run (simulated worker
+    reports);
+  - refused checkpoints never offered again, and no checkpoint crossing a run, scan or tenant;
+  - the V43 transition guard;
+  - work orders that offer only declared inputs (`SplatResumeControlPlaneTest`, 12).
+- Worker orchestrator with on-disk storage: all-or-nothing upload (`STORAGE_ERROR`, nothing registered), and a
+  failed training registering nothing.
+- **Not run:** the 43 live-stack integration and acceptance tests (no stack configured).
+
+**3. GPU-verified. None.** 0 of 19 `tests/gpu` tests ran: 4 need gsplat with CUDA, 1 is the acceptance test, 3 need
+real photos and 11 need Open3D. The GPU image has never been built (≥ 30–40 GB needed, 4.9 GB free). The pinned
+inputs were re-checked without building: `docker build --check` is clean, the base digests resolve, and the gsplat
+sdist hash is OK.
+
+**4. Real-scene-verified. None for splat training.** No real COLMAP project with images is on this host. The only
+real-data evidence is still the 2026-10-19 ETH3D run up to SfM, plus the camera check in section 4.
+
+**5. Remaining unverified:**
+- gsplat training, density control and resume on CUDA (P-1, P-6).
+- What held-out PSNR and gain over the seed a real capture reaches. The D-5 thresholds are floors, not measurements.
+- Whether the time-budget margin covers evaluation, checkpoint, PLY and upload on a real capture (P-3). The D-5
+  evaluation adds work after the training loop, and it is unmeasured.
+- A real full disk or permission failure during a checkpoint write. It was injected at the file boundary.
+- The live stack (43 tests) and the GPU image build (P-5).
+- The run status of a reopened PARTIAL run whose resumed attempt fails other than by the time budget (audit V-1). It
+  is open, and it is not covered by any test.
+
 ## Verdict by level
 
 | Level | Verdict | Basis |
@@ -87,7 +139,7 @@ pipeline produces SPARSE_MODEL, POSES, masks and frames (the ETH3D procedure in 
 | 6 | Gaussian initialisation | Unit-tested | synthetic | `init_params` / `initial_scale_log` in every training test |
 | 7 | **Real gsplat CUDA training** | **NOT RUN** | — | No GPU, no image |
 | 8 | Loss and density control | Unit-tested with the CPU test renderer | synthetic | clone/split/prune/cap/reset, masked loss and gradients |
-| 9 | Checkpoint creation and resume | Unit-tested (bit-exact resume on CPU); CUDA resume not run; **unreachable in production** (audit D-3) | synthetic | `test_training_lifecycle.py`, `test_splat_training.py`, corrupt/mismatched checkpoint tests |
+| 9 | Checkpoint creation and resume | Unit-tested (bit-exact resume on CPU); CUDA resume not run; **unreachable in production** (audit D-3). *Superseded 2026-10-23: D-3 fixed, resume reachable and integration-tested (see top)* | synthetic | `test_training_lifecycle.py`, `test_splat_training.py`, corrupt/mismatched checkpoint tests |
 | 10 | Time budget and partial result | Integration-tested: worker → report → control plane | synthetic | `test_the_control_plane_receives_a_partial_splat_when_the_budget_runs_out` (orchestrator, real deadline); `PipelineControlPlaneTest` / `ProcessingLiveStatusTest` (PARTIAL run, TIME_LIMIT_EXCEEDED) |
 | 11 | PLY export and read-back | Unit-tested | synthetic | bit-identical read-back; SPLAT_EXPORT_FAILED / SPLAT_EXPORT_INVALID / SPLAT_INVALID never published |
 | 12 | Training report | Unit-tested | synthetic | `test_a_completed_run_succeeds_with_a_splat_and_full_provenance` |
@@ -107,7 +159,7 @@ pipeline produces SPARSE_MODEL, POSES, masks and frames (the ETH3D procedure in 
 | CUDA or dependency incompatibility | real DEPENDENCY_UNAVAILABLE on this host; GSPLAT_INCOMPATIBLE, SPLAT_GPU_OUT_OF_MEMORY, GPU_RUNTIME_ERROR mapping; drift/version preflight | pass | real refusal plus unit |
 | Interrupted training | resume from the last periodic checkpoint to the uninterrupted result; OOM mid-run propagates after a resumable checkpoint; cancellation raises; cancelled job uploads nothing | pass | unit / orchestration |
 | Insufficient time budget | budget already spent → no splat; early stop → PARTIAL, never COMPLETED; control plane → PARTIAL run | pass | unit / orchestration / Java |
-| Artifact write or validation failure | SPLAT_EXPORT_FAILED, SPLAT_EXPORT_INVALID, SPLAT_INVALID, SPLAT_CHECKPOINT_WRITE_FAILED, STORAGE_ERROR, INPUT_CHECKSUM_MISMATCH | pass | unit / orchestration |
+| Artifact write or validation failure | SPLAT_EXPORT_FAILED, SPLAT_EXPORT_INVALID, SPLAT_INVALID, SPLAT_CHECKPOINT_WRITE_FAILED, STORAGE_ERROR, INPUT_CHECKSUM_MISMATCH | pass | unit / orchestration. *2026-10-23: since D-6 a failed checkpoint write no longer fails the stage; SPLAT_CHECKPOINT_WRITE_FAILED is now a report field, and other I/O errors are SPLAT_IO_FAILED* |
 
 No failure path observed or tested produces a successful reconstruction or a placeholder artifact.
 
@@ -167,9 +219,9 @@ metrics, no trained real-scene PLY and no real-scene .ksplat exist.
 ## 9. Known limitations
 
 - The CPU tests prove the training *mechanics* with an isotropic CPU test renderer, not gsplat's anisotropic CUDA rasteriser.
-- Checkpoint resume is not reachable through the control plane (D-3). Every later stage downloads the checkpoint (D-4).
-- SUCCEEDED has no quality floor (D-5). A failed final checkpoint write discards a completed cloud (D-6).
-- The acceptance PSNR is measured on training views, not held-out views.
+- *Fixed 2026-10-23 (see top):* checkpoint resume unreachable (D-3); every later stage downloading the checkpoint
+  (D-4); no quality floor (D-5); a failed final checkpoint write discarding a completed cloud (D-6); acceptance PSNR
+  on training views only (the gate now uses held-out views). All are CPU- or integration-verified only, not on a GPU.
 - The default acceptance dataset is synthetic.
 - GLOMAP is in no image; COLMAP's mapper is used.
 - Real-data upstream defects from the ETH3D run remain open (VALIDATION D1–D3):

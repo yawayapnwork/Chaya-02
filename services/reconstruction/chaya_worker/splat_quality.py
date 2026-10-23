@@ -89,8 +89,9 @@ def split_views(cams: Sequence[dict[str, Any]], every: int, *, min_training: int
 
 
 def snapshot(params: dict) -> dict:
-    """Detached copies of the parameters: the untrained seed, kept before training updates them in place."""
-    return {k: v.detach().clone() for k, v in params.items()}
+    """Detached host copies of the parameters: the untrained seed, kept before training updates them in place. In host
+    memory, not on the training device: it is only rendered after training, so it holds no GPU memory meanwhile."""
+    return {k: v.detach().to("cpu", copy=True) for k, v in params.items()}
 
 
 def masked_psnr(pred: np.ndarray, gt: np.ndarray, valid: np.ndarray | None) -> float | None:
@@ -118,14 +119,14 @@ def loss_progress(history: Sequence[dict[str, Any]]) -> dict[str, Any]:
     return {"iterations": len(losses), "window": w, "initial_mean": initial, "final_mean": final, "ratio": ratio}
 
 
-def _render_psnr(params: dict, cams: Sequence[dict[str, Any]], rasterize: Callable) -> list[float | None]:
+def _render_psnr(params: dict, cams: Sequence[dict[str, Any]], rasterize: Callable, device) -> list[float | None]:
     import torch  # noqa: PLC0415
 
     from .splat_training import render_inputs  # noqa: PLC0415
 
     out = []
     with torch.no_grad():
-        inputs = render_inputs(params)
+        inputs = render_inputs({k: v.to(device) for k, v in params.items()})
         for cam in cams:
             image = rasterize(*inputs, cam).image.detach().clamp(0.0, 1.0).cpu().numpy()  # clamp keeps NaN: it stays NaN
             out.append(masked_psnr(image, cam["image"], cam.get("valid")))
@@ -148,7 +149,8 @@ def evaluate(*, params: dict, seed: dict, eval_cams: Sequence[dict[str, Any]], t
             unverified = True
             reasons.append(f"no held-out view to measure on: {fallback}; gsplat_quality_require_held_out is set")
 
-    trained, seeded = _render_psnr(params, cams, rasterize), _render_psnr(seed, cams, rasterize)
+    device = next(iter(params.values())).device  # the seed is in host memory (snapshot); it is rendered where training ran
+    trained, seeded = _render_psnr(params, cams, rasterize, device), _render_psnr(seed, cams, rasterize, device)
     per_view = [{"name": c["name"], "trained_psnr_db": t, "seed_psnr_db": s} for c, t, s in zip(cams, trained, seeded, strict=True)]
     measured = [v for v in per_view if v["trained_psnr_db"] is not None and v["seed_psnr_db"] is not None]
     unmeasurable = [v["name"] for v in per_view if v not in measured]

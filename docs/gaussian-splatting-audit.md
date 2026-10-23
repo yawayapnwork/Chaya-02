@@ -88,6 +88,47 @@ NVIDIA GPU, so no GPU evidence could be produced here. GPU training status: **NO
   the result's own storage is never optional. Covered by `tests/splat/test_checkpoint_persistence.py`, using a real
   torch serializer writing into a file that runs out of space. Never run on CUDA or on a real full disk.
 
+**Verification pass (2026-10-23, after commits `fb69c33`, `e96d477`, `f672b7f`, `6929948`).** Reviewed every change
+since `c3b5281`. Results: `gaussian-splatting-test-baseline.md` §9. D-3 to D-6 hold up on CPU and in the Java
+control plane. GPU runtime verification: **BLOCKED BY HARDWARE**. No fix was rewritten. Findings:
+- **V-1 (P2, open, needs a product decision). A reopened PARTIAL run can lose its PARTIAL status.**
+  - Before D-3 a PARTIAL run was terminal. Now a resumed SPLAT_RECONSTRUCTION can fail in a way other than the time
+    budget: D-5's `SPLAT_QUALITY_INSUFFICIENT`, OOM or `SPLAT_IO_FAILED`.
+  - When it does, `PipelineService.advance` ends the run `FAILED` with `quality` NULL. The earlier attempt's
+    `SPLAT_PARTIAL` is still stored, and the capture stays COMPLETED, but the run no longer reports a kept partial
+    result.
+  - A further retry is offered the same checkpoint again. Under unchanged settings it will very likely be refused
+    again. Retries are user-triggered and bounded by `max_retries`.
+  - `SplatResumeControlPlaneTest` has no case for it. The options are to end such a run PARTIAL (quality PARTIAL) with
+    the newer failure recorded, or FAILED with an explicit kept-partial marker. Not changed here.
+- **V-2 (fixed). D-5's SfM-seed snapshot held training-device memory for the whole run.**
+  - It was a clone on the training device, the size of the initial cloud, although it is only rendered after
+    training. It now waits in host memory and is moved to the trained cloud's device for evaluation.
+  - Covered by `test_the_seed_waits_in_host_memory_and_is_rendered_on_the_training_device` (`meta` device as the
+    stand-in). That test fails on the previous code. The saving on CUDA is unmeasured.
+- **V-3 (evidence). The CPU tests had only ever run on torch 2.14, while the image pins 2.7.1.**
+  - `tests/splat` and the splat artifact smoke test were re-run with torch **2.7.1+cpu**, numpy 2.2.6, scipy 1.15.3 and
+    opencv-python-headless 4.11.0.86 (the GPU lock's versions): 149 passed, 0 failed, 0 skipped.
+  - That run includes the D-6 test of how torch wraps a mid-archive ENOSPC.
+- **V-4 (note). The acceptance test's own threshold is stricter now.** Its unchanged 3 dB gain over the seed is still
+  measured over every dataset view. Two of the synthetic scene's 16 views (`000001.png`, `000009.png`) are now held
+  out of training, so they are unseen. Whether gsplat clears it is unknown until it runs.
+- **Checked and fine:**
+  - Artifact contracts: the Java `INPUTS`, the worker's `stage_inputs` and `stage-artifacts.json` agree, and contract
+    tests on both sides pass.
+  - Checkpoint ownership: only a sealed, non-PII, unpurged artifact of the same run, scan and tenant is offered.
+    `load_checkpoint` re-checks the input identity and settings, and D-6's fallback checkpoint is this job's own.
+  - Migrations: only V43 (D-3). D-5 and D-6 add error codes and report fields, and no constraint lists either.
+  - Privacy: held-out and masked pixels are excluded from PSNR, and D-4 keeps PRIVACY_MASKS for the stages that read
+    them.
+  - Dependencies: none added.
+  - Existing clients:
+    - `inputArtifactIds` now lists only downloaded inputs; the API stores it as lineage.
+    - `cameras_used` now counts training views; nothing reads it.
+    - The web view explains the new codes.
+- **P-8** is addressed by D-5 (a held-out evaluation exists, and the acceptance test asserts it), but it has not run
+  on a GPU.
+
 ## 1. Confirmed working behaviour
 
 Confirmed by code reading and/or the CPU test run in section 6. "Working" here means CPU-verified mechanics, not GPU execution.

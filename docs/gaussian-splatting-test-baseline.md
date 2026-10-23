@@ -150,10 +150,76 @@ failed with `cameras=[]`. Beyond pytest:
 
 GPU runtime verification of all three remains **blocked**: no NVIDIA GPU.
 
-## 8. Next recommended action
+## 8. Verification of D-3 to D-6 (2026-10-23)
 
-1. Done (section 7): D-1, D-2 and D-7 are fixed, with regression tests. Still open from the audit: D-3 to D-6.
-2. Optionally, to match CI exactly: run suite 12 in a throwaway `python:3.12` container with `torch==2.7.1` from the
-   CPU index and `transformers==4.57.1` (about 1 GB of downloads; check disk first). This also covers the `tests/ml` skip.
+Code: HEAD `6929948` (D-3 `fb69c33`, D-4 `e96d477`, D-5 `f672b7f`, D-6 `6929948`), plus the uncommitted V-2 fix and
+its test (audit, "Verification pass"). Host: Windows 11, Intel Graphics only, 4.0–4.9 GB free on C:.
+
+**Worker:** `services/reconstruction/.venv`, with Python 3.12.10, torch 2.14.0+cpu and numpy 2.2.6. One full run:
+`.venv/Scripts/python -m pytest -q -p no:cacheprovider -rs --junitxml=…`. It exited 0 in 6 min 48 s. The groups
+below come from that run's JUnit XML. The CI row matches each id from `--collect-only -m "not gpu and not open3d and
+not integration and not acceptance"` against the same XML; all 732 matched.
+
+| Group | Tests | Passed | Failed | Errors | Skipped |
+|---|---:|---:|---:|---:|---:|
+| `tests/splat` other than privacy (unit, lifecycle, checkpoint resume and persistence, quality gate, adapter, dataset) | 138 | 138 | 0 | 0 | 0 |
+| `tests/splat/test_privacy_masked_training.py` | 7 | 7 | 0 | 0 | 0 |
+| `tests/orchestration/test_privacy_masks.py` | 17 | 17 | 0 | 0 | 0 |
+| `tests/orchestration` (all, incl. `test_stage_inputs.py`, `test_stages_and_orchestrator.py`) | 98 | 97 | 0 | 0 | 1 |
+| artifact validation: `tests/unit/test_ksplat*`, `test_stage_artifact_contract.py`, `test_splat_color.py` | 68 | 68 | 0 | 0 | 0 |
+| `tests/smoke` (pipeline smoke, splat → .ksplat → pinned viewer) | 17 | 17 | 0 | 0 | 0 |
+| `tests/gpu` | 19 | **0** | 0 | 0 | **19** |
+| `tests/integration` + `tests/acceptance` | 43 | **0** | 0 | 0 | **43** |
+| **All** | **795** | **731** | 0 | 0 | **64** |
+| CI CPU selection | 732 | **731** | 0 | 0 | 1 |
+
+**Skipped means not run:**
+- GPU, 19:
+  - 4 need torch-CUDA, gsplat and a device.
+  - The acceptance test stops at its preflight: gsplat missing, CPU-only torch, no COLMAP.
+  - 3 need `CHAYA_TEST_IMAGE_SEQUENCE`.
+  - 11 need Open3D.
+- Integration and acceptance, 43:
+  - 40 are `BLOCKED: no stack configured`.
+  - 2 have no MinIO.
+  - 1 has no stack for the end-to-end test.
+- Other, 2:
+  - 1 orchestration case has an empty parameter set (expected).
+  - `tests/ml` is skipped because `transformers` is not installed. It is unrelated to splats.
+
+**Worker on the GPU image's torch version.** A throwaway venv held torch **2.7.1+cpu** (PyTorch CPU index), numpy
+2.2.6, scipy 1.15.3, opencv-python-headless 4.11.0.86, boto3 1.39.0, requests 2.32.4 and pytest. It ran
+`pytest -q -p no:cacheprovider tests/splat tests/smoke/test_splat_artifact_smoke.py`: **149 passed, 0 failed,
+0 errors, 0 skipped** (1 min 42 s). The venv was deleted afterwards for disk space.
+
+**Java control plane.** The full `mvn -B -ntp verify` ran in `maven:3.9-eclipse-temurin-21`, with Testcontainers
+`pgvector/pgvector:pg17` and the pinned MinIO mirror. All images were already cached. It ended in `BUILD SUCCESS` after
+23 min 19 s: **668 tests, 0 failures, 0 errors, 4 skipped**. The skips are `ClamAvLiveTest` (2) and
+`KeycloakLiveTest` (2), which are opt-in live tests. Relevant classes, all 0 failures, errors and skips:
+
+| Class | Tests |
+|---|---:|
+| `SplatResumeControlPlaneTest` | 12 |
+| `PipelineControlPlaneTest` | 20 |
+| `ProcessingLiveStatusTest` | 10 |
+| `ArtifactIntegrityTest` | 6 |
+| `pipeline.PipelineArtifactContractTest` | 5 |
+| `PipelineOutputContractTest` | 4 |
+| `KsplatPublicationTest` | 4 |
+| `ReconstructionArtifactServingTest` | 1 |
+
+**Other checks:**
+- `ruff check chaya_worker tests`: clean.
+- `apps/web` `npm test`: 385 passed, 0 failed, 0 skipped.
+
+**Not run:** no GPU test, no live-stack test, no real-scene training.
+
+## 9. Next recommended action (updated 2026-10-23)
+
+1. Done: D-1, D-2 and D-7 (section 7), and D-3 to D-6 (section 8), with regression tests. Still open: audit V-1
+   (the run status of a reopened PARTIAL run whose resume fails), and every GPU-only item (P-1 to P-6).
+2. Done in section 8: the splat suites on the pinned torch 2.7.1 (CPU). Still not run there: `tests/ml`, which needs
+   `transformers`.
 3. On a CUDA host: build the GPU image, run preflight, then `CHAYA_REQUIRE_GPU=1 pytest -m gpu`, first synthetic and
-   then with `CHAYA_SPLAT_DATASET` set to a real COLMAP project. Only that run can establish whether GPU training works.
+   then with `CHAYA_SPLAT_DATASET` set to a real COLMAP project (`gaussian-splatting-gpu-environment.md` §7). Only that
+   run can establish whether GPU training works and what held-out PSNR a real capture reaches.
