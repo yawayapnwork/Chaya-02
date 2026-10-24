@@ -5,19 +5,19 @@
 # from CHAYA_PUBLIC_API_BASE_URL / CHAYA_PUBLIC_OIDC_ISSUER / CHAYA_PUBLIC_OIDC_CLIENT_ID and the server-side API URL
 # from CHAYA_API_BASE_URL (lib/public-config.ts, DEPLOYMENT.md). None of these is secret; the image holds no secrets.
 
-FROM node:22-alpine AS deps
+FROM node:25-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
-FROM node:22-alpine AS build
+FROM node:25-alpine AS build
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build && mkdir -p public
 
-FROM node:22-alpine
+FROM node:25-alpine
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=3000 HOSTNAME=0.0.0.0
 # Only the traced standalone server and its static assets; no node_modules install, no build tooling, no sources.
