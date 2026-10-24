@@ -1,0 +1,9 @@
+{
+  "authorized_by": "<name of the person who authorized the capture>",
+  "role": "<their role, e.g. facilities manager>",
+  "date": "<date of the authorization>",
+  "scope": "<what may be captured and processed, and where the data may be stored>",
+  "people_policy": "<NO_PEOPLE_PRESENT | CONSENT_OBTAINED | BLURRED_BY_PIPELINE>",
+  "sensitive_material_reviewed": false,
+  "retention": "<how long the media are kept, and who deletes them>"
+}

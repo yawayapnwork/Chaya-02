@@ -225,6 +225,7 @@ class PoseEstimation:
                                                               "privacy_masks": mask_doc})
         return StageResult(
             "SUCCEEDED", command_record(ctx, {"mapper_used": used, "fallback_used": fallback, "gpu": use_gpu,
+                                           "registered": len(poses), "frames": len(frames),
                                            "calibration_source": cameras_doc["calibration_source"],
                                            "camera_models": sorted({c.model for c in cameras.values()}),
                                            "privacy_masks_applied": mask_doc["applied"]}),

@@ -1,0 +1,10 @@
+{
+  "note": "Fixed BEFORE the run (the harness records this file's SHA-256 and refuses an edited copy on --resume). These values were chosen on 2026-10-24, before any real-venue run existed, from the system's own limits: the calibration API refuses a scale spread above 3 %; a tape over a few metres is good to about 1 %; the splat quality gate must have passed on held-out views with a positive margin.",
+  "min_registered_share": 0.75,
+  "max_scale_relative_spread": 0.03,
+  "max_check_distance_relative_error": 0.02,
+  "require_quality_gate": true,
+  "min_psnr_gain_db": 1.0,
+  "require_canonical_frame": true,
+  "min_pois": 1
+}

@@ -70,3 +70,8 @@ work/
 # Local scan reports
 /reports/
 !.env.production.example
+
+# Real-venue and GPU acceptance runs: their media, downloaded artifacts and reports stay outside Git (docs/REAL_VENUE_ACCEPTANCE.md, "Where the data lives")
+/acceptance-*/
+/gpu-acceptance-*/
+/venue-data/

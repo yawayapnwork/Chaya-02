@@ -10609,6 +10609,21 @@ components:
         totalParts:
           type: integer
           format: int32
+    InputArtifactView:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+        sha256:
+          type: string
+        sizeBytes:
+          type: integer
+          format: int64
+        stage:
+          type: string
     InputRef:
       type: object
       properties:
@@ -12891,6 +12906,10 @@ components:
         finishedAt:
           type: string
           format: date-time
+        inputs:
+          type: array
+          items:
+            $ref: "#/components/schemas/InputArtifactView"
         outputSha256:
           type: string
         startedAt:

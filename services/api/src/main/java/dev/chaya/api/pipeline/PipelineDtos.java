@@ -59,10 +59,20 @@ public final class PipelineDtos {
     public record ArtifactView(UUID id, String kind, String bucket, String key, long sizeBytes, String sha256,
                                String contentType, boolean partial, boolean containsPii) {}
 
+    /**
+     * One attempt of one stage. {@code inputs} are the sealed artifacts the worker reported reading (its report's
+     * inputArtifactIds, stored as pipeline_stage_run.input_artifact_ids), each joined to its kind, producing stage and sealed
+     * checksum: the provenance link from each output back to what it was made of. Only artifacts of the attempt's own venue
+     * are listed; an id that is none is left out. Raw capture media are not processing artifacts and are not listed.
+     */
     public record StageRunView(int attempt, String status, Instant startedAt, Instant finishedAt, Integer exitStatus,
                                String errorCode, String errorMessage, Map<String, Object> errorDetails,
                                String outputSha256, String workerId, Map<String, Object> command,
-                               ArtifactView stdout, ArtifactView stderr, List<ArtifactView> artifacts) {}
+                               ArtifactView stdout, ArtifactView stderr, List<ArtifactView> artifacts,
+                               List<InputArtifactView> inputs) {}
+
+    /** An artifact a stage attempt read: its id, kind, the stage that produced it, and its sealed checksum and size. */
+    public record InputArtifactView(UUID id, String kind, String stage, String sha256, long sizeBytes) {}
 
     /** state: PENDING, QUEUED, RUNNING, SUCCEEDED, FAILED, CANCELLED or NOT_RUN (run ended before it started). */
     public record StageView(String stage, String state, int attempts, StageRunView lastRun) {}

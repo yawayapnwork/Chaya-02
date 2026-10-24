@@ -81,6 +81,45 @@ class PipelineControlPlaneTest extends PipelineTestSupport {
     }
 
     @Test
+    void eachAttemptListsTheArtifactsItReadWithTheirProducingStageAndSealedChecksum() throws Exception {
+        var s = startRun();
+        succeed(claimExpecting("INPUT_VALIDATION"));
+        succeed(claimExpecting("FFMPEG_PREPROCESS"));
+        JsonNode order = claimExpecting("FRAME_QUALITY_FILTER");
+        List<String> offered = order.get("inputs").findValuesAsText("artifactId");
+        List<String> produced = new java.util.ArrayList<>();
+        for (JsonNode o : order.get("inputs")) {
+            if (!o.get("kind").asText().startsWith("RAW_")) produced.add(o.get("artifactId").asText());
+        }
+        assertThat(produced).as("FRAME_QUALITY_FILTER reads an earlier stage's outputs").isNotEmpty();
+        var report = report("SUCCEEDED", outputsFor(order), null, null);
+        // What the worker says it read, plus an id that is no artifact of this venue: only real artifacts are listed.
+        List<String> reported = new java.util.ArrayList<>(offered);
+        reported.add(java.util.UUID.randomUUID().toString());
+        report.put("inputArtifactIds", reported);
+        send(order, report, svc).andExpect(status().isOk());
+
+        JsonNode last = null;
+        for (JsonNode st : processing(s).get("run").get("stages")) {
+            if (st.get("stage").asText().equals("FRAME_QUALITY_FILTER")) last = st.get("lastRun");
+        }
+        assertThat(last).isNotNull();
+        JsonNode inputs = last.get("inputs");
+        // Raw capture media are not processing artifacts, and the unknown id matches nothing: neither is listed.
+        assertThat(inputs.findValuesAsText("id")).containsExactlyInAnyOrderElementsOf(produced);
+        for (JsonNode in : inputs) {
+            JsonNode sent = null;
+            for (JsonNode o : order.get("inputs")) {
+                if (o.get("artifactId").asText().equals(in.get("id").asText())) sent = o;
+            }
+            assertThat(in.get("kind").asText()).isEqualTo(sent.get("kind").asText());
+            assertThat(in.get("stage").asText()).isEqualTo(sent.get("stage").asText());
+            assertThat(in.get("sha256").asText()).isEqualTo(sent.get("sha256").asText()).matches("[0-9a-f]{64}");
+            assertThat(in.get("sizeBytes").asLong()).isEqualTo(sent.get("sizeBytes").asLong());
+        }
+    }
+
+    @Test
     void firstStageReadsTheAcceptedRawMedia() throws Exception {
         var s = startRun();
         JsonNode order = claimExpecting("INPUT_VALIDATION");

@@ -12,6 +12,7 @@ import dev.chaya.api.frame.FrameDtos.FrameView;
 import dev.chaya.api.pipeline.PipelineDtos.ArtifactReport;
 import dev.chaya.api.pipeline.PipelineDtos.ArtifactView;
 import dev.chaya.api.pipeline.PipelineDtos.Heartbeat;
+import dev.chaya.api.pipeline.PipelineDtos.InputArtifactView;
 import dev.chaya.api.pipeline.PipelineDtos.InputRef;
 import dev.chaya.api.pipeline.PipelineDtos.RunView;
 import dev.chaya.api.pipeline.PipelineDtos.StageReport;
@@ -2380,13 +2381,24 @@ public class PipelineService {
             .query((rs, i) -> new ArtifactView(rs.getObject("id", UUID.class), rs.getString("kind"), rs.getString("bucket"),
                 rs.getString("object_key"), rs.getLong("size_bytes"), rs.getString("checksum_sha256"), rs.getString("content_type"),
                 rs.getBoolean("partial"), rs.getBoolean("contains_pii"))).list();
+        List<InputArtifactView> inputs = jdbc.sql("""
+                SELECT a.id, a.kind, sr.stage, a.checksum_sha256, a.size_bytes
+                  FROM pipeline_stage_run me
+                  JOIN processing_artifact a ON a.id = ANY (me.input_artifact_ids) AND a.organization_id = me.organization_id
+                                           AND a.venue_id = me.venue_id
+                  LEFT JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id
+                 WHERE me.id = :s
+                 ORDER BY a.created_at, a.id
+                """).param("s", id)
+            .query((rs, i) -> new InputArtifactView(rs.getObject("id", UUID.class), rs.getString("kind"), rs.getString("stage"),
+                rs.getString("checksum_sha256"), rs.getLong("size_bytes"))).list();
         ArtifactView out = arts.stream().filter(a -> a.kind().equals("LOG_STDOUT")).findFirst().orElse(null);
         ArtifactView err = arts.stream().filter(a -> a.kind().equals("LOG_STDERR")).findFirst().orElse(null);
         return new StageRunView(((Number) sr.get("attempt")).intValue(), (String) sr.get("status"), instant(sr.get("started_at")),
             instant(sr.get("finished_at")), sr.get("exit_status") == null ? null : ((Number) sr.get("exit_status")).intValue(),
             (String) sr.get("error_code"), (String) sr.get("error_message"), parse(sr.get("error_details")),
             sr.get("output_sha256") == null ? null : sr.get("output_sha256").toString().trim(), (String) sr.get("worker_id"),
-            parse(sr.get("command")), out, err, arts.stream().filter(a -> !a.kind().startsWith("LOG_")).toList());
+            parse(sr.get("command")), out, err, arts.stream().filter(a -> !a.kind().startsWith("LOG_")).toList(), inputs);
     }
 
     // =========================================================================================

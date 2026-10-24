@@ -415,7 +415,14 @@ def publish_outcome(ctx: StageContext, outcome, *, source: dict[str, Any], camer
         "checkpoint": {k: v for k, v in checkpoint.items() if k != "publishable"},
     })
     artifacts.append(ArtifactSpec("SPLAT_TRAINING_REPORT", report, "splat-training-report.json", "application/json"))
-    command = command_record(ctx, {**summary, "cameras_used": cameras_used})
+    # What an operator reads through the API (the acceptance harness's thresholds): the gate's verdict and measurements,
+    # training time and peak GPU memory. The full record stays in the SPLAT_TRAINING_REPORT artifact.
+    gate = quality or {}
+    command = command_record(ctx, {**summary, "cameras_used": cameras_used, "quality": {
+        "passed": gate.get("passed"), "basis": gate.get("basis"), "psnr_gain_db": (gate.get("psnr") or {}).get("gain_db"),
+        "trained_mean_psnr_db": (gate.get("psnr") or {}).get("trained_mean_db"),
+        "loss_ratio": (gate.get("training_loss") or {}).get("ratio")},
+        "training_seconds": versions.get("training_seconds"), "gpu_memory": versions.get("gpu_memory")})
 
     if invalid is not None:
         details = summary

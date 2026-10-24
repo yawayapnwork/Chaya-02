@@ -1,0 +1,11 @@
+[
+  {"kind": "DISTANCE", "label": "door B2 width", "method": "TAPE", "unit": "m", "value": 0.912, "uncertainty": 0.003,
+   "observations": [{"point": "A", "media": "IMG_0101.jpg", "u": 1210.5, "v": 880.0}, {"point": "A", "media": "IMG_0104.jpg", "u": 640.0, "v": 902.5},
+                    {"point": "B", "media": "IMG_0101.jpg", "u": 1688.0, "v": 884.0}, {"point": "B", "media": "IMG_0104.jpg", "u": 1101.5, "v": 911.0}]},
+  {"kind": "DISTANCE", "label": "north wall, floor line", "method": "LASER_DISTANCE_METER", "unit": "m", "value": 6.405, "uncertainty": 0.002,
+   "observations": [{"point": "A", "media": "IMG_0120.jpg", "u": 210.0, "v": 1500.0}, {"point": "A", "media": "IMG_0121.jpg", "u": 300.0, "v": 1490.0},
+                    {"point": "B", "media": "IMG_0130.jpg", "u": 3800.0, "v": 1520.0}, {"point": "B", "media": "IMG_0131.jpg", "u": 3650.0, "v": 1510.0}]},
+  {"kind": "DISTANCE", "label": "table length (check)", "role": "check", "method": "TAPE", "unit": "m", "value": 1.600, "uncertainty": 0.002,
+   "observations": [{"point": "A", "media": "IMG_0140.jpg", "u": 900.0, "v": 1300.0}, {"point": "A", "media": "IMG_0142.jpg", "u": 1000.0, "v": 1280.0},
+                    {"point": "B", "media": "IMG_0140.jpg", "u": 2300.0, "v": 1310.0}, {"point": "B", "media": "IMG_0142.jpg", "u": 2410.0, "v": 1295.0}]}
+]

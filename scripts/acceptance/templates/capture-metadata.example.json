@@ -1,0 +1,15 @@
+{
+  "venue_name": "<venue as signed on site, e.g. Main Building, Hall B>",
+  "room": "<room or zone captured>",
+  "floor_label": "<floor as the venue names it; must be the --floor of the run>",
+  "operator": "<who captured>",
+  "device": {"model": "<phone or camera model>", "os": "<OS and version>", "app": "<capture app and version>"},
+  "capture": {
+    "started_at": "<UTC ISO 8601, first frame>",
+    "ended_at": "<UTC ISO 8601, last frame>",
+    "settings": "<resolution, frame rate, exposure/focus lock, stabilisation, lens (wide/main)>",
+    "orientation": "<landscape/portrait; whether the device recorded gravity (it usually does not into the file)>"
+  },
+  "unavailable_sensors": ["<e.g. imu, depth, gps: what the media do NOT carry>"],
+  "notes": "<lighting, moving people or objects, glass, mirrors, anything that may hurt reconstruction>"
+}
