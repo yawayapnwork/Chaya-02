@@ -2,6 +2,13 @@
 
 Digital-twin platform for physical venues: State 01 (the venue) -> State 02 (its living digital reconstruction).
 
+> **Status update (2026-10-24):** the current baseline is
+> [docs/BASELINE_AUDIT_2026-10-24.md](docs/BASELINE_AUDIT_2026-10-24.md). Two things in the record below have changed
+> since it was written. First, real **indoor** public photos (ETH3D `office`) have since run through upload, privacy,
+> COLMAP SfM and metric calibration. That is still not a venue capture, and gsplat has still never trained. Second, CI
+> has changed: `reconstruction-smoke` is green, while `python` (open3d), `docker` (worker image), `security`,
+> `acceptance` (browser) and `ios` are red.
+
 ## Status (2026-10-12)
 
 Every stage of the capture → reconstruction → viewer → search → navigation → AR chain is **implemented** in code, and
@@ -33,6 +40,7 @@ results: [docs/TEST_REPRODUCIBILITY.md](docs/TEST_REPRODUCIBILITY.md).
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Finding and fixing the first failing pipeline stage |
 | [docs/pipeline.md](docs/pipeline.md), [docs/rescan.md](docs/rescan.md) | Stages, runs, artifacts, re-scans and versions in detail |
 | [docs/TEST_REPRODUCIBILITY.md](docs/TEST_REPRODUCIBILITY.md) | What runs where, current CI state |
+| [docs/BASELINE_AUDIT_2026-10-24.md](docs/BASELINE_AUDIT_2026-10-24.md) | Current baseline: P0/P1/P2, requirement traceability, specification reconciliation, path to the first real-venue demo |
 | [docs/E2E_VALIDATION.md](docs/E2E_VALIDATION.md), [docs/REAL_VENUE_ACCEPTANCE.md](docs/REAL_VENUE_ACCEPTANCE.md) | Recorded end-to-end evidence; the procedure for a real-venue run |
 | [.env.example](.env.example) | Local configuration template |
 
@@ -71,7 +79,7 @@ prerequisite.
    ```
    docker compose --env-file .env -f infra/docker/docker-compose.yml up -d
    ```
-3. API. Flyway applies `services/api/src/main/resources/db/migration/V*.sql` (V1–V35) at startup; readiness stays DOWN
+3. API. Flyway applies `services/api/src/main/resources/db/migration/V*.sql` (V1–V43) at startup; readiness stays DOWN
    until it finishes.
    - a. On the host, with the variables from `.env` exported (`POSTGRES_*`, `S3_*`, `KEYCLOAK_ISSUER_URI` are required):
      **[unverified]** on the audit host, which has no JDK 21 or Maven.

@@ -6,6 +6,9 @@ current state is first; the dated sections below it are records and are kept as 
 
 ## Current state (2026-10-12, `40beef5` plus the documentation audit)
 
+*2026-10-24:* superseded by [BASELINE_AUDIT_2026-10-24.md](BASELINE_AUDIT_2026-10-24.md) §1.3 (CI) and §5 (local
+results at `3815ba6`). The tables below are kept as the 2026-10-12 record.
+
 ### Local results
 
 Run on 2026-10-12 on a Windows 11 workstation (Docker Desktop, 18 cores, no CUDA device, no Mac, no phone), from the

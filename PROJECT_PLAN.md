@@ -4,6 +4,9 @@ Each milestone is independently testable and committable. A milestone is **Done*
 has been met and nothing in it pretends to do work that isn't implemented. Code existing is not enough: a milestone whose
 code exists but whose own verification has not been met is **Implemented**, with the unverified part named.
 
+*2026-10-24:* the table below is the 2026-10-12 record. The current per-requirement evidence, with the seven
+validation levels and P0–P2 priorities, is in [docs/BASELINE_AUDIT_2026-10-24.md](docs/BASELINE_AUDIT_2026-10-24.md).
+
 Status last checked **2026-10-12** at `40beef5` (plus the documentation audit that wrote this table). Per-capability
 evidence is in the [validation matrix](#validation-matrix) below; the commands and their results are in
 [docs/TEST_REPRODUCIBILITY.md](docs/TEST_REPRODUCIBILITY.md).

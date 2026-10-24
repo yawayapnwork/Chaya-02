@@ -115,7 +115,7 @@ Capture-time bounds estimation, path planning and coverage scoring run in the cl
 FAISS is not used; persistent vector search is pgvector.
 
 ## 5. Database (PostgreSQL + pgvector)
-Flyway migrations `V1`–`V35` in `services/api/src/main/resources/db/migration`, forward-only, applied at API startup
+Flyway migrations `V1`–`V43` in `services/api/src/main/resources/db/migration`, forward-only, applied at API startup
 (DEPLOYMENT.md §5). Every tenant-scoped row carries `organization_id`, every venue-scoped row `venue_id`, and composite
 foreign keys make cross-organization references impossible (ADR 0002). State columns are enums enforced by CHECK
 constraints and transition triggers; stage records, artifacts and finalized versions are write-once.
@@ -201,7 +201,8 @@ only with `PARTIAL`; a partial reconstruction is never presented as final.
    artifacts. The API seals and re-hashes each artifact (§14), checks the stage's required outputs against
    `packages/contracts/pipeline/stage-artifacts.json`, records the immutable `pipeline_stage_run`, and queues the next
    stage. A failed stage stops the run; `POST …/processing/retry` re-queues it.
-5. Every transition is audited. Clients poll `GET …/processing` (the HUD uses SSE; processing does not). No HTTP request
+5. Every transition is audited. Clients follow `GET …/processing/stream` (SSE, `ProcessingBroadcaster`) and recover from the polled snapshot
+   `GET …/processing` (docs/pipeline.md, "Live progress"). No HTTP request
    blocks on reconstruction.
 
 The legacy `POST /venues/{v}/scans/{s}/jobs` path and `/internal/jobs/{id}/complete|fail` still exist and create jobs
@@ -315,6 +316,8 @@ published like any version, and only when every stage has succeeded (docs/multi-
 The "winning solution blueprint" that this project was built against is **not in the repository**, so its text cannot
 be compared line by line. This table compares the product promises recorded in this repository (the target design that
 earlier versions of this document described, and the promises quoted in docs/ML_EVALUATION.md) with what exists.
+*2026-10-24:* the blueprint (still kept outside the repository) has now been compared section by section, and the
+recommended decisions are recorded: [docs/BASELINE_AUDIT_2026-10-24.md](docs/BASELINE_AUDIT_2026-10-24.md) §3 and §6.
 
 | Promise | Current behaviour | Planned / missing |
 |---|---|---|
@@ -328,6 +331,6 @@ earlier versions of this document described, and the promises quoted in docs/ML_
 | Navigation on the reconstructed venue, step-free routes | Recast/Detour baking and server-side routing on synthetic venues | Any real venue; in-browser Recast (WASM) was planned once and dropped: routing is server-side |
 | AR navigation (Android WebXR, iOS ARKit) | Both clients implemented, unit-tested | Any run on a device |
 | Incremental re-scan with versioned merge | Implemented; validated on synthetic clouds and B5 | A real re-scan |
-| Live job status | Polling (`GET …/processing`); SSE only for the capture HUD | SSE for processing was "later if needed" and has not been needed |
+| Live job status | SSE (`GET …/processing/stream`) with the polled snapshot `GET …/processing` for recovery; the capture HUD has its own stream | — |
 | Organizations and users through the product | SQL and the Keycloak admin console | An organization/user administration API and UI |
 | Automated deploys from green CI | Workflows, deploy gate, rollback, migration rehearsal, restore drill exist | CI is red on `main`; no deploy has succeeded; no real host |
