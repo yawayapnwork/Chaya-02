@@ -9,8 +9,12 @@ token for a venue, and the worker service-account secret:
 
 What it proves end to end with real components: a video uploaded through the ingestion API is processed by the
 real worker, stages 1-4 succeed with real FFmpeg / OpenCV, PII staging objects are deleted after the privacy
-stage, and the run then stops at the first stage whose dependencies are missing with a structured error, never
-as a success. It also proves the failed stage can be retried.
+stage, and the run then stops at the first stage whose dependencies are missing, never as a success:
+  * a default worker does not claim that stage at all (chaya_worker.capabilities), so it stays QUEUED and the control
+    plane's health names it unserved (NO_WORKER, unservedStages) -- the stage never looks served by a worker that
+    cannot run it;
+  * a worker in the diagnostic mode (offer_unavailable_stages) claims it and fails it with a structured error, and the
+    failed stage can be retried (bounded).
 """
 
 from __future__ import annotations
@@ -36,12 +40,12 @@ missing = [n for n in REQUIRED if not os.environ.get(n)]
 needs_stack = pytest.mark.skipif(bool(missing), reason="stack not configured; missing " + ", ".join(missing))
 
 
-def _settings(tmp_path: Path) -> Settings:
+def _settings(tmp_path: Path, **kw) -> Settings:
     e = os.environ
     return Settings(api_url=e["CHAYA_IT_API"], token_url=e["CHAYA_IT_TOKEN_URL"], client_secret=e["CHAYA_IT_WORKER_SECRET"],
                     s3_endpoint=e["CHAYA_IT_S3_ENDPOINT"], s3_access_key=e["CHAYA_IT_S3_ACCESS_KEY"], s3_secret_key=e["CHAYA_IT_S3_SECRET_KEY"],
                     workdir=tmp_path / "work", worker_id="it-worker", min_frames=3, blur_threshold=1.0, duplicate_distance=0.3,
-                    heartbeat_interval=5)
+                    heartbeat_interval=5, **kw)
 
 
 class Api:
@@ -97,7 +101,27 @@ def test_real_worker_runs_the_first_stages_and_stops_honestly_at_the_first_missi
     started = api.call("POST", f"/{capture}/processing", json={"timeBudgetSeconds": 900})
     assert started.status_code == 202 and started.json()["run"]["stages"][0]["state"] == "QUEUED"
 
+    # 1. A default worker runs what it can, then claims nothing more: the next stage needs tools this runner lacks.
     orchestrator = Orchestrator(HttpControlPlane(settings), S3Storage(settings), settings)
+    for _ in range(40):
+        if not orchestrator.run_once():
+            break
+    waiting = api.processing(capture)["run"]
+    assert waiting["status"] == "RUNNING", waiting["status"]
+    queued = [s for s in waiting["stages"] if s["state"] == "QUEUED"]
+    assert queued and queued[0]["stage"] in ("POSE_ESTIMATION", "SPLAT_RECONSTRUCTION") and queued[0]["attempts"] == 0, queued
+    unserved = queued[0]["stage"]
+    # /health is cached for a few seconds (HealthService): poll, bounded.
+    for _ in range(30):
+        health = requests.get(os.environ["CHAYA_IT_API"] + "/api/v1/health", timeout=30).json()
+        if unserved in (health.get("processing") or {}).get("unservedStages", []):
+            break
+        time.sleep(1)
+    assert unserved in health["processing"]["unservedStages"] and health["processing"]["status"] == "NO_WORKER", health
+    assert orchestrator.stage_offer.assessment and unserved in orchestrator.stage_offer.assessment.refused
+
+    # 2. The diagnostic mode claims it anyway, so the stage's own structured refusal lands in the run record.
+    orchestrator = Orchestrator(HttpControlPlane(settings), S3Storage(settings), _settings(tmp_path, offer_unavailable_stages=True))
     run = drain(orchestrator, api, capture)
 
     # Never a success here: every stage is implemented, but this runner has no COLMAP (POSE_ESTIMATION) and no

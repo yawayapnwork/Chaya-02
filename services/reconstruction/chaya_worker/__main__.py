@@ -9,6 +9,7 @@ import time
 
 from . import __version__
 from .api_client import ApiError, HttpControlPlane
+from .capabilities import StageOffer
 from .liveness import liveness_file, mark_alive
 from .logging_json import configure
 from .orchestrator import Orchestrator
@@ -33,8 +34,11 @@ def main(argv: list[str] | None = None) -> None:
                                        "ffmpeg": toolchain.ffmpeg().as_dict(), "colmap": toolchain.colmap().as_dict(),
                                        "glomap": toolchain.glomap().as_dict(), "cuda": toolchain.cuda().as_dict()})
     alive = liveness_file(settings)
+    # Re-assessed with a fresh Toolchain each time, so weights fetched later or a GPU that went away are noticed.
+    offer = StageOffer(settings, toolchain_factory=Toolchain)
+    offer.stages()  # logs what is offered and why anything configured is not
     orchestrator = Orchestrator(HttpControlPlane(settings), S3Storage(settings), settings, toolchain=toolchain,
-                                on_alive=lambda: mark_alive(alive))
+                                on_alive=lambda: mark_alive(alive), stage_offer=offer)
     orchestrator.purge_stale_workdirs()
 
     stopping = False

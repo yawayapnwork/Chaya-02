@@ -125,6 +125,14 @@ def training_failure(exc: BaseException) -> StageError | None:
     return None
 
 
+def _peak_gpu_memory(torch, device) -> dict | None:
+    """Peak device memory of the training just run, as torch's caching allocator measured it (None off CUDA)."""
+    if device.type != "cuda":
+        return None
+    return {"peak_allocated_bytes": int(torch.cuda.max_memory_allocated(device)),
+            "peak_reserved_bytes": int(torch.cuda.max_memory_reserved(device)), "source": "torch.cuda.max_memory_*"}
+
+
 def _release_gpu_memory() -> None:
     try:
         import torch  # noqa: PLC0415
@@ -438,7 +446,8 @@ class SplatReconstruction:
         s = ctx.settings
         preflight = splat_preflight.environment_report(
             ctx.toolchain, min_compute_capability=s.gsplat_min_compute_capability, allow_jit=s.gsplat_allow_jit_backend,
-            lock=splat_preflight.load_lock(splat_preflight.DEFAULT_LOCK_PATH))
+            lock=splat_preflight.load_lock(splat_preflight.DEFAULT_LOCK_PATH), min_driver_version=s.gpu_min_driver_version,
+            min_free_memory_mb=s.gpu_min_free_memory_mb)
         if not preflight["ok"]:
             raise DependencyError(
                 f"{self.name} cannot run on this worker: " + "; ".join(p["message"] for p in preflight["problems"]),
@@ -521,6 +530,8 @@ class SplatReconstruction:
                 cv2.imwrite(str(keyframes_dir / f"iter-{it:06d}.png"), cv2.cvtColor(frame_uint8, cv2.COLOR_RGB2BGR))
 
         started = time.time()
+        if device.type == "cuda":
+            torch.cuda.reset_peak_memory_stats(device)  # so the report's peak is this training's, not the worker's lifetime
         rasterize = st.gsplat_rasterizer(device)
         try:
             outcome = st.train(params=params, cams=train_cams, rasterize=rasterize, config=config,
@@ -544,7 +555,7 @@ class SplatReconstruction:
         versions = {"torch": torch.__version__, "torch_cuda": torch.version.cuda, "gsplat": getattr(gsplat, "__version__", None),
                     "gsplat_validated": st.GSPLAT_VALIDATED_VERSION, "gsplat_backend": preflight["versions"].get("gsplat_backend"),
                     "cuda_devices": ctx.toolchain.cuda_devices(), "training_device": preflight["selected_device"],
-                    "training_seconds": training_seconds, "lock": preflight["lock"]}
+                    "training_seconds": training_seconds, "lock": preflight["lock"], "gpu_memory": _peak_gpu_memory(torch, device)}
         return publish_outcome(ctx, outcome, source=source, cameras_used=len(train_cams), versions=versions, quality=quality,
                                keyframes_tar=keyframes_tar,
                                training_cameras=training_cameras_doc(rectifier, poses_doc), privacy=privacy_mask_summary(cams),

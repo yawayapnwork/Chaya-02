@@ -22,13 +22,19 @@
 #
 # Build (no GPU needed; about 15 GB of layers and tens of minutes of nvcc; lower MAX_JOBS on a small build host):
 #   docker build -f services/reconstruction/Dockerfile.gpu -t chaya-worker-gpu services/reconstruction
-# Check on the GPU host (exit 0 only if training can start):
+# Check on the GPU host (exit 0 only if training can start), then which stages it will offer:
 #   docker run --rm --gpus all chaya-worker-gpu python -m chaya_worker.splat_preflight
+#   docker run --rm --gpus all -v chaya-models:/models chaya-worker-gpu python -m chaya_worker.capabilities
+# The whole acceptance run on a GPU host: scripts/gpu/acceptance.sh (docs/pipeline.md, "GPU acceptance").
 # Host requirements: an NVIDIA GPU of compute capability >= 7.0 (Volta or newer), a driver that supports CUDA 12.6
 # (>= 560), and the NVIDIA Container Toolkit.
 #
-# COLMAP is Ubuntu's package (3.9.x, built without CUDA). SPLAT_RECONSTRUCTION only uses it to convert the sparse model.
-# POSE_ESTIMATION's SIFT runs on the CPU with it; bound COLMAP_NUM_THREADS (DEPLOYMENT.md, "GPU workers").
+# COLMAP is Ubuntu noble's package, pinned to its release-pocket version 3.9.1-2build2 (universe; built without CUDA).
+# SPLAT_RECONSTRUCTION only uses it to convert the sparse model; POSE_ESTIMATION's SIFT runs on the CPU with it (bound
+# COLMAP_NUM_THREADS, DEPLOYMENT.md "GPU workers"). GLOMAP is NOT installed: no Ubuntu package exists, and POSE_ESTIMATION
+# falls back to COLMAP's mapper without it. Both are recorded in gpu-lock.json (colmap, glomap: null) and in the preflight
+# report (optional.glomap). The worker offers only the stages this image can run on the host it starts on
+# (python -m chaya_worker.capabilities): without --gpus it serves no SPLAT_RECONSTRUCTION.
 # No secrets in the image.
 
 ARG CUDA_DEVEL=nvidia/cuda:12.6.3-devel-ubuntu24.04@sha256:392c0df7b577ecae17a17f6ba7f2009c217bb4422f8431c053ae9af61a8c148a
@@ -82,7 +88,7 @@ FROM ${CUDA_RUNTIME}
 ENV DEBIAN_FRONTEND=noninteractive
 # libgl1/libgomp1: Open3D's wheel links them even headless.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 colmap libgl1 libgomp1 \
+ && apt-get install -y --no-install-recommends python3 colmap=3.9.1-2build2 libgl1 libgomp1 \
  && rm -rf /var/lib/apt/lists/* \
  && (userdel -r ubuntu 2>/dev/null || true) \
  && groupadd -g 10001 worker \

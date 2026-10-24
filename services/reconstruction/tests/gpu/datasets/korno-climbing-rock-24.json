@@ -1,0 +1,259 @@
+{
+ "name": "korno-climbing-rock-24",
+ "description": "24 consecutive photographs (frames 25-48 of 98) of the Korno climbing rock (Czech Republic), taken for photogrammetry in one session on 2026-08-11 between 21:26 and 21:30. A real outdoor rock face: real camera input for SfM and Gaussian Splatting, NOT an indoor venue.",
+ "source": "https://commons.wikimedia.org/wiki/Category:Photogrammetry_of_Korno_climbing_rock",
+ "author": "Zbytovsky (Wikimedia Commons user), own work",
+ "license": "CC0-1.0",
+ "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+ "license_checked": "2026-10-24, Wikimedia Commons API extmetadata (LicenseShortName CC0, UsageTerms: Creative Commons Zero, Public Domain Dedication) for every file below",
+ "camera_assumptions": "one camera for the whole set: EXIF of all 24 originals (checked 2026-10-24) reads DJI FC9670, focal length 4.85 mm (26 mm in 35 mm terms), 8000x4500 JPEG. No calibration is supplied: COLMAP self-calibrates one shared SIMPLE_RADIAL camera (ImageReader.single_camera), and SPLAT_RECONSTRUCTION undistorts to pinhole before training.",
+ "derived": {
+  "width": 1600,
+  "height": 900,
+  "resize": "cv2.INTER_AREA from the original",
+  "encoding": "JPEG quality 95 (cv2.imwrite)",
+  "note": "The originals are the reproducibility anchor (Commons SHA-1, verified on download). Derived frame hashes are recorded per run in dataset.json; another JPEG decoder or encoder build may produce different bytes from the same originals."
+ },
+ "files": [
+  {
+   "file": "Photogrammetry dataset of Korno climbing rock 25.jpg",
+   "url": "https://upload.wikimedia.org/wikipedia/commons/8/86/Photogrammetry_dataset_of_Korno_climbing_rock_25.jpg",
+   "sha1": "799ee08650fdfe82a0a53e79458c64ec225e8e01",
+   "bytes": 32923648,
+   "width": 8000,
+   "height": 4500,
+   "license": "CC0",
+   "taken": "2026-08-11 21:26:00"
+  },
+  {
+   "file": "Photogrammetry dataset of Korno climbing rock 26.jpg",
+   "url": "https://upload.wikimedia.org/wikipedia/commons/1/14/Photogrammetry_dataset_of_Korno_climbing_rock_26.jpg",
+   "sha1": "158034d1bad5eda30556b7dd2de8858f8545dd2b",
+   "bytes": 33509376,
+   "width": 8000,
+   "height": 4500,
+   "license": "CC0",
+   "taken": "2026-08-11 21:26:14"
+  },
+  {
+   "file": "Photogrammetry dataset of Korno climbing rock 27.jpg",
+   "url": "https://upload.wikimedia.org/wikipedia/commons/4/41/Photogrammetry_dataset_of_Korno_climbing_rock_27.jpg",
+   "sha1": "b760b8fcb525e3d8856df455a8e497238b9f9dcc",
+   "bytes": 33984512,
+   "width": 8000,
+   "height": 4500,
+   "license": "CC0",
+   "taken": "2026-08-11 21:26:23"
+  },
+  {
+   "file": "Photogrammetry dataset of Korno climbing rock 28.jpg",
+   "url": "https://upload.wikimedia.org/wikipedia/commons/3/38/Photogrammetry_dataset_of_Korno_climbing_rock_28.jpg",
+   "sha1": "6c4304f0ae058d67c1e46ce70166799be7282be8",
+   "bytes": 34926592,
+   "width": 8000,
+   "height": 4500,
+   "license": "CC0",
+   "taken": "2026-08-11 21:26:30"
+  },
+  {
+   "file": "Photogrammetry dataset of Korno climbing rock 29.jpg",
+   "url": "https://upload.wikimedia.org/wikipedia/commons/7/74/Photogrammetry_dataset_of_Korno_climbing_rock_29.jpg",
+   "sha1": "a0b33e1949a745ec9d68e9ea1950def7b6d55ace",
+   "bytes": 34893824,
+   "width": 8000,
+   "height": 4500,
+   "license": "CC0",
+   "taken": "2026-08-11 21:26:42"
+  },
+  {
+   "file": "Photogrammetry dataset of Korno climbing rock 30.jpg",
+   "url": "https://upload.wikimedia.org/wikipedia/commons/6/6b/Photogrammetry_dataset_of_Korno_climbing_rock_30.jpg",
+   "sha1": "8bf0febbd886700fe42ea4033afdad27271fd1cc",
+   "bytes": 33267712,
+   "width": 8000,
+   "height": 4500,
+   "license": "CC0",
+   "taken": "2026-08-11 21:26:55"
+  },
+  {
+   "file": "Photogrammetry dataset of Korno climbing rock 31.jpg",
+   "url": "https://upload.wikimedia.org/wikipedia/commons/4/4f/Photogrammetry_dataset_of_Korno_climbing_rock_31.jpg",
+   "sha1": "b951444db7110d812afdb7449879079eaf5e7915",
+   "bytes": 33001472,
+   "width": 8000,
+   "height": 4500,
+   "license": "CC0",
+   "taken": "2026-08-11 21:27:01"
+  },
+  {
+   "file": "Photogrammetry dataset of Korno climbing rock 32.jpg",
+   "url": "https://upload.wikimedia.org/wikipedia/commons/5/5d/Photogrammetry_dataset_of_Korno_climbing_rock_32.jpg",
+   "sha1": "9c1aece2bccfaee795d3e16c3b51abe36eb99065",
+   "bytes": 34152448,
+   "width": 8000,
+   "height": 4500,
+   "license": "CC0",
+   "taken": "2026-08-11 21:27:14"
+  },
+  {
+   "file": "Photogrammetry dataset of Korno climbing rock 33.jpg",
+   "url": "https://upload.wikimedia.org/wikipedia/commons/e/e1/Photogrammetry_dataset_of_Korno_climbing_rock_33.jpg",
+   "sha1": "098c994e4ac124cee3dfd4004f72caac74372bac",
+   "bytes": 32448512,
+   "width": 8000,
+   "height": 4500,
+   "license": "CC0",
+   "taken": "2026-08-11 21:27:24"
+  },
+  {
+   "file": "Photogrammetry dataset of Korno climbing rock 34.jpg",
+   "url": "https://upload.wikimedia.org/wikipedia/commons/4/40/Photogrammetry_dataset_of_Korno_climbing_rock_34.jpg",
+   "sha1": "78a23f9ba8c5bba45225115a94ed6f6d05b9e009",
+   "bytes": 31072256,
+   "width": 8000,
+   "height": 4500,
+   "license": "CC0",
+   "taken": "2026-08-11 21:27:31"
+  },
+  {
+   "file": "Photogrammetry dataset of Korno climbing rock 35.jpg",
+   "url": "https://upload.wikimedia.org/wikipedia/commons/6/6b/Photogrammetry_dataset_of_Korno_climbing_rock_35.jpg",
+   "sha1": "ef37fa721b2f73ec566c5346534c325e6125ba9a",
+   "bytes": 31395840,
+   "width": 8000,
+   "height": 4500,
+   "license": "CC0",
+   "taken": "2026-08-11 21:27:38"
+  },
+  {
+   "file": "Photogrammetry dataset of Korno climbing rock 36.jpg",
+   "url": "https://upload.wikimedia.org/wikipedia/commons/8/81/Photogrammetry_dataset_of_Korno_climbing_rock_36.jpg",
+   "sha1": "db927e5582f4e8b63f7aabbb22c3a3438d3652e7",
+   "bytes": 30965760,
+   "width": 8000,
+   "height": 4500,
+   "license": "CC0",
+   "taken": "2026-08-11 21:28:08"
+  },
+  {
+   "file": "Photogrammetry dataset of Korno climbing rock 37.jpg",
+   "url": "https://upload.wikimedia.org/wikipedia/commons/7/70/Photogrammetry_dataset_of_Korno_climbing_rock_37.jpg",
+   "sha1": "5a374ff924e4b40b0a3150db9631c005c675e74a",
+   "bytes": 30801920,
+   "width": 8000,
+   "height": 4500,
+   "license": "CC0",
+   "taken": "2026-08-11 21:28:40"
+  },
+  {
+   "file": "Photogrammetry dataset of Korno climbing rock 38.jpg",
+   "url": "https://upload.wikimedia.org/wikipedia/commons/d/d7/Photogrammetry_dataset_of_Korno_climbing_rock_38.jpg",
+   "sha1": "40137431d33221a98d1e1a828b8a227bc8ab2e18",
+   "bytes": 30449664,
+   "width": 8000,
+   "height": 4500,
+   "license": "CC0",
+   "taken": "2026-08-11 21:28:47"
+  },
+  {
+   "file": "Photogrammetry dataset of Korno climbing rock 39.jpg",
+   "url": "https://upload.wikimedia.org/wikipedia/commons/c/cc/Photogrammetry_dataset_of_Korno_climbing_rock_39.jpg",
+   "sha1": "f6dc0e9702892efeeca0fbc1c7426409571af5c7",
+   "bytes": 30851072,
+   "width": 8000,
+   "height": 4500,
+   "license": "CC0",
+   "taken": "2026-08-11 21:28:54"
+  },
+  {
+   "file": "Photogrammetry dataset of Korno climbing rock 40.jpg",
+   "url": "https://upload.wikimedia.org/wikipedia/commons/b/b6/Photogrammetry_dataset_of_Korno_climbing_rock_40.jpg",
+   "sha1": "d974e00262653343097b5dc85507901b5b609160",
+   "bytes": 31207424,
+   "width": 8000,
+   "height": 4500,
+   "license": "CC0",
+   "taken": "2026-08-11 21:28:59"
+  },
+  {
+   "file": "Photogrammetry dataset of Korno climbing rock 41.jpg",
+   "url": "https://upload.wikimedia.org/wikipedia/commons/3/34/Photogrammetry_dataset_of_Korno_climbing_rock_41.jpg",
+   "sha1": "0e53324c29224915f9c1e0dcb3b1b7a17e0ab91f",
+   "bytes": 31227904,
+   "width": 8000,
+   "height": 4500,
+   "license": "CC0",
+   "taken": "2026-08-11 21:29:06"
+  },
+  {
+   "file": "Photogrammetry dataset of Korno climbing rock 42.jpg",
+   "url": "https://upload.wikimedia.org/wikipedia/commons/5/5a/Photogrammetry_dataset_of_Korno_climbing_rock_42.jpg",
+   "sha1": "6bdbbb98b5520fa50de11eaf6fce852b49b4c3cd",
+   "bytes": 31125504,
+   "width": 8000,
+   "height": 4500,
+   "license": "CC0",
+   "taken": "2026-08-11 21:29:13"
+  },
+  {
+   "file": "Photogrammetry dataset of Korno climbing rock 43.jpg",
+   "url": "https://upload.wikimedia.org/wikipedia/commons/b/b3/Photogrammetry_dataset_of_Korno_climbing_rock_43.jpg",
+   "sha1": "7f63c8376e86ed920cdb77e0d96fd8254eae7cc5",
+   "bytes": 30490624,
+   "width": 8000,
+   "height": 4500,
+   "license": "CC0",
+   "taken": "2026-08-11 21:29:19"
+  },
+  {
+   "file": "Photogrammetry dataset of Korno climbing rock 44.jpg",
+   "url": "https://upload.wikimedia.org/wikipedia/commons/e/ed/Photogrammetry_dataset_of_Korno_climbing_rock_44.jpg",
+   "sha1": "b623688951e9fffbb4977f179097642d2bf797e6",
+   "bytes": 29712384,
+   "width": 8000,
+   "height": 4500,
+   "license": "CC0",
+   "taken": "2026-08-11 21:29:42"
+  },
+  {
+   "file": "Photogrammetry dataset of Korno climbing rock 45.jpg",
+   "url": "https://upload.wikimedia.org/wikipedia/commons/c/cf/Photogrammetry_dataset_of_Korno_climbing_rock_45.jpg",
+   "sha1": "657e4660e54eeb83455571bbaed55f2615241afd",
+   "bytes": 29286400,
+   "width": 8000,
+   "height": 4500,
+   "license": "CC0",
+   "taken": "2026-08-11 21:29:49"
+  },
+  {
+   "file": "Photogrammetry dataset of Korno climbing rock 46.jpg",
+   "url": "https://upload.wikimedia.org/wikipedia/commons/6/60/Photogrammetry_dataset_of_Korno_climbing_rock_46.jpg",
+   "sha1": "2ef954613271ef9500dd033e360af5495a20628b",
+   "bytes": 29315072,
+   "width": 8000,
+   "height": 4500,
+   "license": "CC0",
+   "taken": "2026-08-11 21:30:02"
+  },
+  {
+   "file": "Photogrammetry dataset of Korno climbing rock 47.jpg",
+   "url": "https://upload.wikimedia.org/wikipedia/commons/5/5a/Photogrammetry_dataset_of_Korno_climbing_rock_47.jpg",
+   "sha1": "bfeeb8e4b359e248007a01928a8038e49c1c208b",
+   "bytes": 29327360,
+   "width": 8000,
+   "height": 4500,
+   "license": "CC0",
+   "taken": "2026-08-11 21:30:16"
+  },
+  {
+   "file": "Photogrammetry dataset of Korno climbing rock 48.jpg",
+   "url": "https://upload.wikimedia.org/wikipedia/commons/9/9a/Photogrammetry_dataset_of_Korno_climbing_rock_48.jpg",
+   "sha1": "481612746d2617951e71bfea53e6ae66034f5345",
+   "bytes": 26947584,
+   "width": 8000,
+   "height": 4500,
+   "license": "CC0",
+   "taken": "2026-08-11 21:30:24"
+  }
+ ]
+}

@@ -10,8 +10,12 @@ Run it on a GPU worker (docs/pipeline.md, "GPU acceptance"):
 
 (--user 0 only so pip can add pytest to the image's root-owned venv for the test run.)
 
-The dataset is CHAYA_SPLAT_DATASET (a REAL COLMAP project: images/ and sparse/0) when set. Otherwise it is the SYNTHETIC
-rendered room corner (tests/gpu/splat_dataset.py), and the report says which one was used.
+The dataset is CHAYA_SPLAT_DATASET (a REAL COLMAP project: images/ and sparse/0) when set. The reference real dataset is
+24 CC0 photographs from Wikimedia Commons, prepared with the real COLMAP by `python -m tests.gpu.real_dataset prepare`
+(tests/gpu/datasets/korno-climbing-rock-24.json: source, licence, SHA-1 per file); its dataset.json provenance is copied into
+the report. Without CHAYA_SPLAT_DATASET it is the SYNTHETIC rendered room corner (tests/gpu/splat_dataset.py), and the
+report says so. CHAYA_REQUIRE_REAL_DATASET=1 fails the test instead of falling back to the synthetic scene: the
+acceptance run of scripts/gpu/acceptance.sh sets it.
 
 With CHAYA_REQUIRE_GPU=1, a missing requirement FAILS the test with the preflight report instead of skipping it. Use it
 on a GPU worker, where a skip would hide a broken image. Without it the test skips, and the skip is not a pass. A skipped
@@ -79,7 +83,13 @@ def _dataset(tmp: Path):
     from tests.gpu import splat_dataset
 
     project = os.environ.get("CHAYA_SPLAT_DATASET")
+    if not project and os.environ.get("CHAYA_REQUIRE_REAL_DATASET") == "1":
+        pytest.fail("CHAYA_REQUIRE_REAL_DATASET=1 but CHAYA_SPLAT_DATASET is not set: the synthetic scene is not acceptance evidence")
     if project:
+        from tests.gpu import real_dataset
+
+        if (Path(project) / "dataset.json").is_file():
+            real_dataset.validate(Path(project))  # its frames are the ones prepared and hashed, or this fails
         runner = CommandRunner(tmp / "dataset-out.log", tmp / "dataset-err.log")
         return splat_dataset.from_colmap_project(Path(project), tmp / "dataset", Toolchain().colmap().path,
                                                  lambda argv: runner.run(argv, error_code="DATASET", timeout=600))
@@ -135,6 +145,12 @@ def test_gsplat_training_on_cuda_produces_a_validated_viewer_artifact(preflight,
     dataset = _dataset(tmp_path)
     summary["dataset"] = {"name": dataset.name, "synthetic": dataset.synthetic, "frames": len(dataset.images), "sfm_points": dataset.points,
                           "prepare_seconds": round(time.time() - t0, 3)}
+    provenance = Path(os.environ.get("CHAYA_SPLAT_DATASET", "")) / "dataset.json"
+    if os.environ.get("CHAYA_SPLAT_DATASET") and provenance.is_file():
+        meta = json.loads(provenance.read_text(encoding="utf-8"))
+        summary["dataset"]["provenance"] = {k: meta.get(k) for k in ("name", "source", "author", "license", "license_url",
+                                                                       "manifest_sha256", "camera_assumptions", "reconstruction")}
+        summary["dataset"]["provenance"]["frame_sha256"] = {f["name"]: f["sha256"] for f in meta["frames"]}
 
     h = Harness(tmp_path, gsplat_iterations=ITERATIONS, gsplat_densify_start=100, gsplat_densify_stop=1200, gsplat_densify_every=100,
                 gsplat_opacity_reset_every=1000, gsplat_checkpoint_every=500, gsplat_keyframe_every=500)
@@ -165,7 +181,8 @@ def test_gsplat_training_on_cuda_produces_a_validated_viewer_artifact(preflight,
                            ("torch", "torch_cuda", "gsplat", "gsplat_backend")}, "lock": versions.get("lock"),
                            "training_seconds": versions["training_seconds"], "iterations": training["completed_iterations"],
                            "initial_gaussians": training["initial_gaussian_count"], "final_gaussians": training["gaussian_count"],
-                           "first_loss": losses[0], "last_loss": losses[-1]}
+                           "first_loss": losses[0], "last_loss": losses[-1], "gpu_memory": versions.get("gpu_memory")}
+    assert versions["gpu_memory"] and versions["gpu_memory"]["peak_allocated_bytes"] > 0, 'training ran on a CUDA device'
 
     # 2. it learned: trained cloud vs the untrained SfM seed, over every training view, rendered by gsplat
     device = torch.device("cuda", preflight["selected_device"]["index"])

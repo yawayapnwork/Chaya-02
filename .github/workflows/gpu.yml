@@ -52,12 +52,16 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: A CUDA device is present
         run: nvidia-smi
-      - name: Build the GPU worker image (services/reconstruction/Dockerfile.gpu)
-        run: docker build -f services/reconstruction/Dockerfile.gpu -t "chaya-worker-gpu:${GITHUB_SHA}" services/reconstruction
+      # The same procedure as a manual GPU host (scripts/gpu/acceptance.sh): build, preflight, stage offer, the real CC0
+      # dataset reconstructed with the image's COLMAP, then gsplat training on CUDA through the production stages.
+      # Exit 3 (BLOCKED: no GPU, toolkit or disk) fails this job too: blocked is never passed.
+      - name: GPU acceptance (scripts/gpu/acceptance.sh, real CC0 dataset)
+        env:
+          IMAGE: chaya-worker-gpu:${{ github.sha }}
+          DATA: ${{ runner.temp }}/gpu-data
+        run: bash scripts/gpu/acceptance.sh "$RUNNER_TEMP/gpu-acceptance"
       - name: Model weights at their pinned revisions (persistent volume chaya-models)
         run: docker run --rm -v chaya-models:/models "chaya-worker-gpu:${GITHUB_SHA}" python /opt/chaya/fetch_models.py
-      - name: Splat preflight (exit 0 = this image can train)
-        run: docker run --rm --gpus all -v chaya-models:/models "chaya-worker-gpu:${GITHUB_SHA}" python -m chaya_worker.splat_preflight
       - name: GPU tests (pytest -m gpu, CHAYA_REQUIRE_GPU=1)
         id: tests
         env:
@@ -96,5 +100,10 @@ jobs:
         if: always()
         with:
           name: gpu-evidence
-          path: gpu-out/
+          # The acceptance evidence (build log, preflight, capabilities, dataset provenance, report, JUnit) and the full
+          # -m gpu suite's results. The dataset photographs themselves are not uploaded.
+          path: |
+            gpu-out/
+            ${{ runner.temp }}/gpu-acceptance/
+            !${{ runner.temp }}/gpu-acceptance/data/
           retention-days: 90

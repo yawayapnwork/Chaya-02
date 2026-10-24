@@ -28,13 +28,14 @@ from typing import Any
 
 from . import __version__, stage_inputs
 from .api_client import ApiError, ControlPlane
+from .capabilities import StageOffer
 from .contract import ArtifactSpec, InputFile, Stage, StageContext, StageResult
 from .errors import StageError
 from .logging_json import file_logger
 from .resources import ResourceMeter
 from .runner import CommandRunner
 from .settings import Settings
-from .stages import STAGE_ORDER, default_registry, runs_after_privacy
+from .stages import default_registry, runs_after_privacy
 from .stages.base import command_record, sha256_file
 from .storage import ObjectStorage, StorageError
 from .toolchain import Toolchain
@@ -76,7 +77,7 @@ class _Heartbeat(threading.Thread):
 class Orchestrator:
     def __init__(self, api: ControlPlane, storage: ObjectStorage, settings: Settings, *, toolchain: Toolchain | None = None,
                  registry: dict[str, Stage] | None = None, clock: Callable[[], float] = time.time,
-                 on_alive: Callable[[], None] = lambda: None) -> None:
+                 on_alive: Callable[[], None] = lambda: None, stage_offer: StageOffer | None = None) -> None:
         self.api = api
         self.on_alive = on_alive  # called after each successful control-plane round trip (chaya_worker.liveness)
         self.storage = storage
@@ -84,6 +85,8 @@ class Orchestrator:
         self.toolchain = toolchain or Toolchain()
         self.registry = registry or default_registry()
         self.clock = clock
+        # Only the configured stages this worker can execute are offered (chaya_worker.capabilities).
+        self.stage_offer = stage_offer or StageOffer(settings, toolchain_factory=lambda: self.toolchain)
 
     def purge_stale_workdirs(self) -> int:
         """Delete job directories a previous process left behind (it was killed mid-job, so its `finally` never ran).
@@ -104,7 +107,9 @@ class Orchestrator:
 
     def run_once(self) -> bool:
         """Claim and process at most one job. True if a job was processed."""
-        stages = list(self.settings.stages) or STAGE_ORDER
+        stages = self.stage_offer.stages()
+        if not stages:
+            return False  # nothing this worker can run: no claim, so no stage looks served and liveness is not refreshed
         order = self.api.claim(stages, self.settings.worker_id)
         self.on_alive()
         if order is None:

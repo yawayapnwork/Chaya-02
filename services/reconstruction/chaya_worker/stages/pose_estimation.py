@@ -173,7 +173,8 @@ class PoseEstimation:
                     else {"applied": False, "reason": "privacy preprocessing was not part of this run"})
         database, sparse = ctx.workdir / "database.db", ctx.workdir / "sparse"
         sparse.mkdir()
-        use_gpu = ctx.toolchain.gpu_present()
+        # GPU SIFT only with a GPU AND a CUDA build of COLMAP: Ubuntu's (the GPU image's) is built without CUDA.
+        use_gpu = ctx.toolchain.gpu_present() and ctx.toolchain.colmap_has_cuda()
 
         first_mapper = "glomap" if glomap.available else "colmap"
         steps = build_pose_commands(colmap=colmap, glomap=glomap.path, database=database, images=images_dir, sparse=sparse,

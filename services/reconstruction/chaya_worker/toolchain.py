@@ -16,6 +16,19 @@ from dataclasses import asdict, dataclass
 from .errors import DependencyError
 
 
+def colmap_banner_has_cuda(text: str) -> bool:
+    """`colmap help` prints e.g. "(Commit Unknown on Unknown without CUDA)" or "(Commit abc on 2024-01-01 with CUDA)"."""
+    lowered = text.lower()
+    return "with cuda" in lowered and "without cuda" not in lowered
+
+
+def _num(text: str) -> float | None:
+    try:
+        return float(text)
+    except ValueError:
+        return None  # "[N/A]" on some boards
+
+
 @dataclass(frozen=True)
 class ToolStatus:
     name: str
@@ -33,6 +46,7 @@ class Toolchain:
         self._env = os.environ if env is None else env
         self._which = which
         self._cache: dict[str, ToolStatus] = {}
+        self._driver: dict | None = None
 
     # ---- executables ------------------------------------------------------------------------
 
@@ -102,16 +116,83 @@ class Toolchain:
                     import torch
 
                     ok = bool(torch.cuda.is_available())
-                    status = ToolStatus("cuda", ok, version=torch.version.cuda,
-                                        detail=None if ok else "torch is installed but reports no CUDA device")
+                    detail = None
+                    if not ok:
+                        detail = "torch is installed but reports no CUDA device"
+                        if torch.version.cuda:
+                            try:  # is_available() swallows the reason; init() raises it (e.g. "driver ... is too old")
+                                torch.cuda.init()
+                            except Exception as init_exc:  # noqa: BLE001
+                                detail = f"{detail}: {init_exc}"
+                    status = ToolStatus("cuda", ok, version=torch.version.cuda, detail=detail)
                 except Exception as exc:  # noqa: BLE001
                     status = ToolStatus("cuda", False, detail=f"torch failed to initialise: {exc}")
             self._cache["cuda"] = status
         return self._cache["cuda"]
 
     def gpu_present(self) -> bool:
-        """nvidia-smi answers. Used only to decide COLMAP's GPU flags."""
+        """nvidia-smi answers. Used only to decide COLMAP's GPU flags (with colmap_has_cuda)."""
         return self._which("nvidia-smi") is not None
+
+    def colmap_has_cuda(self) -> bool:
+        """Whether the COLMAP binary was built with CUDA: its banner says "with CUDA" or "without CUDA". Ubuntu's COLMAP
+        (the GPU image's) is built without CUDA; asked for GPU SIFT it falls back to OpenGL SiftGPU, which needs a display
+        a headless worker does not have. So GPU SIFT is requested only when this is True and a GPU is present."""
+        colmap = self.colmap()
+        if not colmap.available:
+            return False
+        try:
+            out = subprocess.run([colmap.path, "help"], capture_output=True, text=True, timeout=20)
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return colmap_banner_has_cuda(out.stdout + out.stderr)
+
+    def nvidia_driver(self) -> dict:
+        """What the host's NVIDIA driver says, independently of torch: whether any NVIDIA device is visible to this
+        process at all, the driver version, and each GPU's name and memory. Never used to decide that training can run
+        (only torch enumerating a device does that); used to tell "no GPU here" from "a GPU whose driver is too old"."""
+        if self._driver is not None:
+            return self._driver
+        info: dict = {"present": False, "version": None, "gpus": [], "source": None, "detail": None}
+        smi = self._env.get("NVIDIA_SMI_BIN") or self._which("nvidia-smi")
+        if smi:
+            try:
+                out = subprocess.run([smi, "--query-gpu=name,driver_version,memory.total,memory.free",
+                                      "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=20)
+                if out.returncode == 0:
+                    for line in out.stdout.strip().splitlines():
+                        name, version, total, free = (part.strip() for part in line.split(","))
+                        info["gpus"].append({"name": name, "memory_total_mb": _num(total), "memory_free_mb": _num(free)})
+                        info["version"] = version
+                    info.update(present=bool(info["gpus"]), source="nvidia-smi")
+                else:
+                    info["detail"] = (out.stderr or out.stdout).strip()[:300] or f"nvidia-smi exited {out.returncode}"
+            except (OSError, subprocess.SubprocessError, ValueError) as exc:
+                info["detail"] = f"nvidia-smi failed: {exc}"
+        if not info["present"]:
+            proc = self._env.get("NVIDIA_DRIVER_VERSION_FILE", "/proc/driver/nvidia/version")
+            try:
+                text = open(proc, encoding="utf-8").read()
+                for token in text.split():
+                    if token.count(".") >= 1 and token.replace(".", "").isdigit():
+                        info.update(present=True, version=token, source=proc)
+                        break
+            except OSError:
+                pass
+        if not info["present"] and os.path.exists(self._env.get("NVIDIA_DEVICE_NODE", "/dev/nvidia0")):
+            info.update(present=True, source="device node")
+        self._driver = info
+        return info
+
+    def cuda_memory(self, index: int) -> dict | None:
+        """Free and total memory of CUDA device `index` as torch sees it (cudaMemGetInfo), or None."""
+        try:
+            import torch
+
+            free, total = torch.cuda.mem_get_info(index)
+            return {"free_bytes": int(free), "total_bytes": int(total)}
+        except Exception:  # noqa: BLE001 - no torch, no device, or the query failed: unknown, not zero
+            return None
 
     def cuda_devices(self) -> list[dict]:
         """Per-device name and compute capability, via torch. Empty if torch or CUDA is unavailable."""

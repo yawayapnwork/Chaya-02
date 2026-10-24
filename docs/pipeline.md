@@ -660,48 +660,203 @@ Added on 2026-10-10 (CPU, no NVIDIA GPU on the host):
 
 `services/reconstruction/Dockerfile.gpu` contains:
 
-- CUDA 12.6.3 on Ubuntu 24.04 with Python 3.12, base images pinned by digest;
-- torch 2.7.1+cu126, sha256-checked;
-- gsplat 1.5.3 built from its sha256-checked sdist with the CUDA extension, for `TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0+PTX"`;
+- CUDA 12.6.3 on Ubuntu 24.04 with Python 3.12, both base images pinned by digest;
+- torch 2.7.1+cu126 and torchvision 0.22.1+cu126, sha256-checked wheels;
+- gsplat 1.5.3 built from its sha256-checked sdist with the CUDA extension (`gsplat.csrc`), for
+  `TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0+PTX"`;
 - every other Python package at an exact version: `gpu/requirements-gpu.txt`, plus the full resolved closure
   `gpu/constraints-gpu.txt`, resolved on 2026-10-10 with a pip dry run against PyPI and the cu126 index;
-- Ubuntu's COLMAP.
+- Ubuntu noble's COLMAP, pinned to `3.9.1-2build2` (the release pocket, built without CUDA). No GLOMAP: Ubuntu has no
+  package for it, and POSE_ESTIMATION falls back to COLMAP's mapper;
+- a non-root user (10001), and a `/models` volume for the pinned segmentation, detection and CLIP weights.
 
-`gpu/write_lock.py` runs the worker's own preflight during the build. The build fails unless the only problem is the
-build host's missing GPU, which includes gsplat's compiled kernels failing to load against the installed torch. The
-step writes `/opt/chaya/gpu-lock.json`, and a running worker refuses to train if its versions drift from it.
+`gpu/write_lock.py` runs the worker's own preflight during the build. The only problems it tolerates are the build
+container's missing GPU: `GPU_NOT_PRESENT` or `CUDA_UNAVAILABLE`. Everything else fails the build, including:
 
-Host requirements: an NVIDIA GPU with compute capability ≥ 7.0, a driver supporting CUDA 12.6 (≥ 560), and the NVIDIA
-Container Toolkit. The image has not been built here, because the workstation lacks the disk space for a CUDA build.
-`docker build --check` passes, and both base digests resolve.
+- gsplat's compiled kernels failing to load against the installed torch;
+- COLMAP missing;
+- an OS package missing.
+
+It writes `/opt/chaya/gpu-lock.json`: Python, torch, its CUDA, gsplat and its backend, numpy, scipy, OpenCV and COLMAP,
+the arch list, GLOMAP (`null`), and the `dpkg` versions of python3, colmap, libgl1 and libgomp1. A running worker
+refuses to train if its versions drift from the lock (`PACKAGE_VERSION_DRIFT`).
+
+#### Supported hardware and software
+
+| | Supported | Checked by |
+|---|---|---|
+| GPU | NVIDIA, compute capability ≥ 7.0 (Volta, Turing, Ampere, Ada, Hopper native; newer via PTX JIT, untested) | preflight `GPU_CAPABILITY_UNSUPPORTED` |
+| Driver | ≥ 560.28 (NVIDIA's minimum for CUDA 12.6 on Linux; `GPU_MIN_DRIVER_VERSION`) | preflight `CUDA_DRIVER_INCOMPATIBLE`; the base image's `NVIDIA_REQUIRE_CUDA=cuda>=12.6` |
+| Container runtime | Docker with the NVIDIA Container Toolkit, `docker run --gpus all` | `scripts/gpu/acceptance.sh` step 3; preflight `GPU_NOT_PRESENT` inside a container started without `--gpus` |
+| GPU memory | ≥ `GPU_MIN_FREE_MEMORY_MB` free (default 1024) at the start of training; the acceptance dataset's actual peak is in its report | preflight `GPU_MEMORY_INSUFFICIENT`; `SPLAT_GPU_OUT_OF_MEMORY` during training |
+| CUDA, torch, gsplat | CUDA 12.6.3 runtime, torch 2.7.1+cu126, gsplat 1.5.3 with prebuilt kernels | build (`write_lock.py`), preflight, lock |
+| COLMAP | 3.9.1 (noble, built without CUDA) in the image; 3.8 in the test-only CPU image. SIFT runs on the CPU unless COLMAP is a CUDA build (`Toolchain.colmap_has_cuda`): set `COLMAP_NUM_THREADS` | preflight `TOOL_MISSING`; `colmap help` |
+| GLOMAP | optional, absent from every image | reported as `optional.glomap` in the preflight report |
+| Build host | x86_64, ≥ 40 GB free disk (the bases are 5.6 GB compressed and the wheels 3.7 GB; nvcc intermediates on top), no GPU needed; lower `--build-arg MAX_JOBS` on a small host | — |
+
+#### Which worker serves which stage
+
+The control plane counts a stage as served only when a live worker **offers** it in a claim poll. Otherwise health
+reports `processing.status: NO_WORKER` with `unservedStages`.
+
+A worker offers the configured stages (`WORKER_STAGES`, or every stage when it is empty) whose hard requirements are
+present. That is `chaya_worker.capabilities`, checked at start and every `WORKER_CAPABILITY_RECHECK_SECONDS`
+(default 300). For SPLAT_RECONSTRUCTION it is the full splat preflight. A worker never offers a stage merely because
+its process is alive.
+
+| Image | Configured (`WORKER_STAGES`) | Offered when |
+|---|---|---|
+| CPU `Dockerfile` (infra/deploy) | INPUT_VALIDATION, FFMPEG_PREPROCESS, FRAME_QUALITY_FILTER, PRIVACY_PREPROCESS, REGION_SPLICE, ROOM_STITCH, ARTIFACT_GENERATION, NAVIGATION_BAKING | always: FFmpeg and chaya-navmesh are in the image. Started with no `WORKER_STAGES` it still offers only these: it used to claim every stage and fail the GPU ones |
+| GPU `Dockerfile.gpu` | POSE_ESTIMATION, SPLAT_RECONSTRUCTION, SEMANTIC_SEGMENTATION, GEOMETRIC_CLEANUP, REGION_ALIGNMENT, ROOM_REGISTRATION, PLANE_FITTING, SEMANTIC_INDEXING | SPLAT_RECONSTRUCTION only when the preflight passes (so not without `--gpus`). The semantic stages only once `/models` holds their pinned weights (`fetch_models.py`). POSE_ESTIMATION and the Open3D stages run on CPU and are offered without a GPU |
+
+`python -m chaya_worker.capabilities` prints what is offered and why anything is refused, and exits 1 when a
+configured stage is refused.
+
+`WORKER_OFFER_UNAVAILABLE_STAGES=true` is a **diagnostic mode** that offers every configured stage anyway. Its jobs
+then fail with the stage's own `DEPENDENCY_UNAVAILABLE` and the preflight report in the run record.
+
+What the capability check does not change:
+- leases and heartbeats;
+- bounded retries;
+- cancellation (a heartbeat answering `keepGoing: false`);
+- the enforcer that fails an expired lease as `WORKER_LOST` (`JobRecoveryTest`), so a job never stays RUNNING after its
+  worker disappears.
+
+#### Preflight
+
+```
+docker run --rm --gpus all chaya-worker-gpu python -m chaya_worker.splat_preflight     # JSON; exit 0 only if training can start
+```
+
+The report contains:
+- `ok` and `problems` (each with `code`, `message`, `fix`);
+- `versions`;
+- `devices`, each with its name, compute capability and free/total memory as torch measures it;
+- `selected_device`;
+- `driver`: as nvidia-smi, or else `/proc/driver/nvidia` or `/dev/nvidia0`, sees it;
+- `optional.glomap`;
+- `lock`.
+
+Its codes:
+
+| Code | Meaning |
+|---|---|
+| `PACKAGE_MISSING`, `PACKAGE_VERSION_UNSUPPORTED`, `PACKAGE_VERSION_DRIFT` | a Python package is missing, too old, not the validated gsplat, or differs from the image's lock |
+| `TORCH_WITHOUT_CUDA` | a CPU-only torch |
+| `GPU_NOT_PRESENT` | no NVIDIA device visible at all: a CPU host, or a container started without `--gpus` |
+| `CUDA_DRIVER_INCOMPATIBLE` | a driver older than `GPU_MIN_DRIVER_VERSION`, or torch's CUDA initialisation says the driver is too old |
+| `CUDA_UNAVAILABLE` | a GPU and driver are visible, but torch sees no usable device (torch's own error is in the message) |
+| `GPU_CAPABILITY_UNSUPPORTED` | no device reaches compute capability 7.0 |
+| `GPU_MEMORY_INSUFFICIENT` | the selected device has less free memory than `GPU_MIN_FREE_MEMORY_MB` |
+| `GSPLAT_CUDA_BACKEND_MISSING` | gsplat without loadable compiled kernels |
+| `TOOL_MISSING` | no COLMAP |
+| `CONFIG_INVALID`, `INSUFFICIENT_FRAMES`, `INSUFFICIENT_POINTS` | settings or inputs that cannot produce an artifact, checked before any work |
+
+In a job, any environment problem fails the stage `DEPENDENCY_UNAVAILABLE`. `errorDetails.preflight` carries the
+report, and `errorDetails.missing` names the missing item. Nothing is published.
 
 ### GPU acceptance
 
-On a GPU worker:
+A genuine CUDA reconstruction of real photographs, on a GPU host, in one command:
 
 ```
-docker build -f services/reconstruction/Dockerfile.gpu -t chaya-worker-gpu services/reconstruction
-docker run --rm --gpus all chaya-worker-gpu python -m chaya_worker.splat_preflight      # must print "ok": true
-docker run --rm --gpus all --user 0 -e CHAYA_REQUIRE_GPU=1 -e CHAYA_GPU_ACCEPTANCE_REPORT=/out/gpu-acceptance.json \
-  -v "$PWD/services/reconstruction/tests:/src/tests:ro" -v "$PWD/gpu-acceptance:/out" -w /src chaya-worker-gpu \
-  sh -c "pip install pytest==8.4.1 && python -m pytest -p no:cacheprovider -m gpu tests/gpu/test_splat_acceptance.py -v -rs -s"
-cd apps/web && node --experimental-strip-types scripts/verify-ksplat-artifact.ts ../../gpu-acceptance/viewer-check
+bash scripts/gpu/acceptance.sh [out dir]
 ```
 
-The test runs the real SPLAT_RECONSTRUCTION through the orchestrator. It checks:
+It writes `steps.tsv` and every step's evidence to the out directory. Each step is recorded PASS, FAIL or BLOCKED. It
+exits 0 only if every step passed, 1 if a step failed, and 3 if BLOCKED (no nvidia-smi, the container cannot see the
+GPU, or less disk than `MIN_FREE_DISK_GB`).
 
-- training ran on the preflight-selected CUDA device, with gsplat 1.5.3, every iteration, and density control;
-- the trained cloud renders, through gsplat, at least 3 dB PSNR above the untrained SfM seed over the training views;
+| Step | Command (inside the script) | Evidence |
+|---|---|---|
+| 1. host | `nvidia-smi --query-gpu=name,driver_version,compute_cap,memory.total,memory.free --format=csv`; free disk | `nvidia-smi.csv`, `host.txt` |
+| 2. build | `docker build --progress=plain -f services/reconstruction/Dockerfile.gpu -t chaya-worker-gpu:<sha> services/reconstruction` | `build.log`, `image.txt`, `gpu-lock.json` |
+| 3. toolkit | `docker run --rm --gpus all --entrypoint nvidia-smi <image> -L` | `container-gpus.txt` |
+| 4. preflight, stage offer | `python -m chaya_worker.splat_preflight` (must exit 0); `python -m chaya_worker.capabilities` | `preflight.json`, `capabilities.json` |
+| 5. dataset | `python -m tests.gpu.real_dataset prepare --out /data/korno-24` in the image (its own COLMAP) | `dataset.log`, `dataset.json` |
+| 6. acceptance | `pytest -m gpu tests/gpu/test_splat_acceptance.py tests/gpu/test_gsplat_cuda.py`, with `CHAYA_REQUIRE_GPU=1 CHAYA_REQUIRE_REAL_DATASET=1 CHAYA_SPLAT_DATASET=/data/korno-24` | `acceptance.log`, `gpu.xml`, `gpu-acceptance.json`, `viewer-check/` |
+| 7. viewer library | `node --experimental-strip-types apps/web/scripts/verify-ksplat-artifact.ts <out>/viewer-check` where node is installed | `viewer-check.log`, or NOT RUN |
+
+Environment variables:
+- `IMAGE` (default `chaya-worker-gpu:<git sha>`), `SKIP_BUILD=1` (reuse an image);
+- `DATA` (the dataset cache);
+- `COLMAP_THREADS` (4; each thread needs memory);
+- `MIN_FREE_DISK_GB` (40).
+
+For the test itself:
+- `CHAYA_REQUIRE_GPU=1` makes a missing requirement a failure, not a skip;
+- `CHAYA_REQUIRE_REAL_DATASET=1` refuses the synthetic fallback;
+- `CHAYA_SPLAT_DATASET` is a COLMAP project;
+- `CHAYA_GPU_ACCEPTANCE_REPORT` is where the report goes.
+
+The `gpu` workflow runs the same script on a self-hosted runner labelled `gpu`. Without one, its `requirement` job
+states that acceptance is BLOCKED.
+
+**The dataset.** `korno-climbing-rock-24`, defined in `tests/gpu/datasets/korno-climbing-rock-24.json`:
+- 24 consecutive photographs (frames 25–48) from Wikimedia Commons, "Photogrammetry of Korno climbing rock", by
+  Zbytovsky, **CC0 1.0**, each identified by its Commons SHA-1;
+- 8000×4500 JPEG originals, 757.3 MB, all from one DJI FC9670 camera (4.85 mm);
+- downscaled to 1600×900 (INTER_AREA, JPEG q95);
+- COLMAP self-calibrates one shared SIMPLE_RADIAL camera, and the splat stage undistorts it to pinhole.
+
+It is a real outdoor rock face, **not an indoor venue**. It proves that real gsplat training works on real photographs.
+It says nothing about venue quality.
+
+The 24 originals were downloaded on 2026-10-24, and all 24 SHA-1 values verified. Preparing it with the real COLMAP 3.8
+(CPU, 4 threads; `chaya-physical-worker:colmap`) was done twice:
+- **24 of 24 frames registered both times**, with 21,209 and 22,748 3D points (COLMAP's multithreaded mapper is not
+  run-to-run deterministic);
+- on the second run, feature extraction took 33.6 s, exhaustive matching 97.2 s and the mapper 38.5 s;
+- `dataset.json` records each frame's SHA-256 and each original's SHA-1 and SHA-256.
+
+The GPU image prepares it again with its own COLMAP 3.9.1.
+
+**What the acceptance test asserts.** It runs the real SPLAT_RECONSTRUCTION through the orchestrator, then the real
+ARTIFACT_GENERATION:
+- training ran on the preflight-selected CUDA device, with gsplat 1.5.3, every iteration, density control, and a
+  non-zero peak of CUDA memory (`gpu_memory`, from `torch.cuda.max_memory_allocated`);
+- the loss fell, and the production quality gate passed on **held-out** views. Its PSNR gain over the SfM seed is in
+  the training report;
+- the trained cloud renders at least 3 dB PSNR above the untrained seed over every view;
 - a second job resumes exactly from the first job's checkpoint;
-- a corrupt checkpoint fails `CHECKPOINT_CORRUPT`;
-- the SPLAT becomes a contract-valid `.ksplat`, with checksums, manifest and bundle verified.
+- a corrupt checkpoint fails `CHECKPOINT_CORRUPT` and publishes nothing;
+- the published SPLAT becomes a `.ksplat` that passes the viewer contract, with checksums, manifest and bundle
+  (`tests/splat/viewer_artifacts.py`), and loads in the pinned viewer library where node is available.
 
-`gpu-acceptance.json` records the device, the versions, timings and sizes. With `CHAYA_REQUIRE_GPU=1` a missing
-requirement fails the test instead of skipping it.
+`gpu-acceptance.json` records:
+- device and versions;
+- the dataset's provenance (licence, source, frame hashes, COLMAP registration);
+- training seconds, iterations and Gaussian counts;
+- first and last loss;
+- peak GPU memory;
+- quality;
+- resume and corrupt-checkpoint results;
+- artifact sizes and hashes.
 
-The default dataset is SYNTHETIC: a ray-traced textured room corner with exact cameras
-(`tests/gpu/splat_dataset.py`). Set `CHAYA_SPLAT_DATASET` to a real COLMAP project (`images/` and `sparse/0`) to train
-on real data.
+A failed or interrupted run publishes no final-quality version:
+- **Stopped by the time budget:** the attempt is `TIME_LIMIT_EXCEEDED` with SPLAT_PARTIAL and a checkpoint. The run is
+  `PARTIAL`, never `FINAL`, and its retry resumes the checkpoint.
+- **Failed** (`SPLAT_GPU_OUT_OF_MEMORY`, `GPU_RUNTIME_ERROR`, `SPLAT_QUALITY_*`, `CHECKPOINT_*`): nothing is published,
+  and the run is `FAILED`.
+- **Partial cloud:** never encoded into the viewer's `.ksplat`.
+
+**Evidence obtained and not obtained (2026-10-24).**
+
+Obtained:
+- `docker build --check` is clean;
+- the COLMAP pin installs and runs on Ubuntu 24.04 (`colmap 3.9.1-2build2`, "without CUDA"), and GLOMAP is absent;
+- the dataset was downloaded, verified and reconstructed with real CPU COLMAP (above);
+- the preflight is truthful on this host: `PACKAGE_MISSING` (gsplat), `TORCH_WITHOUT_CUDA`, `TOOL_MISSING`, and no
+  driver;
+- the acceptance script stops BLOCKED (exit 3) here;
+- with `CHAYA_REQUIRE_GPU=1` the acceptance test fails instead of skipping.
+
+**NOT obtained:**
+- the GPU image has not been built (this workstation has no GPU and about 17 GB of free disk);
+- gsplat has never trained on CUDA;
+- no `gpu-acceptance.json` exists.
+
+**GPU acceptance is BLOCKED** until `scripts/gpu/acceptance.sh` runs on a CUDA host.
 
 ## Tests (three separate tiers)
 | Tier | Where | Needs | Run |
@@ -727,7 +882,8 @@ and MinIO credentials were shared; all three were overtaken by the work below.*
   venue capture, and not inside `Dockerfile.gpu` (COLMAP 3.9.x), which has never been built. **GLOMAP** has never run:
   no image contains it, so POSE_ESTIMATION uses the COLMAP mapper fallback.
 - **gsplat training has never run** (no CUDA host; see "Splat training"). No stage after POSE_ESTIMATION has run on a
-  real capture.
+  real capture. *2026-10-24:* still true. COLMAP 3.8 (CPU) has since also reconstructed the 24-photo CC0 acceptance set
+  (24/24 registered, 21,209 points; "GPU acceptance" above). The GPU image is still unbuilt, and GPU acceptance is BLOCKED.
 - The CPU worker image has run against the real stack in the E2E harness (docs/E2E_VALIDATION.md §2), and alone in
   the `reconstruction-smoke` image smoke.
 - MinIO credentials are per service: the API, the CPU worker (`S3_WORKER_*`), GPU workers (`S3_RECON_*`) and backups

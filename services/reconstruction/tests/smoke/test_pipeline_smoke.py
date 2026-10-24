@@ -210,10 +210,13 @@ def test_excluded_stages_keep_their_orchestration_contract_without_their_toolcha
     that lacks their toolchain or upstream input: claimed, reported as a structured failure (DEPENDENCY_UNAVAILABLE
     naming what is missing, or INPUT_INVALID), no artifacts, never a success -- so a CPU-only worker can never fake a
     reconstruction. A stage that needs a calibrated frame reports NOT_CALIBRATED here, since this stand-in control
-    plane never hands one out."""
+    plane never hands one out. A default worker would not even claim the stages whose toolchain it lacks
+    (chaya_worker.capabilities, next test); the diagnostic mode WORKER_OFFER_UNAVAILABLE_STAGES makes it claim them, which
+    is how this per-job refusal (the defence behind the offer) is exercised."""
     storage = LocalStorage(tmp_path / "objects")
     plane = SequencingControlPlane([stage], [], {})
-    settings = Settings(workdir=tmp_path / "work", worker_id="ci-contract", stages=(stage,), heartbeat_interval=0.05)
+    settings = Settings(workdir=tmp_path / "work", worker_id="ci-contract", stages=(stage,), heartbeat_interval=0.05,
+                        offer_unavailable_stages=True)
     assert Orchestrator(plane, storage, settings, toolchain=NO_TOOLS).run_once() is True
     report = plane.by_stage[stage]
     _reason, expected_code = EXCLUDED_IN_CI[stage]
@@ -223,3 +226,13 @@ def test_excluded_stages_keep_their_orchestration_contract_without_their_toolcha
         assert report["errorDetails"]["missing"], "the missing dependency is named"
     assert report["artifacts"] == []
     assert not [k for k in storage.keys(DERIVED_BUCKET) if k.endswith((".ply", ".ksplat", ".splat"))]
+
+
+@pytest.mark.parametrize("stage", sorted(s for s, (_why, code) in EXCLUDED_IN_CI.items() if code == "DEPENDENCY_UNAVAILABLE"))
+def test_a_default_worker_without_the_toolchain_does_not_claim_those_stages_at_all(tmp_path, stage):
+    """Not claimed means not offered: the control plane then reports the stage as unserved (health NO_WORKER) instead of
+    a worker failing its jobs until their retries are spent."""
+    plane = SequencingControlPlane([stage], [], {})
+    settings = Settings(workdir=tmp_path / "work", worker_id="ci-contract", stages=(stage,), heartbeat_interval=0.05)
+    assert Orchestrator(plane, LocalStorage(tmp_path / "objects"), settings, toolchain=NO_TOOLS).run_once() is False
+    assert stage not in plane.by_stage, "nothing was claimed, so nothing was reported"

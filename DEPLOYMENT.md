@@ -507,7 +507,10 @@ A GPU worker for the other GPU stages needs:
 - `WORKER_STAGES` set to the GPU stages, which all run **after** `PRIVACY_PREPROCESS`;
 - on a worker that runs `POSE_ESTIMATION` **without** a GPU, `COLMAP_NUM_THREADS` (for example 2). COLMAP otherwise
   starts one CPU SIFT thread per host core, at about 450 MiB each for 1600×1200 frames, so an 18-core host wants
-  about 8.5 GiB and is OOM-killed (docs/E2E_VALIDATION.md, 6.2). GPU workers extract on the GPU and leave it unset;
+  about 8.5 GiB and is OOM-killed (docs/E2E_VALIDATION.md, 6.2). This includes the `Dockerfile.gpu` image: its COLMAP
+  (Ubuntu's 3.9.1) is built **without CUDA**, so its SIFT runs on the CPU even on a GPU host. POSE_ESTIMATION requests
+  GPU SIFT only from a CUDA build of COLMAP (`Toolchain.colmap_has_cuda`, since 2026-10-24); before that, a GPU host
+  would have asked this COLMAP for GPU SIFT. Set `COLMAP_NUM_THREADS` there too;
 - the `chaya-worker` client secret and the **reconstruction** MinIO account (`S3_RECON_ACCESS_KEY` /
   `S3_RECON_SECRET_KEY` on the main host, passed to the GPU worker as its `S3_ACCESS_KEY` / `S3_SECRET_KEY`). That
   account cannot read the raw bucket or the `pii/` staging objects. **Do not** give a GPU host the `S3_WORKER_*`
@@ -517,7 +520,11 @@ A GPU worker for the other GPU stages needs:
 - network access to the API and MinIO over a private link or VPN. **Do not** publish MinIO or the API's internal
   port to the internet for this.
 
-Its health signal is the same liveness file (`python -m chaya_worker.liveness`).
+Its health signal is the same liveness file (`python -m chaya_worker.liveness`). It offers only the configured stages it
+can execute on that host (`python -m chaya_worker.capabilities`). Started without `--gpus` it serves no
+SPLAT_RECONSTRUCTION, and before `/models` is filled it serves no semantic stage. So health names those stages unserved
+instead of the worker failing their jobs (docs/pipeline.md, "Which worker serves which stage"). The whole GPU acceptance
+on a GPU host: `bash scripts/gpu/acceptance.sh` (docs/pipeline.md, "GPU acceptance").
 
 ## 11. What has and has not been verified
 

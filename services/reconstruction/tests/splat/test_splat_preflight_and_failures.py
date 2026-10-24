@@ -74,7 +74,12 @@ class StubToolchain(Toolchain):
                   "devices": [{"index": 0, "name": "old", "compute_capability": "6.1", "compute_capability_value": 6.1},
                               {"index": 1, "name": "new", "compute_capability": "8.6", "compute_capability_value": 8.6}],
                   "backend": ToolStatus("gsplat-cuda-backend", True, version="prebuilt"),
-                  "colmap": ToolStatus("colmap", True, path="/usr/bin/colmap", version="COLMAP 3.9.1")}
+                  "colmap": ToolStatus("colmap", True, path="/usr/bin/colmap", version="COLMAP 3.9.1"),
+                  "driver": {"present": True, "version": "560.35.03", "gpus": [{"name": "new", "memory_total_mb": 24564.0,
+                                                                                "memory_free_mb": 24000.0}],
+                             "source": "nvidia-smi", "detail": None},
+                  "memory": {"free_bytes": 23 * 2**30, "total_bytes": 24 * 2**30},
+                  "glomap": ToolStatus("glomap", False, detail="not found on PATH; set GLOMAP_BIN to its location")}
         self.f.update(over)
 
     def module(self, name):
@@ -98,6 +103,15 @@ class StubToolchain(Toolchain):
     def colmap(self):
         return self.f["colmap"]
 
+    def glomap(self):
+        return self.f["glomap"]
+
+    def nvidia_driver(self):
+        return self.f["driver"]
+
+    def cuda_memory(self, index):
+        return self.f["memory"]
+
 
 def _report(tc, **kw):
     return splat_preflight.environment_report(tc, min_compute_capability=7.0, python_version=(3, 12), **kw)
@@ -113,6 +127,22 @@ def test_a_complete_environment_passes_and_trains_on_the_qualifying_device_not_d
     assert r["selected_device"]["index"] == 1, "device 0 (6.1) is below the minimum; torch's default device must not be used"
 
 
+def test_the_report_carries_the_driver_device_memory_and_the_optional_glomap():
+    r = _report(StubToolchain(), min_driver_version="560.28", min_free_memory_mb=1024)
+    assert r["ok"], r["problems"]
+    assert r["driver"]["version"] == "560.35.03" and r["min_driver_version"] == "560.28"
+    assert r["selected_device"]["memory"]["free_bytes"] == 23 * 2**30
+    assert all("memory" in d for d in r["devices"])
+    assert r["optional"]["glomap"]["available"] is False, "GLOMAP is reported, never required by this stage"
+
+
+def test_a_driver_exactly_at_the_minimum_is_compatible_and_a_newer_one_too():
+    for version in ("560.28", "560.28.03", "575.51.03"):
+        tc = StubToolchain(cuda=ToolStatus("cuda", False, detail="torch is installed but reports no CUDA device"),
+                           driver={"present": True, "version": version, "gpus": [], "source": "nvidia-smi", "detail": None})
+        assert _codes(_report(tc, min_driver_version="560.28")) == ["CUDA_UNAVAILABLE"], version
+
+
 @pytest.mark.parametrize(("over", "code", "missing"), [
     ({"modules": {**dict.fromkeys(splat_preflight.REQUIRED_MODULES, True), "gsplat": False}}, "PACKAGE_MISSING", "gsplat"),
     ({"torch_build": {"version": "2.7.1+cpu", "cuda": None, "error": None}}, "TORCH_WITHOUT_CUDA", "cuda"),
@@ -122,9 +152,22 @@ def test_a_complete_environment_passes_and_trains_on_the_qualifying_device_not_d
     ({"backend": ToolStatus("gsplat-cuda-backend", False, detail="no compiled extension")}, "GSPLAT_CUDA_BACKEND_MISSING",
      "gsplat-cuda-backend"),
     ({"colmap": ToolStatus("colmap", False)}, "TOOL_MISSING", "colmap"),
+    # A CPU host, or a GPU container started without --gpus: no NVIDIA device at all.
+    ({"cuda": ToolStatus("cuda", False, detail="torch is installed but reports no CUDA device"),
+      "driver": {"present": False, "version": None, "gpus": [], "source": None, "detail": None}}, "GPU_NOT_PRESENT", "cuda"),
+    # A GPU whose driver is too old for CUDA 12.6, told by its version ...
+    ({"cuda": ToolStatus("cuda", False, detail="torch is installed but reports no CUDA device"),
+      "driver": {"present": True, "version": "535.183.01", "gpus": [], "source": "nvidia-smi", "detail": None}},
+     "CUDA_DRIVER_INCOMPATIBLE", "cuda-driver"),
+    # ... or by torch's own initialisation error when the version is unknown.
+    ({"cuda": ToolStatus("cuda", False, detail="torch is installed but reports no CUDA device: The NVIDIA driver on your system "
+                                               "is too old (found version 11040)"),
+      "driver": {"present": True, "version": None, "gpus": [], "source": "device node", "detail": None}},
+     "CUDA_DRIVER_INCOMPATIBLE", "cuda-driver"),
+    ({"memory": {"free_bytes": 300 * 2**20, "total_bytes": 24 * 2**30}}, "GPU_MEMORY_INSUFFICIENT", "cuda-memory"),
 ])
 def test_each_missing_requirement_is_named_with_a_fix(over, code, missing):
-    r = _report(StubToolchain(**over))
+    r = _report(StubToolchain(**over), min_driver_version="560.28", min_free_memory_mb=1024)
     assert not r["ok"] and code in _codes(r)
     assert missing in splat_preflight.missing_names(r)
     assert all(p["fix"] for p in r["problems"]), "every problem says how to fix it"

@@ -6,8 +6,14 @@ Environment (`environment_report`):
   PACKAGE_VERSION_UNSUPPORTED    gsplat is not GSPLAT_VALIDATED_VERSION, torch is older than MIN_TORCH, Python is too old
   PACKAGE_VERSION_DRIFT          an installed version differs from the worker image's lock (gpu-lock.json)
   TORCH_WITHOUT_CUDA             torch is a CPU-only build
-  CUDA_UNAVAILABLE               torch is a CUDA build but sees no usable device (driver, container runtime, visibility)
+  GPU_NOT_PRESENT                no NVIDIA GPU is visible to this process at all: no nvidia-smi answer, no
+                                 /proc/driver/nvidia, no /dev/nvidia0 (a CPU host, or a container started without --gpus)
+  CUDA_DRIVER_INCOMPATIBLE       an NVIDIA driver is there but older than gpu_min_driver_version (CUDA 12.6 needs 560.28),
+                                 or torch's CUDA initialisation says the driver is too old or insufficient
+  CUDA_UNAVAILABLE               a GPU and driver are visible but torch still sees no usable device (container runtime,
+                                 CUDA_VISIBLE_DEVICES, a driver/library mismatch); the detail carries torch's own message
   GPU_CAPABILITY_UNSUPPORTED     no device reaches gsplat_min_compute_capability
+  GPU_MEMORY_INSUFFICIENT        the selected device has less free memory than gpu_min_free_memory_mb
   GSPLAT_CUDA_BACKEND_MISSING    gsplat's CUDA kernels cannot be loaded (Toolchain.gsplat_backend)
   TOOL_MISSING                   COLMAP, needed to read the sparse model, is not installed
 
@@ -19,7 +25,9 @@ Configuration and inputs (`config_problems`, `input_problems`):
 A checkpoint offered as input is checked by chaya_worker.splat_training.load_checkpoint before the frames are prepared.
 
 `python -m chaya_worker.splat_preflight` prints the environment report as JSON and exits 0 only when training can
-start. It never claims more than it measured: a CUDA device is only reported when torch itself enumerates one.
+start. It never claims more than it measured: a CUDA device is only reported when torch itself enumerates one. The report also
+carries the driver as nvidia-smi sees it (`driver`), free and total memory per device, and GLOMAP as an optional tool
+(`optional`: POSE_ESTIMATION falls back to COLMAP's mapper without it; it is not part of this stage).
 """
 
 from __future__ import annotations
@@ -72,8 +80,34 @@ def load_lock(path: Path | None) -> dict[str, Any] | None:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _driver_too_old(version: str | None, minimum: str | None) -> bool:
+    if not version or not minimum:
+        return False
+    have, want = _version_tuple(version), _version_tuple(minimum)
+    return bool(have) and bool(want) and have < want
+
+
+def _cuda_problem(toolchain: Toolchain, detail: str, torch_cuda: str | None, min_driver: str | None) -> Problem:
+    """Why a CUDA build of torch sees no device: no GPU at all, a driver too old for it, or something else."""
+    driver = toolchain.nvidia_driver()
+    run_on_gpu = (f"run on an NVIDIA GPU host with a driver supporting CUDA {torch_cuda} (>= {min_driver}), with the GPU "
+                  "passed to the container (docker run --gpus all) and the NVIDIA Container Toolkit installed")
+    if not driver["present"]:
+        why = f": {driver['detail']}" if driver.get("detail") else ""
+        return Problem("GPU_NOT_PRESENT", "no NVIDIA GPU is visible to this process (no nvidia-smi answer, no "
+                       f"/proc/driver/nvidia, no /dev/nvidia0){why}", run_on_gpu, "cuda")
+    lowered = detail.lower()
+    if _driver_too_old(driver.get("version"), min_driver) or ("driver" in lowered and ("too old" in lowered or "insufficient" in lowered)):
+        return Problem("CUDA_DRIVER_INCOMPATIBLE", f"NVIDIA driver {driver.get('version') or '(version unknown)'} cannot run CUDA "
+                       f"{torch_cuda} ({detail})", f"upgrade the host's NVIDIA driver to {min_driver} or newer", "cuda-driver")
+    return Problem("CUDA_UNAVAILABLE", f"an NVIDIA GPU is visible (driver {driver.get('version')}) but torch reports no usable "
+                   f"CUDA device: {detail}", "check docker run --gpus all, CUDA_VISIBLE_DEVICES and the NVIDIA Container Toolkit",
+                   "cuda")
+
+
 def environment_report(toolchain: Toolchain, *, min_compute_capability: float, allow_jit: bool = False,
-                       lock: dict[str, Any] | None = None, python_version: tuple[int, int] | None = None) -> dict[str, Any]:
+                       lock: dict[str, Any] | None = None, python_version: tuple[int, int] | None = None,
+                       min_driver_version: str | None = None, min_free_memory_mb: int = 0) -> dict[str, Any]:
     """What this worker can and cannot do for SPLAT_RECONSTRUCTION. `ok` is True only when every check passed; then
     `selected_device` is the CUDA device training will use."""
     problems: list[Problem] = []
@@ -105,17 +139,25 @@ def environment_report(toolchain: Toolchain, *, min_compute_capability: float, a
         else:
             cuda = toolchain.cuda()
             if not cuda.available:
-                problems.append(Problem("CUDA_UNAVAILABLE", cuda.detail or "torch reports no CUDA device",
-                                        "run on an NVIDIA GPU host with a driver supporting CUDA "
-                                        f"{torch_build.get('cuda')}, with the GPU passed to the container (docker run --gpus all)", "cuda"))
+                problems.append(_cuda_problem(toolchain, cuda.detail or "torch reports no CUDA device", torch_build.get("cuda"),
+                                              min_driver_version))
             else:
-                devices = toolchain.cuda_devices()
+                devices = [{**d, "memory": toolchain.cuda_memory(d["index"])} for d in toolchain.cuda_devices()]
                 selected = toolchain.select_cuda_device(min_compute_capability)
                 if selected is None:
                     best = max((d["compute_capability_value"] for d in devices), default=None)
                     problems.append(Problem("GPU_CAPABILITY_UNSUPPORTED",
                                             f"no CUDA device has compute capability >= {min_compute_capability} (best: {best})",
                                             "use a Volta (7.0) or newer NVIDIA GPU", "cuda-compute-capability"))
+                else:
+                    memory = next((d["memory"] for d in devices if d["index"] == selected["index"]), None)
+                    selected = {**selected, "memory": memory}
+                    free_mb = memory["free_bytes"] / 2**20 if memory else None
+                    if min_free_memory_mb and free_mb is not None and free_mb < min_free_memory_mb:
+                        problems.append(Problem("GPU_MEMORY_INSUFFICIENT", f"CUDA device {selected['index']} ({selected['name']}) has "
+                                                f"{free_mb:.0f} MiB free; at least {min_free_memory_mb} MiB are required",
+                                                "free the GPU (other processes hold its memory) or use a larger one",
+                                                "cuda-memory"))
     if present["gsplat"]:
         gv = versions.get("gsplat")
         if gv != GSPLAT_VALIDATED_VERSION:
@@ -127,6 +169,8 @@ def environment_report(toolchain: Toolchain, *, min_compute_capability: float, a
             if not backend.available:
                 problems.append(Problem("GSPLAT_CUDA_BACKEND_MISSING", backend.detail or "gsplat's CUDA kernels are unavailable",
                                         "use the GPU worker image (services/reconstruction/Dockerfile.gpu)", "gsplat-cuda-backend"))
+    driver = toolchain.nvidia_driver()
+    glomap = toolchain.glomap()
     colmap = toolchain.colmap()
     versions["colmap"] = colmap.version
     if not colmap.available:
@@ -140,7 +184,8 @@ def environment_report(toolchain: Toolchain, *, min_compute_capability: float, a
                                         "rebuild or reinstall the worker image; do not upgrade packages inside it"))
     return {"ok": not problems, "problems": [p.as_dict() for p in problems], "versions": versions, "devices": devices,
             "selected_device": selected, "min_compute_capability": min_compute_capability, "allow_jit_backend": allow_jit,
-            "lock": lock}
+            "driver": driver, "min_driver_version": min_driver_version, "min_free_memory_mb": min_free_memory_mb,
+            "optional": {"glomap": glomap.as_dict()}, "lock": lock}
 
 
 def missing_names(report: dict[str, Any]) -> list[str]:
@@ -183,7 +228,8 @@ def main(argv: list[str] | None = None) -> int:
     s = Settings.from_env()
     lock_path = Path(os.environ.get("CHAYA_GPU_LOCK", str(DEFAULT_LOCK_PATH)))
     report = environment_report(Toolchain(), min_compute_capability=s.gsplat_min_compute_capability,
-                                allow_jit=s.gsplat_allow_jit_backend, lock=load_lock(lock_path))
+                                allow_jit=s.gsplat_allow_jit_backend, lock=load_lock(lock_path),
+                                min_driver_version=s.gpu_min_driver_version, min_free_memory_mb=s.gpu_min_free_memory_mb)
     print(json.dumps(report, indent=2, default=str))
     return 0 if report["ok"] else 1
 

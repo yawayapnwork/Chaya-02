@@ -47,6 +47,12 @@ class Settings:
     # its attempts are recorded but not priced.
     resource_class: str | None = None
     poll_interval: float = 5.0
+    # Stage offer (chaya_worker.capabilities): configured stages whose hard requirements are missing are not claimed, and
+    # the check is repeated this often (model weights fetched later, a GPU that went away).
+    capability_recheck_seconds: float = 300.0
+    # Diagnostic only: offer configured stages even when they cannot run, so their jobs fail with the stage's structured
+    # DEPENDENCY_UNAVAILABLE in the run record instead of waiting for a capable worker.
+    offer_unavailable_stages: bool = False
     heartbeat_interval: float = 60.0
     workdir: Path = Path("work")
     log_level: str = "INFO"
@@ -99,6 +105,11 @@ class Settings:
     gsplat_stop_margin_seconds: float = 120.0
     gsplat_keyframe_every: int = 500
     gsplat_min_compute_capability: float = 7.0
+    # The GPU image is CUDA 12.6 (Dockerfile.gpu): NVIDIA's minimum Linux driver for CUDA 12.6 is 560.28. An older driver is
+    # CUDA_DRIVER_INCOMPATIBLE in the splat preflight, not a vague "no CUDA device".
+    gpu_min_driver_version: str = "560.28"
+    # Free device memory below which training is refused before it starts (GPU_MEMORY_INSUFFICIENT); 0 = no check.
+    gpu_min_free_memory_mb: int = 1024
     gsplat_min_training_frames: int = 3  # posed frames with images below which training is refused (INSUFFICIENT_FRAMES)
     # Reconstruction quality gate (chaya_worker.splat_quality; gaussian-splatting-audit D-5). Every Nth posed view (sorted by
     # name) is held out of training and only rendered for evaluation: 8 is the 3DGS / Mip-NeRF 360 evaluation protocol.
@@ -357,6 +368,8 @@ class Settings:
             stages=tuple(s for s in e.get("WORKER_STAGES", "").split(",") if s),
             resource_class=e.get("WORKER_RESOURCE_CLASS", "").strip() or None,
             poll_interval=_float(e, "WORKER_POLL_INTERVAL", d.poll_interval),
+            capability_recheck_seconds=_float(e, "WORKER_CAPABILITY_RECHECK_SECONDS", d.capability_recheck_seconds),
+            offer_unavailable_stages=_bool(e, "WORKER_OFFER_UNAVAILABLE_STAGES", d.offer_unavailable_stages),
             heartbeat_interval=_float(e, "WORKER_HEARTBEAT_INTERVAL", d.heartbeat_interval),
             workdir=Path(e.get("WORKER_WORKDIR", str(d.workdir))),
             log_level=e.get("LOG_LEVEL", d.log_level),
@@ -397,6 +410,8 @@ class Settings:
             gsplat_ssim_weight=_float(e, "GSPLAT_SSIM_WEIGHT", d.gsplat_ssim_weight),
             gsplat_keyframe_every=_int(e, "GSPLAT_KEYFRAME_EVERY", d.gsplat_keyframe_every),
             gsplat_min_compute_capability=_float(e, "GSPLAT_MIN_COMPUTE_CAPABILITY", d.gsplat_min_compute_capability),
+            gpu_min_driver_version=e.get("GPU_MIN_DRIVER_VERSION", d.gpu_min_driver_version).strip(),
+            gpu_min_free_memory_mb=_int(e, "GPU_MIN_FREE_MEMORY_MB", d.gpu_min_free_memory_mb),
             gsplat_min_training_frames=_int(e, "GSPLAT_MIN_TRAINING_FRAMES", d.gsplat_min_training_frames),
             gsplat_eval_holdout_every=_int(e, "GSPLAT_EVAL_HOLDOUT_EVERY", d.gsplat_eval_holdout_every),
             gsplat_quality_min_psnr_gain_db=_float(e, "GSPLAT_QUALITY_MIN_PSNR_GAIN_DB", d.gsplat_quality_min_psnr_gain_db),
