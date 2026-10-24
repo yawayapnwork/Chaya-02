@@ -80,11 +80,18 @@ jobs:
           labels: |
             org.opencontainers.image.title=chaya-${{ matrix.service }}
 
+      # Each image's runtime stage upgrades its OS packages behind ARG OS_PACKAGES_REFRESH. A new value per UTC day
+      # invalidates that layer, so the gha layer cache below cannot keep shipping packages from before a security fix
+      # (run 39817750800: the cached worker layer still had libexpat1 2.5.0-1+deb12u4; a fresh build had deb12u5).
+      - id: refresh
+        run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
       # Build once, load locally for the scan; push the same build afterwards (cache makes the second step a no-op).
       - name: Build (local, for scanning)
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: ${{ matrix.context }}
+          build-args: OS_PACKAGES_REFRESH=${{ steps.refresh.outputs.date }}
           load: true
           tags: chaya-${{ matrix.service }}:scan
           cache-from: type=gha,scope=${{ matrix.service }}
@@ -118,6 +125,7 @@ jobs:
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: ${{ matrix.context }}
+          build-args: OS_PACKAGES_REFRESH=${{ steps.refresh.outputs.date }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

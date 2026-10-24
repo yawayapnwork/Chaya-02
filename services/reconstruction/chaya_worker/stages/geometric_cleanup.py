@@ -22,7 +22,13 @@ from __future__ import annotations
 import numpy as np
 
 from ..contract import ArtifactSpec, StageContext, StageError, StageResult
-from ..geometry_cleanup import characteristic_spacing, radius_outlier_mask, semantic_aware_mask, statistical_outlier_mask
+from ..geometry_cleanup import (
+    characteristic_spacing,
+    radius_min_neighbors,
+    radius_outlier_mask,
+    semantic_aware_mask,
+    statistical_outlier_mask,
+)
 from ..ply import read_ply, write_ply
 from .base import command_record, write_json
 
@@ -50,7 +56,10 @@ class GeometricCleanup:
         steps.append({"step": "statistical_outlier_removal", "config": stat_cfg, "removed": int((~stat_mask).sum())})
         keep &= stat_mask
 
-        radius_mask, radius_cfg = radius_outlier_mask(cloud, nb_points=s.cleanup_radius_nb_points, radius=radius)
+        nb_points, threshold_basis = radius_min_neighbors(cloud.positions, radius, cap=s.cleanup_radius_nb_points,
+                                                          share=s.cleanup_radius_neighbor_share)
+        radius_mask, radius_cfg = radius_outlier_mask(cloud, nb_points=nb_points, radius=radius)
+        radius_cfg["threshold_basis"] = threshold_basis
         steps.append({"step": "radius_outlier_removal", "config": radius_cfg, "removed": int((keep & ~radius_mask).sum())})
         keep &= radius_mask
 

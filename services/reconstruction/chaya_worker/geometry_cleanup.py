@@ -69,6 +69,27 @@ def statistical_outlier_mask(cloud: GaussianCloud, *, nb_neighbors: int, std_rat
     return mask, {"nb_neighbors": nb_neighbors, "std_ratio": std_ratio}
 
 
+def radius_min_neighbors(positions: np.ndarray, radius: float, *, cap: int, share: float, floor: int = 3,
+                         sample: int = 20000, seed: int = 0) -> tuple[int, dict[str, Any]]:
+    """The radius filter's neighbour threshold for THIS cloud: `share` of the median point's own count within `radius`
+    (itself included, as Open3D counts), clamped to [floor, cap].
+
+    A fixed count cannot work with a spacing-relative radius: how many neighbours an ordinary surface point has within
+    k x the median nearest-neighbour spacing depends on how the surface is sampled, not on its density. A lattice has about
+    pi*k^2 (28 at k = 3); a randomly sampled surface, which is what SfM and splat clouds look like, only about 1 + 9 ln 2
+    (7.2). A fixed 8 therefore kept a lattice whole and removed about two thirds of a random floor or wall (FINAL_AUDIT
+    P1-14). Relative to the cloud's own median count, the threshold separates isolated points from surface in both.
+    `cap` keeps it never stricter than the fixed threshold it replaces. Deterministic (fixed-seed subsample)."""
+    from scipy.spatial import cKDTree  # noqa: PLC0415
+
+    p = np.asarray(positions, dtype=np.float64)
+    query = p if len(p) <= sample else p[np.random.default_rng(seed).choice(len(p), sample, replace=False)]
+    counts = cKDTree(p).query_ball_point(query, r=radius, return_length=True)
+    median = float(np.median(counts))
+    threshold = int(min(cap, max(floor, int(np.ceil(share * median)))))
+    return threshold, {"median_neighbor_count": median, "neighbor_share": share, "floor": floor, "cap": cap}
+
+
 def radius_outlier_mask(cloud: GaussianCloud, *, nb_points: int, radius: float) -> tuple[np.ndarray, dict[str, Any]]:
     """Open3D's radius outlier removal: a point is kept only if at least `nb_points` other points lie
     within `radius` of it -- catches sparse floating debris that statistical removal can miss."""

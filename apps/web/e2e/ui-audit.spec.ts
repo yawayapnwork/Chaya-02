@@ -14,7 +14,8 @@ async function signedInCapture(page: Page, server: MockCaptureServer) {
   await server.install(page);
   await page.goto("/capture");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByTestId("capture-queue")).toBeVisible();
+  // The sign-in is three navigations (authorize, callback, back to the page): the same bound as the other session waits.
+  await expect(page.getByTestId("capture-queue")).toBeVisible({ timeout: SESSION_RESTORE_MS });
   await expect(page.locator(`option[value="${FLOOR}"]`)).toBeAttached();
 }
 
@@ -200,13 +201,16 @@ test("keyboard: the navigation and the capture form are reached with Tab, in ord
   const order: string[] = [];
   for (let i = 0; i < 12; i++) {
     await page.keyboard.press("Tab");
-    order.push(await page.evaluate(() => {
+    const stop = await page.evaluate(() => {
       const el = document.activeElement as HTMLElement | null;
-      if (!el) return "";
+      // Focus on <body> (or none) means Tab went past the page's last control: the end of the tab order, not a control.
+      if (!el || el === document.body) return null;
       const style = getComputedStyle(el);
       const visible = style.outlineStyle !== "none" || style.boxShadow !== "none";
       return `${el.tagName.toLowerCase()}:${(el.getAttribute("aria-label") ?? el.textContent ?? "").trim().slice(0, 20)}:${visible ? "focus-visible" : "NO-FOCUS-STYLE"}`;
-    }));
+    });
+    if (stop === null) break;
+    order.push(stop);
   }
   console.log(`[audit] tab order: ${order.join(" > ")}`);
   // next dev's own overlay (nextjs-portal) takes a tab stop in development only; it is not part of the app.

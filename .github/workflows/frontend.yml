@@ -8,7 +8,8 @@ on:
     paths: ["apps/web/**", "packages/contracts/fixtures/**", "packages/contracts/viewer/**", "services/reconstruction/chaya_worker/ksplat.py", "scripts/ci/check-fixtures.sh", ".github/workflows/frontend.yml"]
   push:
     branches: [main]
-    paths: ["apps/web/**", "packages/contracts/fixtures/**", "packages/contracts/viewer/**", "services/reconstruction/chaya_worker/ksplat.py", "scripts/ci/check-fixtures.sh", ".github/workflows/frontend.yml"]
+    # No path filter on main: the deploy gate (scripts/ci/require-green.sh) requires this workflow's run for the exact
+    # commit being deployed. Pull requests stay path-filtered (DEPLOYMENT.md "Deploy gate").
   workflow_dispatch:
 
 permissions:

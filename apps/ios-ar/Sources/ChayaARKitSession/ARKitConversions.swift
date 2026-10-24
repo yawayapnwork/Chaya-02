@@ -66,6 +66,10 @@ public enum ReferenceImages {
     /// with the marker's anchor id so a detection identifies the backend anchor.
     public static func make(png: Data, marker: RegisteredMarker) throws -> ARReferenceImage {
         func invalid(_ reason: String) -> InvalidImage { InvalidImage(markerIdentifier: marker.anchor.markerIdentifier, reason: reason) }
+        // Checked on the file first: ImageIO may report a truncated PNG as complete (PNGIntegrity).
+        if let problem = PNGIntegrity.problem(in: png) {
+            throw invalid("the target image is \(problem)")
+        }
         guard let source = CGImageSourceCreateWithData(png as CFData, nil),
               let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
             throw invalid("the target image is not a decodable image")

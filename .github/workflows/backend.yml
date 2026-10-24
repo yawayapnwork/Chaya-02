@@ -6,7 +6,8 @@ on:
     paths: ["services/api/**", "packages/contracts/**", "infra/mirror/**", "scripts/ci/minio-preflight.sh", ".github/workflows/backend.yml"]
   push:
     branches: [main]
-    paths: ["services/api/**", "packages/contracts/**", "infra/mirror/**", "scripts/ci/minio-preflight.sh", ".github/workflows/backend.yml"]
+    # No path filter on main: the deploy gate (scripts/ci/require-green.sh) requires this workflow's run for the exact
+    # commit being deployed. Pull requests stay path-filtered (DEPLOYMENT.md "Deploy gate").
   workflow_dispatch:
 
 permissions:

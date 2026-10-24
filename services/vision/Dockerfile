@@ -26,7 +26,12 @@ RUN if [ "$INSTALL_MODEL" = "true" ]; then \
 FROM python:3.12-slim-bookworm
 # The weight cache is a named volume in compose (vision-cache:/home/vision/.cache). Docker seeds a new named volume from
 # the image's directory, ownership included; without the mkdir/chown it is created root-owned and the download fails.
-RUN groupadd -g 10001 vision \
+# apt-get upgrade takes Debian security fixes published since the base was built; OS_PACKAGES_REFRESH (a date, set by
+# .github/workflows/docker.yml) invalidates this layer daily so the CI layer cache cannot pin an old package set.
+ARG OS_PACKAGES_REFRESH=local
+RUN echo "OS packages as of ${OS_PACKAGES_REFRESH}" \
+ && apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/* \
+ && groupadd -g 10001 vision \
  && useradd -u 10001 -g vision -m -d /home/vision -s /usr/sbin/nologin vision \
  && mkdir -p /home/vision/.cache/huggingface \
  && chown -R vision:vision /home/vision/.cache

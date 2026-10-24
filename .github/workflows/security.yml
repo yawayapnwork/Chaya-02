@@ -60,7 +60,7 @@ jobs:
           /tmp/venv/bin/pip install ./services/${{ matrix.service }}
           /tmp/venv/bin/pip freeze --exclude-editable | grep -v '^chaya-' > /tmp/frozen.txt
           python -m venv /tmp/tools
-          /tmp/tools/bin/pip install pip-audit
+          /tmp/tools/bin/pip install "pip-audit==2.10.1"  # pinned: the scanner itself is not taken at whatever version is newest
       - name: Vulnerabilities (exact versions installed)
         run: /tmp/tools/bin/pip-audit -r /tmp/frozen.txt --no-deps --disable-pip --progress-spinner off
       - name: Licenses (installed environment)

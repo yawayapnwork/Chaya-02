@@ -16,9 +16,8 @@ on:
             "scripts/ci/pytest-summary.py", ".github/workflows/python.yml"]
   push:
     branches: [main]
-    paths: ["services/reconstruction/**", "services/vision/**", "packages/contracts/fixtures/**", "packages/contracts/viewer/**",
-            "apps/web/package-lock.json", "apps/web/scripts/verify-ksplat-artifact.ts", "scripts/ci/check-fixtures.sh",
-            "scripts/ci/pytest-summary.py", ".github/workflows/python.yml"]
+    # No path filter on main: the deploy gate (scripts/ci/require-green.sh) requires this workflow's run for the exact
+    # commit being deployed. Pull requests stay path-filtered (DEPLOYMENT.md "Deploy gate").
   workflow_dispatch:
 
 permissions:

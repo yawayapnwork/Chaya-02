@@ -31,6 +31,7 @@ import numpy as np
 from ..geometry_cleanup import (
     characteristic_spacing,
     opacity_threshold_mask,
+    radius_min_neighbors,
     radius_outlier_mask,
     semantic_aware_mask,
     statistical_outlier_mask,
@@ -96,8 +97,9 @@ def run_methods(cloud: GaussianCloud, *, labels: np.ndarray | None, settings: Se
         mask, seconds = _timed_mask(cloud, lambda: statistical_outlier_mask(
             cloud, nb_neighbors=settings.cleanup_stat_nb_neighbors, std_ratio=settings.cleanup_stat_std_ratio)[0])
         results.append(finish("statistical_outlier", mask, seconds))
-        mask, seconds = _timed_mask(cloud, lambda: radius_outlier_mask(
-            cloud, nb_points=settings.cleanup_radius_nb_points, radius=radius)[0])
+        nb_points, _ = radius_min_neighbors(cloud.positions, radius, cap=settings.cleanup_radius_nb_points,
+                                            share=settings.cleanup_radius_neighbor_share)
+        mask, seconds = _timed_mask(cloud, lambda: radius_outlier_mask(cloud, nb_points=nb_points, radius=radius)[0])
         results.append(finish("density_outlier", mask, seconds))
 
     if not open3d_ok:

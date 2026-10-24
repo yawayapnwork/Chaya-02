@@ -28,7 +28,24 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Runs on a GitHub-hosted runner first, so every run states plainly what it is waiting for. If gpu-tests below stays
+  # "Queued", no online self-hosted runner has the `gpu` label: GPU acceptance is BLOCKED, not passed. (GitHub gives a
+  # workflow no way to list self-hosted runners without an admin token, so this is a statement, not a probe.)
+  requirement:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: |
+          {
+            echo "### GPU acceptance needs a self-hosted runner labelled \`gpu\`"
+            echo ""
+            echo "NVIDIA GPU (compute capability >= 7.0), CUDA 12.6 driver (>= 560), Docker with the NVIDIA Container Toolkit,"
+            echo ">= 80 GB free disk (DEPLOYMENT.md \"GPU workers\"). If the \`gpu-tests\` job is still queued, none is online:"
+            echo "**BLOCKED, not executed**. Nothing in this run proves CUDA training until \`gpu-tests\` completes."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   gpu-tests:
+    needs: requirement
     runs-on: [self-hosted, linux, x64, gpu]
     timeout-minutes: 240
     steps:
@@ -42,6 +59,7 @@ jobs:
       - name: Splat preflight (exit 0 = this image can train)
         run: docker run --rm --gpus all -v chaya-models:/models "chaya-worker-gpu:${GITHUB_SHA}" python -m chaya_worker.splat_preflight
       - name: GPU tests (pytest -m gpu, CHAYA_REQUIRE_GPU=1)
+        id: tests
         env:
           IMAGE_SEQUENCE: ${{ github.event.inputs.image_sequence }}
           SPLAT_DATASET: ${{ github.event.inputs.splat_dataset }}
@@ -56,15 +74,24 @@ jobs:
             -v chaya-models:/models -v "$PWD/services/reconstruction/tests:/src/tests:ro" -v "$PWD/gpu-out:/out" "${extra[@]}" \
             -w /src "chaya-worker-gpu:${GITHUB_SHA}" \
             sh -c "pip install -q pytest==8.4.1 && python -m pytest -p no:cacheprovider -m gpu tests/gpu -rfEs --junitxml=/out/gpu.xml"
-          echo "pytest exit status: $?"
+          status=$?
+          echo "pytest exit status: $status"
+          # Kept for the summary step below (it classifies every test); a crash before any JUnit is written fails here.
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          [ -s gpu-out/gpu.xml ] || { echo "::error::pytest wrote no results (exit $status)"; exit 1; }
       - name: Summary (passed / failed / expected skip / unexpected skip)
         env:
           IMAGE_SEQUENCE: ${{ github.event.inputs.image_sequence }}
+          PYTEST_STATUS: ${{ steps.tests.outputs.status }}
         run: |
           expected=()
           [ -z "$IMAGE_SEQUENCE" ] && expected+=(--expected-skip "CHAYA_TEST_IMAGE_SEQUENCE is not set")
+          set +e
           python3 scripts/ci/pytest-summary.py gpu-out/gpu.xml --label "GPU tests (required)" --mode required "${expected[@]}" \
             | tee -a "$GITHUB_STEP_SUMMARY"
+          summary=${PIPESTATUS[0]}
+          # pytest's own status counts too (exit 5 = nothing collected, 2-4 = interrupted or internal/usage errors).
+          [ "$summary" -eq 0 ] && [ "$PYTEST_STATUS" -eq 0 ]
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:

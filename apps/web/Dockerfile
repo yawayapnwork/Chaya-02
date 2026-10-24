@@ -27,7 +27,12 @@ COPY --from=build /app/public ./public
 # The one writable path (Next's image/fetch cache); everything else stays root-owned and read-only to the app.
 # The runtime only executes `node server.js`: remove the package managers the base image ships (npm, npx, corepack,
 # yarn). They are unused attack surface, and npm's bundled dependencies are where the image scanner's findings were.
-RUN mkdir -p .next/cache && chown node:node .next/cache \
+# apk upgrade takes Alpine security fixes published since the base was built; OS_PACKAGES_REFRESH (a date, set by
+# .github/workflows/docker.yml) invalidates this layer daily so the CI layer cache cannot pin an old package set.
+ARG OS_PACKAGES_REFRESH=local
+RUN echo "OS packages as of ${OS_PACKAGES_REFRESH}" \
+ && apk upgrade --no-cache \
+ && mkdir -p .next/cache && chown node:node .next/cache \
  && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /opt/yarn-* \
            /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /usr/local/bin/yarn /usr/local/bin/yarnpkg
 USER node

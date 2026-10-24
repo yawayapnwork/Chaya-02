@@ -4,10 +4,78 @@ What a clean checkout can run, what CI executes, and what nothing here executes.
 [ADVERSARIAL_REVIEW_2026-09-29.md](ADVERSARIAL_REVIEW_2026-09-29.md) C-1/C-2/C-5. Update it when a row changes. The
 current state is first; the dated sections below it are records and are kept as written.
 
-## Current state (2026-10-12, `40beef5` plus the documentation audit)
+## Current state (2026-10-24, CI restoration on top of `42fd240`)
 
-*2026-10-24:* superseded by [BASELINE_AUDIT_2026-10-24.md](BASELINE_AUDIT_2026-10-24.md) §1.3 (CI) and §5 (local
-results at `3815ba6`). The tables below are kept as the 2026-10-12 record.
+Run on 2026-10-24 on the Windows 11 workstation: Docker Desktop 29.6.2 with a 7.5 GiB VM, Intel graphics only (no CUDA),
+no Mac, no phone. The code is the working tree of the commit `fix(ci): restore reproducible checks across project
+services`. **None of this has run on GitHub Actions yet.** The commit is not pushed, so every CI statement below is
+either a recorded run (with its id) or a local reproduction of the workflow's steps.
+
+### Recorded CI failures: root cause and disposition
+
+| Workflow (last red run) | Recorded failure | Class | Root cause | Disposition | Verified locally |
+|---|---|---|---|---|---|
+| `python` → `open3d` (39817750803, `e96d477`) | `test_geometric_cleanup_and_plane_fitting_run_on_a_real_synthetic_room`: `assert 1 >= 2` | **source defect** | GEOMETRIC_CLEANUP's radius filter kept points with at least 8 neighbours within 3 × the median spacing. A randomly sampled surface has about 1 + 9 ln 2 ≈ 7.2 there, so the filter removed about two thirds of a floor or wall, and PLANE_FITTING then lost them. A lattice has about 28 neighbours there, which is why the lattice benchmarks never saw it (FINAL_AUDIT P1-14). | The threshold is now 0.35 × the cloud's own median neighbour count, clamped to [3, 8] (`geometry_cleanup.radius_min_neighbors`, `CLEANUP_RADIUS_NEIGHBOR_SHARE`). The cap keeps it never stricter than before. The test is unchanged. A unit test that needs no Open3D was added (`tests/unit/test_radius_threshold.py`). | Open3D 0.19.0 image (`chaya-bench-open3d`, Python 3.12.14), `pytest -m open3d tests/gpu`: **11 passed** (1 failed before). B2c synthetic benchmark (5 seeds, ground truth): **all 119 non-timing metrics identical** to the 2026-10-11 record (`benchmarks/results/b2_geometry_cleanup_synthetic/2026-10-24T134606Z.json`). A sweep showed a share of 0.30 would lower B2c noise recall from 0.848 to 0.820, which is why 0.35 was chosen. B2 on the real splat was **not** re-run: its input is not on this host. |
+| `docker` → `image (worker)` (39817750800) | Trivy: `libexpat1` 2.5.0-1+deb12u4, CVE-2025-59375 and CVE-2026-77214 (HIGH, fixed in deb12u5) | **invalid CI assumption** | The image is built with `cache-from: type=gha` (mode=max). Its `apt-get install` layer was replayed from cache, so packages from before the fix kept shipping. A fresh build of the same Dockerfile today already had deb12u5. The worker and vision images never ran `apt-get upgrade`. Inferred from the log: the full job log needs repository-admin rights, but `--log-failed` shows the installed version. | Every runtime stage upgrades its OS packages (`apt-get upgrade` / `apk upgrade`) behind `ARG OS_PACKAGES_REFRESH`. `docker.yml` sets it to the UTC date, so that layer is rebuilt at least daily. Scanner, severity and `--ignore-unfixed` are unchanged. | All four images built from the tree with the workflow's build argument: non-root (api, worker, vision 10001; web `node`), HEALTHCHECK present, Trivy 0.70.0 `--severity CRITICAL,HIGH --ignore-unfixed --scanners vuln,secret`: **exit 0 for api, web, worker and vision**. The worker has `libexpat1 2.5.0-1+deb12u5`. |
+| `security` → `maven` (39817751013) | Dependency-Check: `tika-core` 3.2.2, CVE-2026-66755 (CVSS 7.5) | **dependency** | Vulnerable version pinned in `services/api/pom.xml` | `tika-core` 3.3.3 (newest 3.x; the fix is in 3.3.2). The threshold is unchanged. | `mvn -B -ntp verify`: **668 run, 0 failures, 0 errors, 4 skipped** (opt-in `ClamAvLiveTest`, `KeycloakLiveTest`). The API image ships `tika-core-3.3.3.jar`. Dependency-Check: **NOT RUN to completion**: the local run (no NVD key, building the database from nothing) was stopped when the workstation ran out of memory. Re-run it in CI `security` → `maven`; until then the CVE is closed only by version (3.3.3 ≥ the fixed 3.3.2). |
+| `security` → `web` (not yet red in CI: last run 2026-10-22 passed) | `npm audit --omit=dev --audit-level=high` today: `next` 16.3.8 is **critical** (GHSA-2464-fhr4-w9xw RCE via image optimisation; GHSA-673q-mjm6-r5xr; GHSA-p3m5-59mp-jv5r) | **dependency** (advisories published after the last run) | `next` ≤ 16.4.0 | `next` 16.4.3 (exact pin; `package-lock.json`) | `npm audit`: **0 vulnerabilities**. Lint, typecheck, 389 unit tests, build and Playwright pass on 16.4.3 (below). Trivy on the rebuilt web image: exit 0. |
+| `acceptance` → `c-cross-service` (40073568175) | 40/40 service tests pass; browser A6/B6 fail: one console error each | **source defect** | `next.config.ts` built the report-only CSP at **build** time, and no image build passes `CHAYA_PUBLIC_OIDC_ISSUER`. So `frame-src` lacked the identity provider, and every silent sign-in logged `Framing 'http://localhost:18081/' violates … "frame-src 'self'"` (recorded in `docs/e2e-evidence/2026-10-19-eth3d-office/acceptance/acceptance-c-viewer.json`). | Both CSP headers are set per request by `apps/web/proxy.ts` from the running container's `CHAYA_PUBLIC_*` (`lib/security-headers.ts`, 4 unit tests). The directives are unchanged; the policy stays report-only. | Production standalone server built with **no** `CHAYA_PUBLIC_*`, then started with them: `frame-src 'self' http://localhost:18081`; `/auth/callback` keeps `frame-ancestors 'self'`. Full acceptance run: **NOT RUN**: stopped while building its images when the workstation ran out of memory (the stack never started). So A6/B6 are **not** verified end to end. Re-run in CI `acceptance`, or locally with more free memory. |
+| `ios` → `app` (39204149235, `e47948b`) | `ReferenceImageTests.testMissingAndMalformedImagesAreRejected`: "the fixture truncated halfway" did not throw (`AppLevelTests.swift:173`) | **source defect** | `ReferenceImages.make` relied on `CGImageSourceGetStatusAtIndex == .statusComplete`. For a source made from complete `Data`, ImageIO on the iOS 17.5 Simulator reports a PNG cut in half as complete. | The PNG is checked on the file itself first: signature, every chunk's length and CRC-32, IEND exactly at the end (`ChayaARCore/PNGIntegrity.swift`; pure Swift, so it is tested on Linux against the server's real target-image fixture). | `swift test` (`swift:5.10-jammy`): **86 passed**, 3 of them new. `swiftc -parse` on the ARKit file. **The app-level XCTest was NOT run: it needs macOS with Xcode** (only the `ios` workflow can run it). |
+| `reconstruction-smoke` (documented red 2026-10-12; green in CI since) | — | **invalid CI assumption** (silent skips) | `worker-smoke` did not install torch, so `tests/smoke/test_splat_artifact_smoke.py` skipped as a whole module and the job still passed. Skips were never checked. The stack smoke's end-to-end test could skip the same way. | `worker-smoke` installs CPU torch 2.7.1 and the viewer library and fails on any skip. `image-smoke` allows only "torch is not installed": the production CPU image has no torch by design, and that module runs in `worker-smoke` and `python`. `stack-smoke.sh` fails on a skip of its end-to-end test. Test tools are pinned (`pytest==8.4.1`, `scikit-image==0.26.0`). | Worker smoke (host venv): **17 passed, 0 skipped**. Image smoke in the new worker image: **13 passed, 1 expected skip**; liveness is unhealthy before a control-plane call. Stack smoke: **passed**. End-to-end test 1/1, run stopped at POSE_ESTIMATION as designed, restore drill `RESULT: PASS`, API booted on restored data. |
+| `deploy` (0 successes in 72 runs) | Every visible failure: `CI did not pass for <sha>` | **configuration error** (gate) plus **environment limitation** | (1) The gate accepted a gated workflow with **no** run for the commit as "path-filtered", and treated `skipped` as passed. A commit touching only `apps/web` could therefore deploy while `python` was red on `main`. (2) Red CI has blocked every deploy. (3) Only a `staging` Environment exists on GitHub; whether `DEPLOY_HOST`/`DEPLOY_SSH_KEY` secrets exist cannot be seen without admin rights, and no host has ever been deployed. | Every gated workflow now runs on **every push to `main`** (PR path filters kept). The gate requires `success` for `frontend backend python security reconstruction-smoke acceptance docker ops` on the exact commit: absent (after 3 min), skipped and cancelled all fail, and the newest attempt decides. `scripts/ci/test-require-green.sh` (10 cases) runs in `ops`. Branch-protection strategy: DEPLOYMENT.md "Branch protection and path filters". | `test-require-green.sh`: **10 passed**. **The deploy itself remains BLOCKED**: it needs a host, DNS and the Environment secrets (DEPLOYMENT.md §3). |
+| `gpu` (0 runs) | — | **environment limitation** | No self-hosted runner labelled `gpu`. The test step also ignored pytest's exit status. | A GitHub-hosted `requirement` job states in the run summary that GPU acceptance is BLOCKED until `gpu-tests` runs. `gpu-tests` now fails on pytest's own status and on a missing JUnit file, not only on the summary's verdict. | **NOT RUN**: no CUDA host. Nothing here executes CUDA. |
+
+Also fixed:
+- **Flaky browser tests hidden by retries.** `playwright.config.ts` had `retries: 2`, so an intermittent failure passed as "flaky". Now there is one retry, for a trace only, and `failOnFlakyTests` in CI. That exposed a real race: the suite ran on `next dev`, whose on-demand compilation under the parallel software-WebGL specs sometimes exceeded the silent sign-in's 5 s timeout (`lib/auth.ts`), so a reload showed "Sign in" (`ui-audit.spec.ts:220`). The e2e server is now the **production build** (`npm run build && npm run start`; `PLAYWRIGHT_DEV=1` for the dev server). Production also exposed a dev-only assumption in the tab-order test: Tab past the last control lands on `<body>`. The test now ends the tab order there instead of counting `<body>` as a control, and the post-sign-in waits use the file's 15 s session bound. The browser suite still mocks the API and OIDC provider (`page.route`); the full-stack browser check is the acceptance suite's.
+- **`scripts/ci/pytest-summary.py`** matched skip reasons against `message="collection skipped"` only, which hid the reason of a module-level skip. It now uses the message and the text, in every workflow that reads it.
+- **`pip-audit`** in `security` is pinned (2.10.1). Every action was already pinned by commit SHA, and actionlint 1.7.7 passes on all 11 workflows (with `.github/actionlint.yaml`).
+
+### Local results (2026-10-24)
+
+| Suite | Command | Result |
+|---|---|---|
+| Fixtures | `bash scripts/ci/check-fixtures.sh` | 13 committed, checksums match |
+| Web lint, typecheck, unit, build | `cd apps/web && npm run lint && npm run typecheck && npm test && npm run build` | clean, clean, **389 passed**, built (Next.js 16.4.3) |
+| Web browser (mocked API/OIDC) | `cd apps/web && CI=1 npx playwright test` (production server, 2 workers, `failOnFlakyTests`) | **65 passed, 0 flaky, three consecutive runs** (before the fixes: 1 flaky on `next dev`, then 1 failure on the production build) |
+| Web dependencies | `npm audit --omit=dev --audit-level=high` | 0 vulnerabilities |
+| API | `mvn -B -ntp verify` (`maven:3.9-eclipse-temurin-21`, Testcontainers pgvector pg17 + GHCR MinIO mirror; read-only snapshot copied to `/w`) | **668 run, 0 failures, 0 errors, 4 opt-in skips**, BUILD SUCCESS, 14 min 8 s |
+| Worker lint | `cd services/reconstruction && .venv/Scripts/python -m ruff check .` | clean |
+| Worker CPU suite (CI selection) | `pytest -m "not gpu and not open3d and not integration and not acceptance"` (host venv, Python 3.12.10, torch 2.14 CPU; MinGW `chaya-navmesh`) | **735 passed, 2 skipped**: the allowlisted empty parameter set, and `tests/ml` (no `transformers` in the host venv; the required-suite summary flags it, as CI would) |
+| Worker `tests/ml` | in `chaya-ml-eval` (transformers 4.57.1), `HF_HUB_OFFLINE=1` | 6 passed |
+| Worker Open3D tests | `pytest -m open3d tests/gpu` in Open3D 0.19.0 | **11 passed** |
+| Worker smoke | `pytest -m smoke tests/smoke` + `pytest-summary.py --mode required` | 17 passed, no skips |
+| Worker image smoke | as `reconstruction-smoke` `image-smoke` | 13 passed, 1 expected skip; liveness fails before a control-plane call |
+| Stack smoke + restore drill | `SMOKE_API_PORT=18080 SMOKE_KEYCLOAK_PORT=18081 SMOKE_MINIO_PORT=19000 PYTHON=<venv python> bash scripts/ci/stack-smoke.sh` | **passed**; restore drill `RESULT: PASS` |
+| Python dependencies | `pip-audit==2.10.1 -r <frozen> --no-deps --disable-pip` per service, clean venvs | no known vulnerabilities (both) |
+| Vision lint | `ruff check .` | clean. Vision tests: not re-run (green in CI `python` → `test (vision)` on `e96d477`) |
+| Images | `docker build --build-arg OS_PACKAGES_REFRESH=<date>` ×4, then Trivy 0.70.0 with the workflow's flags | all four: non-root, HEALTHCHECK, **Trivy exit 0** |
+| Deploy, gate, backups | `bash scripts/deploy/test-deploy.sh`; `bash scripts/ci/test-require-green.sh`; `bash scripts/backup/test-restore-drill.sh`; `bash scripts/backup/test-backup-ownership.sh`; `bash scripts/deploy/bundle.sh` | 42 passed; 10 passed; 10 passed; 6 passed; bundle contains the restore drill |
+| Static | `shellcheck -S warning` (ops glob); `actionlint` 1.7.7 | clean; clean |
+| iOS core | `swift test` in `swift:5.10-jammy` (with `packages/contracts/fixtures/ar`) | **86 passed** |
+| Cross-service acceptance | `ACC_API_PORT=18080 ACC_KEYCLOAK_PORT=18081 ACC_WEB_PORT=13000 ACC_WEB_URL=http://localhost:13000 bash scripts/acceptance/run-acceptance.sh ci` | **NOT RUN**: stopped while building its images when the workstation ran out of memory (the stack never started). So A6/B6 are **not** verified end to end. Re-run in CI `acceptance`, or locally with more free memory. |
+
+### Not run on 2026-10-24, and why
+
+| Check | Missing prerequisite |
+|---|---|
+| iOS app build and app-level XCTest (`ios` → `app`) | macOS with Xcode 15.4 (only the `ios` workflow on `macos-14`) |
+| `gpu` workflow, `tests/gpu` CUDA tests, `Dockerfile.gpu` build | An NVIDIA GPU host registered as a self-hosted runner labelled `gpu` (none exists) |
+| The `deploy` workflow | A deploy host, DNS, and the `staging` Environment's secrets; and the commit pushed to `main` with green CI |
+| Any workflow on GitHub for this commit | The commit is not pushed (pushing is the owner's decision). Until it is, "green in CI" is not claimed for any change here. |
+| Cross-service acceptance (`run-acceptance.sh ci`) and OWASP Dependency-Check | Started; both stopped when the workstation ran out of memory (acceptance while building images, Dependency-Check while building its NVD database). Not restarted. |
+| B2 on the real splat | `benchmarks/b2_geometry_cleanup` input (playroom splat) is not on this host |
+| Physical-device AR checks | An ARCore phone and an iPhone |
+
+### Known residual (not changed here)
+
+- **Python images have no lock file.** They install version ranges from `pyproject.toml` (docs/security-hardening.md
+  #18). `pip-audit` scans what resolves today, so an image built on another day can resolve differently.
+- **Base images are pinned by tag, not digest**, except the GPU image's CUDA bases. The daily OS refresh takes Debian
+  and Alpine fixes; a new base digest still arrives only when the tag moves.
+
+## Record: state on 2026-10-12 (`40beef5` plus the documentation audit)
+
+*2026-10-24:* superseded by the section above. The tables below are kept as the 2026-10-12 record.
 
 ### Local results
 

@@ -28,6 +28,9 @@ for k in sys.argv[1].split('.'):
 print(d)" "$1"; }
 ENV_FILE=$(mktemp)
 chmod 600 "$ENV_FILE"
+# JUnit result of the stack end-to-end test (a native path: on Windows "$PY" is not an MSYS program).
+OUT_XML=$(mktemp)
+command -v cygpath > /dev/null && OUT_XML=$(cygpath -m "$OUT_XML")
 cat > "$ENV_FILE" <<EOF
 POSTGRES_DB=chaya
 POSTGRES_USER=postgres
@@ -73,7 +76,7 @@ cleanup() {
   if [ $status -ne 0 ]; then
     echo "---- API log (last 200 lines) ----"; $COMPOSE logs --no-color --tail 200 api || true
   fi
-  if [ -z "${KEEP_STACK:-}" ]; then $COMPOSE down -v --remove-orphans > /dev/null 2>&1 || true; rm -f "$ENV_FILE"; fi
+  if [ -z "${KEEP_STACK:-}" ]; then $COMPOSE down -v --remove-orphans > /dev/null 2>&1 || true; rm -f "$ENV_FILE" "$OUT_XML"; fi
   exit $status
 }
 trap cleanup EXIT
@@ -129,7 +132,10 @@ CHAYA_IT_VENUE_ID=$VENUE \
 CHAYA_IT_S3_ENDPOINT=http://localhost:$MINIO_API_PORT \
 CHAYA_IT_S3_ACCESS_KEY=$S3_WORKER_ACCESS_KEY \
 CHAYA_IT_S3_SECRET_KEY=$S3_WORKER_SECRET_KEY \
-  "$PY" -m pytest -m integration tests/integration/test_stack_e2e.py -v -rA
+  "$PY" -m pytest -m integration tests/integration/test_stack_e2e.py -v -rA --junitxml="$OUT_XML"
+# The test skips itself when a CHAYA_IT_* value is missing; here every one is set, so a skip is a broken smoke, not a pass.
+"$PY" ../../scripts/ci/pytest-summary.py "$OUT_XML" --label "stack smoke: real worker against the real control plane (required)" \
+  --mode required
 cd "$ROOT"
 
 # The stack now holds real data: accepted (scanned) media, pipeline runs, sealed artifacts and purged PII staging. Back

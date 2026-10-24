@@ -52,8 +52,27 @@ jobs:
           cache-dependency-path: services/reconstruction/pyproject.toml
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: pip install -e ".[dev]"
-      - name: Smoke (real CPU stages; GPU stages excluded, contract-tested)
-        run: python -m pytest -m smoke tests/smoke -v -rA
+      # tests/smoke/test_splat_artifact_smoke.py needs CPU torch (it skipped as a whole module without it, and the job
+      # still passed) and the web app's pinned viewer library. Pinned as in the python workflow.
+      - name: CPU PyTorch (pinned; the GPU image's version)
+        run: pip install "torch==2.7.1" --index-url https://download.pytorch.org/whl/cpu
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: The web app's pinned viewer library (npm ci from apps/web's lockfile)
+        working-directory: apps/web
+        run: npm ci --no-audit --no-fund --ignore-scripts
+      - name: Smoke (real CPU stages; GPU stages excluded, contract-tested; required, no skips)
+        run: |
+          set +e
+          python -m pytest -m smoke tests/smoke -v -rA --junitxml=smoke.xml
+          tests=$?
+          python "$GITHUB_WORKSPACE/scripts/ci/pytest-summary.py" smoke.xml --label "worker smoke (required)" --mode required \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          summary=${PIPESTATUS[0]}
+          [ "$tests" -eq 0 ] && [ "$summary" -eq 0 ]
 
   image-smoke:
     runs-on: ubuntu-latest
@@ -73,11 +92,20 @@ jobs:
             echo "::error::a worker that never reached the control plane reported healthy"; exit 1
           fi
       - name: Smoke inside the production image
-        # Test-only tools are installed into a throwaway container as root; the image itself stays non-root and lean.
+        # Test-only tools (pinned) are installed into a throwaway container as root; the image itself stays non-root and
+        # lean. The CPU image has no torch by design (Dockerfile), so the splat-artifact smoke skips here, and only that
+        # skip is allowed: it runs, required, in worker-smoke above and in the python workflow.
         run: |
+          mkdir -p out
+          set +e
           docker run --rm --user 0 -e PYTHONDONTWRITEBYTECODE=1 \
-            -v "$PWD/services/reconstruction:/src:ro" -w /src chaya-worker:smoke \
-            sh -c "pip install -q pytest scikit-image && python -m pytest -p no:cacheprovider -m smoke tests/smoke -v -rA"
+            -v "$PWD/services/reconstruction:/src:ro" -v "$PWD/out:/out" -w /src chaya-worker:smoke \
+            sh -c "pip install -q pytest==8.4.1 scikit-image==0.26.0 && python -m pytest -p no:cacheprovider -m smoke tests/smoke -v -rA --junitxml=/out/image-smoke.xml"
+          tests=$?
+          python3 scripts/ci/pytest-summary.py out/image-smoke.xml --label "worker smoke inside the production image (required)" \
+            --mode required --expected-skip "torch is not installed" | tee -a "$GITHUB_STEP_SUMMARY"
+          summary=${PIPESTATUS[0]}
+          [ "$tests" -eq 0 ] && [ "$summary" -eq 0 ]
 
   stack-smoke:
     runs-on: ubuntu-latest

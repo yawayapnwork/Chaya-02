@@ -86,6 +86,7 @@ def run_methods(scene, labels_by_scenario: dict[str, np.ndarray]) -> dict[str, d
     from chaya_worker.geometry_cleanup import (
         characteristic_spacing,
         opacity_threshold_mask,
+        radius_min_neighbors,
         radius_outlier_mask,
         semantic_aware_mask,
         statistical_outlier_mask,
@@ -95,6 +96,7 @@ def run_methods(scene, labels_by_scenario: dict[str, np.ndarray]) -> dict[str, d
     s = Settings()
     cloud = cloud_of(scene)
     radius = s.cleanup_radius_spacing_factor * characteristic_spacing(cloud.positions)
+    nb_points, _ = radius_min_neighbors(cloud.positions, radius, cap=s.cleanup_radius_nb_points, share=s.cleanup_radius_neighbor_share)
     results, timing = {}, {}
 
     def timed(name, fn):
@@ -108,8 +110,7 @@ def run_methods(scene, labels_by_scenario: dict[str, np.ndarray]) -> dict[str, d
     timed(f"opacity threshold {s.cleanup_opacity_threshold}", lambda: opacity_threshold_mask(cloud, s.cleanup_opacity_threshold))
     stat = timed("statistical outlier", lambda: statistical_outlier_mask(cloud, nb_neighbors=s.cleanup_stat_nb_neighbors,
                                                                         std_ratio=s.cleanup_stat_std_ratio)[0])
-    rad = timed("radius outlier (production radius)", lambda: radius_outlier_mask(cloud, nb_points=s.cleanup_radius_nb_points,
-                                                                                    radius=radius)[0])
+    rad = timed("radius outlier (production radius)", lambda: radius_outlier_mask(cloud, nb_points=nb_points, radius=radius)[0])
     for scenario, labels in labels_by_scenario.items():
         timed(f"semantic-aware alone | {scenario}", lambda labels=labels: semantic_aware_mask(
             cloud, labels, radius=radius, min_same_class_neighbors=s.cleanup_semantic_min_neighbors)[0])

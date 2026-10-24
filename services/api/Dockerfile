@@ -17,7 +17,11 @@ RUN --mount=type=cache,target=/root/.m2 mvn -B -ntp -q -Dmaven.test.skip=true pa
 FROM eclipse-temurin:21-jre-alpine
 # apk upgrade: take Alpine security fixes published since the base image was last rebuilt (the image scan fails on
 # fixable HIGH/CRITICAL findings, and the base tag can lag by weeks). Upgrades only; nothing new is installed.
-RUN apk upgrade --no-cache \
+# OS_PACKAGES_REFRESH (a date, set by .github/workflows/docker.yml) invalidates this layer daily, so the CI layer cache
+# cannot keep replaying an upgrade from before a fix.
+ARG OS_PACKAGES_REFRESH=local
+RUN echo "OS packages as of ${OS_PACKAGES_REFRESH}" \
+ && apk upgrade --no-cache \
  && addgroup -S -g 10001 chaya && adduser -S -D -H -u 10001 -G chaya chaya
 WORKDIR /app
 # Layers from least to most frequently changing, so a code change re-ships only the last one. Owned by root and not

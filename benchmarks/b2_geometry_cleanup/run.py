@@ -65,7 +65,13 @@ def jaccard(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def splat_benchmark(run: Run, ply: Path, labels_path: Path | None) -> None:
-    from chaya_worker.geometry_cleanup import opacity_threshold_mask, radius_outlier_mask, semantic_aware_mask, statistical_outlier_mask
+    from chaya_worker.geometry_cleanup import (
+        opacity_threshold_mask,
+        radius_min_neighbors,
+        radius_outlier_mask,
+        semantic_aware_mask,
+        statistical_outlier_mask,
+    )
     from chaya_worker.ply import read_ply
     from chaya_worker.settings import Settings
 
@@ -73,6 +79,8 @@ def splat_benchmark(run: Run, ply: Path, labels_path: Path | None) -> None:
     cloud, load_s = timed(lambda: read_ply(ply))
     n = len(cloud)
     nn = median_nn(cloud.positions)
+    production_nb, _ = radius_min_neighbors(cloud.positions, s.cleanup_radius_spacing_factor * nn, cap=s.cleanup_radius_nb_points,
+                                            share=s.cleanup_radius_neighbor_share)
     cond = f"trained splat: {ply.parent.name}"
     run.inputs["splat"] = {"file": ply.name, "sha256": sha256_file(ply), "gaussians": n}
     run.add(Metric("Gaussians in the input splat", n, "count", "measured", cond, "chaya_worker.ply.read_ply"),
@@ -80,7 +88,7 @@ def splat_benchmark(run: Run, ply: Path, labels_path: Path | None) -> None:
             Metric("opacity threshold", s.cleanup_opacity_threshold, "sigmoid(opacity)", "configuration", cond, "Settings.cleanup_opacity_threshold"),
             Metric("statistical filter", f"{s.cleanup_stat_nb_neighbors} neighbours, std ratio {s.cleanup_stat_std_ratio}", "",
                    "configuration", cond, "Settings.cleanup_stat_*"),
-            Metric("radius filter (production)", f"{s.cleanup_radius_nb_points} points within {s.cleanup_radius_spacing_factor} x "
+            Metric("radius filter (production)", f"{production_nb} points within {s.cleanup_radius_spacing_factor} x "
                    f"median NN = {s.cleanup_radius_spacing_factor * nn:.5f}", "scene units", "configuration", cond,
                    "Settings.cleanup_radius_spacing_factor", note="scale-invariant: production uses the same rule"),
             Metric("radius filter (scale-relative)", f"{s.cleanup_radius_nb_points} points within {RADIUS_RELATIVE_K} x median NN "
@@ -92,7 +100,7 @@ def splat_benchmark(run: Run, ply: Path, labels_path: Path | None) -> None:
         "outlier_filtering (statistical)": lambda: statistical_outlier_mask(
             cloud, nb_neighbors=s.cleanup_stat_nb_neighbors, std_ratio=s.cleanup_stat_std_ratio)[0],
         "outlier_filtering (radius, production spacing factor)": lambda: radius_outlier_mask(
-            cloud, nb_points=s.cleanup_radius_nb_points, radius=s.cleanup_radius_spacing_factor * nn)[0],
+            cloud, nb_points=production_nb, radius=s.cleanup_radius_spacing_factor * nn)[0],
         "outlier_filtering (radius, scale-relative)": lambda: radius_outlier_mask(
             cloud, nb_points=s.cleanup_radius_nb_points, radius=RADIUS_RELATIVE_K * nn)[0],
     }

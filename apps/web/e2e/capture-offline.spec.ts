@@ -14,7 +14,8 @@ async function signIn(page: Page, server: MockCaptureServer) {
   await server.install(page);
   await page.goto("/capture");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByTestId("capture-queue")).toBeVisible();
+  // The sign-in is three navigations (authorize, callback, back to the page): bounded like ui-audit.spec.ts's.
+  await expect(page.getByTestId("capture-queue")).toBeVisible({ timeout: 15_000 });
   // The venue and floor lists are loaded while online; recording a session offline uses them.
   await expect(page.locator(`option[value="${FLOOR}"]`)).toBeAttached();
 }

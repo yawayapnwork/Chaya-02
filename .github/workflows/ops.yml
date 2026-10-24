@@ -9,7 +9,8 @@ on:
     paths: ["infra/deploy/**", "scripts/backup/**", "scripts/deploy/**", "scripts/ci/**", ".github/workflows/ops.yml"]
   push:
     branches: [main]
-    paths: ["infra/deploy/**", "scripts/backup/**", "scripts/deploy/**", "scripts/ci/**", ".github/workflows/ops.yml"]
+    # No path filter on main: the deploy gate (scripts/ci/require-green.sh) requires this workflow's run for the exact
+    # commit being deployed. Pull requests stay path-filtered (DEPLOYMENT.md "Deploy gate").
   workflow_dispatch:
 
 permissions:
@@ -29,6 +30,8 @@ jobs:
         run: shellcheck -S warning infra/deploy/*.sh scripts/backup/*.sh scripts/deploy/*.sh scripts/ci/*.sh
       - name: deploy.sh control flow and rollback
         run: bash scripts/deploy/test-deploy.sh
+      - name: deploy gate (require-green.sh) against recorded run lists
+        run: bash scripts/ci/test-require-green.sh
       - name: restore drill fails on a bad backup (corrupted, missing, tampered) and passes on a good one
         run: bash scripts/backup/test-restore-drill.sh
       - name: the object mirror belongs to the backup user, so erasures and cleanup can delete from it

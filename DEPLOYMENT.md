@@ -34,13 +34,13 @@ How Chaya 02 is built, shipped, started, checked, rolled back, backed up and rec
 
 | Workflow | Runs on | What it proves |
 |---|---|---|
-| `frontend` | PRs and main touching `apps/web` | lint, unit tests, typecheck, a production build **with no environment baked in**, Playwright e2e against a mocked backend |
-| `backend` | PRs and main touching `services/api` | `mvn verify`: unit tests plus integration tests against real PostgreSQL/pgvector and MinIO (Testcontainers). The job fails if the Testcontainers suites were skipped instead of run. |
-| `python` | PRs and main touching `services/reconstruction`, `services/vision` | ruff (pyflakes, bugbear, isort, pyupgrade, bandit) and pytest. The CPU stages run for real; GPU and live-stack suites skip themselves. |
+| `frontend` | PRs touching `apps/web`; every push to main | lint, unit tests, typecheck, a production build **with no environment baked in**, Playwright e2e against a mocked backend |
+| `backend` | PRs touching `services/api`; every push to main | `mvn verify`: unit tests plus integration tests against real PostgreSQL/pgvector and MinIO (Testcontainers). The job fails if the Testcontainers suites were skipped instead of run. |
+| `python` | PRs touching `services/reconstruction`, `services/vision`; every push to main | ruff (pyflakes, bugbear, isort, pyupgrade, bandit) and pytest. The CPU stages run for real and the CPU suite may not skip outside its allowlist; the Open3D tests run, required, in their own job; GPU and live-stack tests are listed as NOT executed with their reasons. |
 | `security` | PRs, main, weekly | npm audit, pip-audit, OWASP Dependency-Check (CVSS ≥ 7 fails), and license reports (THIRD_PARTY_LICENSES.md) |
 | `docker` | PRs (build and scan only), main, and `v*.*.*` tags (build, scan, push) | builds all four images; checks they run as non-root and declare a HEALTHCHECK; Trivy fails on fixable HIGH/CRITICAL findings; pushes to GHCR with an SBOM and provenance attestation |
 | `reconstruction-smoke` | PRs touching the pipeline or the backup scripts, main, nightly | see [Smoke tests](#smoke-tests). The stack smoke ends with a backup of the stack's real data and an isolated restore drill on which this build's API must boot ([section 8](#8-backups)). |
-| `ops` | PRs and main touching `infra/deploy`, `scripts/backup`, `scripts/deploy`, `scripts/ci` | shellcheck; `deploy.sh`'s control flow against stubs (`scripts/deploy/test-deploy.sh`: config validation, the rehearsal gate, automatic rollback, a failed rollback, the restore hint after a schema change, no `.env` secret in the output); the restore drill against good and corrupted backups (`scripts/backup/test-restore-drill.sh`) |
+| `ops` | PRs touching `infra/deploy`, `scripts/backup`, `scripts/deploy`, `scripts/ci`; every push to main | shellcheck; `deploy.sh`'s control flow against stubs (`scripts/deploy/test-deploy.sh`: config validation, the rehearsal gate, automatic rollback, a failed rollback, the restore hint after a schema change, no `.env` secret in the output); the restore drill against good and corrupted backups (`scripts/backup/test-restore-drill.sh`); the deploy gate against recorded run lists (`scripts/ci/test-require-green.sh`) |
 | `deploy` | after `docker` succeeds on main (staging), or manually (production, rollback) | CI passed for the images' commit ([deploy gate](#deploy-gate)); the images exist; the deploy with automatic rollback; public health checks from outside |
 
 **Actions are pinned by commit SHA** (`uses: owner/action@<40-char sha> # vX.Y.Z`), not by tag. A tag can be moved
@@ -52,9 +52,13 @@ referenced `aquasecurity/trivy-action@0.28.0`, a tag that no longer exists upstr
 action, pin it the same way: `git ls-remote --tags https://github.com/<owner>/<action>` gives the commit (use the
 `^{}` line for annotated tags).
 
-**Branch protection (GitHub settings, not in the repository).** Require `frontend`, `backend`, `python`,
-`docker`, `reconstruction-smoke`, `security` and `ops` on `main`. Because these workflows are path-filtered, mark them as
-required only together with a branch ruleset that treats skipped workflows as passing, or drop the path filters.
+**Branch protection and path filters (2026-10-24).** Every workflow the deploy gate requires (`frontend`, `backend`,
+`python`, `security`, `reconstruction-smoke`, `acceptance`, `docker`, `ops`) runs on **every push to `main`**, with no
+path filter, so each commit that can be deployed has its own run of each. Pull requests stay path-filtered, to save
+runner minutes; that is safe because a PR is never deployed, and its merge commit is checked in full on `main`. So in
+the GitHub branch ruleset, do **not** mark the path-filtered workflows as required status checks for pull requests (a
+filtered-out workflow never reports, and the PR would wait forever); the enforced gate is the deploy gate below. `ios`
+and `gpu` are not gated: nothing iOS is deployed, and GPU acceptance needs a self-hosted runner (DEPLOYMENT.md §10).
 
 ### Deploy gate
 
@@ -62,11 +66,16 @@ required only together with a branch ruleset that treats skipped workflows as pa
 would reach staging on every push to `main`. So before anything is pulled, `deploy` resolves the commit the images
 were built from, and runs `scripts/ci/require-green.sh` against it:
 
-- For each of `frontend`, `backend`, `python`, `security`, `reconstruction-smoke` and `docker`, the latest run for
-  **that exact commit** must have succeeded.
-- Runs still in progress are waited for, up to 45 minutes. The backend suite often finishes after the images.
-- A workflow with **no** run for the commit is reported and allowed. The test workflows are path-filtered, so a
-  commit that touched only `apps/web` has no `backend` run.
+- For each of `frontend`, `backend`, `python`, `security`, `reconstruction-smoke`, `acceptance`, `docker` and `ops`,
+  the latest run (newest attempt) for **that exact commit** must have concluded `success`. `skipped` and `cancelled`
+  are failures (a newer push to `main` cancels an older run, so the older commit is not deployed; the newer one is).
+- Runs still queued or in progress are waited for, up to 45 minutes. The backend and acceptance suites often finish
+  after the images.
+- A workflow with **no** run for the commit fails the gate, after a 3-minute grace for GitHub to create it. Until
+  2026-10-24 it was allowed as "path-filtered": a commit touching only `apps/web` could deploy while `python` was red on
+  `main`. Tested by `scripts/ci/test-require-green.sh` (10 cases, in `ops`).
+- A manual deploy or rollback of a commit from before 2026-10-24 can lack runs of the newly gated workflows; it then
+  needs `allow_unverified`.
 - Emergency override: the manual run's `allow_unverified` input. It deploys anyway, and a warning naming the actor is
   left in the run log. Production deploys still need the Environment reviewer.
 

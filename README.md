@@ -123,6 +123,9 @@ Check it: `curl http://localhost:8080/api/v1/health` (per-component UP / DEGRADE
 
 ## Tests
 
+The current results (2026-10-24), the root cause of each recorded CI failure, and what cannot run here are in
+[docs/TEST_REPRODUCIBILITY.md](docs/TEST_REPRODUCIBILITY.md). The table below is the 2026-10-12 record.
+
 | Suite | Command | Last local result (2026-10-12) |
 |---|---|---|
 | Fixtures present | `bash scripts/ci/check-fixtures.sh` | 12 fixtures, checksums match |

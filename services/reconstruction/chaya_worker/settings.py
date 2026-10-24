@@ -129,7 +129,11 @@ class Settings:
     # it has not been tuned on a real venue reconstruction.
     cleanup_stat_nb_neighbors: int = 20
     cleanup_stat_std_ratio: float = 2.0
+    # The radius filter keeps a point with at least cleanup_radius_neighbor_share of the cloud's median neighbour count
+    # within the radius, at most cleanup_radius_nb_points (geometry_cleanup.radius_min_neighbors explains why a fixed
+    # count removed most of a randomly sampled surface).
     cleanup_radius_nb_points: int = 8
+    cleanup_radius_neighbor_share: float = 0.35
     cleanup_radius_spacing_factor: float = 3.0
     cleanup_opacity_threshold: float = 0.05
     cleanup_semantic_min_neighbors: int = 3  # clutter points with fewer same-class neighbours within the cleanup radius are dropped
@@ -408,6 +412,7 @@ class Settings:
             cleanup_stat_nb_neighbors=_int(e, "CLEANUP_STAT_NB_NEIGHBORS", d.cleanup_stat_nb_neighbors),
             cleanup_stat_std_ratio=_float(e, "CLEANUP_STAT_STD_RATIO", d.cleanup_stat_std_ratio),
             cleanup_radius_nb_points=_int(e, "CLEANUP_RADIUS_NB_POINTS", d.cleanup_radius_nb_points),
+            cleanup_radius_neighbor_share=_float(e, "CLEANUP_RADIUS_NEIGHBOR_SHARE", d.cleanup_radius_neighbor_share),
             cleanup_radius_spacing_factor=_float(e, "CLEANUP_RADIUS_SPACING_FACTOR", d.cleanup_radius_spacing_factor),
             cleanup_opacity_threshold=_float(e, "CLEANUP_OPACITY_THRESHOLD", d.cleanup_opacity_threshold),
             cleanup_semantic_min_neighbors=_int(e, "CLEANUP_SEMANTIC_MIN_NEIGHBORS", d.cleanup_semantic_min_neighbors),
@@ -564,6 +569,7 @@ class Settings:
             "semantic_segmentation_revision": self.semantic_segmentation_revision or None,
             "cleanup_stat_nb_neighbors": self.cleanup_stat_nb_neighbors, "cleanup_stat_std_ratio": self.cleanup_stat_std_ratio,
             "cleanup_radius_nb_points": self.cleanup_radius_nb_points,
+            "cleanup_radius_neighbor_share": self.cleanup_radius_neighbor_share,
             "cleanup_radius_spacing_factor": self.cleanup_radius_spacing_factor,
             "cleanup_opacity_threshold": self.cleanup_opacity_threshold,
             "cleanup_semantic_min_neighbors": self.cleanup_semantic_min_neighbors,

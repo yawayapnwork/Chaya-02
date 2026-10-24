@@ -89,7 +89,9 @@ Also fixed:
   origin. Also `X-Content-Type-Options`, `X-Frame-Options: DENY`, a `Permissions-Policy` that grants only what the
   app uses, and an enforced CSP for framing, plugins, `<base>` and form targets. The full resource CSP is
   **report-only** until it has been verified in a browser against the splat viewer (workers, WASM) and the camera
-  capture.
+  capture. *2026-10-24:* both CSP headers are now set per request by `apps/web/proxy.ts` (`lib/security-headers.ts`)
+  from the running container's `CHAYA_PUBLIC_*`. They used to come from `next.config.ts`, which is evaluated at build
+  time, so `frame-src` never named the identity provider (acceptance A6/B6, VALIDATION_2026-10-19 D5).
 - **Health endpoint:** `/health` is public, and every hit fanned out to the database, S3, Keycloak and clamd. Results
   are now cached for 5 s and every check is time-bounded.
 

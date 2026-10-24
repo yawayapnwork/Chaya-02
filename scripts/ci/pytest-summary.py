@@ -35,7 +35,9 @@ def classify(path: str) -> list[tuple[str, str, str]]:
             out.append((test_id, "failed", (node.get("message") or "").splitlines()[0][:200] if node is not None else ""))
         elif case.find("skipped") is not None:
             node = case.find("skipped")
-            out.append((test_id, "skipped", (node.get("message") or node.text or "").strip()[:300]))
+            # A module-level skip has message="collection skipped" and the real reason only in the text: keep both.
+            reason = " ".join(part.strip() for part in (node.get("message"), node.text) if part and part.strip())
+            out.append((test_id, "skipped", reason[:300]))
         else:
             out.append((test_id, "passed", ""))
     return out

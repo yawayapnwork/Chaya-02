@@ -1,8 +1,8 @@
 {
   "benchmark": "b2_geometry_cleanup_synthetic",
   "title": "Geometry cleanup methods on controlled synthetic scenes with ground truth",
-  "started": "2026-10-11T12:47:58+00:00",
-  "finished": "2026-10-11T12:48:09+00:00",
+  "started": "2026-10-24T13:46:06+00:00",
+  "finished": "2026-10-24T13:46:21+00:00",
   "git": {
     "commit": "",
     "dirty_files": 0
@@ -14,8 +14,8 @@
   },
   "inputs": {
     "confusion": {
-      "file": "benchmarks/results/b6_semantic_models/2026-10-11T122646Z.json",
-      "sha256": "a313405b31e144ac3a05bdff6efd45e9ea6ca86f6d32a6922b8489c6a12216c7",
+      "file": "benchmarks/results/b6_semantic_models/latest.json",
+      "sha256": "6a73eb4fc00901878a09cecda765e6a59aa1171a33e223ad09d5d64f146e448d",
       "mapping": "class_mapping: reviewed:ade20k-150@2026-10-11.1 (after)",
       "dataset": {
         "path": "/data/coco-indoor-eval",
@@ -1300,7 +1300,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 2.2354000066115987e-05
+          "seconds": 3.486800005703117e-05
         },
         "opacity threshold 0.05": {
           "removed": 11235,
@@ -1314,7 +1314,7 @@
           "kept furniture": 0.9448353857753204,
           "kept thin_furniture": 0.9390756302521008,
           "kept clutter": 0.9463340891912321,
-          "seconds": 0.0004277810003259219
+          "seconds": 0.0005152839999027492
         },
         "statistical outlier": {
           "removed": 2378,
@@ -1328,7 +1328,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 3.894739631000448
+          "seconds": 3.6924295270000584
         },
         "radius outlier (production radius)": {
           "removed": 3588,
@@ -1342,7 +1342,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 0.9989495798319328,
           "kept clutter": 1.0,
-          "seconds": 0.11528586500025995
+          "seconds": 0.18911805600009757
         },
         "semantic-aware alone | oracle, noise = background": {
           "removed": 56,
@@ -1356,7 +1356,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 0.03128950300015276
+          "seconds": 0.05429922899975281
         },
         "production chain (statistical -> radius -> semantic) | oracle, noise = background": {
           "removed": 3630,
@@ -1370,7 +1370,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 0.9989495798319328,
           "kept clutter": 1.0,
-          "seconds": 0.04667856900050538
+          "seconds": 0.06492397500005609
         },
         "semantic-aware alone | oracle, noise = unknown": {
           "removed": 0,
@@ -1384,7 +1384,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 0.03758390999973926
+          "seconds": 0.05179269699965516
         },
         "production chain (statistical -> radius -> semantic) | oracle, noise = unknown": {
           "removed": 3630,
@@ -1398,7 +1398,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 0.9989495798319328,
           "kept clutter": 1.0,
-          "seconds": 0.05218757100010407
+          "seconds": 0.07142495500011137
         },
         "semantic-aware alone | measured confusion (B6)": {
           "removed": 6290,
@@ -1412,7 +1412,7 @@
           "kept furniture": 0.9456521739130435,
           "kept thin_furniture": 0.9159663865546218,
           "kept clutter": 1.0,
-          "seconds": 0.03323479600021528
+          "seconds": 0.049910129999716446
         },
         "production chain (statistical -> radius -> semantic) | measured confusion (B6)": {
           "removed": 9697,
@@ -1426,7 +1426,7 @@
           "kept furniture": 0.9455893440562956,
           "kept thin_furniture": 0.9149159663865546,
           "kept clutter": 1.0,
-          "seconds": 0.04442411600030027
+          "seconds": 0.06913540400000784
         },
         "production chain without labels (statistical -> radius)": {
           "removed": 3630,
@@ -1455,7 +1455,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 2.8454000130295753e-05
+          "seconds": 3.410299996176036e-05
         },
         "opacity threshold 0.05": {
           "removed": 11208,
@@ -1469,7 +1469,7 @@
           "kept furniture": 0.9443955767780849,
           "kept thin_furniture": 0.957983193277311,
           "kept clutter": 0.9402872260015117,
-          "seconds": 0.0003280829996583634
+          "seconds": 0.00046098099983282737
         },
         "statistical outlier": {
           "removed": 2317,
@@ -1483,7 +1483,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 0.11603680699954566
+          "seconds": 0.15705990100013878
         },
         "radius outlier (production radius)": {
           "removed": 3581,
@@ -1497,7 +1497,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 0.1276469670001461
+          "seconds": 0.1884352960000797
         },
         "semantic-aware alone | oracle, noise = background": {
           "removed": 59,
@@ -1511,7 +1511,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 0.034589312999742106
+          "seconds": 0.05921740800022235
         },
         "production chain (statistical -> radius -> semantic) | oracle, noise = background": {
           "removed": 3615,
@@ -1525,7 +1525,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 0.045307797000532446
+          "seconds": 0.06865193900011946
         },
         "semantic-aware alone | oracle, noise = unknown": {
           "removed": 0,
@@ -1539,7 +1539,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 0.0410241000008682
+          "seconds": 0.05445513300037419
         },
         "production chain (statistical -> radius -> semantic) | oracle, noise = unknown": {
           "removed": 3615,
@@ -1553,7 +1553,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 0.04554079900026409
+          "seconds": 0.06546324200007803
         },
         "semantic-aware alone | measured confusion (B6)": {
           "removed": 6372,
@@ -1567,7 +1567,7 @@
           "kept furniture": 0.9425106810756472,
           "kept thin_furniture": 0.9065126050420168,
           "kept clutter": 1.0,
-          "seconds": 0.03446259599968471
+          "seconds": 0.047584330999598023
         },
         "production chain (statistical -> radius -> semantic) | measured confusion (B6)": {
           "removed": 9760,
@@ -1581,7 +1581,7 @@
           "kept furniture": 0.9424478512188992,
           "kept thin_furniture": 0.9065126050420168,
           "kept clutter": 1.0,
-          "seconds": 0.040678084999854036
+          "seconds": 0.05795507499988162
         },
         "production chain without labels (statistical -> radius)": {
           "removed": 3615,
@@ -1610,7 +1610,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 2.7535000299394596e-05
+          "seconds": 3.0092999622866046e-05
         },
         "opacity threshold 0.05": {
           "removed": 11139,
@@ -1624,7 +1624,7 @@
           "kept furniture": 0.9447725559185725,
           "kept thin_furniture": 0.9506302521008403,
           "kept clutter": 0.9452003023431594,
-          "seconds": 0.00024683599986019544
+          "seconds": 0.0004436290000739973
         },
         "statistical outlier": {
           "removed": 2348,
@@ -1638,7 +1638,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 0.11623116499958996
+          "seconds": 0.18836627300015607
         },
         "radius outlier (production radius)": {
           "removed": 3601,
@@ -1652,7 +1652,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 0.10352386000067781
+          "seconds": 0.1911530910001602
         },
         "semantic-aware alone | oracle, noise = background": {
           "removed": 63,
@@ -1666,7 +1666,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 0.040983070000038424
+          "seconds": 0.05493922899995596
         },
         "production chain (statistical -> radius -> semantic) | oracle, noise = background": {
           "removed": 3625,
@@ -1680,7 +1680,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 0.05544575400017493
+          "seconds": 0.07302846899983706
         },
         "semantic-aware alone | oracle, noise = unknown": {
           "removed": 0,
@@ -1694,7 +1694,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 0.03417069800070749
+          "seconds": 0.05324599300001864
         },
         "production chain (statistical -> radius -> semantic) | oracle, noise = unknown": {
           "removed": 3625,
@@ -1708,7 +1708,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 0.04449473800013948
+          "seconds": 0.07452758299996276
         },
         "semantic-aware alone | measured confusion (B6)": {
           "removed": 6437,
@@ -1722,7 +1722,7 @@
           "kept furniture": 0.9442070872078412,
           "kept thin_furniture": 0.9086134453781513,
           "kept clutter": 1.0,
-          "seconds": 0.03850691400020878
+          "seconds": 0.051233198000318225
         },
         "production chain (statistical -> radius -> semantic) | measured confusion (B6)": {
           "removed": 9800,
@@ -1736,7 +1736,7 @@
           "kept furniture": 0.9442070872078412,
           "kept thin_furniture": 0.9086134453781513,
           "kept clutter": 1.0,
-          "seconds": 0.06269723600053112
+          "seconds": 0.06256571799985977
         },
         "production chain without labels (statistical -> radius)": {
           "removed": 3625,
@@ -1765,7 +1765,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 1.798899938876275e-05
+          "seconds": 3.0375999813259114e-05
         },
         "opacity threshold 0.05": {
           "removed": 11119,
@@ -1779,7 +1779,7 @@
           "kept furniture": 0.939243528524755,
           "kept thin_furniture": 0.9432773109243697,
           "kept clutter": 0.9455782312925171,
-          "seconds": 0.0002888099998017424
+          "seconds": 0.0005580659999395721
         },
         "statistical outlier": {
           "removed": 2314,
@@ -1793,7 +1793,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 0.12561296700005187
+          "seconds": 0.15073797000013656
         },
         "radius outlier (production radius)": {
           "removed": 3594,
@@ -1807,7 +1807,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 0.1287123550000615
+          "seconds": 0.16863459400019565
         },
         "semantic-aware alone | oracle, noise = background": {
           "removed": 54,
@@ -1821,7 +1821,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 0.03470132500024192
+          "seconds": 0.05977999100014131
         },
         "production chain (statistical -> radius -> semantic) | oracle, noise = background": {
           "removed": 3621,
@@ -1835,7 +1835,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 0.044848628000181634
+          "seconds": 0.07497986699991088
         },
         "semantic-aware alone | oracle, noise = unknown": {
           "removed": 0,
@@ -1849,7 +1849,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 0.03434582599948044
+          "seconds": 0.05334888600009435
         },
         "production chain (statistical -> radius -> semantic) | oracle, noise = unknown": {
           "removed": 3621,
@@ -1863,7 +1863,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 0.04098368299946742
+          "seconds": 0.06710965899992516
         },
         "semantic-aware alone | measured confusion (B6)": {
           "removed": 6474,
@@ -1877,7 +1877,7 @@
           "kept furniture": 0.9440185976375974,
           "kept thin_furniture": 0.9117647058823529,
           "kept clutter": 1.0,
-          "seconds": 0.034187441000540275
+          "seconds": 0.049173121000421816
         },
         "production chain (statistical -> radius -> semantic) | measured confusion (B6)": {
           "removed": 9858,
@@ -1891,7 +1891,7 @@
           "kept furniture": 0.9440185976375974,
           "kept thin_furniture": 0.9117647058823529,
           "kept clutter": 1.0,
-          "seconds": 0.03899518999969587
+          "seconds": 0.060333486999752495
         },
         "production chain without labels (statistical -> radius)": {
           "removed": 3621,
@@ -1920,7 +1920,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 4.488099966692971e-05
+          "seconds": 2.9162000373617047e-05
         },
         "opacity threshold 0.05": {
           "removed": 10998,
@@ -1934,7 +1934,7 @@
           "kept furniture": 0.9433274692133702,
           "kept thin_furniture": 0.9369747899159664,
           "kept clutter": 0.9433106575963719,
-          "seconds": 0.0005734329997721943
+          "seconds": 0.0004660579998017056
         },
         "statistical outlier": {
           "removed": 2378,
@@ -1948,7 +1948,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 0.11390602399933414
+          "seconds": 0.167976870000075
         },
         "radius outlier (production radius)": {
           "removed": 3581,
@@ -1962,7 +1962,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 0.139439116000176
+          "seconds": 0.17351676899988888
         },
         "semantic-aware alone | oracle, noise = background": {
           "removed": 48,
@@ -1976,7 +1976,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 0.048228564000055485
+          "seconds": 0.0544457619998866
         },
         "production chain (statistical -> radius -> semantic) | oracle, noise = background": {
           "removed": 3650,
@@ -1990,7 +1990,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 0.05519357699995453
+          "seconds": 0.06957597399969018
         },
         "semantic-aware alone | oracle, noise = unknown": {
           "removed": 0,
@@ -2004,7 +2004,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 0.07434018100047979
+          "seconds": 0.05745086400020227
         },
         "production chain (statistical -> radius -> semantic) | oracle, noise = unknown": {
           "removed": 3650,
@@ -2018,7 +2018,7 @@
           "kept furniture": 1.0,
           "kept thin_furniture": 1.0,
           "kept clutter": 1.0,
-          "seconds": 0.04832403199998225
+          "seconds": 0.06777127700024721
         },
         "semantic-aware alone | measured confusion (B6)": {
           "removed": 6446,
@@ -2032,7 +2032,7 @@
           "kept furniture": 0.9421337019351596,
           "kept thin_furniture": 0.9096638655462185,
           "kept clutter": 1.0,
-          "seconds": 0.05980049100071483
+          "seconds": 0.04822695500024565
         },
         "production chain (statistical -> radius -> semantic) | measured confusion (B6)": {
           "removed": 9850,
@@ -2046,7 +2046,7 @@
           "kept furniture": 0.9421337019351596,
           "kept thin_furniture": 0.9096638655462185,
           "kept clutter": 1.0,
-          "seconds": 0.08457409899983759
+          "seconds": 0.06093790699969759
         },
         "production chain without labels (statistical -> radius)": {
           "removed": 3650,

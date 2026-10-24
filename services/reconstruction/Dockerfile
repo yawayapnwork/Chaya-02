@@ -28,8 +28,13 @@ COPY chaya_worker ./chaya_worker
 RUN pip install .
 
 FROM python:3.12-slim-bookworm
-# ffmpeg/ffprobe are the only system packages the CPU stages execute.
-RUN apt-get update \
+# ffmpeg/ffprobe are the only system packages the CPU stages execute. apt-get upgrade takes Debian security fixes
+# published since the base was built. OS_PACKAGES_REFRESH (a date, set by .github/workflows/docker.yml) invalidates this
+# layer daily: without it the CI layer cache replayed an install from before a libexpat1 fix (docker run 39817750800).
+ARG OS_PACKAGES_REFRESH=local
+RUN echo "OS packages as of ${OS_PACKAGES_REFRESH}" \
+ && apt-get update \
+ && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends ffmpeg \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd -g 10001 worker \
