@@ -75,11 +75,14 @@ def _block(box, z0, z1, step=0.1):
     return np.array(pts, dtype=np.float64)
 
 
-def build(*, with_ramp: bool = True, with_wide_doorway: bool = True) -> tuple[np.ndarray, np.ndarray]:
+def build(*, with_ramp: bool = True, with_wide_doorway: bool = True, with_narrow_doorway: bool = True,
+          narrow_doorway_width: float = 1.1) -> tuple[np.ndarray, np.ndarray]:
     """(points (N, 3) canonical metres, labels (N,)). `with_ramp=False` makes the ramp lane a second step (no step-free way
-    onto the platform); `with_wide_doorway=False` walls up D2 (only the narrow doorway joins the two rooms)."""
+    onto the platform); `with_wide_doorway=False` walls up D2 (only the narrow doorway joins the two rooms);
+    `with_narrow_doorway=False` walls up D1; `narrow_doorway_width` controls D1's width."""
     x, y = _grid(*EXTENT)
-    gaps = [D1] + ([D2] if with_wide_doorway else [])
+    d1 = (2.55 - narrow_doorway_width / 2, 2.55 + narrow_doorway_width / 2) if with_narrow_doorway else None
+    gaps = ([d1] if d1 is not None else []) + ([D2] if with_wide_doorway else [])
     in_doorway = np.zeros(x.size, dtype=bool)
     for y0, y1 in gaps:  # the floor in a doorway is seen
         in_doorway |= _inside(x, y, (WALL[0], WALL[1], y0, y1))

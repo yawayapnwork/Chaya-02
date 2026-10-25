@@ -257,3 +257,32 @@ def test_the_bake_is_deterministic(navmesh_tool, tmp_path, venue):
     again = Baked(navmesh_tool, tmp_path / "again")
     assert again.build.sha256 == venue.build.sha256
     assert replace(Settings()) == SETTINGS
+
+
+def test_sub_agent_diameter_doorway_is_eroded_and_fails_routing(navmesh_tool, tmp_path):
+    """A 0.5 m doorway is narrower than the agent's 0.7 m diameter (2 * 0.35 m): Recast's erosion
+    completely removes it, so Detour finds no path across the wall."""
+    venue = Baked(navmesh_tool, tmp_path / "narrow-door", with_wide_doorway=False, narrow_doorway_width=0.5)
+    start, end = [1.0, 2.55, 0.0], [6.0, 2.55, 0.0]
+    with pytest.raises(NavmeshError) as exc:
+        venue.detour(start, end)
+    assert exc.value.code == NO_ROUTE
+    assert venue.route("STANDARD", start, end) is None
+
+
+def test_dead_ends_and_disconnected_regions_refuse_routing(navmesh_tool, tmp_path):
+    """When all doorways in a separating wall are closed, the rooms form disconnected components.
+    A route between them is refused with NO_ROUTE, never crossing walls or jumping."""
+    venue = Baked(navmesh_tool, tmp_path / "walled-off", with_wide_doorway=False, with_narrow_doorway=False)
+    start, end = [1.0, 2.5, 0.0], [6.0, 2.5, 0.0]
+    with pytest.raises(NavmeshError) as exc:
+        venue.detour(start, end)
+    assert exc.value.code == NO_ROUTE
+    assert venue.route("STANDARD", start, end) is None
+
+
+def test_endpoint_outside_walkable_bounds_fails_snap(venue):
+    """An endpoint far outside the venue's walkable footprint cannot be snapped to any polygon."""
+    with pytest.raises(NavmeshError) as exc:
+        venue.detour([-5.0, 2.0, 0.0], [6.0, 2.0, 0.0])
+    assert exc.value.code == NO_ROUTE

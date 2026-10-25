@@ -222,6 +222,11 @@ floor's graph. `navigation_edge` can never span two `graph_id`s anyway (its fore
     - without the ramp, STEP_FREE fails closed while STANDARD still routes;
     - the measured clearance decides the doorway: 0.9 m required uses the 1.1 m door, 1.3 m uses only the 1.6 m one,
       1.8 m has no route, and with the wide door walled up 1.3 m has no route;
+    - a narrow doorway of 0.5 m width (< 0.70 m agent diameter) is completely eroded by Recast's `rcErodeWalkableArea`
+      and Detour fails routing (`PATH_NOT_FOUND`, status 6);
+    - dead ends and completely walled-off regions are unreachable and Detour refuses traversal (`PATH_NOT_FOUND`) rather
+      than cutting through walls;
+    - endpoints outside walkable boundaries fail to snap (`findNearestPoly` / `PATH_NOT_FOUND`);
     - the bake is deterministic.
   - `test_venue_stage.py` runs the same venue through NAVIGATION_BAKING with the orchestrator, in a scaled, rotated,
     +Y-up reconstruction frame, and routes on the result. It also runs a re-scan (review N-1) as a re-scan work order
@@ -788,8 +793,14 @@ Synthetic obstacle tests do not prove camera-based detection works. The device p
   - Web (`npm test`): `route-instructions.test.ts` (turns, connector distances, monotone progress, arrival dwell and
     the premature-arrival cases: through a wall, on the wrong floor, on another floor's leg), `obstacle-reroute.test.ts`,
     `multi-stop.test.ts` (only changed segments re-requested, unreachable stops, interruptions, republished graphs),
-    `viewer-route.test.ts`. Playwright (`e2e/viewer-interaction.spec.ts`) drives the viewer against a mocked API:
-    several destinations, highlighting, removal without re-requests, recalculate, cancel, and an expired sign-in.
+    `viewer-route.test.ts`, and `navigation-safety.test.ts` (deterministic test suite verifying the 11 safety requirements:
+    narrow corridors and doorways rejecting insufficient clearance, dead ends and disconnected regions refusing routing,
+    slopes and stairs with strict ADA limits, step-free alternatives requiring verified elevators, rejection of incorrect
+    floor transitions, Liang-Barsky obstacle detection intersecting smoothed routes, endpoint snapping limits distinguishing
+    out-of-bounds from off-navmesh, uncalibrated geometry refusal, stale navigation artifact rejection, no valid route
+    contracts with zero partial path fabrication, and multi-destination waypoint chaining with isolated stop failures).
+    Playwright (`e2e/viewer-interaction.spec.ts`) drives the viewer against a mocked API: several destinations, highlighting,
+    removal without re-requests, recalculate, cancel, and an expired sign-in.
 - **Not validated:**
   - No real venue has been routed on. No real reconstruction has been through NAVIGATION_BAKING (the stages before it
     need a CUDA GPU and Open3D, docs/E2E_VALIDATION.md).
@@ -827,6 +838,14 @@ Synthetic obstacle tests do not prove camera-based detection works. The device p
   - No real building's elevations, connections or control points have been recorded.
   - AR floor identification has not run on a device: real marker visibility across atriums and stairwells, and how
     long identification takes in practice, are unknown.
+
+### Separation of Evidence: Synthetic Fixtures vs Real Venue Acceptance
+
+Deterministic test passes against synthetic geometry (Recast solo-mesh bakes, Detour string pulling, Dijkstra path searches, and mocked API responses) demonstrate that the geometric mathematics, coordinate transforms, and safety checks operate according to specification. **However, synthetic fixture success is not evidence of safe or accessible navigation in a physical building.**
+
+Under no circumstances may a venue or route advertise metre-based accuracy, physical AR guidance, or wheelchair accessibility based solely on synthetic fixture tests or unverified user toggles. The product must strictly distinguish:
+- **Synthetic verification**: Mathematical proof that algorithms behave deterministically on idealized, synthetic test inputs.
+- **Physical acceptance**: On-site empirical evidence that physical geometry, clearances, slopes, and transitions match measured building ground truth.
 
 ### Physical validation still required
 
