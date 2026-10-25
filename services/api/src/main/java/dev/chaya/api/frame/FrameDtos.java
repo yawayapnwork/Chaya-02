@@ -30,6 +30,26 @@ public final class FrameDtos {
     public record CalibrationRequest(@Valid List<DistanceReference> distanceReferences, @Valid List<ControlPoint> controlPoints,
                                      @Valid GravitySpec gravity, String note) {}
 
+    /**
+     * Where a calibration's reconstruction points came from, and the independent measurements that validate it.
+     *
+     * @param pointSource          TRIANGULATED_OBSERVATIONS (located from marked pixels through the run's SfM poses) or
+     *                             OPERATOR_SUPPLIED (entered by hand)
+     * @param holdoutDistances     measured distances kept out of the fit, to check it
+     * @param holdoutControlPoints surveyed points kept out of the fit, to check it
+     * @param triangulation        per measured point: views, ray angle, reprojection error (TRIANGULATED_OBSERVATIONS only)
+     */
+    public record CalibrationEvidence(String pointSource, List<DistanceReference> holdoutDistances, List<ControlPoint> holdoutControlPoints,
+                                      Map<String, Object> triangulation) {
+
+        public static final String TRIANGULATED = "TRIANGULATED_OBSERVATIONS";
+        public static final String OPERATOR_SUPPLIED = "OPERATOR_SUPPLIED";
+
+        public static CalibrationEvidence operatorSupplied() {
+            return new CalibrationEvidence(OPERATOR_SUPPLIED, List.of(), List.of(), Map.of());
+        }
+    }
+
     public record Rotation(double w, double x, double y, double z) {}
 
     public record Vec3(double x, double y, double z) {}
@@ -40,7 +60,8 @@ public final class FrameDtos {
                             Vec3 translation, String scaleSource, Double scaleRelativeSpread, String gravitySource,
                             List<Double> gravityUpReconstruction, Double gravityDisagreementDeg, Double controlPointRmsM,
                             String method, Map<String, Object> inputs, Map<String, Object> residuals, String calibratedBy,
-                            Instant calibratedAt, String units, String upAxis) {
+                            Instant calibratedAt, String units, String upAxis, String pointSource, String validationStatus,
+                            Double holdoutMaxRelativeError, Double holdoutMaxErrorM) {
 
         /** The minimal shape a worker reads from its work order (chaya_worker.frames.CoordinateFrame.from_wire). */
         public Map<String, Object> wire() {

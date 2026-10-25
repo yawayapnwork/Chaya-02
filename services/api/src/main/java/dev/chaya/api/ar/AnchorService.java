@@ -341,9 +341,11 @@ public class AnchorService {
     private static final int MAX_OBSERVATIONS = 16;
 
     private FrameView requireCurrentFrame(UUID venueId, UUID floorId) {
-        return frames.currentForFloor(venueId, floorId).filter(FrameView::canonical)
+        FrameView frame = frames.currentForFloor(venueId, floorId).filter(FrameView::canonical)
             .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, CoordinateFrameService.NOT_CALIBRATED,
                 "floor " + floorId + " has no calibrated coordinate frame; anchor poses cannot be expressed in venue metres"));
+        // Physical AR guidance only on a frame calibrated from measured observations (docs/coordinate-frames.md §3).
+        return frames.requireGuidanceEvidence(frame, "physical AR anchors on floor " + floorId);
     }
 
     private static void requireInCurrentFrame(Anchor anchor, FrameView current) {

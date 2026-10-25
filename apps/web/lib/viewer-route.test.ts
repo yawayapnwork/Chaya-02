@@ -77,6 +77,9 @@ test("each routing failure code is reported as what it means", () => {
   assert.equal(describeRouteFailure("NO_ACCESSIBLE_ROUTE", "d", "STEP_FREE").kind, "no-accessible-route");
   assert.match(describeRouteFailure("FLOOR_CONNECTION_UNAVAILABLE", "d", "STEP_FREE").message, /step-free connection/);
   assert.equal(describeRouteFailure("NAVMESH_NOT_READY", "d", "STANDARD").kind, "not-routable");
+  assert.equal(describeRouteFailure("NOT_CALIBRATED", "d", "STANDARD").kind, "not-routable");
+  assert.equal(describeRouteFailure("METRIC_EVIDENCE_INSUFFICIENT", "d", "STANDARD").kind, "not-routable");
+  assert.match(describeRouteFailure("METRIC_EVIDENCE_INSUFFICIENT", "d", "STANDARD").message, /hand-entered/);
   assert.deepEqual(describeRouteFailure("HTTP_500", "server said so", "STANDARD"), { kind: "other", message: "server said so" });
 });
 

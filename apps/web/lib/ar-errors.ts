@@ -64,5 +64,11 @@ export function classifyArFailure(error: unknown, online: boolean = true): Class
   if (code === "VERSION_MISMATCH") {
     return make("VERSION_CHANGED", false, "This floor was republished. End AR and start again to load the new version.");
   }
+  if (code === "NOT_CALIBRATED" || code === "METRIC_CALIBRATION_REQUIRED") {
+    return make("REFUSED", false, "The floor has no calibrated coordinate frame in metres. Physical AR guidance is unavailable until the venue is calibrated.");
+  }
+  if (code === "METRIC_EVIDENCE_INSUFFICIENT") {
+    return make("REFUSED", false, "The floor was calibrated from hand-entered points rather than measured observations. Physical AR guidance requires calibration from marked observations.");
+  }
   return make("REFUSED", status === null || status >= 500, `The server refused the request${code ? ` (${code})` : ""}.`);
 }

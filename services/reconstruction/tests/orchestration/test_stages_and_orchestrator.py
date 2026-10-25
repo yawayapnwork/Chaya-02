@@ -134,6 +134,22 @@ def test_frame_extraction_produces_real_frames_flagged_as_pii(testsrc_video, tmp
     assert report["command"]["commands"][0][-1].endswith("%06d.jpg") and "fps=5" in " ".join(report["command"]["commands"][0])
 
 
+def test_the_frame_manifest_maps_every_frame_to_its_source_time_and_size(testsrc_video, tmp_path):
+    """The calibration's triangulation locates a point marked at time t of a video in the frame extracted at t
+    (dev.chaya.api.capture.CalibrationTriangulation): every frame names its source, its time and its size."""
+    import json
+
+    h = Harness(tmp_path, frame_fps=5.0)
+    video = h.raw_input("RAW_VIDEO", testsrc_video)
+    report = h.run(h.order("FFMPEG_PREPROCESS", [video]))
+    manifest = json.loads(download(h, artifact(report, "FRAME_MANIFEST")["key"], tmp_path).read_text(encoding="utf-8"))
+    assert manifest["video_fps"] == 5.0
+    sources = manifest["frame_sources"]
+    assert [f["frame"] for f in sources] == manifest["frames"]
+    assert all(f["artifact_id"] == video["artifactId"] and f["kind"] == "RAW_VIDEO" and f["frame_size"] == [320, 240] for f in sources)
+    assert [f["time_seconds"] for f in sources] == [round(i / 5.0, 6) for i in range(len(sources))], "frame k is at (k-1)/fps"
+
+
 def test_quality_filter_drops_blurred_badly_exposed_and_duplicate_frames_and_says_why(harness, tmp_path):
     def scene(tint: int, dark: bool = False) -> np.ndarray:
         checker = (np.indices((240, 320)).sum(axis=0) // 8 % 2).astype(np.uint8)

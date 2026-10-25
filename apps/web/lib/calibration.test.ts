@@ -7,6 +7,7 @@ import {
   captureStageBadge,
   checkMeasurementDraft,
   clickToPixel,
+  explainCalibrationCode,
   measurementBody,
 } from "./calibration.ts";
 
@@ -107,4 +108,12 @@ test("status badges distinguish incomplete, uploaded, pending, calibrated and re
   assert.equal(calibrationBadge("CALIBRATED", "CANONICAL").label, "Calibrated");
   assert.equal(calibrationBadge("CALIBRATED", "METRIC_NOT_ALIGNED").label, "Calibrated (scale only)");
   assert.equal(calibrationBadge("REJECTED", "ARBITRARY_SCALE").tone, "error");
+});
+
+test("explainCalibrationCode provides actionable guidance for calibration errors", () => {
+  assert.match(explainCalibrationCode("METRIC_EVIDENCE_INSUFFICIENT") ?? "", /marked observations/);
+  assert.match(explainCalibrationCode("NOT_CALIBRATED") ?? "", /Calibrate/);
+  assert.match(explainCalibrationCode("CALIBRATION_HOLDOUT_FAILED") ?? "", /holdout/);
+  assert.match(explainCalibrationCode("TRIANGULATION_FAILED") ?? "", /triangulated/);
+  assert.match(explainCalibrationCode("CALIBRATION_INCONSISTENT") ?? "", /disagree/);
 });

@@ -131,8 +131,11 @@ export function describeRouteFailure(code: string, detail: string, profile: Rout
       };
     case "NAVMESH_NOT_READY":
       return { kind: "not-routable", message: "This floor has no navigation mesh for this route yet, so no route can be planned." };
+    case "NOT_CALIBRATED":
     case "METRIC_CALIBRATION_REQUIRED":
       return { kind: "not-routable", message: "The start or destination floor is not calibrated in metres, so no route can be planned." };
+    case "METRIC_EVIDENCE_INSUFFICIENT":
+      return { kind: "not-routable", message: "The floor was calibrated from hand-entered points rather than measured observations; metric routing cannot be advertised until calibrated from marked observations." };
     case "VERSION_MISMATCH":
       return { kind: "not-routable", message: "The destination belongs to a different scan version than the one being routed on." };
     case "START_OUT_OF_BOUNDS":

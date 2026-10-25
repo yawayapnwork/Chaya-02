@@ -223,6 +223,14 @@ export function explainCalibrationCode(code: string): string | null {
       return "The stated uncertainty is too large for a calibration; measure a longer reference.";
     case "CALIBRATION_INCONSISTENT":
       return "The measurements disagree with each other; re-measure or withdraw the one that is off.";
+    case "CALIBRATION_HOLDOUT_FAILED":
+      return "The calibration disagreed with independent holdout measurements beyond tolerance.";
+    case "TRIANGULATION_FAILED":
+      return "The marked points could not be triangulated from the camera poses. Re-mark points in multiple views with baseline separation.";
+    case "METRIC_EVIDENCE_INSUFFICIENT":
+      return "The floor frame was calibrated from hand-entered points rather than measured observations. Guidance requires calibration from marked observations.";
+    case "NOT_CALIBRATED":
+      return "The venue or floor has no calibrated metric coordinate frame. Calibrate the reconstruction first.";
     case "CAPTURE_NOT_OWNED":
       return "Only the capture's operator, a venue manager or an admin can change its calibration.";
     case "FLOOR_REQUIRED":

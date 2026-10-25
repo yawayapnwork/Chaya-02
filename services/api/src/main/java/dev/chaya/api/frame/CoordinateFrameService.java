@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.chaya.api.audit.AuditService;
+import dev.chaya.api.frame.FrameDtos.CalibrationEvidence;
 import dev.chaya.api.frame.FrameDtos.CalibrationRequest;
 import dev.chaya.api.frame.FrameDtos.ControlPoint;
 import dev.chaya.api.frame.FrameDtos.DistanceReference;
@@ -54,12 +55,15 @@ import org.springframework.transaction.annotation.Transactional;
 public class CoordinateFrameService {
 
     public static final String NOT_CALIBRATED = "NOT_CALIBRATED";
+    /** A canonical frame whose points were entered by hand backs no metric routing or physical AR (requireGuidanceEvidence). */
+    public static final String METRIC_EVIDENCE_INSUFFICIENT = "METRIC_EVIDENCE_INSUFFICIENT";
     private static final TypeReference<Map<String, Object>> MAP = new TypeReference<>() {};
     private static final String FRAME_COLUMNS = """
         id, floor_id, source_run_id, version, status, metric_status, gravity_status, horizontal_datum, scale,
         rotation_w, rotation_x, rotation_y, rotation_z, translation_x, translation_y, translation_z, scale_source,
         scale_relative_spread, gravity_source, gravity_up_reconstruction, gravity_disagreement_deg, control_point_rms_m,
-        method, inputs, residuals, calibrated_by, calibrated_at""";
+        method, inputs, residuals, calibrated_by, calibrated_at,
+        point_source, validation_status, holdout_max_relative_error, holdout_max_error_m""";
 
     /** room: the run reconstructs one room of the floor (docs/multi-room.md), never what the floor shows. */
     private record RunInfo(UUID id, UUID orgId, UUID venueId, UUID floorId, UUID reconstructionFrameRunId, boolean room) {}
@@ -94,6 +98,15 @@ public class CoordinateFrameService {
 
     @Transactional
     public FrameView calibrate(Actor actor, UUID venueId, UUID runId, CalibrationRequest request) {
+        return calibrate(actor, venueId, runId, request, CalibrationEvidence.operatorSupplied());
+    }
+
+    /**
+     * Calibrates with the given evidence. The fit uses only the request's references; {@code evidence}'s holdouts are
+     * evaluated against the fitted frame afterwards and refuse it (422 CALIBRATION_HOLDOUT_FAILED) beyond tolerance, so
+     * the accuracy a frame claims is measured on observations it was not fitted to.
+     */
+    public FrameView calibrate(Actor actor, UUID venueId, UUID runId, CalibrationRequest request, CalibrationEvidence evidence) {
         guard.requireVenue(actor, venueId);
         RunInfo run = jdbc.sql("""
                 SELECT r.id, r.organization_id, r.venue_id, c.floor_id, r.reconstruction_frame_run_id, c.space_id IS NOT NULL
@@ -113,6 +126,7 @@ public class CoordinateFrameService {
 
         Result result = request.controlPoints() != null && !request.controlPoints().isEmpty()
             ? fromControlPoints(run, request) : fromDistances(run, request);
+        Holdout holdout = validateHoldouts(request, result, evidence);
 
         int version = jdbc.sql("SELECT coalesce(max(version), 0) + 1 FROM coordinate_frame WHERE source_run_id = :r")
             .param("r", runId).query(Integer.class).single();
@@ -126,13 +140,21 @@ public class CoordinateFrameService {
         inputs.put("controlPoints", request.controlPoints());
         inputs.put("gravity", request.gravity());
         inputs.put("note", request.note());
+        inputs.put("pointSource", evidence.pointSource());
+        inputs.put("holdoutDistances", evidence.holdoutDistances());
+        inputs.put("holdoutControlPoints", evidence.holdoutControlPoints());
+        inputs.put("triangulation", evidence.triangulation());
+        Map<String, Object> residuals = new LinkedHashMap<>(result.residuals());
+        residuals.put("holdout", holdout.details());
         UUID id = jdbc.sql("""
                 INSERT INTO coordinate_frame (organization_id, venue_id, floor_id, source_run_id, source_artifact_id, version,
                     metric_status, gravity_status, horizontal_datum, scale, rotation_w, rotation_x, rotation_y, rotation_z,
                     translation_x, translation_y, translation_z, scale_source, scale_relative_spread, gravity_source,
-                    gravity_up_reconstruction, gravity_disagreement_deg, control_point_rms_m, method, inputs, residuals, calibrated_by)
+                    gravity_up_reconstruction, gravity_disagreement_deg, control_point_rms_m, method, inputs, residuals, calibrated_by,
+                    point_source, validation_status, holdout_max_relative_error, holdout_max_error_m)
                 VALUES (:o, :v, :f, :r, :a, :ver, :ms, :gs, :hd, :s, :qw, :qx, :qy, :qz, :tx, :ty, :tz, :ss, :spread, :gsrc,
-                    CAST(:up AS double precision[]), :dis, :rms, :m, CAST(:in AS jsonb), CAST(:res AS jsonb), :by)
+                    CAST(:up AS double precision[]), :dis, :rms, :m, CAST(:in AS jsonb), CAST(:res AS jsonb), :by,
+                    :ps, :vs, :hre, :hem)
                 RETURNING id
                 """)
             .param("o", run.orgId()).param("v", venueId).param("f", run.floorId()).param("r", runId).param("a", posesArtifact)
@@ -143,7 +165,9 @@ public class CoordinateFrameService {
             .param("ss", result.scaleSource()).param("spread", result.spread()).param("gsrc", result.gravitySource())
             .param("up", result.upReconstruction() == null ? null : sqlArray(result.upReconstruction()))
             .param("dis", result.disagreementDeg()).param("rms", result.controlPointRms()).param("m", result.method())
-            .param("in", json(inputs)).param("res", json(result.residuals())).param("by", actor.subject())
+            .param("in", json(inputs)).param("res", json(residuals)).param("by", actor.subject())
+            .param("ps", evidence.pointSource()).param("vs", holdout.status()).param("hre", holdout.maxRelativeError())
+            .param("hem", holdout.maxErrorM())
             .query(UUID.class).single();
 
         FrameView view = load(id).orElseThrow();
@@ -154,6 +178,8 @@ public class CoordinateFrameService {
         meta.put("gravityStatus", result.gravity());
         meta.put("horizontalDatum", result.datum());
         meta.put("method", result.method());
+        meta.put("pointSource", evidence.pointSource());
+        meta.put("validationStatus", holdout.status());
         boolean frameRoot = runId.equals(run.reconstructionFrameRunId());
         if (view.canonical() && frameRoot && run.floorId() != null && run.room()) {
             // One room of the floor: its frame is the room's. The floor takes a frame from what it publishes, which a room
@@ -172,6 +198,119 @@ public class CoordinateFrameService {
         }
         audit.success(actor, venueId, "coordinate_frame.calibrate", "coordinate_frame", id, meta);
         return view;
+    }
+
+    /** Holdout validation of a fitted frame: status, worst errors, and per holdout the numbers. */
+    private record Holdout(String status, Double maxRelativeError, Double maxErrorM, Map<String, Object> details) {}
+
+    private Holdout validateHoldouts(CalibrationRequest request, Result result, CalibrationEvidence evidence) {
+        List<DistanceReference> distances = evidence.holdoutDistances() == null ? List.of() : evidence.holdoutDistances();
+        List<ControlPoint> points = evidence.holdoutControlPoints() == null ? List.of() : evidence.holdoutControlPoints();
+        Map<String, Object> details = new LinkedHashMap<>();
+        if (distances.isEmpty() && points.isEmpty()) {
+            details.put("status", "NOT_VALIDATED");
+            details.put("why", "no HOLDOUT measurement: the frame's accuracy beyond its own fit residuals is unknown");
+            return new Holdout("NOT_VALIDATED", null, null, details);
+        }
+
+        // Holdout measurements must be independent observations: reject any overlap with calibration references
+        List<DistanceReference> reqDistances = request.distanceReferences() == null ? List.of() : request.distanceReferences();
+        for (DistanceReference h : distances) {
+            double[] hA = vec(h.a(), "holdout.a");
+            double[] hB = vec(h.b(), "holdout.b");
+            for (DistanceReference ref : reqDistances) {
+                if (h.label() != null && h.label().equalsIgnoreCase(ref.label())) {
+                    throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "CALIBRATION_INCONSISTENT",
+                        "holdout distance \"" + h.label() + "\" was also used in the calibration fit; holdouts must be independent observations");
+                }
+                double[] rA = vec(ref.a(), "ref.a");
+                double[] rB = vec(ref.b(), "ref.b");
+                boolean sameDirect = Vectors.distance(hA, rA) < 1e-6 && Vectors.distance(hB, rB) < 1e-6;
+                boolean sameReverse = Vectors.distance(hA, rB) < 1e-6 && Vectors.distance(hB, rA) < 1e-6;
+                if (sameDirect || sameReverse) {
+                    throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "CALIBRATION_INCONSISTENT",
+                        "holdout distance \"" + h.label() + "\" shares endpoints with calibration reference \"" + ref.label()
+                            + "\"; holdouts must be independent observations");
+                }
+            }
+        }
+        List<ControlPoint> reqPoints = request.controlPoints() == null ? List.of() : request.controlPoints();
+        for (ControlPoint h : points) {
+            double[] hRec = vec(h.reconstruction(), "holdout.reconstruction");
+            double[] hVen = vec(h.venue(), "holdout.venue");
+            for (ControlPoint ref : reqPoints) {
+                if (h.label() != null && h.label().equalsIgnoreCase(ref.label())) {
+                    throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "CALIBRATION_INCONSISTENT",
+                        "holdout control point \"" + h.label() + "\" was also used in the calibration fit; holdouts must be independent observations");
+                }
+                double[] rRec = vec(ref.reconstruction(), "ref.reconstruction");
+                double[] rVen = vec(ref.venue(), "ref.venue");
+                if (Vectors.distance(hRec, rRec) < 1e-6 || Vectors.distance(hVen, rVen) < 1e-6) {
+                    throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "CALIBRATION_INCONSISTENT",
+                        "holdout control point \"" + h.label() + "\" shares coordinates with calibration control point \"" + ref.label()
+                            + "\"; holdouts must be independent observations");
+                }
+            }
+        }
+        List<Map<String, Object>> rows = new ArrayList<>();
+        Double worstRel = null;
+        Double worstM = null;
+        List<String> failed = new ArrayList<>();
+        for (DistanceReference h : distances) {
+            double[] lm = lengthAndMeasured(h);
+            double calibrated = result.scale() * lm[0];
+            double rel = Math.abs(calibrated - lm[1]) / lm[1];
+            worstRel = worstRel == null ? rel : Math.max(worstRel, rel);
+            rows.add(Map.of("label", String.valueOf(h.label()), "kind", "DISTANCE", "measuredMetres", lm[1], "calibratedMetres", calibrated,
+                "relativeError", rel));
+            if (rel > props.maxHoldoutRelativeError()) {
+                failed.add(h.label() + " (" + round(100 * rel) + " %)");
+            }
+        }
+        for (ControlPoint h : points) {
+            if (result.transform() == null) {
+                throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "HOLDOUT_NOT_EVALUABLE", "holdout control point \"" + h.label()
+                    + "\" cannot be checked: the calibration has no gravity-aligned frame to place it in");
+            }
+            double[] placed = result.transform().apply(vec(h.reconstruction(), "holdout.reconstruction"));
+            double err = Vectors.distance(placed, vec(h.venue(), "holdout.venue"));
+            worstM = worstM == null ? err : Math.max(worstM, err);
+            rows.add(Map.of("label", String.valueOf(h.label()), "kind", "CONTROL_POINT", "errorMetres", err));
+            if (err > props.maxHoldoutErrorM()) {
+                failed.add(h.label() + " (" + round(err) + " m)");
+            }
+        }
+        details.put("holdouts", rows);
+        details.put("maxRelativeError", worstRel);
+        details.put("maxErrorM", worstM);
+        details.put("limits", Map.of("maxRelativeError", props.maxHoldoutRelativeError(), "maxErrorM", props.maxHoldoutErrorM()));
+        if (!failed.isEmpty()) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "CALIBRATION_HOLDOUT_FAILED", "the calibrated frame disagrees with "
+                + "independent holdout measurements " + failed + " beyond tolerance (" + round(100 * props.maxHoldoutRelativeError())
+                + " % / " + props.maxHoldoutErrorM() + " m): the fit is not trustworthy -- residuals: " + json(details));
+        }
+        details.put("status", "HOLDOUT_VALIDATED");
+        return new Holdout("HOLDOUT_VALIDATED", worstRel, worstM, details);
+    }
+
+    /**
+     * Whether a frame may back metric routing and physical AR guidance: canonical, and its reconstruction points located
+     * from measured observations (TRIANGULATED_OBSERVATIONS). Hand-entered points (OPERATOR_SUPPLIED) qualify only when
+     * chaya.frames.accept-operator-supplied-points is set.
+     */
+    public boolean eligibleForGuidance(FrameView frame) {
+        return frame.canonical() && (CalibrationEvidence.TRIANGULATED.equals(frame.pointSource()) || props.acceptOperatorSuppliedPoints());
+    }
+
+    /** {@link #eligibleForGuidance}, or 409 METRIC_EVIDENCE_INSUFFICIENT saying how to get there. */
+    public FrameView requireGuidanceEvidence(FrameView frame, String what) {
+        if (!eligibleForGuidance(frame)) {
+            throw new ApiException(HttpStatus.CONFLICT, METRIC_EVIDENCE_INSUFFICIENT, what + " needs a frame calibrated from measured "
+                + "observations: coordinate frame " + frame.id() + " was calibrated from reconstruction points entered by hand ("
+                + frame.pointSource() + "). Calibrate the capture from its marked measurements (POST .../captures/{c}/calibration "
+                + "without resolvedPoints), so the points are triangulated through the reconstruction's camera poses");
+        }
+        return frame;
     }
 
     private Result fromControlPoints(RunInfo run, CalibrationRequest request) {
@@ -193,6 +332,51 @@ public class CoordinateFrameService {
         }
         Map<String, Object> residuals = new LinkedHashMap<>();
         residuals.put("controlPointResidualsM", fit.residuals());
+        double span = 0;
+        double bestDist = -1;
+        double[] p1 = null;
+        double[] p2 = null;
+        for (int i = 0; i < dst.size(); i++) {
+            for (int j = i + 1; j < dst.size(); j++) {
+                double d = Vectors.distance(dst.get(i), dst.get(j));
+                if (d > span) {
+                    span = d;
+                    p1 = dst.get(i);
+                    p2 = dst.get(j);
+                }
+            }
+        }
+        residuals.put("controlPointSpanM", span);
+        if (span < props.minControlPointSpanM()) {
+            throw invalid("the control points span " + round(span) + " m; at least " + props.minControlPointSpanM()
+                + " m are needed, or the rotation is poorly fixed away from them");
+        }
+        double transverseSpread = 0;
+        if (p1 != null && p2 != null && span > 1e-9) {
+            double[] dir = Vectors.sub(p2, p1);
+            double len = Vectors.norm(dir);
+            for (double[] pt : dst) {
+                double[] cross = Vectors.cross(dir, Vectors.sub(pt, p1));
+                transverseSpread = Math.max(transverseSpread, Vectors.norm(cross) / len);
+            }
+        }
+        residuals.put("controlPointTransverseSpreadM", transverseSpread);
+        if (transverseSpread < 0.5) {
+            throw invalid("the control points lie within " + round(transverseSpread)
+                + " m of one line, which does not fix the rotation about it: add a control point at least 0.5 m off that line");
+        }
+        int worst = 0;
+        for (int i = 1; i < fit.residuals().length; i++) {
+            if (fit.residuals()[i] > fit.residuals()[worst]) {
+                worst = i;
+            }
+        }
+        if (fit.residuals()[worst] > props.maxControlPointResidualM()) {
+            residuals.put("outlierControlPoint", cps.get(worst).label());
+            throw inconsistent("control point \"" + cps.get(worst).label() + "\" is " + round(fit.residuals()[worst])
+                + " m from where the others place it (limit " + props.maxControlPointResidualM() + " m): re-survey it or "
+                + "withdraw it", residuals);
+        }
         if (fit.rmsResidual() > props.maxControlPointRmsM()) {
             throw inconsistent("control points do not fit one similarity transform: RMS residual " + round(fit.rmsResidual())
                 + " m exceeds " + props.maxControlPointRmsM() + " m", residuals);
@@ -232,14 +416,42 @@ public class CoordinateFrameService {
             throw invalid("a metric calibration needs at least " + props.minDistanceReferences()
                 + " independent measured distances (or at least three control points); reconstruction units are never assumed to be metres");
         }
+        for (int i = 0; i < refs.size(); i++) {
+            double[] a1 = vec(refs.get(i).a(), "a");
+            double[] b1 = vec(refs.get(i).b(), "b");
+            for (int j = i + 1; j < refs.size(); j++) {
+                double[] a2 = vec(refs.get(j).a(), "a");
+                double[] b2 = vec(refs.get(j).b(), "b");
+                boolean sameDirect = (Vectors.distance(a1, a2) < 1e-6 && Vectors.distance(b1, b2) < 1e-6);
+                boolean sameReverse = (Vectors.distance(a1, b2) < 1e-6 && Vectors.distance(b1, a2) < 1e-6);
+                if (sameDirect || sameReverse || (refs.get(i).label() != null && refs.get(i).label().equalsIgnoreCase(refs.get(j).label()))) {
+                    throw invalid("distance references \"" + refs.get(i).label() + "\" and \"" + refs.get(j).label()
+                        + "\" are identical; calibration requires independent measured distances");
+                }
+            }
+        }
         List<double[]> lm = refs.stream().map(this::lengthAndMeasured).toList();
+        for (int i = 0; i < refs.size(); i++) {
+            if (lm.get(i)[1] < props.minReferenceLengthM()) {
+                throw invalid("measured distance \"" + refs.get(i).label() + "\" is " + round(lm.get(i)[1]) + " m; references shorter than "
+                    + props.minReferenceLengthM() + " m are refused, because the same marking error is a larger share of them");
+            }
+        }
         SimilarityEstimator.ScaleFit sf = SimilarityEstimator.scaleFromDistances(lm);
         Map<String, Object> residuals = new LinkedHashMap<>();
         residuals.put("perReferenceScale", sf.perReferenceScale());
         residuals.put("scaleRelativeSpread", sf.relativeSpread());
         if (sf.relativeSpread() > props.maxScaleRelativeSpread()) {
+            int worst = 0;
+            for (int i = 1; i < refs.size(); i++) {
+                if (Math.abs(sf.perReferenceScale()[i] - sf.scale()) > Math.abs(sf.perReferenceScale()[worst] - sf.scale())) {
+                    worst = i;
+                }
+            }
+            residuals.put("mostInconsistentReference", refs.get(worst).label());
             throw inconsistent("the measured distances imply scales that differ by up to " + round(100 * sf.relativeSpread())
-                + " % (limit " + round(100 * props.maxScaleRelativeSpread()) + " %); re-measure or re-pick the points", residuals);
+                + " % (limit " + round(100 * props.maxScaleRelativeSpread()) + " %); the most inconsistent is \"" + refs.get(worst).label()
+                + "\": re-measure it, re-mark its points, or withdraw it", residuals);
         }
         String source = request.gravity() == null ? null : request.gravity().source().toUpperCase(Locale.ROOT);
         double[] up = null;
@@ -332,6 +544,11 @@ public class CoordinateFrameService {
                         """).param("f", floorId).param("n", next.id()).update();
                 meta.put("anchorsMarkedStale", stale);
             }
+            int retiredGraphs = jdbc.sql("""
+                    UPDATE navigation_graph SET status = 'RETIRED'
+                     WHERE floor_id = :f AND status = 'ACTIVE' AND coordinate_frame_id IS DISTINCT FROM :n
+                    """).param("f", floorId).param("n", next.id()).update();
+            meta.put("navigationGraphsRetired", retiredGraphs);
         }
         jdbc.sql("UPDATE floor SET current_coordinate_frame_id = :n WHERE id = :f").param("n", next.id()).param("f", floorId).update();
         return meta;
@@ -562,6 +779,8 @@ public class CoordinateFrameService {
             rs.getString("scale_source"), (Double) rs.getObject("scale_relative_spread"), rs.getString("gravity_source"), upList,
             (Double) rs.getObject("gravity_disagreement_deg"), (Double) rs.getObject("control_point_rms_m"), rs.getString("method"),
             parse(rs.getObject("inputs")), parse(rs.getObject("residuals")), rs.getString("calibrated_by"),
-            rs.getTimestamp("calibrated_at").toInstant(), CanonicalFrame.UNITS, CanonicalFrame.UP_AXIS);
+            rs.getTimestamp("calibrated_at").toInstant(), CanonicalFrame.UNITS, CanonicalFrame.UP_AXIS, rs.getString("point_source"),
+            rs.getString("validation_status"), (Double) rs.getObject("holdout_max_relative_error"),
+            (Double) rs.getObject("holdout_max_error_m"));
     }
 }

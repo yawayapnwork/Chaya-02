@@ -70,12 +70,27 @@ Scale comes from one of two sources:
    - Each reference's own scale is mᵢ/lᵢ. If any of them deviates from `s` by more than
      `chaya.frames.max-scale-relative-spread` (3 %), the calibration is refused with `422 CALIBRATION_INCONSISTENT`.
    - A single distance is refused (`400`), because its error could not be checked.
+   - Duplicate or overlapping distance references (sharing identical endpoints or labels) are rejected (`400 INVALID_CALIBRATION`) to prevent degenerate or unverified scale fits.
 2. **Surveyed control points** (`controlPoints`). You need at least three non-collinear points, each with its
    reconstruction coordinates and its venue coordinates (metres, +Z up).
    - The fit is a least-squares similarity: Horn's closed-form rotation, which is always a proper rotation, then
      Umeyama's scale and the translation.
-   - It is refused (`422`) when the RMS residual exceeds `chaya.frames.max-control-point-rms-m` (5 cm).
-   - Any distance references sent alongside the control points are checked against the fitted scale.
+   - Spatial distribution: control points must span at least `chaya.frames.min-control-point-span-m` (2.0 m) AND maintain a transverse spread of at least 0.5 m off any single line; near-collinear points leave the rotation about the line unconstrained and are refused (`400 INVALID_CALIBRATION`).
+   - Outliers and residuals: individual residuals beyond `max-control-point-residual-m` (10 cm) or overall RMS residual beyond `max-control-point-rms-m` (5 cm) are refused (`422 CALIBRATION_INCONSISTENT`).
+   - Any distance references sent alongside the control points are checked against the fitted scale (limit 3 %).
+
+### Independent holdout validation
+
+When holdout observations (`holdoutDistances`, `holdoutControlPoints`) are supplied:
+- Holdouts are never used during fitting; they are evaluated strictly after the candidate transform is computed.
+- **Independence:** A holdout measurement must be strictly independent of the calibration fit references. If any holdout measurement shares a label, reconstruction coordinates, or venue endpoints with a reference used in the fit, the calibration is refused with `422 CALIBRATION_INCONSISTENT`.
+- If holdout errors exceed tolerance (`max-holdout-relative-error` 5 % for distances, `max-holdout-error-m` 5 cm for control points), the calibration is refused with `422 CALIBRATION_HOLDOUT_FAILED`.
+
+### Metric guidance eligibility: preventing unverified geometry from advertising metres
+
+A canonical frame is only eligible to back metric routing (`RouteService`) and physical AR guidance (`AnchorService`) when its reconstruction points were located from measured observations (`point_source = TRIANGULATED_OBSERVATIONS`), triangulated through the reconstruction's camera poses.
+
+Reconstruction coordinates entered by hand (`OPERATOR_SUPPLIED`) do not provide verified metric evidence. Any consumer requesting metric navigation or physical AR on such a frame fails with `409 METRIC_EVIDENCE_INSUFFICIENT`, preventing hand-selected points from falsely advertising verified physical guidance.
 
 **If there is no calibration, there is no metric frame.** Downstream metric stages fail with `NOT_CALIBRATED` (§6).
 
@@ -115,8 +130,9 @@ No part of the system takes any reconstruction axis to be vertical.
   - Readers see `frameStatus`: `CURRENT`, `STALE` or `UNBOUND`.
 - **Recalibration of the same reconstruction.** The new frame supersedes the old one. POIs and anchors are
   re-projected exactly, with `new = T_new ∘ T_old⁻¹ (old)`: POIs gain a version, anchors are updated in place.
-  Navigation graphs are **not** re-projected, because their step-free flags depend on the up direction. They must be
-  baked again.
+  Navigation graphs are **not** re-projected, because their step-free flags and slope calculations depend on the up
+  direction and horizontal datum. Any active navigation graph on the floor in the old frame is automatically retired
+  (`status = 'RETIRED'`), and the floor requires re-baking (`NAVMESH_NOT_READY`) before routes can be planned.
 - **A different reconstruction becomes current.** Two SfM reconstructions have no known relation, so nothing is
   guessed:
   - `CALIBRATED` anchors become `STALE`;
@@ -229,8 +245,11 @@ What they cover:
 - **AR device conventions** are taken from the ARKit and WebXR specifications, and have not been checked on a
   device. `apps/web/components/ArWorkspace.tsx` still has the unrelated defects listed in review finding AR-1. The iOS
   package (`apps/ios-ar`) has **not** been updated to the device-frame boundary: it cannot be compiled here.
-- **No picking UI.** An operator must supply reconstruction coordinates for distance references, floor points and
-  control points. The viewer has no point-picking tool yet. Measured values can now be recorded with the capture,
-  with their units and the image pixels where each point is seen ([capture-calibration.md](capture-calibration.md)).
-  Triangulating those pixels into reconstruction coordinates is not implemented, so the reconstruction coordinates
-  are still entered by hand.
+- **Triangulation from marked observations.** Multi-view ray intersection via DLT with camera intrinsics and distortion
+  undistortion (`CalibrationTriangulation`, `Triangulator`) is implemented and tested with synthetic camera poses and
+  projections (`TriangulatorTest`). When calibrating a capture without manual `resolvedPoints`, the system triangulates
+  the marked pixel observations directly into reconstruction coordinates (`point_source = TRIANGULATED_OBSERVATIONS`),
+  producing a verified coordinate frame eligible for metric routing and physical AR guidance. Hand-entered coordinates
+  (`OPERATOR_SUPPLIED`) are gated out of guidance. Real-world validation of triangulation on physical capture media remains pending.
+- **Real-world calibration.** No calibration has been performed on a real physical venue capture. Real-world
+  validation requires measured on-site distances or surveyed control points with independent holdout observations.

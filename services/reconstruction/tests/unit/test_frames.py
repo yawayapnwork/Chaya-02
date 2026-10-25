@@ -111,7 +111,22 @@ def test_rejects_non_rotations_and_non_positive_scale():
     with pytest.raises(ValueError):
         Similarity(0.0, np.eye(3), np.zeros(3))
     with pytest.raises(ValueError):
+        Similarity(-1.0, np.eye(3), np.zeros(3))
+    with pytest.raises(ValueError):
         Similarity(float("nan"), np.eye(3), np.zeros(3))
+    with pytest.raises(ValueError):
+        Similarity(1.0, np.eye(3), np.array([float("nan"), 0.0, 0.0]))
+    with pytest.raises(ValueError):
+        Similarity(1.0, np.eye(3), np.array([float("inf"), 0.0, 0.0]))
+
+
+def test_canonical_frame_is_right_handed_and_preserves_cross_product():
+    t = _truth()
+    x_axis = t.apply_direction(np.array([1.0, 0.0, 0.0]))
+    y_axis = t.apply_direction(np.array([0.0, 1.0, 0.0]))
+    z_axis = t.apply_direction(np.array([0.0, 0.0, 1.0]))
+    np.testing.assert_allclose(np.cross(x_axis, y_axis), z_axis, atol=1e-12)
+    assert np.linalg.det(t.rotation) == pytest.approx(1.0, abs=1e-12)
 
 
 def test_orientation_quaternions_rotate_with_the_frame():

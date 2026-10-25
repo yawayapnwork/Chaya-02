@@ -26,8 +26,12 @@ public final class SimilarityEstimator {
      * rotation -- never a reflection), then Umeyama's scale given that rotation, then the translation between centroids.
      */
     public static Fit fromCorrespondences(List<double[]> src, List<double[]> dst) {
-        if (src.size() != dst.size() || src.size() < 3) {
+        if (src == null || dst == null || src.size() != dst.size() || src.size() < 3) {
             throw new IllegalArgumentException("at least three correspondences are needed");
+        }
+        for (int i = 0; i < src.size(); i++) {
+            requireFinite3D(src.get(i), "source point[" + i + "]");
+            requireFinite3D(dst.get(i), "destination point[" + i + "]");
         }
         double[] cs = Vectors.centroid(src);
         double[] cd = Vectors.centroid(dst);
@@ -86,12 +90,19 @@ public final class SimilarityEstimator {
      * measured lengths m_i (metres), and the largest relative deviation of any single reference's m_i / l_i from it.
      */
     public static ScaleFit scaleFromDistances(List<double[]> reconstructionLengthsAndMeasured) {
+        if (reconstructionLengthsAndMeasured == null || reconstructionLengthsAndMeasured.isEmpty()) {
+            throw new IllegalArgumentException("at least one distance reference is needed");
+        }
         double num = 0;
         double den = 0;
         double[] per = new double[reconstructionLengthsAndMeasured.size()];
         for (int i = 0; i < per.length; i++) {
-            double l = reconstructionLengthsAndMeasured.get(i)[0];
-            double m = reconstructionLengthsAndMeasured.get(i)[1];
+            double[] pair = reconstructionLengthsAndMeasured.get(i);
+            if (pair == null || pair.length < 2) {
+                throw new IllegalArgumentException("every reference needs two distinct reconstruction points and a positive measured length");
+            }
+            double l = pair[0];
+            double m = pair[1];
             if (!(l > 1e-12) || !(m > 0) || !Double.isFinite(l) || !Double.isFinite(m)) {
                 throw new IllegalArgumentException("every reference needs two distinct reconstruction points and a positive measured length");
             }
@@ -112,6 +123,7 @@ public final class SimilarityEstimator {
      * (canonical +X along the horizontal projection of reconstruction +X, or of +Y when +X is near vertical).
      */
     public static Quaternion levelling(double[] upReconstruction) {
+        requireFinite3D(upReconstruction, "up direction");
         double[] up = Vectors.normalize(upReconstruction);
         double[] ref = {1, 0, 0};
         double fromVertical = Vectors.angleDegrees(ref, up);
@@ -127,8 +139,12 @@ public final class SimilarityEstimator {
 
     /** Least-squares plane through at least three non-collinear points, its normal oriented towards `above`. */
     public static FittedPlane plane(List<double[]> points, double[] above) {
-        if (points.size() < 3) {
+        if (points == null || points.size() < 3) {
             throw new IllegalArgumentException("a plane needs at least three points");
+        }
+        requireFinite3D(above, "point above floor");
+        for (int i = 0; i < points.size(); i++) {
+            requireFinite3D(points.get(i), "floor point[" + i + "]");
         }
         double[] c = Vectors.centroid(points);
         List<double[]> centred = points.stream().map(p -> Vectors.sub(p, c)).toList();
@@ -162,6 +178,11 @@ public final class SimilarityEstimator {
      * reconstruction point on the floor plane) at canonical (0, 0, 0).
      */
     public static Similarity floorLocal(double scale, double[] upReconstruction, double[] originOnFloor) {
+        if (!Double.isFinite(scale) || !(scale > 0)) {
+            throw new IllegalArgumentException("scale must be finite and positive");
+        }
+        requireFinite3D(upReconstruction, "up direction");
+        requireFinite3D(originOnFloor, "origin on floor");
         Quaternion r = levelling(upReconstruction);
         double[] ro = r.rotate(originOnFloor);
         return new Similarity(scale, r, new double[]{-scale * ro[0], -scale * ro[1], -scale * ro[2]});
@@ -169,8 +190,17 @@ public final class SimilarityEstimator {
 
     /** Projects `p` along `up` onto the plane through `planePoint` perpendicular to `up`. */
     public static double[] projectOntoPlane(double[] p, double[] planePoint, double[] up) {
+        requireFinite3D(p, "point");
+        requireFinite3D(planePoint, "plane point");
+        requireFinite3D(up, "up direction");
         double[] u = Vectors.normalize(up);
         return Vectors.sub(p, Vectors.scale(u, Vectors.dot(Vectors.sub(p, planePoint), u)));
+    }
+
+    private static void requireFinite3D(double[] p, String what) {
+        if (p == null || p.length != 3 || !Double.isFinite(p[0]) || !Double.isFinite(p[1]) || !Double.isFinite(p[2])) {
+            throw new IllegalArgumentException(what + " must be a finite 3D vector");
+        }
     }
 
     private static void requireNonCollinear(List<double[]> centred, String what) {

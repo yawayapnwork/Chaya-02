@@ -364,6 +364,7 @@ public class RouteService {
         FrameView frame = frames.load(scope.coordinateFrameId()).filter(FrameView::canonical)
             .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, "METRIC_CALIBRATION_REQUIRED",
                 "scan version " + scope.id() + " has no canonical coordinate frame"));
+        frames.requireGuidanceEvidence(frame, "routing in scan version " + scope.id());
         return new Query(actor, venueId, profile, scope, frame);
     }
 
@@ -875,9 +876,11 @@ public class RouteService {
     }
 
     private FrameView requireMetricFrame(UUID venueId, UUID floorId) {
-        return metricFrame(venueId, floorId).orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, "METRIC_CALIBRATION_REQUIRED",
+        FrameView frame = metricFrame(venueId, floorId).orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, "METRIC_CALIBRATION_REQUIRED",
             "floor " + floorId + " has no calibrated metric, gravity-aligned coordinate frame, so its navigation data cannot be "
                 + "in metres; calibrate its reconstruction first"));
+        // Metres are only advertised from a frame calibrated on measured observations (docs/coordinate-frames.md §3).
+        return frames.requireGuidanceEvidence(frame, "routing on floor " + floorId);
     }
 
     private Optional<PoiRow> loadPoi(UUID orgId, UUID venueId, UUID poiId) {
@@ -912,6 +915,10 @@ public class RouteService {
         Optional<FrameView> frame = metricFrame(venueId, floorId);
         if (frame.isEmpty()) {
             return "floor " + floorId + " has no calibrated metric frame";
+        }
+        if (!frames.eligibleForGuidance(frame.get())) {
+            return "floor " + floorId + " coordinate frame was calibrated from hand-entered points ("
+                + frame.get().pointSource() + "), not measured observations, so metric routing cannot be advertised";
         }
         Optional<UUID> current = versions.currentOf(floorId);
         if (current.isEmpty()) {
@@ -950,12 +957,14 @@ public class RouteService {
     private FloorGraph loadFloorGraph(Query q, UUID floorId, boolean required) {
         String problem = notReadyReason(q.venueId, floorId, q.profile);
         if (problem != null) {
-            if (metricFrame(q.venueId, floorId).isEmpty()) {
+            Optional<FrameView> mf = metricFrame(q.venueId, floorId);
+            if (mf.isEmpty() || !frames.eligibleForGuidance(mf.get())) {
                 requireMetricFrame(q.venueId, floorId);
             }
             throw new ApiException(HttpStatus.CONFLICT, "NAVMESH_NOT_READY", problem
                 + "; run NAVIGATION_BAKING on a calibrated reconstruction of this floor" + (required ? "" : " (intermediate floor)"));
         }
+        requireMetricFrame(q.venueId, floorId);
         return buildFloorGraph(q, activeGraph(q.venueId, floorId, q.profile), floorId);
     }
 

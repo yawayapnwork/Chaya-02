@@ -22,10 +22,11 @@ public final class CaptureCalibrationDtos {
      * One measurement as the operator made it. kind: DISTANCE (value, the measured length between physical points A and
      * B) or CONTROL_POINT (venue: x, y, z of physical point P in the survey datum `datum`, +Z up). unit: m, cm, mm, ft or
      * in, for value, venue and uncertainty alike. method: TAPE, LASER_DISTANCE_METER, TOTAL_STATION, SURVEY_PLAN or
-     * OTHER. Every point needs at least two observations in different images or video frames.
+     * OTHER. Every point needs at least two observations in different images or video frames. role: CALIBRATION (the
+     * default: fitted) or HOLDOUT (never fitted; only checks the fitted frame, docs/capture-calibration.md "Holdouts").
      */
     public record MeasurementInput(String kind, String label, String method, String unit, Double value, Double uncertainty,
-                                   String datum, List<Double> venue, List<ObservationInput> observations) {}
+                                   String datum, List<Double> venue, List<ObservationInput> observations, String role) {}
 
     public record WithdrawRequest(String reason) {}
 
@@ -36,15 +37,23 @@ public final class CaptureCalibrationDtos {
                                   Double value, Double measuredMetres, String datum, List<Double> venue, List<Double> venueMetres,
                                   Double uncertaintyMetres, String status, String withdrawnReason, String withdrawnBy,
                                   Instant withdrawnAt, String createdBy, Instant createdAt, boolean usedByActiveFrame,
-                                  List<ObservationView> observations) {}
+                                  List<ObservationView> observations, String role) {}
 
     /** The reconstruction coordinates (reconstruction units) of one measured point, located by the operator. */
     public record ResolvedPoint(UUID measurementId, String point, List<Double> reconstruction) {}
 
     /**
-     * Calibrates the capture's reconstruction from its recorded measurements. Only measurements named in resolvedPoints
-     * are used, and each of them needs all its points (A and B, or P). gravity and note as for the reconstruction
-     * calibration endpoint.
+     * Calibrates the capture's reconstruction from its recorded measurements.
+     *
+     * <p>Without resolvedPoints (the default and the only path to a frame eligible for metric routing and AR): every ACTIVE
+     * measurement's points are triangulated from their marked pixels through the run's own camera poses
+     * (CalibrationTriangulation); CALIBRATION measurements are fitted, HOLDOUT measurements validate the fit. Gravity:
+     * RECONSTRUCTED_FLOOR_PLANE or NONE with distances, the survey itself with control points (hand-entered
+     * OPERATOR_FLOOR_POINTS are refused here).
+     *
+     * <p>With resolvedPoints: the operator's hand-entered reconstruction coordinates are used, and the frame is recorded as
+     * OPERATOR_SUPPLIED. Only the measurements named are used, each with all its points (A and B, or P); HOLDOUT ones among
+     * them still only validate. gravity and note as for the reconstruction calibration endpoint.
      */
     public record CalibrateCapture(List<ResolvedPoint> resolvedPoints, GravitySpec gravity, String note) {}
 

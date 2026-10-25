@@ -71,6 +71,9 @@ class FfmpegPreprocess:
         frames_dir.mkdir()
         s = ctx.settings
         sources, frame_sizes = [], {}
+        # Where every frame came from, so a point marked in a source medium can be located in the frame SfM registered
+        # (dev.chaya.api.capture.CalibrationTriangulation): the source, the frame's time in a video, and the frame's size.
+        frame_sources: list[dict] = []
         for vi, video in enumerate(videos):
             pattern = frames_dir / f"v{vi:02d}-%06d.jpg"
             ctx.runner.run(build_extract_command(ctx.toolchain.ffmpeg().path, video.path, pattern, s.frame_fps, s.max_frame_height,
@@ -80,6 +83,11 @@ class FfmpegPreprocess:
             if produced:
                 first = cv2.imdecode(np.fromfile(str(frames_dir / produced[0]), dtype=np.uint8), cv2.IMREAD_COLOR)
                 frame_sizes[video.artifact_id] = (int(first.shape[1]), int(first.shape[0]))
+            for name in produced:
+                # FFmpeg's fps filter emits output frame k (1-based, the %06d number) at (k - 1) / fps from the stream start.
+                k = int(name.rsplit("-", 1)[1].split(".")[0])
+                frame_sources.append({"frame": name, "artifact_id": video.artifact_id, "kind": "RAW_VIDEO",
+                                      "time_seconds": round((k - 1) / s.frame_fps, 6), "frame_size": list(frame_sizes[video.artifact_id])})
             ctx.logger.info("frames extracted", extra={"artifact_id": video.artifact_id, "frames": len(produced)})
         for ii, image in enumerate(images):
             img = cv2.imdecode(np.fromfile(str(image.path), dtype=np.uint8), cv2.IMREAD_COLOR)
@@ -95,6 +103,8 @@ class FfmpegPreprocess:
             cv2.imwrite(str(frames_dir / f"i{ii:04d}.jpg"), img, [cv2.IMWRITE_JPEG_QUALITY, 95])
             frame_sizes[image.artifact_id] = (int(img.shape[1]), int(img.shape[0]))
             sources.append({"artifact_id": image.artifact_id, "kind": "RAW_IMAGE", "frames": 1})
+            frame_sources.append({"frame": f"i{ii:04d}.jpg", "artifact_id": image.artifact_id, "kind": "RAW_IMAGE", "time_seconds": None,
+                                  "frame_size": list(frame_sizes[image.artifact_id])})
 
         names = sorted(p.name for p in frames_dir.glob("*.jpg"))
         if not names:
@@ -107,7 +117,7 @@ class FfmpegPreprocess:
         archive_path = ctx.workdir / "frames.tar"
         archive.pack(frames_dir, archive_path)
         manifest = write_json(ctx.workdir / "frames-manifest.json", {
-            "count": len(names), "sources": sources, "frames": names,
+            "count": len(names), "sources": sources, "frames": names, "frame_sources": frame_sources, "video_fps": s.frame_fps,
             "camera_calibration": "CAPTURE_METADATA" if calibration is not None else "NOT_PROVIDED"})
         return StageResult(
             "SUCCEEDED", command_record(ctx), ctx.runner.last_exit_status(),

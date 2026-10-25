@@ -40,7 +40,11 @@ import org.testcontainers.utility.DockerImageName;
     "chaya.erasure.sweep-initial-delay=PT24H",
     // The production relevance margin (0.078) is calibrated for CLIP. The test embeddings are random unit vectors
     // (TestEmbeddingConfig), whose unrelated pairs sit near cosine 0 +- 0.04: 0.3 separates them unambiguously.
-    "chaya.search.relevance-min-margin=0.3"
+    "chaya.search.relevance-min-margin=0.3",
+    // The fixture worker (PipelineTestSupport) publishes placeholder POSES with no real cameras to triangulate through, so the
+    // control-plane tests calibrate with operator-supplied reconstruction points. MeasuredCalibrationTest runs with the
+    // production default (false) and covers the gate and the triangulated path.
+    "chaya.frames.accept-operator-supplied-points=true"
 })
 @AutoConfigureMockMvc
 @Import({TestJwtConfig.class, TestScannerConfig.class, TestEmbeddingConfig.class})

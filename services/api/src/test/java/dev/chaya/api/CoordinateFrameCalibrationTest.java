@@ -210,6 +210,38 @@ class CoordinateFrameCalibrationTest extends PipelineTestSupport {
             .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
         assertThat(anchor.get("digitalPose").get("x").asDouble()).isCloseTo(13.0, within(1e-9));
         assertThat(anchor.get("coordinateFrameId").asText()).isEqualTo(v2.get("id").asText());
+
+        // Invalidation: active navigation graphs baked in the old frame are retired
+        UUID v1Id = UUID.fromString(v1.get("id").asText());
+        assertThat(jdbc.sql("SELECT count(*) FROM navigation_graph WHERE floor_id = :f AND coordinate_frame_id = :old AND status = 'ACTIVE'")
+            .param("f", s.c().floor()).param("old", v1Id).query(Integer.class).single())
+            .as("active navigation graphs in the old frame are retired").isZero();
+        assertThat(jdbc.sql("SELECT count(*) FROM navigation_graph WHERE floor_id = :f AND coordinate_frame_id = :old AND status = 'RETIRED'")
+            .param("f", s.c().floor()).param("old", v1Id).query(Integer.class).single())
+            .as("old navigation graph is marked RETIRED").isEqualTo(1);
+    }
+
+    @Test
+    void duplicateDistanceReferencesAreRefused() throws Exception {
+        Started s = reconstructed(true);
+        JsonNode refs = calibrationFixture().get("distanceReferences");
+        String duplicate = mapper.writeValueAsString(Map.of("distanceReferences", List.of(refs.get(0), refs.get(0))));
+        calibrate(s, duplicate).andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("INVALID_CALIBRATION"));
+    }
+
+    @Test
+    void controlPointsWithSmallTransverseSpreadAreRefused() throws Exception {
+        Started s = reconstructed(true);
+        // 3 points along the X axis spanning 10 m, with transverse spread of only 0.05 m (< 0.5 m limit)
+        List<Map<String, Object>> cps = List.of(
+            Map.of("label", "CP-1", "reconstruction", List.of(0.0, 0.0, 0.0), "venue", List.of(0.0, 0.0, 0.0)),
+            Map.of("label", "CP-2", "reconstruction", List.of(10.0, 0.0, 0.0), "venue", List.of(10.0, 0.0, 0.0)),
+            Map.of("label", "CP-3", "reconstruction", List.of(5.0, 0.05, 0.0), "venue", List.of(5.0, 0.05, 0.0))
+        );
+        String body = mapper.writeValueAsString(Map.of("controlPoints", cps));
+        calibrate(s, body).andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("INVALID_CALIBRATION"));
     }
 
     @Test

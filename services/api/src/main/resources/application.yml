@@ -145,6 +145,18 @@ chaya:
     # solved transform is inconsistent with the others (moved, misidentified, mis-registered). Same as the clients' drift limit.
     max-anchor-residual-m: 0.3
     max-anchor-residual-deg: 8.0
+    # Measured calibration (docs/coordinate-frames.md, "Triangulated measurement points" and "Holdout validation").
+    min-reference-length-m: 0.3
+    max-control-point-residual-m: 0.10
+    min-control-point-span-m: 0.5
+    min-triangulation-angle-deg: 2.0
+    max-reprojection-rms-px: 4.0
+    max-reprojection-px: 8.0
+    max-video-frame-offset-seconds: 0.05
+    max-holdout-relative-error: 0.02
+    max-holdout-error-m: 0.05
+    # Hand-entered reconstruction points never make a venue eligible for metric routing or physical AR guidance.
+    accept-operator-supplied-points: ${CHAYA_FRAMES_ACCEPT_OPERATOR_SUPPLIED_POINTS:false}
 
 management:
   endpoints:

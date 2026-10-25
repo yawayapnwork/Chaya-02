@@ -186,6 +186,11 @@ export default function CalibrationPanel({
   const active = measurements.filter((m) => m.status === "ACTIVE");
   const resolvable = active.filter((m) => Object.keys(resolved).some((k) => k.startsWith(m.id + ":")));
 
+  const onCalibrateTriangulated = () =>
+    act(async () => {
+      await calibrateCapture(venueId, captureId, { gravity: { source: gravity } });
+    });
+
   const onCalibrate = () =>
     act(async () => {
       const points = [];
@@ -351,34 +356,47 @@ export default function CalibrationPanel({
       )}
 
       {status && ["READY_TO_CALIBRATE", "REJECTED", "CALIBRATED"].includes(status.state) && active.length > 0 && (
-        <fieldset className="space-y-3 rounded border p-3" disabled={busy}>
+        <fieldset className="space-y-4 rounded border p-3" disabled={busy}>
           <legend className="px-1 text-sm font-medium">Calibrate the reconstruction</legend>
-          <p className="text-sm text-zinc-600">
-            The marked pixels are not yet located in the reconstruction automatically. For each measurement you use, enter the
-            reconstruction coordinates (x y z, as shown by the viewer) of its points. Measured values come from the recorded
-            measurements.
-          </p>
-          {active.map((m) => (
-            <div key={m.id} className="flex flex-wrap items-center gap-2 text-sm">
-              <span className="w-40 truncate">{m.label}</span>
-              {pointsOf(m.kind).map((p) => (
-                <label key={p}>{p}{" "}
-                  <input className="w-44 rounded border p-1 font-mono" placeholder="x y z" value={resolved[`${m.id}:${p}`] ?? ""}
-                    onChange={(e) => setResolved({ ...resolved, [`${m.id}:${p}`]: e.target.value })} />
-                </label>
-              ))}
-            </div>
-          ))}
-          <label className="block text-sm">Gravity{" "}
-            <select className="rounded border p-1" value={gravity} onChange={(e) => setGravity(e.target.value as GravitySource)}>
-              <option value="RECONSTRUCTED_FLOOR_PLANE">Reconstructed floor plane</option>
-              <option value="NONE">None (scale only)</option>
-            </select>
-            <span className="ml-2 text-xs text-zinc-600">Control points carry their own up direction.</span>
-          </label>
-          <button className="rounded bg-black px-4 py-2 text-white disabled:opacity-50" disabled={busy || resolvable.length === 0} onClick={onCalibrate}>
-            Calibrate
-          </button>
+          <div className="space-y-2 rounded bg-zinc-50 p-3 text-sm">
+            <p className="font-medium">Option A: Calibrate from marked observations (Recommended)</p>
+            <p className="text-xs text-zinc-600">
+              Triangulates marked pixel observations through the reconstruction&apos;s camera poses. This produces a verified
+              coordinate frame eligible for metric routing and physical AR guidance.
+            </p>
+            <label className="block text-sm">Gravity{" "}
+              <select className="rounded border p-1" value={gravity} onChange={(e) => setGravity(e.target.value as GravitySource)}>
+                <option value="RECONSTRUCTED_FLOOR_PLANE">Reconstructed floor plane</option>
+                <option value="NONE">None (scale only)</option>
+              </select>
+              <span className="ml-2 text-xs text-zinc-600">Control points carry their own up direction.</span>
+            </label>
+            <button className="rounded bg-black px-4 py-2 text-white disabled:opacity-50" disabled={busy} onClick={onCalibrateTriangulated}>
+              Calibrate from marked observations
+            </button>
+          </div>
+
+          <div className="space-y-2 border-t pt-3 text-sm">
+            <p className="font-medium text-amber-900">Option B: Enter reconstruction coordinates manually (Operator Supplied)</p>
+            <p className="text-xs text-amber-800">
+              Warning: Points entered by hand produce an OPERATOR_SUPPLIED calibration which is not eligible for metric routing or
+              physical AR guidance. Use Option A whenever possible.
+            </p>
+            {active.map((m) => (
+              <div key={m.id} className="flex flex-wrap items-center gap-2 text-sm">
+                <span className="w-40 truncate">{m.label}</span>
+                {pointsOf(m.kind).map((p) => (
+                  <label key={p}>{p}{" "}
+                    <input className="w-44 rounded border p-1 font-mono" placeholder="x y z" value={resolved[`${m.id}:${p}`] ?? ""}
+                      onChange={(e) => setResolved({ ...resolved, [`${m.id}:${p}`]: e.target.value })} />
+                  </label>
+                ))}
+              </div>
+            ))}
+            <button className="rounded border border-zinc-400 px-4 py-2 text-zinc-800 hover:bg-zinc-100 disabled:opacity-50" disabled={busy || resolvable.length === 0} onClick={onCalibrate}>
+              Calibrate from manual coordinates
+            </button>
+          </div>
         </fieldset>
       )}
     </section>

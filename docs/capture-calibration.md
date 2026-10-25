@@ -98,16 +98,24 @@ accepted, the reconstruction stays `ARBITRARY_SCALE`. The next metric stage's wo
 ## Calibration: `POST .../captures/{id}/calibration`
 
 ```json
-{"resolvedPoints": [{"measurementId": "…", "point": "A", "reconstruction": [x, y, z]}, …],
- "gravity": {"source": "RECONSTRUCTED_FLOOR_PLANE"}, "note": "…"}
+{"gravity": {"source": "RECONSTRUCTED_FLOOR_PLANE"}, "note": "…"}
 ```
 
-- **The operator must supply the reconstruction coordinates of every measured point used.** Locating the marked pixels
-  in the reconstruction automatically is not implemented. That would mean triangulating them through the reconstructed
-  camera poses, and mapping video frame times onto the extracted frame names in `poses.json`. The recorded observations
-  are what such a step would consume. Until it exists, `requirements` names each point that is still needed.
-- Only measurements named in `resolvedPoints` are used. Each one needs all its points (A and B, or P); otherwise the
-  request is refused with `400 UNRESOLVED_POINTS`.
+- **Triangulation from marked observations (Default & Guidance Eligible):** When `resolvedPoints` is omitted or empty,
+  the control plane automatically triangulates marked pixel observations into 3D reconstruction coordinates via multi-view
+  ray intersection (`CalibrationTriangulation` / `Triangulator`) using the reconstructed camera poses (`poses.json`).
+  The resulting coordinate frame records `point_source = TRIANGULATED_OBSERVATIONS` and is **eligible for metric routing
+  and physical AR guidance**.
+- **Manual reconstruction coordinates (`resolvedPoints`):** If the operator explicitly supplies reconstruction coordinates
+  `[x, y, z]` for measured points, the resulting frame records `point_source = OPERATOR_SUPPLIED`. Such frames are
+  **ineligible for metric routing or physical AR guidance** (`409 METRIC_EVIDENCE_INSUFFICIENT`), ensuring arbitrary picked
+  points cannot advertise physical metric precision.
+- **Holdout validation:** Holdout measurements (`role = "HOLDOUT"`) are held out from the fit and evaluated against the
+  fitted frame. Holdouts must be independent observations: any overlap with calibration references is rejected with
+  `422 CALIBRATION_INCONSISTENT`. Holdout errors beyond 5 % relative error or 5 cm absolute error fail the calibration with
+  `422 CALIBRATION_HOLDOUT_FAILED`.
+- Only measurements named or triangulated are used. Each one needs all its points (A and B, or P); otherwise the
+  request is refused with `400 UNRESOLVED_POINTS` or `422 TRIANGULATION_FAILED`.
 - The measured lengths and venue coordinates come from the recorded measurements, never from the request.
 - The request is evaluated by the existing calibration (`CoordinateFrameService`): its checks, tolerances and errors
   (`INVALID_CALIBRATION`, `CALIBRATION_INCONSISTENT`, `GRAVITY_UNAVAILABLE`) apply unchanged.

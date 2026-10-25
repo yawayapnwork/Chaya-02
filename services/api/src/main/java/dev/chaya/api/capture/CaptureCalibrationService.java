@@ -11,10 +11,12 @@ import dev.chaya.api.capture.CaptureCalibrationDtos.ObservationView;
 import dev.chaya.api.capture.CaptureCalibrationDtos.ResolvedPoint;
 import dev.chaya.api.capture.CaptureService.CaptureView;
 import dev.chaya.api.frame.CoordinateFrameService;
+import dev.chaya.api.frame.FrameDtos.CalibrationEvidence;
 import dev.chaya.api.frame.FrameDtos.CalibrationRequest;
 import dev.chaya.api.frame.FrameDtos.ControlPoint;
 import dev.chaya.api.frame.FrameDtos.DistanceReference;
 import dev.chaya.api.frame.FrameDtos.FrameView;
+import dev.chaya.api.frame.FrameDtos.GravitySpec;
 import dev.chaya.api.frame.FrameProperties;
 import dev.chaya.api.security.Actor;
 import dev.chaya.api.security.Role;
@@ -71,11 +73,12 @@ public class CaptureCalibrationService {
     static final int REQUIRED_CONTROL_POINTS = 3;
     private static final Map<String, Double> UNIT_METRES = Map.of("m", 1.0, "cm", 0.01, "mm", 0.001, "ft", 0.3048, "in", 0.0254);
     private static final Set<String> METHODS = Set.of("TAPE", "LASER_DISTANCE_METER", "TOTAL_STATION", "SURVEY_PLAN", "OTHER");
+    private static final Set<String> ROLES = Set.of("CALIBRATION", "HOLDOUT");
 
     private static final String MEASUREMENT_COLUMNS = """
         m.id, m.capture_session_id, m.floor_id, m.kind, m.label, m.method, m.unit, m.measured_value, m.measured_metres, m.datum,
         m.venue_x, m.venue_y, m.venue_z, m.venue_x_m, m.venue_y_m, m.venue_z_m, m.uncertainty_metres, m.status,
-        m.withdrawn_reason, m.withdrawn_by, m.withdrawn_at, m.created_by, m.created_at,
+        m.withdrawn_reason, m.withdrawn_by, m.withdrawn_at, m.created_by, m.created_at, m.role,
         EXISTS (SELECT 1 FROM coordinate_frame_measurement fm JOIN coordinate_frame f ON f.id = fm.coordinate_frame_id
                  WHERE fm.measurement_id = m.id AND f.status = 'ACTIVE') AS used""";
 
@@ -85,9 +88,12 @@ public class CaptureCalibrationService {
     private final FrameProperties frameProps;
     private final AuditService audit;
     private final TransactionTemplate tx;
+    private final CalibrationTriangulation triangulation;
 
     public CaptureCalibrationService(JdbcClient jdbc, CaptureService captures, CoordinateFrameService frames,
-                                     FrameProperties frameProps, AuditService audit, TransactionTemplate tx) {
+                                     FrameProperties frameProps, AuditService audit, TransactionTemplate tx,
+                                     CalibrationTriangulation triangulation) {
+        this.triangulation = triangulation;
         this.jdbc = jdbc;
         this.captures = captures;
         this.frames = frames;
@@ -122,6 +128,11 @@ public class CaptureCalibrationService {
         String label = in.label() == null ? "" : in.label().strip();
         if (label.isEmpty() || label.length() > 120) {
             throw invalid("INVALID_MEASUREMENT", "label is required (1-120 characters), e.g. \"door 2.14 width\" or \"CP-3\"");
+        }
+        String rawRole = in.role() == null ? "CALIBRATION" : upper(in.role());
+        String role = "CHECK".equals(rawRole) ? "HOLDOUT" : rawRole;
+        if (!ROLES.contains(role)) {
+            throw invalid("INVALID_MEASUREMENT", "role must be CALIBRATION (fitted) or HOLDOUT (kept out of the fit, to check it)");
         }
         String method = upper(in.method());
         if (!METHODS.contains(method)) {
@@ -206,8 +217,8 @@ public class CaptureCalibrationService {
             UUID created = jdbc.sql("""
                     INSERT INTO capture_measurement (organization_id, venue_id, capture_session_id, floor_id, kind, label, method, unit,
                         measured_value, measured_metres, datum, venue_x, venue_y, venue_z, venue_x_m, venue_y_m, venue_z_m,
-                        uncertainty_metres, created_by)
-                    VALUES (:o, :v, :c, :f, :k, :l, :m, :u, :mv, :mm, :d, :vx, :vy, :vz, :vxm, :vym, :vzm, :unc, :by)
+                        uncertainty_metres, created_by, role)
+                    VALUES (:o, :v, :c, :f, :k, :l, :m, :u, :mv, :mm, :d, :vx, :vy, :vz, :vxm, :vym, :vzm, :unc, :by, :role)
                     RETURNING id
                     """)
                 .param("o", actor.organizationId()).param("v", venueId).param("c", captureId).param("f", c.floorId())
@@ -217,6 +228,7 @@ public class CaptureCalibrationService {
                 .param("vz", venueMetres == null ? null : in.venue().get(2))
                 .param("vxm", venueMetres == null ? null : venueMetres[0]).param("vym", venueMetres == null ? null : venueMetres[1])
                 .param("vzm", venueMetres == null ? null : venueMetres[2]).param("unc", uncertainty).param("by", actor.subject())
+                .param("role", role)
                 .query(UUID.class).single();
             for (Obs o : observations) {
                 jdbc.sql("""
@@ -444,9 +456,10 @@ public class CaptureCalibrationService {
                         points.add(m.label() + " (P)");
                     }
                 }
-                needs.add("Automatic location of the marked pixels in the reconstruction (triangulation through the reconstructed "
-                    + "camera poses) is not implemented. Pick each measured point in the reconstruction and submit its "
-                    + "reconstruction coordinates: " + String.join(", ", points) + ".");
+                needs.add("Calibrate: POST .../calibration without resolvedPoints. The marked pixels of " + String.join(", ", points)
+                    + " are triangulated through the reconstruction's camera poses; each point must be marked in at least "
+                    + MIN_VIEWS_PER_POINT + " registered views taken from different positions. (Hand-entered reconstruction "
+                    + "coordinates are accepted too, but such a frame backs no metric routing or AR guidance.)");
             }
         }
         if (reconstructed && !"CANONICAL".equals(reconstructionFrame)) {
@@ -465,43 +478,81 @@ public class CaptureCalibrationService {
         }
         UUID run = runOf(captureId).orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, "RECONSTRUCTION_FRAME_UNAVAILABLE",
             "processing has not been started for this capture; there is no reconstruction to calibrate yet"));
-        if (body == null || body.resolvedPoints() == null || body.resolvedPoints().isEmpty()) {
-            throw invalid("UNRESOLVED_POINTS", "resolvedPoints is required: the reconstruction coordinates of each measured point "
-                + "(see GET .../calibration for the list)");
-        }
-        Map<UUID, Map<String, List<Double>>> resolved = new LinkedHashMap<>();
-        for (ResolvedPoint p : body.resolvedPoints()) {
-            if (p == null || p.measurementId() == null || p.point() == null) {
-                throw invalid("UNRESOLVED_POINTS", "every resolved point names a measurementId and a point (A, B or P)");
-            }
-            if (resolved.computeIfAbsent(p.measurementId(), k -> new HashMap<>()).put(upper(p.point()), p.reconstruction()) != null) {
-                throw invalid("UNRESOLVED_POINTS", "point " + p.point() + " of measurement " + p.measurementId() + " is given twice");
-            }
-        }
+        boolean triangulate = body == null || body.resolvedPoints() == null || body.resolvedPoints().isEmpty();
         List<DistanceReference> distances = new ArrayList<>();
         List<ControlPoint> controlPoints = new ArrayList<>();
+        List<DistanceReference> holdoutDistances = new ArrayList<>();
+        List<ControlPoint> holdoutPoints = new ArrayList<>();
         List<UUID> used = new ArrayList<>();
-        for (var e : resolved.entrySet()) {
-            MeasurementView m = measurement(captureId, e.getKey());
-            if (!m.status().equals("ACTIVE")) {
-                throw new ApiException(HttpStatus.CONFLICT, "MEASUREMENT_WITHDRAWN", "measurement \"" + m.label() + "\" is withdrawn");
+        Map<String, Object> diagnostics = new LinkedHashMap<>();
+        GravitySpec gravity = body == null ? null : body.gravity();
+        String note = body == null ? null : body.note();
+        if (triangulate) {
+            if (gravity != null && "OPERATOR_FLOOR_POINTS".equalsIgnoreCase(gravity.source())) {
+                throw invalid("UNRESOLVED_POINTS", "a calibration from measured observations takes its gravity from the reconstructed "
+                    + "floor plane or the surveyed control points; hand-entered OPERATOR_FLOOR_POINTS would make it rest on picked points");
             }
-            Set<String> expected = m.kind().equals("DISTANCE") ? Set.of("A", "B") : Set.of("P");
-            if (!e.getValue().keySet().equals(expected)) {
-                throw invalid("UNRESOLVED_POINTS", "measurement \"" + m.label() + "\" needs reconstruction coordinates for exactly "
-                    + String.join(" and ", expected.stream().sorted().toList()) + " (got " + e.getValue().keySet() + ")");
+            List<MeasurementView> active = measurements(captureId, true);
+            if (active.isEmpty()) {
+                throw invalid("NO_EVIDENCE", "this capture has no ACTIVE measurement to calibrate from");
             }
-            if (m.kind().equals("DISTANCE")) {
-                distances.add(new DistanceReference(m.label(), e.getValue().get("A"), e.getValue().get("B"), m.measuredMetres()));
-            } else {
-                controlPoints.add(new ControlPoint(m.label(), e.getValue().get("P"), m.venueMetres()));
+            CalibrationTriangulation.Outcome located = triangulation.locate(captureId, run, active);
+            diagnostics.putAll(located.diagnostics());
+            if (!located.failures().isEmpty()) {
+                throw recordedRejection(actor, venueId, captureId, run, active.stream().map(MeasurementView::id).toList(),
+                    new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "TRIANGULATION_FAILED", "these measured points could not be "
+                        + "located from their marks: " + String.join("; ", located.failures()) + ". Re-mark them in registered views "
+                        + "taken from different positions, or withdraw them -- details: " + diagnostics));
             }
-            used.add(m.id());
+            for (MeasurementView m : active) {
+                Map<String, List<Double>> pts = located.points().get(m.id());
+                boolean holdout = "HOLDOUT".equals(m.role());
+                if (m.kind().equals("DISTANCE")) {
+                    DistanceReference ref = new DistanceReference(m.label(), pts.get("A"), pts.get("B"), m.measuredMetres());
+                    (holdout ? holdoutDistances : distances).add(ref);
+                } else {
+                    ControlPoint cp = new ControlPoint(m.label(), pts.get("P"), m.venueMetres());
+                    (holdout ? holdoutPoints : controlPoints).add(cp);
+                }
+                used.add(m.id());
+            }
+        } else {
+            Map<UUID, Map<String, List<Double>>> resolved = new LinkedHashMap<>();
+            for (ResolvedPoint p : body.resolvedPoints()) {
+                if (p == null || p.measurementId() == null || p.point() == null) {
+                    throw invalid("UNRESOLVED_POINTS", "every resolved point names a measurementId and a point (A, B or P)");
+                }
+                if (resolved.computeIfAbsent(p.measurementId(), k -> new HashMap<>()).put(upper(p.point()), p.reconstruction()) != null) {
+                    throw invalid("UNRESOLVED_POINTS", "point " + p.point() + " of measurement " + p.measurementId() + " is given twice");
+                }
+            }
+            for (var e : resolved.entrySet()) {
+                MeasurementView m = measurement(captureId, e.getKey());
+                if (!m.status().equals("ACTIVE")) {
+                    throw new ApiException(HttpStatus.CONFLICT, "MEASUREMENT_WITHDRAWN", "measurement \"" + m.label() + "\" is withdrawn");
+                }
+                Set<String> expected = m.kind().equals("DISTANCE") ? Set.of("A", "B") : Set.of("P");
+                if (!e.getValue().keySet().equals(expected)) {
+                    throw invalid("UNRESOLVED_POINTS", "measurement \"" + m.label() + "\" needs reconstruction coordinates for exactly "
+                        + String.join(" and ", expected.stream().sorted().toList()) + " (got " + e.getValue().keySet() + ")");
+                }
+                boolean holdout = "HOLDOUT".equals(m.role());
+                if (m.kind().equals("DISTANCE")) {
+                    (holdout ? holdoutDistances : distances).add(new DistanceReference(m.label(), e.getValue().get("A"),
+                        e.getValue().get("B"), m.measuredMetres()));
+                } else {
+                    (holdout ? holdoutPoints : controlPoints).add(new ControlPoint(m.label(), e.getValue().get("P"), m.venueMetres()));
+                }
+                used.add(m.id());
+            }
         }
-        CalibrationRequest request = new CalibrationRequest(distances, controlPoints, body.gravity(), body.note());
+        CalibrationEvidence evidence = new CalibrationEvidence(
+            triangulate ? CalibrationEvidence.TRIANGULATED : CalibrationEvidence.OPERATOR_SUPPLIED, holdoutDistances, holdoutPoints,
+            diagnostics);
+        CalibrationRequest request = new CalibrationRequest(distances, controlPoints, gravity, note);
         try {
             tx.executeWithoutResult(s -> {
-                FrameView frame = frames.calibrate(actor, venueId, run, request);
+                FrameView frame = frames.calibrate(actor, venueId, run, request, evidence);
                 UUID attempt = insertAttempt(actor, venueId, captureId, run, "ACCEPTED", frame.id(), null, null, used);
                 for (UUID m : used) {
                     jdbc.sql("INSERT INTO coordinate_frame_measurement (coordinate_frame_id, measurement_id) VALUES (:f, :m)")
@@ -521,6 +572,16 @@ public class CaptureCalibrationService {
             throw e;
         }
         return status(captures.get(actor, venueId, captureId));
+    }
+
+    /** Records a refused attempt (outside the calibration transaction, which never started) and returns the exception. */
+    private ApiException recordedRejection(Actor actor, UUID venueId, UUID captureId, UUID run, List<UUID> measurements, ApiException e) {
+        tx.executeWithoutResult(s -> {
+            UUID attempt = insertAttempt(actor, venueId, captureId, run, "REJECTED", null, e.code(), e.getMessage(), measurements);
+            audit.success(actor, venueId, "capture.calibrate_rejected", "capture_session", captureId,
+                Map.of("attemptId", attempt.toString(), "code", e.code()));
+        });
+        return e;
     }
 
     private UUID insertAttempt(Actor actor, UUID venueId, UUID captureId, UUID run, String outcome, UUID frame, String code,
@@ -658,7 +719,7 @@ public class CaptureCalibrationService {
             out.add(new MeasurementView(m.id(), m.captureId(), m.floorId(), m.kind(), m.label(), m.method(), m.unit(), m.value(),
                 m.measuredMetres(), m.datum(), m.venue(), m.venueMetres(), m.uncertaintyMetres(), m.status(), m.withdrawnReason(),
                 m.withdrawnBy(), m.withdrawnAt(), m.createdBy(), m.createdAt(), m.usedByActiveFrame(),
-                obs.getOrDefault(m.id(), List.of())));
+                obs.getOrDefault(m.id(), List.of()), m.role()));
         }
         return out;
     }
@@ -673,7 +734,7 @@ public class CaptureCalibrationService {
             cp ? List.of(rs.getDouble("venue_x_m"), rs.getDouble("venue_y_m"), rs.getDouble("venue_z_m")) : null,
             (Double) rs.getObject("uncertainty_metres"), rs.getString("status"), rs.getString("withdrawn_reason"),
             rs.getString("withdrawn_by"), withdrawn == null ? null : withdrawn.toInstant(), rs.getString("created_by"),
-            rs.getTimestamp("created_at").toInstant(), rs.getBoolean("used"), List.of());
+            rs.getTimestamp("created_at").toInstant(), rs.getBoolean("used"), List.of(), rs.getString("role"));
     }
 
     private static double[] toArray(List<Double> v) {

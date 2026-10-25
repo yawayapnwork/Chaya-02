@@ -204,4 +204,52 @@ class SimilarityTest {
         assertThat(e.values()[1]).isCloseTo(3, within(1e-12));
         assertThat(e.values()[2]).isCloseTo(1, within(1e-12));
     }
+
+    @Test
+    void fromCorrespondencesRejectsNonFinitePoints() {
+        List<double[]> nanSrc = List.of(new double[]{0, 0, 0}, new double[]{1, 0, 0}, new double[]{0, Double.NaN, 0});
+        List<double[]> valid = List.of(new double[]{0, 0, 0}, new double[]{1, 0, 0}, new double[]{0, 1, 0});
+        assertThatThrownBy(() -> SimilarityEstimator.fromCorrespondences(nanSrc, valid))
+            .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("finite");
+        List<double[]> infDst = List.of(new double[]{0, 0, 0}, new double[]{1, 0, 0}, new double[]{0, Double.POSITIVE_INFINITY, 0});
+        assertThatThrownBy(() -> SimilarityEstimator.fromCorrespondences(valid, infDst))
+            .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("finite");
+    }
+
+    @Test
+    void scaleFromDistancesRejectsNonFiniteAndInvalid() {
+        assertThatThrownBy(() -> SimilarityEstimator.scaleFromDistances(List.of(new double[]{Double.NaN, 1.0})))
+            .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> SimilarityEstimator.scaleFromDistances(List.of(new double[]{1.0, -2.0})))
+            .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> SimilarityEstimator.scaleFromDistances(List.of(new double[]{0.0, 1.0})))
+            .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void canonicalFramePreservesHandedness() {
+        Similarity t = truth();
+        double[] x = t.applyDirection(new double[]{1, 0, 0});
+        double[] y = t.applyDirection(new double[]{0, 1, 0});
+        double[] z = t.applyDirection(new double[]{0, 0, 1});
+        double[] cross = Vectors.cross(x, y);
+        assertClose(cross, z, 1e-12);
+    }
+
+    @Test
+    void noisyControlPointsReportExpectedResiduals() {
+        List<double[]> src = new ArrayList<>();
+        List<double[]> dst = new ArrayList<>();
+        for (JsonNode cp : fixture.get("controlPoints")) {
+            src.add(vec(cp.get("reconstruction")));
+            dst.add(vec(cp.get("venue")));
+        }
+        double[] noisy = dst.get(dst.size() - 1).clone();
+        noisy[0] += 0.03;
+        dst.set(dst.size() - 1, noisy);
+
+        SimilarityEstimator.Fit fit = SimilarityEstimator.fromCorrespondences(src, dst);
+        assertThat(fit.residuals()[dst.size() - 1]).isGreaterThan(0.01);
+        assertThat(fit.rmsResidual()).isGreaterThan(0.005);
+    }
 }
