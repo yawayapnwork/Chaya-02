@@ -69,6 +69,44 @@ Only bytes that pass all six become the Blob that GaussianSplats3D loads.
 
 A scene that fails any of these is not shown (`OUT_OF_SCOPE`).
 
+## Provenance and manifest validation
+
+When a reconstruction artifact set includes `ARTIFACT_MANIFEST` (`manifest.json`), the viewer fetches and verifies it
+against the reconstruction request before accepting the `.ksplat` for rendering (`verifyManifest` in `artifact-integrity.ts`):
+
+1. `manifestVersion` must equal `"1.0"`.
+2. `coordinateSpace` must be `"RECONSTRUCTION"` (reconstruction-relative frame before calibration).
+3. `runId` and `scanId` must exactly match the requested reconstruction.
+4. The manifest's listed KSPLAT checksum and file size must match the registered `ArtifactRef`.
+5. Synthetic fixtures (`packages/contracts/fixtures/viewer-scene` and `ksplat`) are identified by SHA-256 (`KNOWN_SYNTHETIC_SHA256`).
+   When detected, the UI displays a prominent banner (`data-testid="synthetic-demonstration-notice"`) labeling the scene as
+   synthetic demonstration data. Synthetic fixtures are never advertised as real venue digital twins.
+
+## Reconstruction quality lifecycle and UI states
+
+The viewer faithfully mirrors the backend's scan version quality and lifecycle states:
+
+- **NONE**: No published scan exists. Displays clear onboarding guidance to start a mobile capture or visit Operations.
+- **IN_PROGRESS**: The reconstruction pipeline is currently processing. Shows progress metrics and active stages.
+- **PARTIAL**: Visual reconstruction completed with partial room or angle coverage. Labeled with `[partial]` in the
+  version selector and badged with a warning banner (`data-testid="reconstruction-partial"`). Never presented as `FINAL`.
+- **FINAL**: Certified complete venue digital twin (`data-testid="reconstruction-final"`).
+- **FAILED**: Reconstruction pipeline failed. Surfaced with actionable error details (`data-testid="reconstruction-failed"`).
+- **CORRUPT / MISMATCH**: Artifact failed checksum, format headers, or manifest verification. Surfaced with integrity alerts.
+- **WEBGL_UNSUPPORTED**: Hardware acceleration is disabled or WebGL context cannot be created (`GraphicsContextError`
+  with `unsupported: true`). Marks the error as non-retryable and instructs the user how to enable hardware acceleration.
+
+## Download streaming, retries, and GPU resource lifecycle
+
+1. **Streaming & Bounded Retries**: Downloads of large `.ksplat` binaries support progress reporting and handle transient
+   streaming drops (`SIZE_MISMATCH`) with bounded retries (up to 2 retries with exponential backoff).
+2. **Cancellation**: In-flight downloads and manifest checks accept an `AbortSignal`. Switching scenes or unmounting
+   aborts network requests immediately.
+3. **Artifact Caching**: `ArtifactCache` keeps recently fetched artifacts per URL to avoid duplicate downloads across
+   tabs while safely scoping data to the active scan version.
+4. **GPU Cleanup**: On unmount or version switch, `viewerResources.dispose()` stops animation loops, removes event listeners,
+   terminates sort web workers, revokes Blob object URLs, and calls `GaussianSplats3D.Viewer.dispose()` to prevent WebGL memory leaks.
+
 ## Stored with the published artifact
 
 `processing_artifact` keeps `checksum_sha256` and `size_bytes`; both were already verified against storage when the

@@ -31,9 +31,10 @@ export function forScene<T>(loaded: Scoped<T> | null, currentKey: string | null)
 
 /** How a reconstruction is named in the version picker. `current`: the version the floor publishes. A room version (one
  * room of the floor, docs/multi-room.md) is named by its room; a stitched floor says so. */
-export function versionLabel(v: { versionNumber?: number | null; generatedAt: string; kind?: string; roomName?: string | null },
+export function versionLabel(v: { versionNumber?: number | null; generatedAt: string; kind?: string; roomName?: string | null; runQuality?: string | null },
                              formattedDate: string, current: boolean): string {
-  const name = v.versionNumber != null ? `v${v.versionNumber} · ${formattedDate}` : `${formattedDate} (not a finalized version)`;
+  const quality = v.runQuality === "PARTIAL" ? " [partial]" : "";
+  const name = v.versionNumber != null ? `v${v.versionNumber} · ${formattedDate}${quality}` : `${formattedDate} (not a finalized version)${quality}`;
   const described = v.kind === "ROOM" ? `Room ${v.roomName ?? "?"} · ${name}` : v.kind === "STITCHED" ? `${name} · stitched rooms` : name;
   return current ? `${described} (current)` : described;
 }

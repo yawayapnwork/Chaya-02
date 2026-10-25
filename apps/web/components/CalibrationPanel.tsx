@@ -188,7 +188,7 @@ export default function CalibrationPanel({
 
   const onCalibrateTriangulated = () =>
     act(async () => {
-      await calibrateCapture(venueId, captureId, { gravity: { source: gravity } });
+      await calibrateCapture(venueId, captureId, { resolvedPoints: [], gravity: { source: gravity } });
     });
 
   const onCalibrate = () =>

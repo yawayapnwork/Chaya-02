@@ -195,3 +195,90 @@ test("a floor still processing shows its pipeline progress, not just 'no reconst
   await expect(panel.getByTestId("processing-progress")).toContainText("Camera pose estimation (1 of 3 stages)");
   await expect(panel.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "33");
 });
+
+test("a partial reconstruction is prominently labeled as partial and never presented as final", async ({ page }) => {
+  test.setTimeout(SCENE_TIMEOUT);
+  await startPublicLink(page);
+  const generatedAt = new Date().toISOString();
+  const runId = "partial-run-0001";
+  const scanVersionId = "partial-sv-0001";
+  const artifactPath = `/api/v1/venues/${VENUE_ID}/scan-versions/${scanVersionId}/artifacts/KSPLAT`;
+
+  await mockJson(page, `**/mock-api/api/v1/venues/${VENUE_ID}/floors/${FLOOR_ID}/reconstructions`, [
+    {
+      runId,
+      floorId: FLOOR_ID,
+      generatedAt,
+      runStatus: "SUCCEEDED",
+      runQuality: "PARTIAL",
+      scanVersionId,
+      versionNumber: 1,
+      parentVersionId: null,
+      current: true,
+    },
+  ]);
+
+  const frame = fixtureFrame(runId);
+  await mockJson(page, `**/mock-api/api/v1/venues/${VENUE_ID}/reconstructions/${runId}`, {
+    runId,
+    scanId: "scan-partial",
+    floorId: FLOOR_ID,
+    generatedAt,
+    runStatus: "SUCCEEDED",
+    runQuality: "PARTIAL",
+    scanVersionId,
+    versionNumber: 1,
+    parentVersionId: null,
+    artifacts: [
+      {
+        kind: "KSPLAT",
+        contentType: "application/octet-stream",
+        sizeBytes: KSPLAT.length,
+        sha256: sha(KSPLAT),
+        url: artifactPath,
+        format: KSPLAT_FORMAT,
+      },
+    ],
+    coordinateFrame: frame,
+  });
+
+  await page.route(`**/mock-api${artifactPath}`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/octet-stream",
+      body: KSPLAT,
+      headers: { "content-length": String(KSPLAT.length) },
+    })
+  );
+
+  await mockJson(page, `**/mock-api/api/v1/venues/${VENUE_ID}/pois`, []);
+
+  await page.goto("/viewer?link=good-secret");
+
+  // Partial notice must be prominently visible
+  const partialNotice = page.getByTestId("reconstruction-partial");
+  await expect(partialNotice).toBeVisible({ timeout: SCENE_TIMEOUT });
+  await expect(partialNotice).toContainText("Partial Reconstruction");
+  await expect(partialNotice).toContainText("Reduced coverage");
+
+  // Must NEVER present as final
+  await expect(page.getByTestId("reconstruction-final")).toHaveCount(0);
+
+  // Quality dl field shows PARTIAL
+  const quality = page.getByTestId("reconstruction-quality");
+  await expect(quality).toContainText("PARTIAL");
+});
+
+test("a synthetic demonstration fixture is prominently identified and not disguised as a venue", async ({ page }) => {
+  test.setTimeout(SCENE_TIMEOUT);
+  await mockViewerApi(page, "synthetic-run-0001", { calibrated: true });
+  await page.goto("/viewer?link=good-secret");
+
+  const demoNotice = page.getByTestId("synthetic-demonstration-notice");
+  await expect(demoNotice).toBeVisible({ timeout: SCENE_TIMEOUT });
+  await expect(demoNotice).toContainText("Synthetic Demonstration Data");
+  await expect(demoNotice).toContainText("not an actual venue reconstruction");
+
+  const provenance = page.getByTestId("reconstruction-provenance");
+  await expect(provenance).toContainText("Synthetic Fixture (Demo)");
+});

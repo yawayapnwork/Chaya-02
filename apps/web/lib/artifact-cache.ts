@@ -45,7 +45,15 @@ export class ArtifactCache<T extends { size: number } = Blob> {
   }
 
   /** The cached artifact, or the result of `load` (shared with any concurrent request for the same artifact). */
-  get(ref: CacheableRef, load: (onProgress: Progress) => Promise<T>, onProgress?: Progress): Promise<T> {
+  get(
+    ref: CacheableRef,
+    load: (onProgress: Progress, signal?: AbortSignal) => Promise<T>,
+    onProgress?: Progress,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    if (signal?.aborted) {
+      return Promise.reject(new DOMException("The download was cancelled.", "AbortError"));
+    }
     const key = ArtifactCache.key(ref);
     const hit = this.entries.get(key);
     if (hit) {
@@ -57,10 +65,15 @@ export class ArtifactCache<T extends { size: number } = Blob> {
     const pending = this.inFlight.get(key);
     if (pending) {
       if (onProgress) pending.listeners.add(onProgress);
+      if (signal) {
+        signal.addEventListener("abort", () => {
+          if (onProgress) pending.listeners.delete(onProgress);
+        }, { once: true });
+      }
       return pending.promise;
     }
     const listeners = new Set<Progress>(onProgress ? [onProgress] : []);
-    const promise = load((loaded, total) => listeners.forEach((l) => l(loaded, total))).then(
+    const promise = load((loaded, total) => listeners.forEach((l) => l(loaded, total)), signal).then(
       (value) => {
         this.inFlight.delete(key);
         this.store(key, value);
@@ -72,6 +85,11 @@ export class ArtifactCache<T extends { size: number } = Blob> {
       },
     );
     this.inFlight.set(key, { promise, listeners });
+    if (signal) {
+      signal.addEventListener("abort", () => {
+        if (onProgress) listeners.delete(onProgress);
+      }, { once: true });
+    }
     return promise;
   }
 

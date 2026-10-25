@@ -39,5 +39,9 @@ test("server, network and graphics failures are retryable; other client errors a
   assert.equal(classifyViewerError(new TypeError("Failed to fetch")).retryable, true);
   assert.equal(classifyViewerError(apiError(429)).retryable, true);
   assert.equal(classifyViewerError(apiError(400)).retryable, false);
-  assert.deepEqual([classifyViewerError(new GraphicsContextError("lost")).kind], ["graphics"]);
+  assert.deepEqual([classifyViewerError(new GraphicsContextError("lost")).kind, classifyViewerError(new GraphicsContextError("lost")).retryable], ["graphics", true]);
+  const unsupported = classifyViewerError(new GraphicsContextError("WebGL disabled", true));
+  assert.equal(unsupported.kind, "graphics");
+  assert.equal(unsupported.title, "WebGL Unsupported");
+  assert.equal(unsupported.retryable, false);
 });

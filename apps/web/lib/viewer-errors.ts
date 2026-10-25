@@ -32,9 +32,12 @@ const TITLES: Record<ViewerFailureKind, string> = {
 
 /** A WebGL context that could not be created, or was lost while the model was on screen. */
 export class GraphicsContextError extends Error {
-  constructor(message: string) {
+  readonly unsupported: boolean;
+
+  constructor(message: string, unsupported = false) {
     super(message);
     this.name = "GraphicsContextError";
+    this.unsupported = unsupported;
   }
 }
 
@@ -44,7 +47,12 @@ function make(kind: ViewerFailureKind, message: string, retryable: boolean): Vie
 
 export function classifyViewerError(e: unknown): ViewerFailure {
   const message = e instanceof Error ? e.message : String(e);
-  if (e instanceof GraphicsContextError) return make("graphics", message, true);
+  if (e instanceof GraphicsContextError) {
+    if (e.unsupported) {
+      return { kind: "graphics", title: "WebGL Unsupported", message, retryable: false };
+    }
+    return make("graphics", message, true);
+  }
   if (e instanceof KsplatInvalidError) {
     // A truncated file is what an interrupted transfer looks like; anything else is the file itself.
     return e.reason === "TRUNCATED" ? make("corrupt", message, true) : make("incompatible", message, false);

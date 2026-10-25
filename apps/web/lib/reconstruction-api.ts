@@ -1,7 +1,16 @@
 "use client";
 
 import { ApiError, api } from "./capture-api";
-import { type ArtifactRef, ArtifactIntegrityError, checkBeforeDownload, readExactly, verifyArtifact } from "./artifact-integrity";
+import {
+  type ArtifactFormat,
+  type ArtifactManifest,
+  type ArtifactRef,
+  ArtifactIntegrityError,
+  checkBeforeDownload,
+  readExactly,
+  verifyArtifact,
+  verifyManifest,
+} from "./artifact-integrity";
 import type { CoordinateFrame } from "./coordinate-frame";
 import { publicConfig } from "./env";
 import { currentAuthHeaders } from "./session";
@@ -25,7 +34,7 @@ export interface ReconstructionVersion {
   roomName?: string | null;
 }
 
-export type { ArtifactFormat, ArtifactRef } from "./artifact-integrity";
+export type { ArtifactFormat, ArtifactManifest, ArtifactRef } from "./artifact-integrity";
 
 /** Mirrors dev.chaya.api.reconstruction.ReconstructionService.Reconstruction. The artifacts are in the
  * reconstruction's own frame; `coordinateFrame` (null until calibrated) is how they are placed in canonical metres.
@@ -79,22 +88,75 @@ export async function exchangePublicLink(secret: string): Promise<PublicViewerTo
  * Downloads an artifact (e.g. the .ksplat) with the caller's credentials (bearer or public-viewer token), reporting real
  * progress from the stream, and returns its bytes only once they are verified: exactly the registered size (a larger
  * download is cut off, a shorter one refused), the registered SHA-256, and for a KSPLAT the viewer contract and the
- * format the API recorded (lib/artifact-integrity). Anything else throws -- the viewer never hands unverified bytes to
- * GaussianSplats3D. The caller turns the Blob into an object URL, since that loader fetches the path itself and cannot
- * be handed an Authorization header.
+ * format the API recorded (lib/artifact-integrity). Retries up to maxRetries on transient network/streaming failures.
+ * Supports cancellation via AbortSignal. Anything else throws -- the viewer never hands unverified bytes to GaussianSplats3D.
  */
-export async function fetchArtifact(ref: ArtifactRef, onProgress?: (loadedBytes: number, totalBytes: number) => void): Promise<Blob> {
+export async function fetchArtifact(
+  ref: ArtifactRef,
+  onProgress?: (loadedBytes: number, totalBytes: number) => void,
+  signal?: AbortSignal,
+  maxRetries = 2,
+): Promise<Blob> {
   checkBeforeDownload(ref);
-  const res = await fetch(`${publicConfig().apiBaseUrl}${ref.url}`, { headers: await currentAuthHeaders() });
-  if (!res.ok) throw new ApiError(res.status, "ARTIFACT_FETCH_FAILED", `Could not load the reconstruction asset (HTTP ${res.status}).`);
-  const length = res.headers.get("Content-Encoding") ? null : res.headers.get("Content-Length"); // encoded: of the encoding
-  if (length !== null && Number(length) !== ref.sizeBytes) {
-    await res.body?.cancel().catch(() => {});
-    throw new ArtifactIntegrityError("SIZE_MISMATCH",
-      `The server is sending ${length} bytes but the reconstruction is registered as ${ref.sizeBytes}.`);
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (signal?.aborted) {
+      throw new DOMException("The download was cancelled.", "AbortError");
+    }
+    try {
+      const res = await fetch(`${publicConfig().apiBaseUrl}${ref.url}`, {
+        headers: await currentAuthHeaders(),
+        signal,
+      });
+      if (!res.ok) {
+        const isRetryable = res.status >= 500 || res.status === 408 || res.status === 429;
+        if (isRetryable && attempt < maxRetries) {
+          await new Promise((r) => setTimeout(r, 200 * Math.pow(2, attempt)));
+          continue;
+        }
+        throw new ApiError(res.status, "ARTIFACT_FETCH_FAILED", `Could not load the reconstruction asset (HTTP ${res.status}).`);
+      }
+      const length = res.headers.get("Content-Encoding") ? null : res.headers.get("Content-Length");
+      if (length !== null && Number(length) !== ref.sizeBytes) {
+        await res.body?.cancel().catch(() => {});
+        throw new ArtifactIntegrityError("SIZE_MISMATCH",
+          `The server is sending ${length} bytes but the reconstruction is registered as ${ref.sizeBytes}.`);
+      }
+      if (!res.body) throw new ArtifactIntegrityError("SIZE_MISMATCH", "The reconstruction download has no body.");
+      const bytes = await readExactly(res.body, ref.sizeBytes, (loaded) => onProgress?.(loaded, ref.sizeBytes), signal);
+      await verifyArtifact(bytes, ref);
+      return new Blob([bytes], { type: "application/octet-stream" });
+    } catch (e) {
+      if (signal?.aborted) throw e;
+      if (e instanceof ArtifactIntegrityError && (e.code === "SIZE_MISMATCH" || e.code === "CHECKSUM_MISMATCH") && attempt < maxRetries) {
+        lastError = e;
+        await new Promise((r) => setTimeout(r, 200 * Math.pow(2, attempt)));
+        continue;
+      }
+      if (e instanceof TypeError && attempt < maxRetries) {
+        lastError = e;
+        await new Promise((r) => setTimeout(r, 200 * Math.pow(2, attempt)));
+        continue;
+      }
+      throw e;
+    }
   }
-  if (!res.body) throw new ArtifactIntegrityError("SIZE_MISMATCH", "The reconstruction download has no body.");
-  const bytes = await readExactly(res.body, ref.sizeBytes, (loaded) => onProgress?.(loaded, ref.sizeBytes));
-  await verifyArtifact(bytes, ref);
-  return new Blob([bytes], { type: "application/octet-stream" });
+  throw lastError ?? new Error("Download failed after bounded retries.");
+}
+
+/** Fetches and validates the authoritative artifact manifest against the scene registration. */
+export async function fetchAndVerifyManifest(
+  manifestRef: ArtifactRef,
+  expected: { runId: string; scanId?: string; ksplatRef: ArtifactRef },
+  signal?: AbortSignal,
+): Promise<ArtifactManifest> {
+  const blob = await fetchArtifact(manifestRef, undefined, signal);
+  const text = await blob.text();
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch (e) {
+    throw new ArtifactIntegrityError("FORMAT_MISMATCH", `Artifact manifest is not valid JSON: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  return verifyManifest(json, expected);
 }

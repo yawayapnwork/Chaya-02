@@ -13,13 +13,14 @@ import {
   type Reconstruction,
   type ReconstructionVersion,
   exchangePublicLink,
+  fetchAndVerifyManifest,
   fetchArtifact,
   getReconstruction,
   listReconstructions,
 } from "@/lib/reconstruction-api";
 import { detectDeviceProfile, type DeviceProfile } from "@/lib/device-profile";
 import { formatBytes, formatDate } from "@/lib/viewer-format";
-import { checkSceneScope } from "@/lib/artifact-integrity";
+import { checkSceneScope, isSyntheticFixture } from "@/lib/artifact-integrity";
 import { type Scoped, forScene, initialVersion, sceneKey, versionLabel } from "@/lib/version-scope";
 import { type SearchPosition, type SearchResult } from "@/lib/search-api";
 import { type RouteResponse, listFloorConnections, planMultiStopRoute, planRoute } from "@/lib/navigation-api";
@@ -319,34 +320,52 @@ export default function ViewerWorkspace() {
   useEffect(() => {
     const ksplat = reconstruction?.artifacts.find((a) => a.kind === "KSPLAT");
     if (!ksplat) return; // reconstruction is null: the effects above already reset sceneLoad to idle
+    const manifestRef = reconstruction?.artifacts.find((a) => a.kind === "ARTIFACT_MANIFEST");
     const key = sceneKey(reconstruction)!;
     let cancelled = false;
     let url: string | null = null;
+    const abortController = new AbortController();
     const progress = (loaded: number, total: number) => {
       if (!cancelled) setLoadState({ key, value: { phase: "downloading", percent: Math.round((loaded / total) * 100) } });
     };
     const run = async () => {
       setLoadState({ key, value: { phase: "downloading", percent: 0 } });
       try {
+        if (manifestRef && reconstruction) {
+          await fetchAndVerifyManifest(manifestRef, {
+            runId: reconstruction.runId,
+            scanId: reconstruction.scanId,
+            ksplatRef: ksplat,
+          }, abortController.signal);
+        }
+        if (cancelled) return;
         // Verified before it is returned (and before it is cached): registered size, SHA-256, the .ksplat contract and
         // the published format. A cached entry is those same verified bytes.
-        const blob = await artifactCache.get(ksplat, (onProgress) => fetchArtifact(ksplat, onProgress), progress);
+        const blob = await artifactCache.get(
+          ksplat,
+          (onProgress, signal) => fetchArtifact(ksplat, onProgress, signal ?? abortController.signal),
+          progress,
+          abortController.signal,
+        );
         if (cancelled) return;
         url = URL.createObjectURL(blob);
         viewerResources.objectUrls++;
         setBlob({ key, value: url });
         setLoadState({ key, value: { phase: "preparing", percent: 0 } });
       } catch (e) {
-        if (!cancelled) setLoadState({ key, value: { phase: "error", failure: classifyViewerError(e) } });
+        if (!cancelled && !(e instanceof DOMException && e.name === "AbortError")) {
+          setLoadState({ key, value: { phase: "error", failure: classifyViewerError(e) } });
+        }
       }
     };
     run();
     return () => {
+      cancelled = true;
+      abortController.abort();
       artifactCache.unsubscribe(ksplat, progress);
       // The scene this download was for is no longer the one on screen (another version, floor or venue, a retry, or
       // the page closing): its canvas unmounts with it, so the bytes are released here rather than kept until the next
       // download finishes.
-      cancelled = true;
       if (url) {
         URL.revokeObjectURL(url);
         viewerResources.objectUrls--;
@@ -400,6 +419,10 @@ export default function ViewerWorkspace() {
   const blobUrl = forScene(blob, currentKey);
   const sceneLoad: SceneLoad = forScene(loadState, currentKey) ?? { phase: "idle" };
   const canvasKey = currentKey ?? "";
+  const isSynthetic = reconstruction ? isSyntheticFixture(reconstruction) : false;
+  const isPartial = reconstruction?.runQuality === "PARTIAL";
+  const isFinal = reconstruction?.runQuality === "FINAL" && !isSynthetic;
+  const isFailed = reconstruction?.runStatus === "FAILED" || reconstruction?.runStatus === "CANCELLED";
   const routeOutcomes = forScene(loadedRoutes, currentKey);
   const routeFrom = pois.find((p) => p.id === routeFromId) ?? null;
   const routeStops = useMemo(
@@ -731,8 +754,72 @@ export default function ViewerWorkspace() {
             <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-center text-zinc-600" data-testid="no-reconstruction"
               data-state={pendingHere ? (pendingHere.state === "failed" ? "failed" : "processing") : "unavailable"}>
               <p className="text-lg font-medium">No reconstruction available.</p>
-              {!pendingHere && <p className="text-sm">This floor has not produced a viewable reconstruction yet.</p>}
+              {!pendingHere && (
+                <>
+                  <p className="text-sm">This floor has not produced a viewable reconstruction yet.</p>
+                  {!isPublicLink && (
+                    <div className="mt-2 flex gap-2">
+                      <Link href={`/capture?venue=${venueId}&floor=${floorId}`} className="rounded border bg-white px-3 py-1.5 text-xs text-zinc-800 shadow-sm hover:bg-zinc-50">
+                        Start a capture
+                      </Link>
+                      <Link href="/ops" className="rounded border bg-white px-3 py-1.5 text-xs text-zinc-800 shadow-sm hover:bg-zinc-50">
+                        Operations dashboard
+                      </Link>
+                    </div>
+                  )}
+                </>
+              )}
               {pendingHere && <ProcessingNotice progress={pendingHere} />}
+            </div>
+          )}
+
+          {reconstruction && (
+            <div className="pointer-events-none absolute left-3 top-3 z-10 flex flex-col gap-1.5 max-w-sm">
+              {isSynthetic && (
+                <div
+                  role="status"
+                  data-testid="synthetic-demonstration-notice"
+                  className="pointer-events-auto rounded border border-purple-300 bg-purple-50/95 px-2.5 py-1 text-xs text-purple-900 shadow-sm backdrop-blur"
+                >
+                  <span className="font-semibold uppercase tracking-wider bg-purple-200/80 px-1 py-0.5 rounded text-[10px] mr-1.5">
+                    Synthetic Demonstration Data
+                  </span>
+                  <span>Test fixture only, not an actual venue reconstruction.</span>
+                </div>
+              )}
+              {isPartial && (
+                <div
+                  role="status"
+                  data-testid="reconstruction-partial"
+                  className="pointer-events-auto rounded border border-amber-300 bg-amber-50/95 px-2.5 py-1 text-xs text-amber-900 shadow-sm backdrop-blur"
+                >
+                  <span className="font-semibold uppercase tracking-wider bg-amber-200/80 px-1 py-0.5 rounded text-[10px] mr-1.5">
+                    Partial Reconstruction
+                  </span>
+                  <span>Reduced coverage; not final or certified for navigation.</span>
+                </div>
+              )}
+              {isFinal && (
+                <div
+                  role="status"
+                  data-testid="reconstruction-final"
+                  className="pointer-events-auto hidden sm:block rounded border border-emerald-300 bg-emerald-50/95 px-2.5 py-1 text-xs text-emerald-900 shadow-sm backdrop-blur"
+                >
+                  <span className="font-semibold text-emerald-800">Final Reconstruction</span> · Certified venue digital twin
+                </div>
+              )}
+              {isFailed && (
+                <div
+                  role="alert"
+                  data-testid="reconstruction-failed"
+                  className="pointer-events-auto rounded border border-red-300 bg-red-50/95 px-2.5 py-1 text-xs text-red-900 shadow-sm backdrop-blur"
+                >
+                  <span className="font-semibold uppercase tracking-wider bg-red-200/80 px-1 py-0.5 rounded text-[10px] mr-1.5">
+                    Failed Reconstruction
+                  </span>
+                  <span>This pipeline run failed to complete all stages ({reconstruction.runStatus}).</span>
+                </div>
+              )}
             </div>
           )}
 
@@ -815,6 +902,15 @@ export default function ViewerWorkspace() {
               data-testid="viewer-state" data-state={sceneLoad.failure.kind}>
               <p className="text-lg font-medium">{sceneLoad.failure.title}</p>
               <p className="max-w-md text-center text-sm text-white/80">{sceneLoad.failure.message}</p>
+              {sceneLoad.failure.kind === "corrupt" && (
+                <p className="text-xs text-zinc-400">Next step: The downloaded artifact failed integrity validation. Click Retry to download again.</p>
+              )}
+              {sceneLoad.failure.kind === "incompatible" && (
+                <p className="text-xs text-zinc-400">Next step: The artifact format does not match this viewer. Re-run ARTIFACT_GENERATION on the worker.</p>
+              )}
+              {sceneLoad.failure.kind === "graphics" && !sceneLoad.failure.retryable && (
+                <p className="text-xs text-zinc-400">Next step: Ensure WebGL and hardware acceleration are enabled in your browser settings (chrome://settings/system).</p>
+              )}
               {sceneLoad.failure.retryable && (
                 // A verified model is not downloaded again (lib/artifact-cache): a graphics failure only rebuilds the viewer.
                 <button className="min-h-10 rounded border border-white/40 px-3 py-1.5 text-sm" onClick={() => setReloadToken((t) => t + 1)}>
@@ -841,6 +937,14 @@ export default function ViewerWorkspace() {
               <section>
                 <h2 className="font-medium">Reconstruction</h2>
                 <dl className="mt-1 grid grid-cols-[6rem_1fr] gap-1 text-xs text-zinc-700">
+                  <dt>Provenance</dt>
+                  <dd data-testid="reconstruction-provenance">
+                    {isSynthetic ? (
+                      <span className="font-semibold text-purple-800">Synthetic Fixture (Demo)</span>
+                    ) : (
+                      <span className="text-zinc-700">Real Venue Scan</span>
+                    )}
+                  </dd>
                   <dt>Version</dt>
                   <dd data-testid="scan-version">
                     {reconstruction.versionNumber != null
@@ -851,7 +955,16 @@ export default function ViewerWorkspace() {
                   </dd>
                   <dt>Generated</dt><dd>{formatDate(reconstruction.generatedAt)}</dd>
                   <dt>Run status</dt><dd>{reconstruction.runStatus}</dd>
-                  <dt>Quality</dt><dd>{reconstruction.runQuality ?? "—"}</dd>
+                  <dt>Quality</dt>
+                  <dd data-testid="reconstruction-quality">
+                    {reconstruction.runQuality === "FINAL" ? (
+                      <span className="font-semibold text-emerald-700">FINAL (Certified)</span>
+                    ) : reconstruction.runQuality === "PARTIAL" ? (
+                      <span className="font-semibold text-amber-700">PARTIAL (Incomplete)</span>
+                    ) : (
+                      reconstruction.runQuality ?? "—"
+                    )}
+                  </dd>
                   <dt>Coordinates</dt>
                   <dd data-testid="coordinate-frame-status">
                     {isCanonical(frame)

@@ -43,7 +43,9 @@ test("the viewer opens on the version the floor publishes, not the newest one", 
 test("the picker names versions by number and says which one is current", () => {
   assert.equal(versionLabel({ versionNumber: 2, generatedAt: "x" }, "29 Sep", true), "v2 · 29 Sep (current)");
   assert.equal(versionLabel({ versionNumber: 1, generatedAt: "x" }, "28 Sep", false), "v1 · 28 Sep");
+  assert.equal(versionLabel({ versionNumber: 1, generatedAt: "x", runQuality: "PARTIAL" }, "28 Sep", false), "v1 · 28 Sep [partial]");
   assert.equal(versionLabel({ versionNumber: null, generatedAt: "x" }, "27 Sep", false), "27 Sep (not a finalized version)");
+  assert.equal(versionLabel({ versionNumber: null, generatedAt: "x", runQuality: "PARTIAL" }, "27 Sep", false), "27 Sep (not a finalized version) [partial]");
 });
 
 test("a room's own version is named by its room, a stitched floor says so, and neither opens by default over the floor", () => {

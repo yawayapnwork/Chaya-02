@@ -5,7 +5,16 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { type ArtifactRef, ArtifactIntegrityError, checkSceneScope, readExactly, sha256Hex, verifyArtifact } from "./artifact-integrity.ts";
+import {
+  type ArtifactRef,
+  ArtifactIntegrityError,
+  checkSceneScope,
+  isSyntheticFixture,
+  readExactly,
+  sha256Hex,
+  verifyArtifact,
+  verifyManifest,
+} from "./artifact-integrity.ts";
 import { KsplatInvalidError, validateKsplat } from "./ksplat-validation.ts";
 
 const bytes = readFileSync(new URL("../../../packages/contracts/fixtures/viewer-scene/scene.ksplat", import.meta.url));
@@ -96,4 +105,155 @@ test("another run, another version, another version's asset or frame, or a broke
   assert.throws(() => checkSceneScope(scene({ coordinateFrame: { ...frame, scale: Number.NaN } }), expected), out);
   assert.throws(() => checkSceneScope(scene({ coordinateFrame: { ...frame, rotation: { x: 0, y: 0, z: 1, w: 1 } } }), expected), out);
   assert.throws(() => checkSceneScope(scene({ coordinateFrame: { ...frame, translation: null } }), expected), out);
+});
+
+test("isSyntheticFixture identifies synthetic fixtures and rejects real venue scans as synthetic", () => {
+  assert.equal(isSyntheticFixture({ runQuality: "SYNTHETIC_DEMO" }), true);
+  assert.equal(isSyntheticFixture({ runQuality: "FIXTURE" }), true);
+  assert.equal(isSyntheticFixture({ scanId: "scan-synthetic-123" }), true);
+  assert.equal(isSyntheticFixture({ scanId: "test-fixture-scan" }), true);
+  assert.equal(isSyntheticFixture({ artifacts: [{ sha256: "af64e4f4d2037e8c3c2949f41134921691f9b5b9e8fd36a7331a1b32607bf48d" }] }), true);
+  assert.equal(isSyntheticFixture({ artifacts: [{ url: "/fixtures/viewer-scene/scene.ksplat" }] }), true);
+
+  assert.equal(
+    isSyntheticFixture({
+      runQuality: "FINAL",
+      scanId: "e2e88a0e-2d3b-411a-821b-cfc09f87c123",
+      artifacts: [{ sha256: "111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000", url: "/api/v1/venues/v-1/reconstructions/r-1/artifacts/KSPLAT" }],
+    }),
+    false
+  );
+});
+
+test("verifyManifest validates consistent manifests and rejects corrupt or mismatched entries", () => {
+  const ksplatRef = ref();
+  const validManifest = {
+    manifestVersion: "1.0",
+    coordinateSpace: "RECONSTRUCTION",
+    runId: RUN,
+    scanId: "scan-1",
+    sourceScanVersion: VERSION,
+    workerVersion: "0.1.0",
+    artifacts: [
+      {
+        name: "scene.ksplat",
+        kind: "KSPLAT",
+        checksum: { algorithm: "sha256", value: ksplatRef.sha256 },
+        sizeBytes: ksplatRef.sizeBytes,
+      },
+    ],
+  };
+
+  const verified = verifyManifest(validManifest, { runId: RUN, scanId: "scan-1", ksplatRef });
+  assert.equal(verified.runId, RUN);
+  assert.equal(verified.artifacts.length, 1);
+
+  // Wrong manifestVersion
+  assert.throws(
+    () => verifyManifest({ ...validManifest, manifestVersion: "2.0" }, { runId: RUN, ksplatRef }),
+    code("FORMAT_MISMATCH")
+  );
+
+  // Wrong coordinateSpace
+  assert.throws(
+    () => verifyManifest({ ...validManifest, coordinateSpace: "CANONICAL" }, { runId: RUN, ksplatRef }),
+    code("FORMAT_MISMATCH")
+  );
+
+  // Mismatched runId
+  assert.throws(
+    () => verifyManifest({ ...validManifest, runId: "other-run" }, { runId: RUN, ksplatRef }),
+    code("OUT_OF_SCOPE")
+  );
+
+  // Mismatched scanId
+  assert.throws(
+    () => verifyManifest({ ...validManifest, scanId: "other-scan" }, { runId: RUN, scanId: "scan-1", ksplatRef }),
+    code("OUT_OF_SCOPE")
+  );
+
+  // Mismatched KSPLAT checksum
+  assert.throws(
+    () =>
+      verifyManifest(
+        {
+          ...validManifest,
+          artifacts: [
+            {
+              name: "scene.ksplat",
+              kind: "KSPLAT",
+              checksum: { algorithm: "sha256", value: "0".repeat(64) },
+              sizeBytes: ksplatRef.sizeBytes,
+            },
+          ],
+        },
+        { runId: RUN, ksplatRef }
+      ),
+    code("CHECKSUM_MISMATCH")
+  );
+
+  // Mismatched KSPLAT size
+  assert.throws(
+    () =>
+      verifyManifest(
+        {
+          ...validManifest,
+          artifacts: [
+            {
+              name: "scene.ksplat",
+              kind: "KSPLAT",
+              checksum: { algorithm: "sha256", value: ksplatRef.sha256 },
+              sizeBytes: ksplatRef.sizeBytes + 100,
+            },
+          ],
+        },
+        { runId: RUN, ksplatRef }
+      ),
+    code("SIZE_MISMATCH")
+  );
+
+  // Missing KSPLAT entry
+  assert.throws(
+    () =>
+      verifyManifest(
+        {
+          ...validManifest,
+          artifacts: [{ name: "other.bin", kind: "OTHER", checksum: { algorithm: "sha256", value: "x" }, sizeBytes: 10 }],
+        },
+        { runId: RUN, ksplatRef }
+      ),
+    code("FORMAT_MISMATCH")
+  );
+});
+
+test("checkSceneScope validates ARTIFACT_MANIFEST URL when present", () => {
+  const manifestUrl = `/api/v1/venues/${VENUE}/scan-versions/${VERSION}/artifacts/ARTIFACT_MANIFEST`;
+  const validManifestRef: ArtifactRef = {
+    kind: "ARTIFACT_MANIFEST",
+    contentType: "application/json",
+    sizeBytes: 500,
+    sha256: "1".repeat(64),
+    url: manifestUrl,
+    format: null,
+  };
+
+  assert.equal(
+    checkSceneScope(scene({ artifacts: [ref(), validManifestRef] }), expected).url,
+    ref().url
+  );
+
+  // Manifest URL pointing to wrong version is rejected
+  assert.throws(
+    () =>
+      checkSceneScope(
+        scene({
+          artifacts: [
+            ref(),
+            { ...validManifestRef, url: `/api/v1/venues/${VENUE}/scan-versions/other-version/artifacts/ARTIFACT_MANIFEST` },
+          ],
+        }),
+        expected
+      ),
+    code("OUT_OF_SCOPE")
+  );
 });

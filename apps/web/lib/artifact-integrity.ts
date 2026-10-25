@@ -65,12 +65,19 @@ export async function readExactly(
   body: ReadableStream<Uint8Array>,
   expectedBytes: number,
   onProgress?: (loadedBytes: number) => void,
+  signal?: AbortSignal,
 ): Promise<ArrayBuffer> {
+  if (signal?.aborted) {
+    throw new DOMException("The download was cancelled.", "AbortError");
+  }
   const out = new Uint8Array(expectedBytes);
   const reader = body.getReader();
   let loaded = 0;
   try {
     for (;;) {
+      if (signal?.aborted) {
+        throw new DOMException("The download was cancelled.", "AbortError");
+      }
       const { done, value } = await reader.read();
       if (done) break;
       if (loaded + value.byteLength > expectedBytes) {
@@ -118,6 +125,93 @@ export async function verifyArtifact(bytes: ArrayBuffer, ref: ArtifactRef): Prom
     }
   }
   return info;
+}
+
+export interface ArtifactManifestEntry {
+  name: string;
+  kind: string;
+  checksum: { algorithm: string; value: string };
+  sizeBytes: number;
+  artifactVersion?: string;
+  sourceScanVersion?: string | null;
+  processingConfiguration?: Record<string, unknown>;
+  createdAt?: string;
+  format?: Record<string, unknown>;
+}
+
+export interface ArtifactManifest {
+  manifestVersion: string;
+  coordinateSpace: string;
+  runId: string;
+  scanId: string;
+  sourceScanVersion?: string | null;
+  workerVersion?: string;
+  createdAt?: string;
+  processingConfiguration?: Record<string, unknown>;
+  artifacts: ArtifactManifestEntry[];
+}
+
+export const KNOWN_SYNTHETIC_SHA256 = new Set([
+  "af64e4f4d2037e8c3c2949f41134921691f9b5b9e8fd36a7331a1b32607bf48d", // packages/contracts/fixtures/viewer-scene/scene.ksplat
+  "082f2c7db95af8165dbdde2cb51699590e624d9b7fafeb6d67d8879de3847e9b", // packages/contracts/fixtures/ksplat/scene.ksplat
+]);
+
+/** Identifies whether a reconstruction is a synthetic demonstration fixture rather than a real venue twin. */
+export function isSyntheticFixture(scene: {
+  runQuality?: string | null;
+  scanId?: string | null;
+  artifacts?: { sha256?: string; url?: string }[];
+}): boolean {
+  if (scene.runQuality === "SYNTHETIC_DEMO" || scene.runQuality === "FIXTURE") return true;
+  if (scene.scanId && (scene.scanId.toLowerCase().includes("synthetic") || scene.scanId.toLowerCase().includes("fixture"))) return true;
+  if (scene.artifacts?.some((a) => (a.sha256 && KNOWN_SYNTHETIC_SHA256.has(a.sha256)) || a.url?.includes("viewer-scene"))) return true;
+  return false;
+}
+
+/**
+ * Validates the authoritative artifact manifest against the reconstruction request and the KSPLAT artifact.
+ * Fails closed if the manifest is corrupted, out of scope, or records different artifact properties.
+ */
+export function verifyManifest(
+  manifest: unknown,
+  expected: { runId: string; scanId?: string; ksplatRef: ArtifactRef }
+): ArtifactManifest {
+  if (typeof manifest !== "object" || manifest === null) {
+    throw new ArtifactIntegrityError("FORMAT_MISMATCH", "Artifact manifest is not a valid JSON object.");
+  }
+  const m = manifest as Partial<ArtifactManifest>;
+  if (m.manifestVersion !== "1.0") {
+    throw new ArtifactIntegrityError("FORMAT_MISMATCH", `Unsupported manifest version: ${m.manifestVersion}; expected 1.0.`);
+  }
+  if (m.coordinateSpace !== "RECONSTRUCTION") {
+    throw new ArtifactIntegrityError("FORMAT_MISMATCH", `Manifest coordinateSpace must be RECONSTRUCTION, got: ${m.coordinateSpace}.`);
+  }
+  if (m.runId !== expected.runId) {
+    throw new ArtifactIntegrityError("OUT_OF_SCOPE", `Manifest runId ${m.runId} does not match expected runId ${expected.runId}.`);
+  }
+  if (expected.scanId && m.scanId && m.scanId !== expected.scanId) {
+    throw new ArtifactIntegrityError("OUT_OF_SCOPE", `Manifest scanId ${m.scanId} does not match expected scanId ${expected.scanId}.`);
+  }
+  if (!Array.isArray(m.artifacts)) {
+    throw new ArtifactIntegrityError("FORMAT_MISMATCH", "Manifest artifacts list is missing or invalid.");
+  }
+  const ksplatEntry = m.artifacts.find((a) => a.kind === "KSPLAT" || a.name === "scene.ksplat");
+  if (!ksplatEntry) {
+    throw new ArtifactIntegrityError("FORMAT_MISMATCH", "Manifest does not contain an entry for KSPLAT.");
+  }
+  if (ksplatEntry.checksum?.value !== expected.ksplatRef.sha256) {
+    throw new ArtifactIntegrityError(
+      "CHECKSUM_MISMATCH",
+      `Manifest recorded KSPLAT checksum ${ksplatEntry.checksum?.value} does not match artifact registration ${expected.ksplatRef.sha256}.`
+    );
+  }
+  if (ksplatEntry.sizeBytes !== expected.ksplatRef.sizeBytes) {
+    throw new ArtifactIntegrityError(
+      "SIZE_MISMATCH",
+      `Manifest recorded KSPLAT size ${ksplatEntry.sizeBytes} does not match artifact registration ${expected.ksplatRef.sizeBytes}.`
+    );
+  }
+  return m as ArtifactManifest;
 }
 
 export { KsplatInvalidError };
@@ -169,6 +263,14 @@ export function checkSceneScope(scene: ScopedScene, expected: SceneExpectation):
     ? `${base}/scan-versions/${version}/artifacts/KSPLAT`
     : `${base}/reconstructions/${scene.runId}/artifacts/KSPLAT`;
   if (ksplat.url !== url) outOfScope(`its viewer asset is ${ksplat.url}, not ${url}`);
+
+  const manifest = scene.artifacts.find((a) => a.kind === "ARTIFACT_MANIFEST");
+  if (manifest) {
+    const manifestUrl = version
+      ? `${base}/scan-versions/${version}/artifacts/ARTIFACT_MANIFEST`
+      : `${base}/reconstructions/${scene.runId}/artifacts/ARTIFACT_MANIFEST`;
+    if (manifest.url !== manifestUrl) outOfScope(`its manifest is ${manifest.url}, not ${manifestUrl}`);
+  }
 
   const frame = scene.coordinateFrame;
   if (version && !frame) outOfScope("a scan version without its recorded coordinate frame");

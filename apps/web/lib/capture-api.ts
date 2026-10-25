@@ -410,5 +410,5 @@ export const getCalibration = (venueId: string, captureId: string) =>
 export const calibrateCapture = (
   venueId: string,
   captureId: string,
-  body: { resolvedPoints: ResolvedPoint[]; gravity?: { source: GravitySource }; note?: string },
+  body: { resolvedPoints?: ResolvedPoint[]; gravity?: { source: GravitySource }; note?: string },
 ) => api<CalibrationStatus>(`${captureBase(venueId, captureId)}/calibration`, { method: "POST", body: JSON.stringify(body) });

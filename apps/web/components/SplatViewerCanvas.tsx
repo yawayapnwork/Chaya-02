@@ -208,8 +208,17 @@ export default function SplatViewerCanvas({
 
       resize();
 
+      if (typeof window !== "undefined" && !window.WebGLRenderingContext) {
+        throw new GraphicsContextError(
+          "WebGL is not supported or hardware acceleration is disabled in this browser. Please enable hardware acceleration in your browser settings (chrome://settings/system) or use an updated browser.",
+          true,
+        );
+      }
+
       // Without antialias and with failIfMajorPerformanceCaveat unset, the only way this fails is no WebGL at all.
-      if (!renderer.getContext()) throw new GraphicsContextError("This device could not create a WebGL context.");
+      if (!renderer.getContext()) {
+        throw new GraphicsContextError("This device could not create a WebGL context.", true);
+      }
 
       viewer = new GaussianSplats3D.Viewer({
         selfDrivenMode: false,
@@ -241,7 +250,7 @@ export default function SplatViewerCanvas({
       }
     } catch (e) {
       onError(e instanceof GraphicsContextError ? e : new GraphicsContextError(
-        `This device could not create a WebGL context${e instanceof Error ? ` (${e.message})` : ""}.`));
+        `This device could not create a WebGL context${e instanceof Error ? ` (${e.message})` : ""}.`, true));
       return;
     }
 
