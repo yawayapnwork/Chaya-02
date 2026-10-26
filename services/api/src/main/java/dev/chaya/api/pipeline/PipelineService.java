@@ -1269,6 +1269,21 @@ public class PipelineService {
         }
         UUID frameId = requireCanonicalArtifactFrame(run, JobStage.SEMANTIC_INDEXING, doc, "DETECTED_OBJECTS");
         requireArtifactVersion(run, doc, "DETECTED_OBJECTS");
+        // If an earlier attempt on this scan version wrote AUTO_DETECTED POIs from a different artifact, supersede them
+        // so re-running SEMANTIC_INDEXING never leaves stale detections alongside the latest artifact's detections.
+        if (run.scanVersionId() != null) {
+            jdbc.sql("""
+                    UPDATE poi p SET deleted_at = now(), superseded_by_scan_version_id = :sv
+                     WHERE p.venue_id = :venue AND p.deleted_at IS NULL
+                       AND EXISTS (
+                           SELECT 1 FROM poi_version v
+                            WHERE v.poi_id = p.id AND v.source = 'AUTO_DETECTED'
+                              AND v.scan_version_id = :sv
+                              AND v.detection_artifact_id IS DISTINCT FROM :a
+                       )
+                    """)
+                .param("sv", run.scanVersionId()).param("venue", run.venueId()).param("a", stored.id()).update();
+        }
         int superseded = run.incremental() ? supersedePoisInRegion(run, floorId) : 0;
         String embeddingModel = (String) doc.get("embedding_model");
         @SuppressWarnings("unchecked")
@@ -1820,6 +1835,7 @@ public class PipelineService {
                 SELECT p.id, v.x, v.y FROM poi p JOIN poi_version v ON v.poi_id = p.id
                  WHERE p.venue_id = :venue AND p.floor_id = :floor AND p.deleted_at IS NULL AND v.source = 'AUTO_DETECTED'
                    AND v.version_number = (SELECT max(version_number) FROM poi_version WHERE poi_id = p.id)
+                   AND poi_version_is_current(p.floor_id, v.scan_version_id, v.source)
                 """).param("venue", run.venueId()).param("floor", floorId).query().listOfRows();
         int superseded = 0;
         for (Map<String, Object> row : candidates) {

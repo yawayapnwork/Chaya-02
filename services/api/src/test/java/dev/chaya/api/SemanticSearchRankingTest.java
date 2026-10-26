@@ -542,4 +542,38 @@ class SemanticSearchRankingTest extends AbstractIntegrationTest {
         assertThat(f.get("image_model").asText()).isEqualTo(f.get("text_model").asText());
         assertThat(crop("couch-3")).hasSize(512);
     }
+
+    @Test
+    void aSynonymMatchOnAWeakDetectionNeverBecomesAConfidentExactMatchAndDiagnosticsExplainEveryResult() {
+        UUID frame = recalibrated();
+        // A weak detector hit (confidence 0.25 < 0.50) labelled "couch" and a staff Lounge POI with tag "sofas" in the same frame.
+        UUID weakCouch = detected(t, run, "couch-3", "couch", 35, 0, 0.4, model, model, frame, 0.25, "SINGLE_VIEW", 0.25);
+        UUID staffLounge = manual(t, "Lounge", "seating area", List.of("sofas", "armchairs"), 36, 0, model, frame);
+
+        SearchResponse r = query("sofa");
+        SearchResult loungeResult = r.results().stream().filter(x -> x.poiId().equals(staffLounge)).findFirst().orElseThrow();
+        SearchResult weakResult = r.results().stream().filter(x -> x.poiId().equals(weakCouch)).findFirst().orElseThrow();
+
+        // The weak detection matched via synonym ("sofa" -> "couch") must not receive unconditional exactMatch priority,
+        // is flagged lowConfidence = true, and ranks behind the staff Lounge POI.
+        assertThat(weakResult.exactMatch()).isFalse();
+        assertThat(weakResult.lowConfidence()).isTrue();
+        assertThat(loungeResult.exactMatch()).isTrue();
+        assertThat(r.results().indexOf(loungeResult)).isLessThan(r.results().indexOf(weakResult));
+
+        // ResultDiagnostics explain detector vs manual POI and semantic embedding retrieval mode.
+        assertThat(weakResult.diagnostics()).isNotNull();
+        assertThat(weakResult.diagnostics().origin()).isEqualTo("DETECTOR");
+        assertThat(weakResult.diagnostics().retrievalMode()).isEqualTo("SEMANTIC_EMBEDDING");
+        assertThat(weakResult.diagnostics().explanation()).contains("Detector POI");
+
+        assertThat(loungeResult.diagnostics()).isNotNull();
+        assertThat(loungeResult.diagnostics().origin()).isEqualTo("MANUAL_POI");
+        assertThat(loungeResult.diagnostics().retrievalMode()).isEqualTo("SEMANTIC_EMBEDDING");
+        assertThat(loungeResult.diagnostics().explanation()).contains("Manual POI");
+
+        assertThat(r.indexDiagnostics()).isNotNull();
+        assertThat(r.indexDiagnostics().indexComplete()).isTrue();
+        assertThat(r.indexDiagnostics().failedEmbeddingPois()).isZero();
+    }
 }

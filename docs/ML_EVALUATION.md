@@ -272,3 +272,14 @@ services/reconstruction: python -m pytest tests/unit/test_semantic_models.py tes
 chaya-ml-eval:           python -m pytest tests/ml          # training harness smoke tests on tiny random models
 benchmarks:              python -m pytest benchmarks/tests/test_synthetic_cleanup_scene.py
 ```
+
+
+## 8. Licensing enforcement and detector phrase canonicalization (2026-10-26)
+
+- **Commercial-use license gate (`chaya_worker.model_provenance.enforce_license_policy`, `Settings.commercial_use_only`):**
+  - When `MODEL_COMMERCIAL_USE_ONLY=true` (set on the production `worker` service in `infra/deploy/docker-compose.yml`), `capabilities.assess()`, `SEMANTIC_SEGMENTATION`, and `SEMANTIC_INDEXING` refuse to run any checkpoint with `commercial_use=False` (`nvidia/segformer-b0-finetuned-ade-512-512` under the NVIDIA Source Code License for SegFormer, or any fine-tuned checkpoint derived from it) or `commercial_use=None` (unknown/unverified checkpoints), raising `ModelLicenseError` / `StageError(code="MODEL_LICENSE_RESTRICTED")`.
+  - Permissively licensed stock checkpoints (`IDEA-Research/grounding-dino-tiny` under Apache-2.0 and `open_clip:ViT-B-32:openai` under MIT) pass the gate (`commercial_use=True`).
+- **Grounding DINO phrase canonicalization (`chaya_worker.grounding_dino.resolve_prompt_phrase`):**
+  - Grounding DINO's `post_process_grounded_object_detection` groups all prompt tokens above `text_threshold` into one label string, which produced non-canonical merged labels on 163 of 485 detections (`33.61%`) at the 0.35 box threshold on `coco-indoor-eval@1.0.0` (and 231 of 992 non-empty unevaluable detections at the 0.10 evaluation threshold, e.g. `"desk reception desk counter"`, `"restroom sign exit sign"`, `"##tinguisher"`).
+  - `GroundingDinoDetector` now computes per-box, per-prompt-phrase token-span activations from `outputs.logits` (`_per_box_phrase_scores` + `resolve_prompt_phrase`), assigning each detection to its highest-scoring single canonical prompt phrase while preserving the raw string in `Detection.raw_label`.
+  - Verified against all non-empty phrase outputs of `coco-indoor-eval@1.0.0` (`benchmarks/results/b6_semantic_models/latest.json`): **231 / 231 (100%)** multi-phrase/fragment outputs resolve to a single canonical prompt phrase, reducing non-canonical phrases at threshold 0.35 from **33.61% (163/485)** to **0.00% (0/485)**.

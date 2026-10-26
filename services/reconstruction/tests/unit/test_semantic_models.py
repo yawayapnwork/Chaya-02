@@ -25,8 +25,18 @@ from chaya_worker.evaluation import (
     retrieval_metrics,
     top1_accuracy,
 )
-from chaya_worker.grounding_dino import post_process
-from chaya_worker.model_provenance import CARD_SCHEMA, MODEL_CARD, STOCK_MODELS, ModelCardError, provenance, read_card
+from chaya_worker.grounding_dino import phrase_token_spans, prompt_phrases, resolve_prompt_phrase, post_process
+from chaya_worker.model_provenance import (
+    CARD_SCHEMA,
+    MODEL_CARD,
+    STOCK_MODELS,
+    ModelCardError,
+    ModelLicenseError,
+    check_license_policy,
+    enforce_license_policy,
+    provenance,
+    read_card,
+)
 from chaya_worker.navmesh import GROUND_LABELS, OBSTACLE_LABELS
 from chaya_worker.semantic_classes import (
     ADE20K_150_REVIEWED,
@@ -252,3 +262,49 @@ def test_a_detection_without_a_phrase_is_never_published():
     # poi_version.label CHECK would refuse it, so it must be dropped in the worker.
     assert not has_phrase("") and not has_phrase("   ") and not has_phrase("##")
     assert has_phrase("chair") and has_phrase("desk reception desk counter") and has_phrase("##tinguisher")
+
+
+def test_detector_canonicalizes_merged_and_fragmented_phrases_to_prompt_vocabulary():
+    prompt = Settings().object_detection_prompt
+    phrases = prompt_phrases(prompt)
+    assert "fire extinguisher" in phrases and "reception desk" in phrases and "restroom sign" in phrases
+    # WordPiece fragment resolves to its prompt phrase
+    assert resolve_prompt_phrase("##tinguisher", prompt) == "fire extinguisher"
+    # Merged multi-phrase output resolves to the highest-scoring prompt phrase when logit scores are provided
+    assert resolve_prompt_phrase(
+        "desk reception desk counter", prompt,
+        phrase_scores={"desk": 0.41, "reception desk": 0.64, "counter": 0.29},
+        text_threshold=0.25,
+    ) == "reception desk"
+    assert resolve_prompt_phrase(
+        "sofa couch", prompt,
+        phrase_scores={"sofa": 0.31, "couch": 0.58},
+        text_threshold=0.25,
+    ) == "couch"
+    # Deterministic fallback when logits are absent
+    assert resolve_prompt_phrase("restroom sign exit sign", prompt) == "restroom sign"
+    assert resolve_prompt_phrase("   ", prompt) == ""
+    assert phrase_token_spans([101, 2001, 1012, 2002, 2003, 1012, 102], {101, 102, 1012}) == [[1], [3, 4]]
+
+
+def test_commercial_use_license_gate_blocks_research_only_and_unverified_models(tmp_path):
+    s = Settings()
+    seg = provenance(s.semantic_segmentation_model, requested_revision=None, resolved_revision=None)
+    det = provenance(s.grounding_dino_model, requested_revision=None, resolved_revision=None)
+    clip = provenance(f"open_clip:{s.clip_model_name}:{s.clip_pretrained}", requested_revision=None, resolved_revision=None)
+
+    assert check_license_policy(seg, commercial_use_only=False) == []
+    problems = check_license_policy(seg, commercial_use_only=True)
+    assert len(problems) == 1 and problems[0]["code"] == "MODEL_LICENSE_RESTRICTED"
+    with pytest.raises(ModelLicenseError):
+        enforce_license_policy(seg, commercial_use_only=True)
+
+    # Stock Grounding DINO (Apache-2.0) and OpenCLIP ViT-B-32 openai (MIT) pass commercial-use policy
+    enforce_license_policy(det, commercial_use_only=True)
+    enforce_license_policy(clip, commercial_use_only=True)
+
+    # Derivative checkpoint trained from research-only SegFormer inherits commercial_use=False and is blocked
+    (tmp_path / MODEL_CARD).write_text(json.dumps(_card()), encoding="utf-8")
+    trained_seg = provenance(str(tmp_path), requested_revision=None, resolved_revision=None)
+    with pytest.raises(ModelLicenseError):
+        enforce_license_policy(trained_seg, commercial_use_only=True)

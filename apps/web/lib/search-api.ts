@@ -4,7 +4,15 @@ import { api } from "./capture-api";
 import type { SearchResponse } from "./search-view";
 
 export { locationNote, type SpatialStatus } from "./search-location";
-export type { SearchCorrection, SearchInterpretation, SearchPosition, SearchResponse, SearchResult } from "./search-view";
+export type {
+  IndexDiagnostics,
+  ResultDiagnostics,
+  SearchCorrection,
+  SearchInterpretation,
+  SearchPosition,
+  SearchResponse,
+  SearchResult,
+} from "./search-view";
 
 export interface SearchOptions {
   floorId?: string;

@@ -83,3 +83,85 @@ test("when nothing is relevant, the closest candidates are offered as such, neve
   await expect(page.getByTestId("search-results")).not.toContainText("Water fountain");
   await expect(page.getByTestId("search-results")).not.toContainText("No matches.");
 });
+
+test("voice permission denial and cancellation do not break typed search, and result/index diagnostics render", async ({ page }) => {
+  await page.addInitScript(() => {
+    class MockSpeechRecognition extends EventTarget {
+      lang = "en-US";
+      continuous = false;
+      interimResults = false;
+      maxAlternatives = 1;
+      onresult: ((e: unknown) => void) | null = null;
+      onerror: ((e: { error: string }) => void) | null = null;
+      onend: (() => void) | null = null;
+      start() {
+        const mode = (window as unknown as { __voiceMode?: string }).__voiceMode ?? "deny";
+        if (mode === "deny") {
+          setTimeout(() => {
+            this.onerror?.({ error: "not-allowed" });
+            this.onend?.();
+          }, 10);
+        }
+      }
+      stop() {
+        this.onend?.();
+      }
+      abort() {
+        this.onerror?.({ error: "aborted" });
+        this.onend?.();
+      }
+    }
+    (window as unknown as { SpeechRecognition: unknown }).SpeechRecognition = MockSpeechRecognition;
+  });
+
+  const expiresAt = new Date(Date.now() + 60_000).toISOString();
+  await mockJson(page, "**/mock-api/api/v1/public/viewer-token", { token: "cvt_test", expiresAt, venueId: VENUE_ID });
+  await mockJson(page, `**/mock-api/api/v1/venues/${VENUE_ID}/floors`, [{ id: FLOOR_ID, level: 0, name: "Ground Floor" }]);
+  await mockJson(page, `**/mock-api/api/v1/venues/${VENUE_ID}/floors/${FLOOR_ID}/reconstructions`, []);
+  await mockJson(page, `**/mock-api/api/v1/venues/${VENUE_ID}/pois`, []);
+  await mockJson(page, `**/mock-api/api/v1/venues/${VENUE_ID}/search**`, {
+    query: "couch",
+    matchType: "embedding",
+    indexDiagnostics: {
+      embeddingModel: "clip-vit-b32",
+      totalPois: 5,
+      indexedPois: 4,
+      pendingEmbeddingPois: 0,
+      failedEmbeddingPois: 1,
+      indexComplete: false,
+    },
+    results: [
+      {
+        poiId: "poi-1",
+        floorId: FLOOR_ID,
+        label: "Lobby sofa",
+        category: "furniture",
+        tags: [],
+        x: 1,
+        y: 2,
+        z: 0,
+        similarity: 0.91,
+        detectionConfidence: 0.84,
+        source: "AUTO_DETECTED",
+        boundingBox: null,
+        diagnostics: {
+          origin: "DETECTOR",
+          retrievalMode: "SEMANTIC_EMBEDDING",
+          matchChannel: "SYNONYM",
+          matchedTerm: "sofa",
+          explanation: "Detector object (conf=0.84); matched via synonym ('sofa') + CLIP text embedding (cos=0.91).",
+        },
+      },
+    ],
+  });
+
+  await page.goto("/viewer?link=good-secret");
+  await page.getByRole("button", { name: "Search by voice" }).click();
+  await expect(page.getByTestId("voice-search-note")).toContainText("Microphone access was denied");
+
+  // Typed search still works normally after voice permission denial
+  await page.getByLabel("Search query").fill("couch");
+  await page.getByRole("button", { name: "Go" }).click();
+  await expect(page.getByTestId("search-index-status")).toContainText("Index incomplete: 4/5 POIs embedded (1 failed");
+  await expect(page.getByTestId("search-result-diagnostics")).toContainText("Detector object (conf=0.84)");
+});

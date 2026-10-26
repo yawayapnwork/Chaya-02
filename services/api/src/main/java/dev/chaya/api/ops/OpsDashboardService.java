@@ -661,14 +661,26 @@ public class OpsDashboardService {
                 SELECT count(*) AS total,
                        count(*) FILTER (WHERE v.source = 'MANUAL') AS manual,
                        count(*) FILTER (WHERE v.source = 'AUTO_DETECTED') AS auto,
-                       count(*) FILTER (WHERE v.no_embedding) AS awaiting
+                       count(*) FILTER (WHERE v.no_embedding) AS awaiting,
+                       count(*) FILTER (WHERE v.no_embedding AND v.failed_embedding) AS failed
                   FROM poi p
-                  JOIN LATERAL (SELECT source, embedding IS NULL AS no_embedding FROM poi_version
-                                 WHERE poi_id = p.id ORDER BY version_number DESC LIMIT 1) v ON true
+                  JOIN LATERAL (
+                      SELECT pv.source, pv.scan_version_id,
+                             pv.embedding IS NULL AS no_embedding,
+                             EXISTS (SELECT 1 FROM poi_embedding_failure f WHERE f.poi_version_id = pv.id) AS failed_embedding
+                        FROM poi_version pv
+                       WHERE pv.poi_id = p.id ORDER BY pv.version_number DESC LIMIT 1
+                  ) v ON true
                  WHERE p.venue_id = :v AND p.organization_id = :o AND p.deleted_at IS NULL
+                   AND poi_version_is_current(p.floor_id, v.scan_version_id, v.source)
                 """)
             .param("v", venueId).param("o", org)
-            .query((rs, i) -> new PoiStats(rs.getLong("total"), rs.getLong("manual"), rs.getLong("auto"), rs.getLong("awaiting")))
+            .query((rs, i) -> {
+                long awaiting = rs.getLong("awaiting");
+                long failed = rs.getLong("failed");
+                return new PoiStats(rs.getLong("total"), rs.getLong("manual"), rs.getLong("auto"),
+                    awaiting, failed, awaiting == 0L && failed == 0L);
+            })
             .single();
 
         return new SearchAnalytics(d, summary.total(), summary.zero(), summary.avgLatency(), summary.p95Latency(),

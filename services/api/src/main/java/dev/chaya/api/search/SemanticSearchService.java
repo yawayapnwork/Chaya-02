@@ -5,13 +5,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.chaya.api.navigation.NavigationDtos.RouteRequest;
 import dev.chaya.api.navigation.NavigationDtos.RouteResponse;
 import dev.chaya.api.navigation.RouteService;
+import dev.chaya.api.rescan.ScanVersionService;
 import dev.chaya.api.search.QueryInterpreter.Interpretation;
 import dev.chaya.api.search.SearchDtos.Correction;
+import dev.chaya.api.search.SearchDtos.IndexDiagnostics;
+import dev.chaya.api.search.SearchDtos.ResultDiagnostics;
 import dev.chaya.api.search.SearchDtos.SearchInterpretation;
 import dev.chaya.api.search.SearchDtos.SearchPosition;
 import dev.chaya.api.search.SearchDtos.SearchResponse;
 import dev.chaya.api.search.SearchDtos.SearchResult;
-import dev.chaya.api.rescan.ScanVersionService;
 import dev.chaya.api.security.Actor;
 import dev.chaya.api.security.PublicExposure;
 import dev.chaya.api.security.TenantGuard;
@@ -22,6 +24,7 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -62,8 +65,8 @@ import org.springframework.stereotype.Service;
  * chaya.search.lexical-min-similarity). Nothing relevant: results is empty, the nearest candidates are closestMatches.
  *
  * <p><b>Order</b> (deterministic for identical inputs and data): relevant first; spatially VALID before every other tier;
- * for a "nearest" query with a position, by distance (below); then exact name/category/tag matches; then the rank score
- * {@code similarity + lexicalWeight * lexical + evidenceWeight * (evidence - 1)}; then lexical similarity; then image
+ * for a "nearest" query with a position, by distance (below); then confident exact name/category/tag matches; then the rank
+ * score {@code similarity + lexicalWeight * lexical + evidenceWeight * (evidence - 1)}; then lexical similarity; then image
  * similarity; then POI id.
  *
  * <p><b>Nearest.</b> Only with a position (SearchPosition). Distances are real walking routes from RouteService (STEP_FREE
@@ -88,14 +91,6 @@ public class SemanticSearchService {
     private static final Logger log = LoggerFactory.getLogger(SemanticSearchService.class);
     private static final TypeReference<Map<String, Object>> MAP = new TypeReference<>() {};
 
-    // Shared WHERE clause (venue/org/floor scope); each query below prepends its own SELECT and appends its own extra
-    // predicate and ORDER BY. The accessibility filter is not part of the scope (IN_FILTER below): relevance is judged
-    // against everything the venue has, and only then are results limited to what staff recorded as accessible, so the
-    // filter cannot shrink the scope into the unjudged "too few POIs" case and return whatever is left. Without :sv the scope is what each floor publishes now: every live POI at its
-    // latest version that belongs to its floor's current scan version (poi_version_is_current, V28), so a search never
-    // returns a detection of an unpublished run or of a replaced version next to the current ones; with :sv (a FINALIZED
-    // ScanVersion) it is exactly that version's POIs, each as it is in that version (scan_version_poi_version). Machine-made
-    // POIs always name the pipeline run that made them (poi_version_auto_detected_has_provenance, V12).
     private static final String SCOPE_WHERE = """
               FROM poi p
               JOIN poi_version v ON v.poi_id = p.id
@@ -112,7 +107,6 @@ public class SemanticSearchService {
                     OR EXISTS (SELECT 1 FROM pipeline_run pr WHERE pr.id = v.pipeline_run_id AND pr.privacy_enabled))
             """;
 
-    // Where a POI's position stands relative to what is being viewed: the floor's current frame, or the selected version's.
     private static final String SPATIAL_STATUS = """
             CASE WHEN v.coordinate_frame_id IS NULL THEN 'UNBOUND'
                  WHEN v.coordinate_frame_id IS DISTINCT FROM (CASE WHEN CAST(:sv AS uuid) IS NULL
@@ -121,14 +115,12 @@ public class SemanticSearchService {
                  WHEN v.source = 'AUTO_DETECTED' AND v.localization_status IS NULL THEN 'UNVERIFIED'
                  ELSE 'VALID' END""";
 
-    // A manual POI: 1 (staff placed it). A detected object: its detector confidence, times how its position is supported.
     private static final String EVIDENCE = """
             CASE WHEN v.source = 'AUTO_DETECTED'
                  THEN COALESCE(v.detection_confidence, 0)
                       * CASE v.localization_status WHEN 'MULTI_VIEW' THEN 1.0 WHEN 'SINGLE_VIEW' THEN 0.75 ELSE 0.5 END
                  ELSE 1.0 END""";
 
-    // The POI's own text as lexical matching sees it, and the normalisation QueryInterpreter.normalize applies to a query.
     private static final String DOC = "lower(concat_ws(' ', v.label, v.category, array_to_string(v.tags, ' ')))";
     private static final String NORM = "btrim(regexp_replace(lower(%s), '[^[:alnum:]]+', ' ', 'g'))";
 
@@ -138,31 +130,26 @@ public class SemanticSearchService {
             CASE WHEN jsonb_typeof(v.attributes->'accessible') = 'boolean' THEN (v.attributes->>'accessible')::boolean END AS accessible_attr,
             (:accessible = false OR (jsonb_typeof(v.attributes->'accessible') = 'boolean'
                                      AND (v.attributes->>'accessible')::boolean)) AS in_filter,
+            EXISTS (SELECT 1 FROM poi_embedding_failure f WHERE f.poi_version_id = v.id) AS embedding_failed,
             v.localization_status, v.localization_uncertainty_m, """ + SPATIAL_STATUS + " AS spatial_status, " + EVIDENCE + " AS evidence, "
         + DOC + " AS doc, " + NORM.formatted("v.label") + " AS norm_label, " + NORM.formatted("v.category") + " AS norm_category, "
         + "ARRAY(SELECT " + NORM.formatted("t") + " FROM unnest(v.tags) t) AS norm_tags";
 
-    // Per row: the best lexical match over the query's phrasings (on a tie, the user's own words before synonyms: terms keep
-    // QueryInterpreter's order), and whether a phrasing IS the POI's label, category or tag.
     private static final String LEXICAL_JOIN = """
             LEFT JOIN LATERAL (SELECT CAST(strict_word_similarity(t.t, s.doc) AS double precision) AS lexical_similarity,
                                       t.t AS matched_term
                                  FROM terms t ORDER BY strict_word_similarity(t.t, s.doc) DESC, t.ord LIMIT 1) lex ON true""";
-    private static final String EXACT = """
-            EXISTS (SELECT 1 FROM terms t WHERE t.t = s.norm_label OR t.t = s.norm_category OR t.t = ANY (s.norm_tags))""";
 
-    // Every POI in scope is scored (not only the index's top k): the relevance statistics need all of them, and the image
-    // channel can admit a detected object whose text score alone would not reach the top k. A venue's POIs number in the
-    // hundreds to thousands, so this exact scan replaces the HNSW lookup at no practical cost.
-    //
-    //   vocabulary       the distinct text vectors in scope: what the venue has names for, each name counted once
-    //   detector_labels  the distinct text vectors of detected objects: the classes a detected crop is classified over
-    //   relevant_image   CLIP zero-shot: the crop is at least as close to the query as to every detector label in scope
-    //                    (needs >= 2 labels: against a single class the test says nothing)
-    //   relevant_lexical a phrasing of the query (QueryInterpreter: as typed, corrected, synonyms) matches the POI's text
-    //                    whole-word by trigrams
-    //
-    // A row whose text embedding is missing or of another model has similarity NULL: it can be relevant by name only.
+    // A weak detection (detection_confidence below lowConfidenceBelow) never receives the unconditional exact_match tier
+    // over confident matches, even when matched via synonym. Primary label/category matches outrank tag-only matches.
+    private static final String EXACT = """
+            (NOT (s.source = 'AUTO_DETECTED' AND s.detection_confidence IS NOT NULL AND s.detection_confidence < :lowConf)
+             AND EXISTS (SELECT 1 FROM terms t WHERE t.t = s.norm_label OR t.t = s.norm_category OR t.t = ANY (s.norm_tags)))""";
+
+    private static final String LABEL_EXACT = """
+            (NOT (s.source = 'AUTO_DETECTED' AND s.detection_confidence IS NOT NULL AND s.detection_confidence < :lowConf)
+             AND EXISTS (SELECT 1 FROM terms t WHERE t.t = s.norm_label OR t.t = s.norm_category))""";
+
     private static final String VECTOR_SQL = """
             WITH q AS (SELECT CAST(:qv AS vector) AS v),
             terms AS (SELECT u.t, min(u.ord) AS ord FROM unnest(CAST(ARRAY[:terms] AS text[])) WITH ORDINALITY AS u(t, ord) GROUP BY u.t),
@@ -178,7 +165,8 @@ public class SemanticSearchService {
             label_count AS (SELECT count(*) AS n FROM detector_labels),
             scored AS (
             SELECT s.*, lex.lexical_similarity, lex.matched_term, """ + EXACT + """
-                    AS exact_match,
+                    AS exact_match, """ + LABEL_EXACT + """
+                    AS label_exact_match,
                    1 - (s.embedding <=> q.v) AS similarity,
                    1 - (s.image_embedding <=> q.v) AS image_similarity,
                    CASE WHEN s.image_embedding IS NOT NULL
@@ -190,32 +178,36 @@ public class SemanticSearchService {
             SELECT sc.*, sc.similarity - st.mean_similarity AS margin, st.peers,
                    st.peers >= :minPois AS judged,
                    COALESCE(sc.similarity - st.mean_similarity >= :minMargin, false) AS relevant_text,
-                   COALESCE(lc.n >= 2 AND sc.image_similarity >= sc.best_label_image_similarity, false) AS relevant_image,
+                   COALESCE(lc.n >= 2
+                            AND NOT (sc.source = 'AUTO_DETECTED' AND sc.detection_confidence IS NOT NULL AND sc.detection_confidence < :lowConf)
+                            AND sc.image_similarity >= sc.best_label_image_similarity, false) AS relevant_image,
                    COALESCE(sc.lexical_similarity >= :lexMin, false) AS relevant_lexical,
                    sc.similarity + :wLex * COALESCE(sc.lexical_similarity, 0) + :wEv * (sc.evidence - 1) AS rank_score
               FROM scored sc, stats st, label_count lc)
             SELECT j.poi_id, j.floor_id, j.label, j.category, j.tags, j.x, j.y, j.z, j.detection_confidence, j.bounding_box,
                    j.source, j.scan_version_id, j.pipeline_run_id, j.detection_artifact_id, j.detection_provenance,
                    j.accessible_attr, j.localization_status, j.localization_uncertainty_m, j.spatial_status, j.evidence,
-                   j.norm_label, j.lexical_similarity, j.matched_term, j.exact_match, j.similarity, j.image_similarity, j.margin,
+                   j.norm_label, j.lexical_similarity, j.matched_term, j.exact_match, j.label_exact_match, j.similarity, j.image_similarity, j.margin,
                    j.judged, j.relevant_text, j.relevant_image, j.relevant_lexical, j.rank_score,
-                   j.embedding IS NOT NULL AS indexed,
+                   j.embedding IS NOT NULL AS indexed, j.embedding_failed,
                    ((j.embedding IS NOT NULL AND NOT j.judged) OR j.relevant_text OR j.relevant_image OR j.relevant_lexical) AS relevant
               FROM judged j
              WHERE j.in_filter
-             ORDER BY relevant DESC, (j.spatial_status = 'VALID') DESC, j.exact_match DESC, j.rank_score DESC NULLS LAST,
+             ORDER BY relevant DESC, (j.spatial_status = 'VALID') DESC, j.exact_match DESC, j.label_exact_match DESC, j.rank_score DESC NULLS LAST,
                       j.lexical_similarity DESC NULLS LAST, j.image_similarity DESC NULLS LAST, j.poi_id
              LIMIT :limit
             """;
 
-    // The fallback while the vision service is down: trigram similarity of each phrasing with the label.
     private static final String LEXICAL_SQL = """
             WITH terms AS (SELECT u.t, min(u.ord) AS ord FROM unnest(CAST(ARRAY[:terms] AS text[])) WITH ORDINALITY AS u(t, ord) GROUP BY u.t),
-            scope AS (SELECT """ + COMMON_COLUMNS + SCOPE_WHERE + """
+            scope AS (SELECT """ + COMMON_COLUMNS + """
+                             , (v.embedding IS NOT NULL AND (CAST(:model AS text) IS NULL OR v.embedding_model = CAST(:model AS text))) AS indexed
+            """ + SCOPE_WHERE + """
             ),
             scored AS (
             SELECT s.*, lex.lexical_similarity, lex.matched_term, """ + EXACT + """
-                    AS exact_match,
+                    AS exact_match, """ + LABEL_EXACT + """
+                    AS label_exact_match,
                    (SELECT max(similarity(s.label, t.t)) FROM terms t) AS label_similarity,
                    EXISTS (SELECT 1 FROM terms t WHERE s.label ILIKE ('%' || t.t || '%')) AS contains_term
               FROM scope s
@@ -224,9 +216,17 @@ public class SemanticSearchService {
             SELECT sc.*, CAST(sc.label_similarity AS double precision) AS similarity
               FROM scored sc
              WHERE sc.in_filter AND (sc.contains_term OR sc.label_similarity > 0.2)
-             ORDER BY (sc.spatial_status = 'VALID') DESC, sc.exact_match DESC, sc.label_similarity DESC, sc.poi_id
+             ORDER BY (sc.spatial_status = 'VALID') DESC, sc.exact_match DESC, sc.label_exact_match DESC, sc.label_similarity DESC, sc.poi_id
              LIMIT :limit
             """;
+
+    private static final String INDEX_DIAGNOSTICS_SQL = """
+            SELECT count(*) AS total_pois,
+                   count(*) FILTER (WHERE v.embedding IS NOT NULL AND (CAST(:model AS text) IS NULL OR v.embedding_model = CAST(:model AS text))) AS indexed_pois,
+                   count(*) FILTER (WHERE v.embedding IS NULL OR (CAST(:model AS text) IS NOT NULL AND v.embedding_model IS DISTINCT FROM CAST(:model AS text))) AS pending_pois,
+                   count(*) FILTER (WHERE (v.embedding IS NULL OR (CAST(:model AS text) IS NOT NULL AND v.embedding_model IS DISTINCT FROM CAST(:model AS text)))
+                                      AND EXISTS (SELECT 1 FROM poi_embedding_failure f WHERE f.poi_version_id = v.id)) AS failed_pois
+            """ + SCOPE_WHERE;
 
     private static final String VOCABULARY_SQL = "SELECT DISTINCT " + DOC + " AS doc" + SCOPE_WHERE;
 
@@ -245,15 +245,12 @@ public class SemanticSearchService {
     static final String STRAIGHT_LINE = "STRAIGHT_LINE";
     static final String NOT_EVALUATED = "NOT_EVALUATED";
 
-    /** Routing failures that mean "there is nothing to route on here", not "this destination is unreachable". */
     private static final Set<String> ROUTING_UNAVAILABLE = Set.of("NAVMESH_NOT_READY", "METRIC_CALIBRATION_REQUIRED",
         "VERSION_MISMATCH", "VERSION_WRONG_FLOOR");
 
-    /** All search parameters. position: for "nearest" (SearchPosition); everything else as on the endpoint. */
     public record SearchQuery(String q, UUID floorId, Integer topK, Boolean accessible, UUID scanVersionId,
                               SearchPosition position) {}
 
-    /** One scored row while the response is put together. */
     private static final class Candidate {
         UUID poiId;
         UUID floorId;
@@ -265,11 +262,13 @@ public class SemanticSearchService {
         double z;
         Double similarity;
         Double confidence;
+        Double evidence;
         String source;
         Map<String, Object> bbox;
         Double margin;
         Double imageSimilarity;
         String matchedBy;
+        String matchType;
         String spatialStatus;
         String localizationStatus;
         Double localizationUncertainty;
@@ -284,6 +283,7 @@ public class SemanticSearchService {
         String normLabel;
         Boolean accessible;
         boolean indexed;
+        boolean embeddingFailed;
         boolean judged;
         boolean relevant;
         Double distance;
@@ -322,10 +322,6 @@ public class SemanticSearchService {
         return search(actor, venueId, new SearchQuery(query, floorId, topK, accessibleOnly, scanVersionId, null));
     }
 
-    /**
-     * Not one transaction: every statement reads committed data on its own, and "nearest" plans routes through RouteService,
-     * whose expected failures (no route to one candidate) must not mark a surrounding transaction rollback-only.
-     */
     public SearchResponse search(Actor actor, UUID venueId, SearchQuery request) {
         long started = System.nanoTime();
         guard.requireVenue(actor, venueId);
@@ -371,7 +367,6 @@ public class SemanticSearchService {
         if (results.isEmpty()) {
             closest = scored.rows().stream().filter(c -> !c.relevant).limit(props.closestMatches()).map(this::toResult).toList();
             if (accessible) {
-                // Nothing staff recorded as accessible matches: offer the matches nobody recorded either way, as such.
                 Scored open = score(scope, interp, false);
                 List<Candidate> unknown = new ArrayList<>(open.rows().stream()
                     .filter(c -> c.relevant && !Boolean.FALSE.equals(c.accessible)).toList());
@@ -387,18 +382,32 @@ public class SemanticSearchService {
         SearchInterpretation interpretation = new SearchInterpretation(interp.normalized(), interp.subject(), interp.lexicalTerms(),
             interp.synonymGroups(), interp.corrections().stream().map(c -> new Correction(c.from(), c.to())).toList(),
             targetKind(interp, relevant), interp.spatialModifier().name(), spatialApplied, spatialNote, accessible);
+        IndexDiagnostics indexDiagnostics = queryIndexDiagnostics(scope, scored.model());
 
         int latencyMs = (int) ((System.nanoTime() - started) / 1_000_000);
         logQuery(actor, venueId, interp.normalized(), results.size(), latencyMs);
         return new SearchResponse(request.q(), scored.matchType(), results, closest, scored.relevance(), interpretation,
-            lowConfidence, unconfirmed, suggestions);
+            lowConfidence, unconfirmed, suggestions, indexDiagnostics);
     }
 
     private record Scope(UUID venue, UUID org, UUID floor, boolean anonymous, UUID scanVersion) {}
 
-    private record Scored(List<Candidate> rows, String matchType, String relevance) {}
+    private record Scored(List<Candidate> rows, String matchType, String relevance, String model) {}
 
-    /** The scored candidates of the scope, relevant first, in the order the class comment describes (without distance). */
+    private IndexDiagnostics queryIndexDiagnostics(Scope scope, String model) {
+        return jdbc.sql(INDEX_DIAGNOSTICS_SQL)
+            .param("venue", scope.venue()).param("org", scope.org()).param("floor", scope.floor())
+            .param("anonymous", scope.anonymous()).param("sv", scope.scanVersion()).param("model", model)
+            .query((rs, i) -> {
+                long total = rs.getLong("total_pois");
+                long indexed = rs.getLong("indexed_pois");
+                long pending = rs.getLong("pending_pois");
+                long failed = rs.getLong("failed_pois");
+                return new IndexDiagnostics(model, total, indexed, pending, failed, pending == 0L && failed == 0L);
+            })
+            .single();
+    }
+
     private Scored score(Scope scope, Interpretation interp, boolean accessible) {
         List<String> terms = interp.lexicalTerms();
         try {
@@ -410,28 +419,36 @@ public class SemanticSearchService {
                 .param("terms", terms).param("lexMin", props.lexicalMinSimilarity())
                 .param("wLex", props.lexicalWeight()).param("wEv", props.evidenceWeight())
                 .param("minPois", props.relevanceMinPois()).param("minMargin", props.relevanceMinMargin())
+                .param("lowConf", props.lowConfidenceBelow())
                 .param("limit", props.candidateLimit())
                 .query((rs, i) -> mapScored(rs, interp)).list();
             boolean judged = rows.stream().anyMatch(c -> c.judged);
-            return new Scored(rows, "embedding", judged ? FILTERED : UNFILTERED);
+            return new Scored(rows, "embedding", judged ? FILTERED : UNFILTERED, queryEmbedding.model());
         } catch (EmbeddingUnavailableException e) {
             log.warn("embedding model unavailable, falling back to lexical search: {}", e.getMessage());
+            String configuredModel = null;
             List<Candidate> rows = jdbc.sql(LEXICAL_SQL)
                 .param("venue", scope.venue()).param("org", scope.org()).param("floor", scope.floor()).param("accessible", accessible)
                 .param("anonymous", scope.anonymous()).param("sv", scope.scanVersion())
+                .param("model", configuredModel)
+                .param("lowConf", props.lowConfidenceBelow())
                 .param("terms", terms).param("limit", props.candidateLimit())
                 .query((rs, i) -> {
                     Candidate c = mapRow(rs);
+                    c.matchType = "lexical_fallback";
+                    c.indexed = rs.getBoolean("indexed");
                     c.similarity = rs.getDouble("similarity");
                     c.relevant = true;
+                    c.matchedBy = interp.synonymTerms().contains(c.matchedTerm) ? BY_SYNONYM : BY_LEXICAL;
                     return c;
                 }).list();
-            return new Scored(rows, "lexical_fallback", LEXICAL);
+            return new Scored(rows, "lexical_fallback", LEXICAL, configuredModel);
         }
     }
 
     private Candidate mapScored(ResultSet rs, Interpretation interp) throws SQLException {
         Candidate c = mapRow(rs);
+        c.matchType = "embedding";
         c.similarity = rs.getObject("similarity", Double.class);
         c.judged = rs.getBoolean("judged");
         c.relevant = rs.getBoolean("relevant");
@@ -439,11 +456,17 @@ public class SemanticSearchService {
         c.margin = rs.getObject("margin", Double.class);
         c.rankScore = rs.getObject("rank_score", Double.class);
         c.imageSimilarity = rs.getObject("image_similarity", Double.class);
-        if (c.judged && c.relevant) {
-            boolean text = rs.getBoolean("relevant_text");
-            boolean image = rs.getBoolean("relevant_image");
-            c.matchedBy = text && image ? BY_TEXT_AND_IMAGE : text ? BY_TEXT : image ? BY_IMAGE
-                : interp.synonymTerms().contains(c.matchedTerm) ? BY_SYNONYM : BY_LEXICAL;
+        if (c.relevant) {
+            if (c.judged) {
+                boolean text = rs.getBoolean("relevant_text");
+                boolean image = rs.getBoolean("relevant_image");
+                c.matchedBy = text && image ? BY_TEXT_AND_IMAGE : text ? BY_TEXT : image ? BY_IMAGE
+                    : interp.synonymTerms().contains(c.matchedTerm) ? BY_SYNONYM : BY_LEXICAL;
+            } else {
+                c.matchedBy = c.indexed
+                    ? (interp.synonymTerms().contains(c.matchedTerm) && c.exact ? BY_SYNONYM : BY_TEXT)
+                    : (interp.synonymTerms().contains(c.matchedTerm) ? BY_SYNONYM : BY_LEXICAL);
+            }
         }
         return c;
     }
@@ -460,6 +483,7 @@ public class SemanticSearchService {
         c.z = rs.getDouble("z");
         Object confidence = rs.getObject("detection_confidence");
         c.confidence = confidence == null ? null : ((Number) confidence).doubleValue();
+        c.evidence = rs.getObject("evidence", Double.class);
         c.source = rs.getString("source");
         Object bbox = rs.getObject("bounding_box");
         c.bbox = bbox == null ? null : parseJson(bbox.toString());
@@ -476,6 +500,7 @@ public class SemanticSearchService {
         c.matchedTerm = rs.getString("matched_term");
         c.normLabel = rs.getString("norm_label");
         c.accessible = rs.getObject("accessible_attr", Boolean.class);
+        c.embeddingFailed = rs.getBoolean("embedding_failed");
         c.indexed = true;
         return c;
     }
@@ -483,19 +508,64 @@ public class SemanticSearchService {
     private SearchResult toResult(Candidate c) {
         Object sourceFrame = c.bbox == null ? null : c.bbox.get("sourceFrame");
         boolean detected = "AUTO_DETECTED".equals(c.source);
-        Boolean low = detected ? (c.confidence == null || c.confidence < props.lowConfidenceBelow()) : null;
+        Boolean low = detected ? (c.confidence == null || c.confidence < props.lowConfidenceBelow() || BY_IMAGE.equals(c.matchedBy)) : null;
+        ResultDiagnostics diag = buildDiagnostics(c, detected, low);
         return new SearchResult(c.poiId, c.floorId, c.label, c.category, c.tags, c.x, c.y, c.z,
             c.similarity == null ? 0.0 : c.similarity, c.confidence, c.source, c.bbox, c.margin, c.imageSimilarity, c.matchedBy,
             sourceFrame instanceof String s ? s : null, c.spatialStatus, c.localizationStatus, c.localizationUncertainty,
             c.lexicalSimilarity, c.rankScore, c.scanVersionId, c.pipelineRunId, c.artifactId, c.provenance, c.exact, c.matchedTerm,
             c.distance, c.distanceKind, c.routeStatus, low, List.copyOf(c.duplicates), c.accessible,
-            c.indexed ? "INDEXED" : "PENDING_EMBEDDING");
+            c.indexed ? "INDEXED" : "PENDING_EMBEDDING", diag);
     }
 
-    /**
-     * NAMED_PLACE: exactly one relevant staff POI is named like the subject (or a synonym of it). CATEGORY: the subject is a
-     * synonym-table group, or equals the category, a tag or a detector label of relevant POIs. DESCRIPTION: anything else.
-     */
+    private ResultDiagnostics buildDiagnostics(Candidate c, boolean detected, Boolean lowConfidence) {
+        String origin = detected ? "DETECTOR" : "MANUAL_POI";
+        String retrievalMode = "lexical_fallback".equals(c.matchType) ? "LEXICAL_FALLBACK"
+            : (!c.indexed ? "LEXICAL_ONLY" : "SEMANTIC_EMBEDDING");
+        String channel = c.matchedBy != null ? c.matchedBy
+            : ("lexical_fallback".equals(c.matchType) ? "LEXICAL_FALLBACK" : (c.indexed ? "TEXT" : "LEXICAL"));
+        Double semanticSim = "SEMANTIC_EMBEDDING".equals(retrievalMode) ? c.similarity : null;
+        StringBuilder exp = new StringBuilder();
+        if (detected) {
+            exp.append("Detector POI (Grounding DINO");
+            if (c.confidence != null) {
+                exp.append(String.format(Locale.ROOT, ", conf=%.2f", c.confidence));
+            }
+            if (c.localizationStatus != null) {
+                exp.append(", ").append(c.localizationStatus);
+            }
+            if (Boolean.TRUE.equals(lowConfidence)) {
+                exp.append(", low-confidence");
+            }
+            exp.append(")");
+        } else {
+            exp.append("Manual POI (staff-curated)");
+        }
+        exp.append(" via ").append(retrievalMode).append(" [").append(channel);
+        if (c.matchedTerm != null && !c.matchedTerm.isBlank()) {
+            exp.append(": '").append(c.matchedTerm).append("'");
+        }
+        exp.append("]; spatial=").append(c.spatialStatus);
+        if (semanticSim != null) {
+            exp.append(String.format(Locale.ROOT, ", textCos=%.3f", semanticSim));
+        }
+        if (c.imageSimilarity != null) {
+            exp.append(String.format(Locale.ROOT, ", cropCos=%.3f", c.imageSimilarity));
+        }
+        if (c.lexicalSimilarity != null) {
+            exp.append(String.format(Locale.ROOT, ", lex=%.3f", c.lexicalSimilarity));
+        }
+        if (c.rankScore != null) {
+            exp.append(String.format(Locale.ROOT, ", rank=%.3f", c.rankScore));
+        }
+        if (!c.indexed && c.embeddingFailed) {
+            exp.append(" (embedding failed; awaiting retry)");
+        }
+        return new ResultDiagnostics(origin, retrievalMode, channel, c.matchedTerm, semanticSim, c.imageSimilarity,
+            c.lexicalSimilarity, c.confidence, c.evidence, c.rankScore, c.spatialStatus, c.localizationStatus,
+            !c.indexed && c.embeddingFailed, exp.toString());
+    }
+
     private static String targetKind(Interpretation interp, List<Candidate> relevant) {
         Set<String> terms = Set.copyOf(interp.lexicalTerms());
         long named = relevant.stream().filter(c -> "MANUAL".equals(c.source) && terms.contains(c.normLabel)).count();
@@ -508,11 +578,6 @@ public class SemanticSearchService {
         return "DESCRIPTION";
     }
 
-    /**
-     * Folds detected objects that are one physical object seen under two detector labels of one synonym group (or under
-     * the same label twice) into the better-ranked one: both VALID, on one floor, within duplicateDistanceM. Manual POIs are
-     * never folded: staff placed each of them on purpose.
-     */
     private void foldDuplicates(List<Candidate> ranked) {
         double max = props.duplicateDistanceM();
         List<Candidate> kept = new ArrayList<>();
@@ -539,14 +604,6 @@ public class SemanticSearchService {
         ranked.addAll(kept);
     }
 
-    /**
-     * Reorders the VALID tier of `ranked` (relevant candidates) by distance from `position` (class comment, "Nearest").
-     * Same-floor candidates are routed in increasing straight-line distance -- a lower bound of any walking route in the
-     * same frame -- until k routed ones are no farther than the next lower bound, or the evaluation cap is reached; other
-     * floors' candidates are routed after them in relevance order while the cap allows. Order within the tier: routed
-     * distances ascending, then straight-line estimates ascending (floors with nothing to route on), then candidates not
-     * routed (same floor: by straight-line lower bound), then those no route reaches; ties keep their relevance order.
-     */
     private void orderByDistance(Actor actor, UUID venueId, UUID scanVersionId, SearchPosition position, boolean stepFree,
                                  List<Candidate> ranked, int k) {
         List<Candidate> valid = ranked.stream().filter(c -> "VALID".equals(c.spatialStatus) && c.floorId != null).toList();
@@ -582,7 +639,6 @@ public class SemanticSearchService {
             if (failure == null) {
                 routed.add(c.distance);
             } else if (ROUTING_UNAVAILABLE.contains(failure)) {
-                // Nothing on this floor can be routed: fall back to straight-line distances, labelled as such.
                 floorRoutable = false;
                 for (Candidate s : sameFloor) {
                     if (s.distanceKind == null) {
@@ -602,13 +658,12 @@ public class SemanticSearchService {
             route(actor, venueId, scanVersionId, position, stepFree, c);
         }
 
-        // routed, then straight-line estimates, then not routed (by lower bound when known), then unreachable
         Comparator<Candidate> byDistance = Comparator
             .comparingInt((Candidate c) -> ROUTE.equals(c.distanceKind) ? 0 : STRAIGHT_LINE.equals(c.distanceKind) ? 1
                 : c.routeStatus == null || NOT_EVALUATED.equals(c.routeStatus) ? 2 : 3)
             .thenComparingDouble(c -> c.distance != null ? c.distance : c.lowerBound != null ? c.lowerBound : Double.MAX_VALUE);
         List<Candidate> tier = new ArrayList<>(valid);
-        tier.sort(byDistance); // stable: ties keep the relevance order
+        tier.sort(byDistance);
         List<Candidate> reordered = new ArrayList<>(tier);
         for (Candidate c : ranked) {
             if (!tier.contains(c)) {
@@ -619,7 +674,6 @@ public class SemanticSearchService {
         ranked.addAll(reordered);
     }
 
-    /** Plans one route; sets distance or routeStatus and returns the failure code (null on success). */
     private String route(Actor actor, UUID venueId, UUID scanVersionId, SearchPosition position, boolean stepFree, Candidate c) {
         try {
             RouteResponse r = routes.route(actor, new RouteRequest(venueId, position.floorId(),

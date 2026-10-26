@@ -156,10 +156,12 @@ final class Fixtures {
         UUID frame = jdbc.sql("""
                 INSERT INTO coordinate_frame (organization_id, venue_id, floor_id, source_run_id, version, metric_status,
                     gravity_status, horizontal_datum, scale, rotation_w, rotation_x, rotation_y, rotation_z,
-                    translation_x, translation_y, translation_z, scale_source, gravity_source, method, inputs, residuals, calibrated_by)
+                    translation_x, translation_y, translation_z, scale_source, gravity_source, method, inputs, residuals, calibrated_by,
+                    validation_status)
                 VALUES (:o, :v, :f, :r, (SELECT coalesce(max(version), 0) + 1 FROM coordinate_frame WHERE source_run_id = :r),
                     'METRIC', 'ALIGNED', :d, 1, 1, 0, 0, 0, 0, 0, 0,
-                    'CONTROL_POINTS', 'CONTROL_POINTS', 'TEST_FIXTURE', '{"fixture": true}', '{}', 'fixture') RETURNING id""")
+                    'CONTROL_POINTS', 'CONTROL_POINTS', 'TEST_FIXTURE', '{"fixture": true}', '{}', 'fixture',
+                    'NOT_VALIDATED') RETURNING id""")
             .param("o", org).param("v", venue).param("f", floor).param("r", run).param("d", datum).query(UUID.class).single();
         if (floor != null && makeCurrent) {
             // As CoordinateFrameService#calibrate: a floor that publishes a version of another reconstruction keeps its frame

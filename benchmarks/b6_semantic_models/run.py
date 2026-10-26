@@ -203,9 +203,12 @@ def run_detection_and_retrieval(run: Run, root: Path, manifest: dict, images, an
 
     if "det" in tasks:
         scored, n_gt = defaultdict(list), defaultdict(int)
+        raw_scored = defaultdict(list)
         unevaluable, ambiguous = defaultdict(int), 0
+        raw_unevaluable, raw_ambiguous = defaultdict(int), 0
         for rec in images:
             preds = defaultdict(list)
+            raw_preds = defaultdict(list)
             for d in detections[rec.image_id]:
                 c = phrase_class(d.label, det_classes)
                 if c is None:
@@ -213,46 +216,85 @@ def run_detection_and_retrieval(run: Run, root: Path, manifest: dict, images, an
                         ambiguous += 1
                     else:
                         unevaluable[" ".join(d.label.lower().split())] += 1
-                    continue
-                preds[c].append((d.box_xyxy, d.confidence))
+                else:
+                    preds[c].append((d.box_xyxy, d.confidence))
+
+                raw_lbl = d.raw_label if d.raw_label is not None else d.label
+                rc = phrase_class(raw_lbl, det_classes)
+                if rc is None:
+                    if any(f" {p} " in f" {raw_lbl.lower()} " for ps in det_classes.values() for p in ps):
+                        raw_ambiguous += 1
+                    else:
+                        raw_unevaluable[" ".join(raw_lbl.lower().split())] += 1
+                else:
+                    raw_preds[rc].append((d.box_xyxy, d.confidence))
+
             for c in det_classes:
                 gts = [b for k, b in gt_boxes[rec.image_id] if k == c]
                 n_gt[c] += len(gts)
                 scored[c].extend(match_image(preds[c], gts))
+                raw_scored[c].extend(match_image(raw_preds[c], gts))
         aps = []
+        raw_aps = []
+        raw_vs_canonical = {}
         for c in det_classes:
             if n_gt[c] == 0:
                 run.add(unavailable(f"AP@0.5 {c}", "AP", "no ground-truth box of this class in the dataset",
                                     "a dataset with this class", cond))
                 continue
             ap = average_precision(scored[c], n_gt[c])
+            raw_ap = average_precision(raw_scored[c], n_gt[c])
             aps.append(ap)
+            raw_aps.append(raw_ap)
             p, r, tp, fp = precision_recall_at(scored[c], n_gt[c], s.object_detection_box_threshold)
+            rp, rr, rtp, rfp = precision_recall_at(raw_scored[c], n_gt[c], s.object_detection_box_threshold)
+            raw_vs_canonical[c] = {
+                "gt_boxes": n_gt[c],
+                "raw_ap50": round(raw_ap, 4),
+                "canonical_ap50": round(ap, 4),
+                "raw_precision": None if np.isnan(rp) else round(rp, 4),
+                "canonical_precision": None if np.isnan(p) else round(p, 4),
+                "raw_recall": round(rr, 4),
+                "canonical_recall": round(r, 4),
+                "raw_tp": rtp, "raw_fp": rfp,
+                "canonical_tp": tp, "canonical_fp": fp,
+            }
             run.add(Metric(f"AP@0.5 {c}", round(ap, 4), "AP", "measured", cond, "chaya_worker.evaluation (all-point)",
-                           note=f"{n_gt[c]} GT boxes"),
+                           note=f"{n_gt[c]} GT boxes (before canonicalization: {raw_ap:.4f})"),
                     Metric(f"precision at box threshold {s.object_detection_box_threshold} {c}",
                            None if np.isnan(p) else round(p, 4), "fraction", "measured" if not np.isnan(p) else "unavailable",
                            cond, "production threshold", note=None if not np.isnan(p) else "no detection above the threshold"),
                     Metric(f"recall at box threshold {s.object_detection_box_threshold} {c}", round(r, 4), "fraction", "measured",
-                           cond, "production threshold", note=f"TP {tp}, FP {fp}"))
+                           cond, "production threshold", note=f"TP {tp}, FP {fp} (before canonicalization: TP {rtp}, FP {rfp})"))
         if aps:
             run.add(Metric("mAP@0.5 over evaluable classes", round(float(np.mean(aps)), 4), "AP", "measured", cond,
-                           "chaya_worker.evaluation", note=f"{len(aps)} classes; small sample, no interval"))
+                           "chaya_worker.evaluation",
+                           note=f"{len(aps)} classes; before canonicalization: {float(np.mean(raw_aps)):.4f}"))
         # Label quality at the production threshold: what SEMANTIC_INDEXING would actually receive.
         prompt_phrases = [p.strip() for p in s.object_detection_prompt.lower().split(".") if p.strip()]
         kept = [d for dets in detections.values() for d in dets if d.confidence >= s.object_detection_box_threshold]
         empty = sum(1 for d in kept if not has_phrase(d.label))
         merged = sum(1 for d in kept if has_phrase(d.label)
                      and " ".join(d.label.lower().split()) not in prompt_phrases)
+        raw_merged = sum(1 for d in kept if has_phrase(d.raw_label or d.label)
+                         and " ".join((d.raw_label or d.label).lower().split()) not in prompt_phrases)
+        canonicalized = sum(1 for d in kept if d.raw_label and " ".join(d.raw_label.lower().split()) != " ".join(d.label.lower().split()))
         run.add(Metric(f"detections at box threshold {s.object_detection_box_threshold}", len(kept), "count", "measured", cond,
                        "production prompt and thresholds"),
                 Metric("detections with no phrase (dropped by SEMANTIC_INDEXING)", round(empty / len(kept), 4) if kept else 0.0,
                        "fraction", "measured", cond, "chaya_worker.stages.semantic_indexing.has_phrase", note=f"{empty} boxes"),
                 Metric("detections whose phrase is not one prompt phrase (several merged, or a fragment)",
                        round(merged / len(kept), 4) if kept else 0.0, "fraction", "measured", cond, "Grounding DINO text grouping",
-                       note=f"{merged} boxes, e.g. 'desk reception desk counter'"))
+                       note=f"{merged} boxes after canonicalization (raw before canonicalization: {raw_merged}/{len(kept)} = "
+                            f"{(raw_merged / len(kept) if kept else 0.0):.4f}; {canonicalized} resolved)"))
         run.details["detection"]["unevaluable_phrases"] = dict(sorted(unevaluable.items(), key=lambda kv: -kv[1]))
         run.details["detection"]["ambiguous_phrases"] = ambiguous
+        run.details["detection"]["raw_unevaluable_phrases"] = dict(sorted(raw_unevaluable.items(), key=lambda kv: -kv[1]))
+        run.details["detection"]["raw_ambiguous_phrases"] = raw_ambiguous
+        run.details["detection"]["raw_vs_canonical"] = raw_vs_canonical
+        run.details["detection"]["raw_merged_at_threshold"] = raw_merged
+        run.details["detection"]["canonical_merged_at_threshold"] = merged
+        run.details["detection"]["canonicalized_at_threshold"] = canonicalized
         run.add(unavailable("3D localization error", "m", "the dataset has no 3D ground truth (COCO images are single "
                             "photographs); localization is measured separately and only on synthetic scenes "
                             "(tests/unit/test_object_localization.py)", "a venue capture with surveyed object positions", cond))

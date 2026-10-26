@@ -4,8 +4,10 @@ import {
   type SearchResponse,
   type SearchResult,
   canNavigate,
+  diagnosticNote,
   distanceNote,
   emptyMessage,
+  indexStatusNote,
   interpretationNotes,
   matchNote,
   resultBadges,
@@ -91,4 +93,33 @@ test("an empty result says why, and never presents candidates as matches", () =>
   assert.equal(emptyMessage(response({ query: "swimming pool", closestMatches: [base] })), "Nothing matching “swimming pool” here. Closest:");
   assert.match(emptyMessage(response({ query: "accessible cafe", accessibilityUnconfirmed: [base], closestMatches: [base] })) ?? "",
     /recorded as wheelchair accessible/);
+});
+
+test("diagnostics explain detector vs manual POI and semantic embedding vs lexical fallback", () => {
+  assert.equal(diagnosticNote(base, "embedding"), "Manual POI · semantic embedding");
+  assert.equal(diagnosticNote(base, "lexical_fallback"), "Manual POI · lexical fallback");
+  assert.equal(diagnosticNote({ ...base, source: "AUTO_DETECTED", detectionConfidence: 0.78, matchedBy: "SYNONYM", matchedTerm: "sofa" }, "embedding"),
+    "Detector (78% conf) · synonym match (“sofa”) + semantic embedding");
+  assert.equal(diagnosticNote({ ...base, indexStatus: "PENDING_EMBEDDING" }, "embedding"),
+    "Manual POI · lexical match (embedding pending)");
+  const serverExplained: SearchResult = {
+    ...base,
+    diagnostics: {
+      origin: "DETECTOR",
+      retrievalMode: "SEMANTIC_EMBEDDING",
+      explanation: "Detector object (conf=0.84); matched via synonym ('sofa') + CLIP text embedding (cos=0.91).",
+    },
+  };
+  assert.equal(diagnosticNote(serverExplained, "embedding"),
+    "Detector object (conf=0.84); matched via synonym ('sofa') + CLIP text embedding (cos=0.91).");
+});
+
+test("indexStatusNote surfaces pending or failed embeddings when indexComplete is false", () => {
+  assert.equal(indexStatusNote(response({})), null);
+  assert.equal(indexStatusNote(response({
+    indexDiagnostics: { embeddingModel: "clip-vit-b32", totalPois: 10, indexedPois: 10, pendingEmbeddingPois: 0, failedEmbeddingPois: 0, indexComplete: true },
+  })), null);
+  assert.equal(indexStatusNote(response({
+    indexDiagnostics: { embeddingModel: "clip-vit-b32", totalPois: 10, indexedPois: 8, pendingEmbeddingPois: 1, failedEmbeddingPois: 1, indexComplete: false },
+  })), "Index incomplete: 8/10 POIs embedded (1 pending, 1 failed; unembedded POIs match by name only).");
 });

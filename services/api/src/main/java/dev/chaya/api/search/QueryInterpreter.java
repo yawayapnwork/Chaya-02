@@ -33,7 +33,7 @@ import java.util.regex.Pattern;
  *       candidate is that close. Shorter words are never corrected ("gift" stays "gift", it does not become "lift"), and
  *       neither is the singular or plural of a dictionary word ("armchair" next to the venue's "armchairs").</li>
  *   <li><b>Synonyms:</b> a small table of common venue words (stairs/staircase/stairway, elevator/lift, restroom/toilet/loo,
- *       sofa/couch/settee, ...). It does not replace CLIP: the subject is still embedded as typed (after spelling), and the
+ *       sofa/couch/settee/loveseat, ...). It does not replace CLIP: the subject is still embedded as typed (after spelling), and the
  *       table only adds alternative phrasings to the lexical match, so "loo" matches a POI tagged "toilet" by name. It holds
  *       synonyms and plurals only, not kinds of a thing: "armchair" is not a synonym of "chair".</li>
  * </ol>
@@ -54,7 +54,7 @@ public final class QueryInterpreter {
         List.of("emergency exit", "fire exit", "emergency door"),
         List.of("reception", "reception desk", "front desk", "check-in", "check in"),
         List.of("information desk", "info desk", "help desk", "information point", "information kiosk"),
-        List.of("sofa", "couch", "settee", "sofas", "couches"),
+        List.of("sofa", "couch", "settee", "loveseat", "sofas", "couches"),
         List.of("chair", "chairs"),
         List.of("table", "tables"),
         List.of("bench", "benches"),
@@ -171,12 +171,15 @@ public final class QueryInterpreter {
         }
         String typedSubject = subject;
 
-        Set<String> dictionary = new TreeSet<>(GROUP_OF.keySet().stream().flatMap(p -> List.of(p.split(" ")).stream()).toList());
+        Set<String> venueWords = new TreeSet<>();
         for (String w : venueVocabulary) {
             if (!w.isBlank()) {
-                dictionary.add(w);
+                venueWords.add(w);
             }
         }
+        Set<String> dictionary = new TreeSet<>(GROUP_OF.keySet().stream().flatMap(p -> List.of(p.split(" ")).stream()).toList());
+        dictionary.addAll(venueWords);
+
         List<Correction> corrections = new ArrayList<>();
         List<String> words = new ArrayList<>(List.of(subject.split(" ")));
         for (int i = 0; i < words.size(); i++) {
@@ -220,6 +223,11 @@ public final class QueryInterpreter {
             }
             padded = padded.replace(" " + phrase + " ", " ");
         }
+        // Include direct singular/plural inflections present in the venue's own vocabulary (e.g. "armchair" -> "armchairs")
+        for (String inflected : inflectionsIn(subject, venueWords)) {
+            terms.add(inflected);
+        }
+
         String embeddingText = subject.equals(normalized) && corrections.isEmpty()
             ? (query == null ? "" : query.strip().toLowerCase(Locale.ROOT)) : subject;
         return new Interpretation(normalized, subject, embeddingText, typedSubject, List.copyOf(terms), synonymTerms, groups, corrections,
@@ -278,9 +286,27 @@ public final class QueryInterpreter {
     /** w is the singular or plural of a dictionary word ("armchair" next to the venue's "armchairs"): a real word, not a
      * misspelling, so it is not "corrected" into another one. */
     private static boolean inflectionOf(String w, Set<String> dictionary) {
-        return dictionary.contains(w + "s") || dictionary.contains(w + "es")
-            || (w.endsWith("s") && dictionary.contains(w.substring(0, w.length() - 1)))
-            || (w.endsWith("es") && dictionary.contains(w.substring(0, w.length() - 2)));
+        return !inflectionsIn(w, dictionary).isEmpty();
+    }
+
+    private static List<String> inflectionsIn(String w, Set<String> vocabulary) {
+        if (w.isEmpty() || w.contains(" ")) {
+            return List.of();
+        }
+        List<String> out = new ArrayList<>();
+        if (vocabulary.contains(w + "s")) {
+            out.add(w + "s");
+        }
+        if (vocabulary.contains(w + "es")) {
+            out.add(w + "es");
+        }
+        if (w.endsWith("s") && w.length() > 3 && vocabulary.contains(w.substring(0, w.length() - 1))) {
+            out.add(w.substring(0, w.length() - 1));
+        }
+        if (w.endsWith("es") && w.length() > 4 && vocabulary.contains(w.substring(0, w.length() - 2))) {
+            out.add(w.substring(0, w.length() - 2));
+        }
+        return out;
     }
 
     /** The single dictionary word within the allowed distance of w, or null when there is none or more than one. */

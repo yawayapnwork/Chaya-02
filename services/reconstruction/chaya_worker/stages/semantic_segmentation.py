@@ -33,7 +33,7 @@ from ..camera_model import CameraModelError, FrameRectifier
 from ..colmap_txt import parse_cameras_txt
 from ..contract import ArtifactSpec, StageContext, StageError, StageResult
 from ..model_loading import load_pretrained, resolved_revision
-from ..model_provenance import provenance
+from ..model_provenance import ModelLicenseError, enforce_license_policy, provenance
 from ..ply import read_ply
 from ..privacy import masks as privacy_masks
 from ..semantic_classes import CLUTTER, FLOOR, FURNITURE, STAIRS, UNKNOWN, WALL, class_mapping
@@ -91,6 +91,15 @@ class SemanticSegmentation:
 
     def run(self, ctx: StageContext) -> StageResult:
         s = ctx.settings
+        rev = s.semantic_segmentation_revision
+        try:
+            enforce_license_policy(
+                provenance(s.semantic_segmentation_model, requested_revision=rev, resolved_revision=None),
+                commercial_use_only=s.commercial_use_only,
+            )
+        except ModelLicenseError as exc:
+            raise StageError(str(exc), code="MODEL_LICENSE_RESTRICTED") from exc
+
         ctx.toolchain.require(["py:torch", "py:transformers", "colmap"], stage=self.name)
         ctx.toolchain.require([f"model:{s.semantic_segmentation_model}"], stage=self.name)
 
@@ -126,12 +135,15 @@ class SemanticSegmentation:
         masks = privacy_masks.from_inputs(ctx)
 
         device = "cuda" if ctx.toolchain.cuda().available else "cpu"
-        rev = s.semantic_segmentation_revision
         processor = AutoImageProcessor.from_pretrained(s.semantic_segmentation_model, **({"revision": rev} if rev else {}))
         model = load_pretrained(AutoModelForSemanticSegmentation.from_pretrained, s.semantic_segmentation_model, revision=rev,
                                 allow_pickle=s.allow_pickle_weights, what="semantic segmentation model").to(device).eval()
         buckets, mapping_method = class_mapping(model.config.id2label)
         model_prov = provenance(s.semantic_segmentation_model, requested_revision=rev, resolved_revision=resolved_revision(model))
+        try:
+            enforce_license_policy(model_prov, commercial_use_only=s.commercial_use_only)
+        except ModelLicenseError as exc:
+            raise StageError(str(exc), code="MODEL_LICENSE_RESTRICTED") from exc
 
         n = len(cloud)
         class_votes = np.zeros((n, len(VOTED)), dtype=np.float64)  # one column per VOTED class

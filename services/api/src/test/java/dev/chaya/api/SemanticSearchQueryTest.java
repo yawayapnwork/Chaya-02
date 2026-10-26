@@ -444,6 +444,25 @@ class SemanticSearchQueryTest extends AbstractIntegrationTest {
         assertThat(poiIds(r.results())).containsExactly(pending);
         assertThat(r.results().get(0).indexStatus()).isEqualTo("PENDING_EMBEDDING");
         assertThat(r.results().get(0).rankScore()).isNull();
+        assertThat(r.results().get(0).diagnostics()).isNotNull();
+        assertThat(r.results().get(0).diagnostics().retrievalMode()).isEqualTo("LEXICAL_ONLY");
+        assertThat(r.results().get(0).diagnostics().embeddingFailed()).isFalse();
+        assertThat(r.indexDiagnostics()).isNotNull();
+        assertThat(r.indexDiagnostics().indexComplete()).isFalse();
+        assertThat(r.indexDiagnostics().pendingEmbeddingPois()).isEqualTo(1);
+        assertThat(r.indexDiagnostics().failedEmbeddingPois()).isZero();
+
+        UUID pendingVersion = jdbc.sql("SELECT id FROM poi_version WHERE poi_id = :p").param("p", pending).query(UUID.class).single();
+        jdbc.sql("INSERT INTO poi_embedding_failure (poi_version_id, attempts, last_error, next_attempt_at) "
+                + "VALUES (:id, 2, 'vision timeout', now() + interval '1 minute')")
+            .param("id", pendingVersion).update();
+
+        SearchResponse failed = query("prayer room");
+        assertThat(failed.indexDiagnostics().indexComplete()).isFalse();
+        assertThat(failed.indexDiagnostics().failedEmbeddingPois()).isEqualTo(1);
+        assertThat(failed.results().get(0).diagnostics().embeddingFailed()).isTrue();
+        assertThat(failed.results().get(0).diagnostics().explanation()).contains("embedding failed; awaiting retry");
+
         assertThat(query("cafe").results()).allSatisfy(x -> assertThat(x.indexStatus()).isEqualTo("INDEXED"));
     }
 }

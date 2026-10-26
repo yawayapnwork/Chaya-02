@@ -206,7 +206,12 @@ public final class OpsDtos {
     /** term = normalized query text as logged (search results themselves are not logged). */
     public record TermCount(String term, long count, Double avgResultCount, Instant lastSearchedAt) {}
 
-    public record PoiStats(long total, long manual, long autoDetected, long awaitingEmbedding) {}
+    public record PoiStats(long total, long manual, long autoDetected, long awaitingEmbedding,
+                           long failedEmbedding, boolean indexComplete) {
+        public PoiStats(long total, long manual, long autoDetected, long awaitingEmbedding) {
+            this(total, manual, autoDetected, awaitingEmbedding, 0L, awaitingEmbedding == 0L);
+        }
+    }
 
     public record SearchAnalytics(int days, long queryCount, long zeroResultCount, Double avgLatencyMs, Double p95LatencyMs,
                                   long distinctSearchers, Instant firstQueryAt, Instant lastQueryAt, List<TermCount> topTerms,

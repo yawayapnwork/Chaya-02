@@ -5,6 +5,34 @@
 
 import type { SpatialStatus } from "./search-location.ts";
 
+/** Mirrors SearchDtos.ResultDiagnostics: provenance and retrieval mode explanation for a single result. */
+export interface ResultDiagnostics {
+  origin: "DETECTOR" | "MANUAL_POI";
+  retrievalMode: "SEMANTIC_EMBEDDING" | "LEXICAL_FALLBACK" | "LEXICAL_ONLY";
+  matchChannel?: "TEXT" | "IMAGE" | "TEXT_AND_IMAGE" | "LEXICAL" | "SYNONYM" | null;
+  matchedTerm?: string | null;
+  semanticSimilarity?: number | null;
+  imageSimilarity?: number | null;
+  lexicalSimilarity?: number | null;
+  detectionConfidence?: number | null;
+  evidenceScore?: number | null;
+  rankScore?: number | null;
+  spatialStatus?: SpatialStatus | null;
+  localizationStatus?: "MULTI_VIEW" | "SINGLE_VIEW" | null;
+  embeddingFailed?: boolean;
+  explanation: string;
+}
+
+/** Mirrors SearchDtos.IndexDiagnostics: venue/version embedding index completeness at query time. */
+export interface IndexDiagnostics {
+  embeddingModel?: string | null;
+  totalPois: number;
+  indexedPois: number;
+  pendingEmbeddingPois: number;
+  failedEmbeddingPois: number;
+  indexComplete: boolean;
+}
+
 /** Mirrors SearchDtos.SearchResult. */
 export interface SearchResult {
   poiId: string;
@@ -60,6 +88,8 @@ export interface SearchResult {
   accessible?: boolean | null;
   /** PENDING_EMBEDDING: found by name only until the embedding job reaches it. */
   indexStatus?: "INDEXED" | "PENDING_EMBEDDING";
+  /** Structured explanation of whether this result came from a detector, manual POI, lexical fallback or semantic embedding. */
+  diagnostics?: ResultDiagnostics | null;
 }
 
 export interface SearchCorrection {
@@ -99,6 +129,8 @@ export interface SearchResponse {
   accessibilityUnconfirmed?: SearchResult[];
   /** Only when results is empty: other searches that return something here. */
   suggestions?: string[];
+  /** Venue/version index completeness diagnostics. */
+  indexDiagnostics?: IndexDiagnostics | null;
 }
 
 /** The searcher's position as the viewer knows it: a POI standing in for "where I am" (the route's From). */
@@ -135,6 +167,7 @@ export function resultBadges(r: SearchResult): string[] {
   if (r.lowConfidence) badges.push("low confidence");
   if (r.matchedBy === "IMAGE") badges.push("matched by appearance");
   if (r.indexStatus === "PENDING_EMBEDDING") badges.push("name match only");
+  if (r.diagnostics?.embeddingFailed) badges.push("embedding failed");
   if (r.accessible === true) badges.push("accessible");
   const merged = r.duplicateIds?.length ?? 0;
   if (merged > 0) badges.push(`${merged + 1} detections merged`);
@@ -147,6 +180,47 @@ export function matchNote(r: SearchResult, matchType: SearchResponse["matchType"
   if (r.indexStatus === "PENDING_EMBEDDING" || r.matchedBy === "LEXICAL") return "name match";
   if (r.matchedBy === "SYNONYM") return `name match (“${r.matchedTerm ?? ""}”)`;
   return `${Math.round(r.similarity * 100)}% match`;
+}
+
+/**
+ * Explains whether a result came from a detector or manual POI, and whether it was retrieved via
+ * semantic embedding, synonym/lexical match, or lexical fallback.
+ */
+export function diagnosticNote(r: SearchResult, matchType: SearchResponse["matchType"]): string {
+  if (r.diagnostics?.explanation) return r.diagnostics.explanation;
+  const origin = r.source === "AUTO_DETECTED"
+    ? (r.detectionConfidence != null ? `Detector (${Math.round(r.detectionConfidence * 100)}% conf)` : "Detector")
+    : "Manual POI";
+  if (matchType === "lexical_fallback") {
+    return `${origin} · lexical fallback`;
+  }
+  if (r.indexStatus === "PENDING_EMBEDDING") {
+    return `${origin} · lexical match (embedding pending)`;
+  }
+  if (r.matchedBy === "SYNONYM") {
+    return `${origin} · synonym match (“${r.matchedTerm ?? ""}”) + semantic embedding`;
+  }
+  if (r.matchedBy === "LEXICAL") {
+    return `${origin} · lexical match${r.matchedTerm ? ` (“${r.matchedTerm}”)` : ""} + semantic embedding`;
+  }
+  if (r.matchedBy === "IMAGE") {
+    return `${origin} · crop image embedding`;
+  }
+  if (r.matchedBy === "TEXT_AND_IMAGE") {
+    return `${origin} · text + crop image embedding`;
+  }
+  return `${origin} · semantic embedding`;
+}
+
+/** Explains when a venue's semantic index is incomplete due to pending or failed POI embeddings. */
+export function indexStatusNote(response: SearchResponse): string | null {
+  const d = response.indexDiagnostics;
+  if (!d || d.indexComplete) return null;
+  const parts: string[] = [];
+  if (d.pendingEmbeddingPois > 0) parts.push(`${d.pendingEmbeddingPois} pending`);
+  if (d.failedEmbeddingPois > 0) parts.push(`${d.failedEmbeddingPois} failed`);
+  const detail = parts.length > 0 ? ` (${parts.join(", ")}; unembedded POIs match by name only)` : "";
+  return `Index incomplete: ${d.indexedPois}/${d.totalPois} POIs embedded${detail}.`;
 }
 
 /** Whether "Navigate" can be offered: a route needs a position in the frame being viewed, on a floor. */

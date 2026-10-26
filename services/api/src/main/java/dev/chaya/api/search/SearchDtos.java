@@ -64,6 +64,15 @@ public final class SearchDtos {
      *                                 recorded. Never inferred from a label or an image
      * @param indexStatus              INDEXED (has a text embedding of the query's model) or PENDING_EMBEDDING (found by
      *                                 name only, until the embedding backfill reaches it) */
+    public record ResultDiagnostics(String origin, String retrievalMode, String matchChannel, String matchedTerm,
+                                    Double semanticSimilarity, Double imageSimilarity, Double lexicalSimilarity,
+                                    Double detectionConfidence, Double evidenceScore, Double rankScore,
+                                    String spatialStatus, String localizationStatus, boolean embeddingFailed,
+                                    String explanation) {}
+
+    public record IndexDiagnostics(String embeddingModel, long totalPois, long indexedPois, long pendingEmbeddingPois,
+                                   long failedEmbeddingPois, boolean indexComplete) {}
+
     public record SearchResult(UUID poiId, UUID floorId, String label, String category, List<String> tags,
                                double x, double y, double z, double similarity, Double detectionConfidence,
                                String source, Map<String, Object> boundingBox, Double relevanceMargin,
@@ -72,7 +81,23 @@ public final class SearchDtos {
                                Double rankScore, UUID scanVersionId, UUID pipelineRunId, UUID detectionArtifactId,
                                Map<String, Object> provenance, boolean exactMatch, String matchedTerm, Double distanceMeters,
                                String distanceKind, String routeStatus, Boolean lowConfidence, List<UUID> duplicateIds,
-                               Boolean accessible, String indexStatus) {}
+                               Boolean accessible, String indexStatus, ResultDiagnostics diagnostics) {
+        public SearchResult(UUID poiId, UUID floorId, String label, String category, List<String> tags,
+                            double x, double y, double z, double similarity, Double detectionConfidence,
+                            String source, Map<String, Object> boundingBox, Double relevanceMargin,
+                            Double imageSimilarity, String matchedBy, String sourceFrame, String spatialStatus,
+                            String localizationStatus, Double localizationUncertaintyM, Double lexicalSimilarity,
+                            Double rankScore, UUID scanVersionId, UUID pipelineRunId, UUID detectionArtifactId,
+                            Map<String, Object> provenance, boolean exactMatch, String matchedTerm, Double distanceMeters,
+                            String distanceKind, String routeStatus, Boolean lowConfidence, List<UUID> duplicateIds,
+                            Boolean accessible, String indexStatus) {
+            this(poiId, floorId, label, category, tags, x, y, z, similarity, detectionConfidence, source, boundingBox,
+                relevanceMargin, imageSimilarity, matchedBy, sourceFrame, spatialStatus, localizationStatus,
+                localizationUncertaintyM, lexicalSimilarity, rankScore, scanVersionId, pipelineRunId, detectionArtifactId,
+                provenance, exactMatch, matchedTerm, distanceMeters, distanceKind, routeStatus, lowConfidence, duplicateIds,
+                accessible, indexStatus, null);
+        }
+    }
 
     /** A spelling correction QueryInterpreter applied: the word as typed and the venue or synonym-table word used. */
     public record Correction(String from, String to) {}
@@ -118,7 +143,15 @@ public final class SearchDtos {
      */
     public record SearchResponse(String query, String matchType, List<SearchResult> results, List<SearchResult> closestMatches,
                                  String relevance, SearchInterpretation interpretation, boolean lowConfidence,
-                                 List<SearchResult> accessibilityUnconfirmed, List<String> suggestions) {}
+                                 List<SearchResult> accessibilityUnconfirmed, List<String> suggestions,
+                                 IndexDiagnostics indexDiagnostics) {
+        public SearchResponse(String query, String matchType, List<SearchResult> results, List<SearchResult> closestMatches,
+                              String relevance, SearchInterpretation interpretation, boolean lowConfidence,
+                              List<SearchResult> accessibilityUnconfirmed, List<String> suggestions) {
+            this(query, matchType, results, closestMatches, relevance, interpretation, lowConfidence,
+                accessibilityUnconfirmed, suggestions, null);
+        }
+    }
 
     /** Optional position of the person searching, for "nearest": canonical metres on positionFloorId, in that floor's
      * current coordinate frame (or the scan version's, when one is searched), exactly as a route's start. */

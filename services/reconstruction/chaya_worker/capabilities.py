@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import recast, splat_preflight
+from .model_provenance import check_license_policy, provenance
 from .settings import Settings
 from .stages import STAGE_ORDER
 from .toolchain import Toolchain
@@ -85,6 +86,17 @@ def assess(settings: Settings, toolchain: Toolchain) -> Assessment:
                 allow_jit=settings.gsplat_allow_jit_backend, lock=splat_preflight.load_lock(splat_preflight.DEFAULT_LOCK_PATH),
                 min_driver_version=settings.gpu_min_driver_version, min_free_memory_mb=settings.gpu_min_free_memory_mb)
             reasons += [{"code": p["code"], "message": p["message"], "fix": p["fix"]} for p in preflight["problems"]]
+        if stage == "SEMANTIC_SEGMENTATION" and settings.commercial_use_only:
+            seg_prov = provenance(settings.semantic_segmentation_model,
+                                  requested_revision=settings.semantic_segmentation_revision, resolved_revision=None)
+            reasons += check_license_policy(seg_prov, commercial_use_only=True)
+        if stage == "SEMANTIC_INDEXING" and settings.commercial_use_only:
+            det_prov = provenance(settings.grounding_dino_model,
+                                  requested_revision=settings.grounding_dino_revision, resolved_revision=None)
+            clip_prov = provenance(f"open_clip:{settings.clip_model_name}:{settings.clip_pretrained}",
+                                   requested_revision=None, resolved_revision=None)
+            reasons += check_license_policy(det_prov, commercial_use_only=True)
+            reasons += check_license_policy(clip_prov, commercial_use_only=True)
         if reasons:
             refused[stage] = reasons
         else:

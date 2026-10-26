@@ -60,6 +60,10 @@ class ModelCardError(ValueError):
     """A checkpoint claims to be trained by this project, but its card is incomplete or inconsistent."""
 
 
+class ModelLicenseError(ValueError):
+    """A checkpoint's licence does not permit commercial use in a commercial-only configuration."""
+
+
 @dataclass
 class ModelProvenance:
     model_id: str
@@ -131,3 +135,29 @@ def provenance(model_id: str, *, requested_revision: str | None, resolved_revisi
     return ModelProvenance(model_id=model_id, requested_revision=requested_revision or None, resolved_revision=resolved_revision,
                            fine_tuned=False, kind="unregistered",
                            notes=["not in STOCK_MODELS and no chaya_model_card.json: licence and training unknown"])
+
+
+def check_license_policy(prov: ModelProvenance, *, commercial_use_only: bool) -> list[dict[str, str]]:
+    """Return structured policy violations if `commercial_use_only` is enabled and `prov` is not cleared for commercial use."""
+    if not commercial_use_only or prov.commercial_use is True:
+        return []
+    if prov.commercial_use is False:
+        return [{
+            "code": "MODEL_LICENSE_RESTRICTED",
+            "message": (f"{prov.model_id} is restricted to non-commercial research/evaluation use "
+                        f"({prov.license or 'commercial_use=false'}) and cannot be used when MODEL_COMMERCIAL_USE_ONLY=true"),
+            "fix": "Configure a commercially licensed checkpoint or set MODEL_COMMERCIAL_USE_ONLY=false for research/evaluation runs.",
+        }]
+    return [{
+        "code": "MODEL_LICENSE_RESTRICTED",
+        "message": (f"{prov.model_id} has an unverified licence (kind={prov.kind}, commercial_use=null) "
+                    "and cannot be used when MODEL_COMMERCIAL_USE_ONLY=true"),
+        "fix": "Register the checkpoint's licence in STOCK_MODELS or supply a valid chaya_model_card.json from a commercially licensed base model.",
+    }]
+
+
+def enforce_license_policy(prov: ModelProvenance, *, commercial_use_only: bool) -> None:
+    """Raise ModelLicenseError when `commercial_use_only` is True and the checkpoint is not cleared for commercial use."""
+    problems = check_license_policy(prov, commercial_use_only=commercial_use_only)
+    if problems:
+        raise ModelLicenseError(problems[0]["message"])

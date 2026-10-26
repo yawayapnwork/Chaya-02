@@ -43,6 +43,7 @@ from ..colmap_txt import parse_cameras_txt
 from ..contract import ArtifactSpec, StageContext, StageError, StageResult
 from ..frames import Similarity, frame_provenance, require_canonical
 from ..grounding_dino import GroundingDinoDetector
+from ..model_provenance import ModelLicenseError, enforce_license_policy, provenance
 from ..object_localization import METHOD as LOCALIZATION_METHOD
 from ..object_localization import REJECTIONS, Localized, camera_depth, localize_detection
 from ..ply import read_ply
@@ -176,6 +177,18 @@ class SemanticIndexing:
         s = ctx.settings
         frame = require_canonical(ctx.order, self.name)  # before any model is loaded
         to_canonical = frame.to_canonical()
+        try:
+            enforce_license_policy(
+                provenance(s.grounding_dino_model, requested_revision=s.grounding_dino_revision, resolved_revision=None),
+                commercial_use_only=s.commercial_use_only,
+            )
+            enforce_license_policy(
+                provenance(f"open_clip:{s.clip_model_name}:{s.clip_pretrained}", requested_revision=None, resolved_revision=None),
+                commercial_use_only=s.commercial_use_only,
+            )
+        except ModelLicenseError as exc:
+            raise StageError(str(exc), code="MODEL_LICENSE_RESTRICTED") from exc
+
         ctx.toolchain.require(["py:torch", "py:transformers", "py:open_clip", "py:PIL", "colmap"], stage=self.name)
         ctx.toolchain.require([f"model:{s.grounding_dino_model}"], stage=self.name)
 
@@ -224,12 +237,18 @@ class SemanticIndexing:
                                          text_threshold=s.object_detection_text_threshold,
                                          revision=s.grounding_dino_revision, allow_pickle=s.allow_pickle_weights)
         embedder = ClipEmbedder(s.clip_model_name, s.clip_pretrained, device=device)
+        try:
+            enforce_license_policy(detector.provenance, commercial_use_only=s.commercial_use_only)
+            enforce_license_policy(embedder.provenance, commercial_use_only=s.commercial_use_only)
+        except ModelLicenseError as exc:
+            raise StageError(str(exc), code="MODEL_LICENSE_RESTRICTED") from exc
 
         raw_objects: list[dict[str, Any]] = []
         crops: list[np.ndarray] = []
         frames_processed = 0
         dropped_privacy = 0
         dropped_no_phrase = 0
+        canonicalized_phrases = 0
         rejected = dict.fromkeys(REJECTIONS, 0)
         params = s.localization_params()
         metres_per_unit = to_canonical.scale  # the cloud's frame -> canonical: camera depths in metres
@@ -265,6 +284,8 @@ class SemanticIndexing:
                 if not has_phrase(det.label):
                     dropped_no_phrase += 1
                     continue
+                if det.raw_label is not None and normalized_label(det.raw_label) != normalized_label(det.label):
+                    canonicalized_phrases += 1
                 x0, y0, x1, y1 = (int(max(0, v)) for v in det.box_xyxy)
                 x1, y1 = min(w, x1), min(h, y1)
                 if x1 <= x0 or y1 <= y0:
@@ -311,6 +332,7 @@ class SemanticIndexing:
             "model_provenance": {"detector": detector.provenance.as_dict(), "embedding": embedder.provenance.as_dict()},
             "frames_processed": frames_processed, "raw_detection_count": len(raw_objects), "object_count": len(objects),
             "dropped_as_privacy_masked": dropped_privacy, "dropped_without_phrase": dropped_no_phrase,
+            "canonicalized_phrases": canonicalized_phrases,
             "privacy_masks_applied": masks is not None,
             "localization": {"method": LOCALIZATION_METHOD, "params": params.__dict__, "rejected": rejected,
                              "multi_view_objects": sum(1 for o in objects if o["localization"]["status"] == "MULTI_VIEW")}})

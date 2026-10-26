@@ -118,9 +118,9 @@ class RescanServiceTest extends AbstractIntegrationTest {
         jdbc.sql("UPDATE coordinate_frame SET status = 'SUPERSEDED' WHERE source_run_id = :r").param("r", run).update();
         jdbc.sql("""
                 INSERT INTO coordinate_frame (organization_id, venue_id, floor_id, source_run_id, version, metric_status,
-                    gravity_status, horizontal_datum, scale, scale_source, gravity_source, method, inputs, residuals, calibrated_by)
+                    gravity_status, horizontal_datum, scale, scale_source, gravity_source, method, inputs, residuals, calibrated_by, validation_status)
                 VALUES (:o, :v, :f, :r, 2, 'METRIC', 'NOT_ALIGNED', 'NONE', 1, 'MEASURED_DISTANCES', 'NONE', 'TEST_FIXTURE',
-                    '{"fixture": true}', '{}', 'fixture')""")
+                    '{"fixture": true}', '{}', 'fixture', 'NOT_VALIDATED')""")
             .param("o", t.org()).param("v", t.venue()).param("f", t.floor()).param("r", run).update();
         assertThatThrownBy(() -> rescan.initiate(actor, t.venue(), t.floor(), new RescanRequest(parent, SQUARE, null)))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.code()).isEqualTo("NOT_CALIBRATED"));

@@ -190,3 +190,11 @@ def test_the_capabilities_command_reports_and_exits_nonzero_when_a_configured_st
 def test_open3d_stages_need_open3d(stage):
     assert stage in assess(_settings((stage,)), FakeToolchain({"py:open3d"})).offered
     assert stage in assess(_settings((stage,)), FakeToolchain(set())).refused
+
+
+def test_commercial_use_only_refuses_research_only_segmentation_checkpoint_but_offers_semantic_indexing():
+    a = assess(_settings(("SEMANTIC_SEGMENTATION", "SEMANTIC_INDEXING"), commercial_use_only=True),
+               FakeToolchain(GPU_IMAGE_TOOLS | MODELS, gpu="ok"))
+    assert a.offered == ["SEMANTIC_INDEXING"]
+    assert "SEMANTIC_SEGMENTATION" in a.refused
+    assert any(r["code"] == "MODEL_LICENSE_RESTRICTED" for r in a.refused["SEMANTIC_SEGMENTATION"])

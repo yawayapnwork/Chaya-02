@@ -15,10 +15,12 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
@@ -82,7 +84,7 @@ class SearchBenchmarkTest extends AbstractIntegrationTest {
     record Query(String q, String type, List<String> expected, String source) {}
 
     /** One venue: its tree, and how a result is identified in `expected` (a manual POI's label, a detection's crop id). */
-    private record Venue(Fixtures.Tree tree, Actor actor, Map<UUID, String> ident) {}
+    private record Venue(Fixtures.Tree tree, Actor actor, Map<UUID, String> ident, UUID runId) {}
 
     @Test
     @SuppressWarnings("unchecked")
@@ -117,6 +119,8 @@ class SearchBenchmarkTest extends AbstractIntegrationTest {
         condition = "mixed";
         Map<String, List<String>> mixedRanked = run(mixed, all);
         report.put("mixed", score(mixedRanked, all));
+        report.put("by_category", scoreByCategory(mixedRanked, all));
+        report.put("adversarial_suite", evaluateAdversarialSuite(mixed, mixedRanked, all));
         Map<String, Object> top5 = new LinkedHashMap<>();
         all.forEach(q -> top5.put(q.q(), mixedRanked.get(q.q()).subList(0, Math.min(5, mixedRanked.get(q.q()).size()))));
         report.put("mixed_top5", top5);
@@ -249,7 +253,7 @@ class SearchBenchmarkTest extends AbstractIntegrationTest {
             }
         }
         Actor actor = new Actor(Actor.Kind.USER, "bench-b3", t.org(), Set.of(t.venue()), Set.of(Role.ADMIN));
-        return new Venue(t, actor, ident);
+        return new Venue(t, actor, ident, run);
     }
 
     /** A manual POI (run == null) or a detection stored as ingestion stores one, with the text embedding the backfill
@@ -322,17 +326,136 @@ class SearchBenchmarkTest extends AbstractIntegrationTest {
             List<Query> qs = queries.stream().filter(q -> q.type().equals(type)).toList();
             if (type.equals("zero_result")) {
                 long empty = qs.stream().filter(q -> ranked.get(q.q()).isEmpty()).count();
-                out.put(type, Map.of("n", qs.size(), "correct_rejection", round((double) empty / qs.size())));
+                double cr = round((double) empty / qs.size());
+                double fpr = round(1.0 - (double) empty / qs.size());
+                List<Double> indicators = qs.stream().map(q -> ranked.get(q.q()).isEmpty() ? 1.0 : 0.0).toList();
+                Map<String, Object> zr = new LinkedHashMap<>();
+                zr.put("n", qs.size());
+                zr.put("correct_rejection", cr);
+                zr.put("false_positive_rate", fpr);
+                zr.put("no_result_rate", cr);
+                zr.put("correct_rejection_ci95", bootstrapCi95(indicators));
+                out.put(type, zr);
                 continue;
             }
             answerable.addAll(qs);
-            out.put(type, Map.of("n", qs.size(), "top1", round(top1(ranked, qs)), "top5", round(top5(ranked, qs))));
+            out.put(type, metricsFor(ranked, qs));
         }
         if (!answerable.isEmpty()) {
-            out.put("all_answerable", Map.of("n", answerable.size(), "top1", round(top1(ranked, answerable)),
-                "top5", round(top5(ranked, answerable))));
+            out.put("all_answerable", metricsFor(ranked, answerable));
         }
         return out;
+    }
+
+    private static Map<String, Object> metricsFor(Map<String, List<String>> ranked, List<Query> qs) {
+        double t1 = top1(ranked, qs);
+        double t5 = top5(ranked, qs);
+        double mrr = mrr(ranked, qs);
+        double map = mapAtK(ranked, qs, TOPK);
+        double fprTop1 = falsePositiveTop1(ranked, qs);
+        double noRes = noResultRate(ranked, qs);
+        List<Double> t1Ind = qs.stream()
+            .map(q -> !ranked.get(q.q()).isEmpty() && q.expected().contains(ranked.get(q.q()).get(0)) ? 1.0 : 0.0)
+            .toList();
+        List<Double> t5Ind = qs.stream()
+            .map(q -> ranked.get(q.q()).stream().limit(5).anyMatch(q.expected()::contains) ? 1.0 : 0.0)
+            .toList();
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("n", qs.size());
+        m.put("top1", round(t1));
+        m.put("top5", round(t5));
+        m.put("mrr", round(mrr));
+        m.put("map_at_10", round(map));
+        m.put("false_positive_rate_top1", round(fprTop1));
+        m.put("no_result_rate", round(noRes));
+        m.put("top1_ci95", bootstrapCi95(t1Ind));
+        m.put("top5_ci95", bootstrapCi95(t5Ind));
+        return m;
+    }
+
+    private Map<String, Object> scoreByCategory(Map<String, List<String>> ranked, List<Query> all) {
+        Map<String, String> itemCategory = new HashMap<>();
+        dataset.get("pois").forEach(p -> itemCategory.put(p.get("label").asText(), p.get("category").asText()));
+        detected.get("extra_manual_pois").forEach(p -> itemCategory.put(p.get("label").asText(), p.get("category").asText()));
+        detected.get("detected").forEach(d -> itemCategory.put(d.get("id").asText(), "detected:" + d.get("label").asText()));
+
+        Map<String, List<Query>> byCat = new LinkedHashMap<>();
+        for (Query q : all) {
+            if (q.expected().isEmpty()) {
+                continue;
+            }
+            Set<String> cats = new java.util.LinkedHashSet<>();
+            for (String exp : q.expected()) {
+                String c = itemCategory.getOrDefault(exp, "other");
+                cats.add(c);
+            }
+            for (String c : cats) {
+                byCat.computeIfAbsent(c, k -> new ArrayList<>()).add(q);
+            }
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        byCat.forEach((cat, qs) -> out.put(cat, metricsFor(ranked, qs)));
+        return out;
+    }
+
+    private Map<String, Object> evaluateAdversarialSuite(Venue mixed, Map<String, List<String>> mixedRanked, List<Query> all) {
+        Map<String, Object> suite = new LinkedHashMap<>();
+
+        // 1. Repeated objects (multiple instances of chairs, couches, plants, tables, benches, restrooms, elevators, rooms)
+        List<Query> repeated = all.stream()
+            .filter(q -> q.expected().size() >= 2 && (q.type().equals("detected_exact") || q.type().equals("ambiguous")))
+            .toList();
+        suite.put("repeated_objects", metricsFor(mixedRanked, repeated));
+
+        // 2. Visually similar objects (same detector label disambiguated by crop appearance)
+        List<Query> visual = all.stream().filter(q -> q.type().equals("visual_attribute")).toList();
+        suite.put("visually_similar_objects", metricsFor(mixedRanked, visual));
+
+        // 3. Occluded / cluttered objects (chair-1 with dog, couch-1 with person, couch-2 with teddy bear)
+        List<Query> occluded = all.stream()
+            .filter(q -> q.expected().contains("chair-1") || q.expected().contains("couch-1") || q.expected().contains("couch-2"))
+            .toList();
+        suite.put("occluded_objects", metricsFor(mixedRanked, occluded));
+
+        // 4. Unseen labels (queries whose words do not appear in detector prompts or POI labels/tags)
+        List<Query> unseen = all.stream()
+            .filter(q -> q.type().equals("synonym") || q.type().equals("detected_synonym"))
+            .toList();
+        suite.put("unseen_labels", metricsFor(mixedRanked, unseen));
+
+        // 5. Absent objects (queries for facilities/objects absent from the venue)
+        List<Query> absent = all.stream().filter(q -> q.type().equals("zero_result")).toList();
+        suite.put("absent_objects", score(mixedRanked, absent).get("zero_result"));
+
+        // 6. Stale scan versions (detections on an unpublished draft scan version must have 0% leakage into search)
+        UUID draftPoi = jdbc.sql("INSERT INTO poi (organization_id, venue_id, floor_id) VALUES (:o, :v, :f) RETURNING id")
+            .param("o", mixed.tree().org()).param("v", mixed.tree().venue()).param("f", mixed.tree().floor())
+            .query(UUID.class).single();
+        JsonNode couchVec = TestEmbeddingConfig.TEXT_FIXTURE.get().get("texts").get("couch");
+        jdbc.sql("""
+                INSERT INTO poi_version (organization_id, venue_id, poi_id, version_number, label, tags, x, y, z,
+                    embedding, embedding_model, source, detection_confidence, pipeline_run_id, created_by, scan_version_id)
+                VALUES (:o, :v, :p, 1, 'couch', '{}', 99, 0, 99, CAST(:e AS vector), :m, 'AUTO_DETECTED', 0.99, :run,
+                    'adversarial-stale', :draftSv)""")
+            .param("o", mixed.tree().org()).param("v", mixed.tree().venue()).param("p", draftPoi)
+            .param("e", TestEmbeddingConfig.vectorLiteral(TestEmbeddingConfig.vector(couchVec))).param("m", model)
+            .param("run", mixed.runId()).param("draftSv", mixed.tree().version()).update();
+        List<String> staleProbeQueries = List.of("couch", "sofa", "settee", "chair", "reception desk");
+        int leaked = 0;
+        for (String pq : staleProbeQueries) {
+            SearchResponse sr = search.search(mixed.actor(), mixed.tree().venue(), pq, null, TOPK, null);
+            boolean hasDraft = sr.results().stream().anyMatch(r -> r.poiId().equals(draftPoi))
+                || (sr.closestMatches() != null && sr.closestMatches().stream().anyMatch(r -> r.poiId().equals(draftPoi)));
+            if (hasDraft) {
+                leaked++;
+            }
+        }
+        suite.put("stale_scan_versions", Map.of(
+            "n", staleProbeQueries.size(),
+            "stale_leakage_rate", round((double) leaked / staleProbeQueries.size()),
+            "isolation_pass_rate", round(1.0 - (double) leaked / staleProbeQueries.size())
+        ));
+        return suite;
     }
 
     private static double top1(Map<String, List<String>> ranked, List<Query> qs) {
@@ -343,6 +466,71 @@ class SearchBenchmarkTest extends AbstractIntegrationTest {
     private static double top5(Map<String, List<String>> ranked, List<Query> qs) {
         return (double) qs.stream().filter(q -> ranked.get(q.q()).stream().limit(5).anyMatch(q.expected()::contains)).count()
             / qs.size();
+    }
+
+    private static double mrr(Map<String, List<String>> ranked, List<Query> qs) {
+        double sum = 0.0;
+        for (Query q : qs) {
+            List<String> res = ranked.get(q.q());
+            for (int i = 0; i < res.size(); i++) {
+                if (q.expected().contains(res.get(i))) {
+                    sum += 1.0 / (i + 1);
+                    break;
+                }
+            }
+        }
+        return sum / qs.size();
+    }
+
+    private static double mapAtK(Map<String, List<String>> ranked, List<Query> qs, int k) {
+        double sum = 0.0;
+        for (Query q : qs) {
+            if (q.expected().isEmpty()) {
+                continue;
+            }
+            List<String> res = ranked.get(q.q());
+            int hits = 0;
+            double ap = 0.0;
+            int limit = Math.min(k, res.size());
+            for (int i = 0; i < limit; i++) {
+                if (q.expected().contains(res.get(i))) {
+                    hits++;
+                    ap += (double) hits / (i + 1);
+                }
+            }
+            sum += ap / Math.min(q.expected().size(), k);
+        }
+        return sum / qs.size();
+    }
+
+    private static double falsePositiveTop1(Map<String, List<String>> ranked, List<Query> qs) {
+        return (double) qs.stream().filter(q -> !ranked.get(q.q()).isEmpty() && !q.expected().contains(ranked.get(q.q()).get(0)))
+            .count() / qs.size();
+    }
+
+    private static double noResultRate(Map<String, List<String>> ranked, List<Query> qs) {
+        return (double) qs.stream().filter(q -> ranked.get(q.q()).isEmpty()).count() / qs.size();
+    }
+
+    private static List<Double> bootstrapCi95(List<Double> values) {
+        if (values.isEmpty()) {
+            return List.of(0.0, 0.0);
+        }
+        int n = values.size();
+        int b = 2000;
+        Random rng = new Random(42L);
+        List<Double> means = new ArrayList<>(b);
+        for (int i = 0; i < b; i++) {
+            double s = 0.0;
+            for (int j = 0; j < n; j++) {
+                s += values.get(rng.nextInt(n));
+            }
+            means.add(s / n);
+        }
+        Collections.sort(means);
+        double lo = means.get((int) Math.floor(0.025 * (b - 1)));
+        double hi = means.get((int) Math.ceil(0.975 * (b - 1)));
+        return List.of(round(lo), round(hi));
     }
 
     /** Nearest-rank percentile of a sorted list. */

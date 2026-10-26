@@ -108,6 +108,8 @@ services:
       S3_ACCESS_KEY: ${S3_WORKER_ACCESS_KEY:?set S3_WORKER_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_WORKER_SECRET_KEY:?set S3_WORKER_SECRET_KEY}
       WORKER_ID: cpu-worker
+      # Production commercial deployment refuses research/evaluation-only model checkpoints (e.g. SegFormer ADE20K).
+      MODEL_COMMERCIAL_USE_ONLY: "true"
       # The rate-card class this worker's machine is priced at (CHAYA_COST_RATES); empty: its attempts are not priced
       WORKER_RESOURCE_CLASS: ${CHAYA_CPU_WORKER_RESOURCE_CLASS:-}
       # The CPU image can run only these; GPU stages are claimed by GPU workers on a GPU host (DEPLOYMENT.md,

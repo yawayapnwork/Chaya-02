@@ -165,6 +165,9 @@ class Settings:
     grounding_dino_revision: str = ""  # commit SHA; empty = unpinned (logged)
     # Pickle weights can run code on load; only safetensors unless this is set deliberately.
     allow_pickle_weights: bool = False
+    # Commercial-use licence gate (chaya_worker.model_provenance): when true, refuses any checkpoint whose licence is
+    # restricted to research/evaluation (commercial_use=False, e.g. stock SegFormer-B0 ADE20K) or unverified.
+    commercial_use_only: bool = False
     object_detection_prompt: str = (
         "chair. table. sofa. couch. desk. door. window. sign. elevator. stairs. plant. artwork. "
         "reception desk. bench. shelf. counter. restroom sign. exit sign. fire extinguisher."
@@ -444,6 +447,7 @@ class Settings:
             grounding_dino_model=e.get("GROUNDING_DINO_MODEL", d.grounding_dino_model),
             grounding_dino_revision=e.get("GROUNDING_DINO_REVISION", d.grounding_dino_revision),
             allow_pickle_weights=e.get("MODEL_ALLOW_PICKLE_WEIGHTS", "false").strip().lower() == "true",
+            commercial_use_only=_bool(e, "MODEL_COMMERCIAL_USE_ONLY", d.commercial_use_only),
             object_detection_prompt=e.get("OBJECT_DETECTION_PROMPT", d.object_detection_prompt),
             object_detection_box_threshold=_float(e, "OBJECT_DETECTION_BOX_THRESHOLD", d.object_detection_box_threshold),
             object_detection_text_threshold=_float(e, "OBJECT_DETECTION_TEXT_THRESHOLD", d.object_detection_text_threshold),
@@ -596,6 +600,7 @@ class Settings:
             "gravity_min_cameras_above_fraction": self.gravity_min_cameras_above_fraction,
             "grounding_dino_model": self.grounding_dino_model, "object_detection_prompt": self.object_detection_prompt,
             "grounding_dino_revision": self.grounding_dino_revision or None, "allow_pickle_weights": self.allow_pickle_weights,
+            "commercial_use_only": self.commercial_use_only,
             "object_detection_box_threshold": self.object_detection_box_threshold,
             "object_detection_text_threshold": self.object_detection_text_threshold,
             "clip_model_name": self.clip_model_name, "clip_pretrained": self.clip_pretrained,

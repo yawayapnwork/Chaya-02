@@ -499,6 +499,43 @@ host, after one untimed warm-up pass; it is not the API's HTTP latency and is fr
 `SearchBenchmarkTest` asserts the "after" values as floors, so a change that loses retrieval quality on B3 fails the
 build (the `HEAD` code fails them).
 
+### Venue-grounded retrieval, weak-detection gating, and adversarial suite (2026-10-26)
+
+**Changes evaluated (`SearchBenchmarkTest`, `SemanticSearchService`, `QueryInterpreter`):**
+
+1. **Primary label/category exact match priority (`label_exact_match`):** Within `exact_match`, matches on `norm_label` or `norm_category` rank ahead of tag-only matches (`norm_tags`), so `"settee"` ranks `couch-3` ahead of `Lounge` (tagged `"sofas"`).
+2. **Venue-vocabulary inflections (`QueryInterpreter.inflectionsIn`):** Singular/plural inflections (`-s` / `-es`) present in the venue's own POI vocabulary are included in `lexicalTerms` without changing `embeddingText` (e.g. `"armchair"` matches `Lounge`'s tag `"armchairs"`).
+3. **Weak-detection gating:** `AUTO_DETECTED` POIs with `detection_confidence < 0.50` never receive `exact_match` or `label_exact_match` priority (even via synonym expansion) and are never admitted by zero-shot crop similarity (`relevant_image`) alone.
+4. **Expanded metrics and adversarial suite:** `SearchBenchmarkTest` now records MRR, mAP@10, top-1 false-positive rate, no-result rate, 95% percentile bootstrap confidence intervals (`n=2000`, seed 42), per-category breakdowns (`by_category`), and a 6-part `adversarial_suite` (`repeated_objects`, `visually_similar_objects`, `occluded_objects`, `unseen_labels`, `absent_objects`, `stale_scan_versions`).
+
+**Measured results (`services/api/target/search-benchmark/b3-inprocess.json`, PostgreSQL 17 + pgvector, real `open_clip:ViT-B-32:openai` text and crop vectors):**
+
+| Split / Condition | n | Baseline Recall@1 / @5 (2026-10-14) | Recall@1 (95% CI) | Recall@5 (95% CI) | MRR | mAP@10 | Top-1 FPR | No-Result Rate |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|
+| Manual: exact | 15 | 100.0% / 100.0% | 100.0% [100.0, 100.0] | 100.0% [100.0, 100.0] | 1.0000 | 1.0000 | 0.0% | 0.0% |
+| Manual: synonym | 17 | 52.9% / 58.8% | 52.9% [29.4, 76.5] | 58.8% [35.3, 82.4] | 0.5588 | 0.5588 | 5.9% | 41.2% |
+| Manual: ambiguous | 12 | 91.7% / 91.7% | 91.7% [75.0, 100.0] | 91.7% [75.0, 100.0] | 0.9167 | 0.7139 | 8.3% | 0.0% |
+| Manual: all answerable | 44 | 79.5% / 81.8% | 79.5% [65.9, 90.9] | 81.8% [70.5, 93.2] | 0.8068 | 0.7515 | 4.5% | 15.9% |
+| Manual: zero-result (absent) | 15 | 86.7% empty | — | — | — | — | 13.3% | **86.7%** [66.7, 100.0] |
+| Phrasing templates (3 × 27 answerable) | 81 | 96.3% / 96.3% | 96.3% [88.9, 100.0] | 96.3% [88.9, 100.0] | 0.9630 | 0.8728 | 3.7% | 0.0% |
+| Misspelled (1-char deletion) | 20 | 95.0% / 95.0% | 95.0% [85.0, 100.0] | 95.0% [85.0, 100.0] | 0.9500 | 0.9200 | 0.0% | 5.0% |
+| Mixed: detected_exact | 5 | 100.0% / 100.0% | 100.0% [100.0, 100.0] | 100.0% [100.0, 100.0] | 1.0000 | 1.0000 | 0.0% | 0.0% |
+| Mixed: detected_synonym | 5 | 60.0% / 100.0% | **80.0%** [40.0, 100.0] | 100.0% [100.0, 100.0] | 0.9000 | 0.7858 | 20.0% | 0.0% |
+| Mixed: visual_attribute | 7 | 71.4% / 100.0% | 71.4% [42.9, 100.0] | 100.0% [100.0, 100.0] | 0.8571 | 0.8571 | 28.6% | 0.0% |
+| Mixed: manual + detected (`mixed`) | 5 | 80.0% / 100.0% | **100.0%** [100.0, 100.0] | 100.0% [100.0, 100.0] | 1.0000 | 0.9113 | 0.0% | 0.0% |
+| Mixed: all answerable | 66 | 80.3% / 87.9% | **81.8%** [72.7, 90.9] | 87.9% [80.3, 95.5] | 0.8485 | 0.7962 | 7.6% | 10.6% |
+
+**Adversarial suite (`adversarial_suite` in `b3-inprocess.json`):**
+
+| Adversarial slice | n | Recall@1 (95% CI) | Recall@5 (95% CI) | MRR | mAP@10 | Top-1 FPR | No-Result / Isolation |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| Repeated objects (multi-instance classes/categories) | 17 | 94.1% [82.4, 100.0] | 94.1% [82.4, 100.0] | 0.9412 | 0.7980 | 5.9% | 0.0% no-result |
+| Visually similar objects (same detector label, crop disambiguation) | 7 | 71.4% [42.9, 100.0] | 100.0% [100.0, 100.0] | 0.8571 | 0.8571 | 28.6% | 0.0% no-result |
+| Occluded objects (dog on `chair-1`, person on `couch-1`, teddy bear on `couch-2`) | 8 | 100.0% [100.0, 100.0] | 100.0% [100.0, 100.0] | 1.0000 | 0.8871 | 0.0% | 0.0% no-result |
+| Unseen labels (zero shared words with any label, category, or tag) | 22 | 59.1% [36.4, 77.3] | 68.2% [50.0, 86.4] | 0.6364 | 0.6104 | 9.1% | 31.8% no-result |
+| Absent objects (not in venue) | 15 | — | — | — | — | 13.3% | **86.7%** [66.7, 100.0] rejected |
+| Stale scan versions (superseded `v1` + unpublished draft `v3` injected) | 5 | — | — | — | — | 0.0% stale leakage | **100.0%** version isolation |
+
 ## 4. Benchmark 4: navigation
 
 **Question.** Does the accessible (STEP_FREE) route avoid stairs and narrow passages, and at what cost in distance?

@@ -1,9 +1,18 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { createSpeechRecognizer, speechRecognitionSupported } from "@/lib/voice-input";
+import { classifyVoiceError, createSpeechRecognizer, extractTranscript, speechRecognitionSupported } from "@/lib/voice-input";
 import { type SearchPosition, type SearchResponse, type SearchResult, locationNote, searchVenue } from "@/lib/search-api";
-import { canNavigate, distanceNote, emptyMessage, interpretationNotes, matchNote, resultBadges } from "@/lib/search-view";
+import {
+  canNavigate,
+  diagnosticNote,
+  distanceNote,
+  emptyMessage,
+  indexStatusNote,
+  interpretationNotes,
+  matchNote,
+  resultBadges,
+} from "@/lib/search-view";
 
 interface SemanticSearchPanelProps {
   venueId: string;
@@ -38,6 +47,7 @@ export default function SemanticSearchPanel({ venueId, floorId, scanVersionId, p
   const [searchedFrom, setSearchedFrom] = useState<SearchPosition | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [voiceNote, setVoiceNote] = useState<string | null>(null);
   const [listening, setListening] = useState(false);
   const recognizerRef = useRef<ReturnType<typeof createSpeechRecognizer>>(null);
 
@@ -45,6 +55,7 @@ export default function SemanticSearchPanel({ venueId, floorId, scanVersionId, p
     if (!text.trim()) return;
     setBusy(true);
     setError(null);
+    setVoiceNote(null);
     try {
       setResponse(await searchVenue(venueId, text, {
         floorId: restrictToFloor ? floorId : undefined,
@@ -71,6 +82,12 @@ export default function SemanticSearchPanel({ venueId, floorId, scanVersionId, p
     runSearch(text);
   }
 
+  function cancelVoice() {
+    recognizerRef.current?.abort();
+    setListening(false);
+    setVoiceNote(null);
+  }
+
   function toggleVoice() {
     if (listening) {
       recognizerRef.current?.stop();
@@ -78,32 +95,43 @@ export default function SemanticSearchPanel({ venueId, floorId, scanVersionId, p
     }
     const recognizer = createSpeechRecognizer();
     if (!recognizer) {
-      setError("Voice search is not supported in this browser.");
+      setVoiceNote(classifyVoiceError("unsupported").userMessage);
       return;
     }
+    setVoiceNote(null);
     recognizerRef.current = recognizer;
     recognizer.onresult = (event) => {
-      const transcript = event.results[0]?.[0]?.transcript;
+      const transcript = extractTranscript(event);
       if (transcript) {
         searchFor(transcript);
+      } else {
+        setVoiceNote("Could not transcribe speech. Try again or type your search.");
       }
     };
     recognizer.onerror = (event) => {
-      setError(`Voice input error: ${event.error}`);
+      const disp = classifyVoiceError(event.error);
       setListening(false);
+      if (!disp.isCancellation && disp.userMessage) {
+        setVoiceNote(disp.userMessage);
+      }
     };
     recognizer.onend = () => setListening(false);
-    setListening(true);
-    recognizer.start();
+    try {
+      setListening(true);
+      recognizer.start();
+    } catch {
+      setListening(false);
+      setVoiceNote(classifyVoiceError("failed").userMessage);
+    }
   }
 
   useEffect(() => {
-    const recognizer = recognizerRef.current;
-    return () => recognizer?.abort();
+    return () => recognizerRef.current?.abort();
   }, []);
 
   const notes = response ? interpretationNotes(response, searchedFrom) : [];
   const empty = response ? emptyMessage(response) : null;
+  const indexNote = response ? indexStatusNote(response) : null;
 
   return (
     <section>
@@ -128,6 +156,16 @@ export default function SemanticSearchPanel({ venueId, floorId, scanVersionId, p
             {listening ? "●" : "🎤"}
           </button>
         )}
+        {listening && (
+          <button
+            type="button"
+            className="rounded border px-2 text-xs text-zinc-600"
+            onClick={cancelVoice}
+            aria-label="Cancel voice search"
+          >
+            Cancel
+          </button>
+        )}
         <button type="submit" className="rounded bg-black px-2 text-sm text-white disabled:opacity-50" disabled={busy}>
           Go
         </button>
@@ -143,11 +181,19 @@ export default function SemanticSearchPanel({ venueId, floorId, scanVersionId, p
         </label>
         <span data-testid="search-position">{position ? `From: ${position.label}` : "Position: not set"}</span>
       </div>
+      {voiceNote && <p role="status" data-testid="voice-search-note" className="mt-1 text-xs text-amber-700">{voiceNote}</p>}
       {error && <p role="alert" className="mt-1 text-xs text-red-700">{error}</p>}
       {response && (
         <>
           {response.matchType === "lexical_fallback" && (
-            <p className="mt-1 text-xs text-amber-700">Semantic search is temporarily unavailable; showing text matches instead.</p>
+            <p className="mt-1 text-xs text-amber-700" data-testid="search-lexical-fallback">
+              Semantic search is temporarily unavailable; showing text matches instead.
+            </p>
+          )}
+          {indexNote && (
+            <p className="mt-1 text-xs text-amber-700" data-testid="search-index-status">
+              {indexNote}
+            </p>
           )}
           {notes.length > 0 && (
             <ul className="mt-1 space-y-0.5 text-xs text-zinc-600" data-testid="search-interpretation">
@@ -164,6 +210,7 @@ export default function SemanticSearchPanel({ venueId, floorId, scanVersionId, p
               const selected = r.poiId === selectedPoiId;
               const distance = distanceNote(r);
               const location = locationNote(r);
+              const diag = diagnosticNote(r, response.matchType);
               return (
                 <li key={r.poiId} className={`rounded border ${selected ? "border-amber-400 bg-amber-50" : ""}`}
                   data-testid="search-result" aria-current={selected ? "true" : undefined}>
@@ -171,7 +218,7 @@ export default function SemanticSearchPanel({ venueId, floorId, scanVersionId, p
                     <span className="font-medium">{r.label}</span>
                     <span className="ml-2 text-xs text-zinc-500">{matchNote(r, response.matchType)}</span>
                     {resultBadges(r).map((b) => (
-                      <span key={b} className={`ml-1 rounded px-1 text-xs ${b === "low confidence" || b === "matched by appearance"
+                      <span key={b} className={`ml-1 rounded px-1 text-xs ${b === "low confidence" || b === "matched by appearance" || b === "embedding failed"
                         ? "bg-amber-50 text-amber-800" : "bg-blue-50 text-blue-700"}`}>{b}</span>
                     ))}
                     {distance && <span data-testid="search-distance" className="block text-xs text-zinc-700">{distance}</span>}
@@ -181,6 +228,9 @@ export default function SemanticSearchPanel({ venueId, floorId, scanVersionId, p
                         {location}
                       </span>
                     )}
+                    <span data-testid="search-result-diagnostics" className="block text-[11px] text-zinc-400">
+                      {diag}
+                    </span>
                   </button>
                   {onNavigate && canNavigate(r) && (
                     <div className="px-2 pb-1">

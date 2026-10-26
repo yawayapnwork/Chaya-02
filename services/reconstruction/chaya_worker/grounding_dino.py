@@ -20,6 +20,118 @@ class Detection:
     label: str
     confidence: float
     box_xyxy: tuple[float, float, float, float]  # pixel coordinates in the source frame
+    raw_label: str | None = None
+
+
+def prompt_phrases(text_prompt: str) -> list[str]:
+    """Canonical lowercase prompt phrases in order, split on Grounding DINO's '.' separator."""
+    out: list[str] = []
+    for part in text_prompt.split("."):
+        norm = " ".join(part.lower().split())
+        if norm and norm not in out:
+            out.append(norm)
+    return out
+
+
+def phrase_token_spans(input_ids_1d: list[int], separator_ids: set[int]) -> list[list[int]]:
+    """Contiguous token-index spans between '.' and special-token separators in `input_ids_1d`."""
+    spans: list[list[int]] = []
+    current: list[int] = []
+    for idx, tok in enumerate(input_ids_1d):
+        if int(tok) in separator_ids:
+            if current:
+                spans.append(current)
+                current = []
+        else:
+            current.append(idx)
+    if current:
+        spans.append(current)
+    return spans
+
+
+def resolve_prompt_phrase(raw_label: str, text_prompt: str, *, phrase_scores: dict[str, float] | None = None,
+                          text_threshold: float = 0.0) -> str:
+    """Resolve a raw Grounding DINO decoded label (which may merge several prompt phrases that exceeded
+    `text_threshold`, e.g. 'desk reception desk counter', or decode only a BERT WordPiece suffix like
+    '##tinguisher') to the single best-matching canonical phrase from `text_prompt`.
+
+    When per-phrase token-span scores (`phrase_scores`) from the model's logits are supplied, picks the
+    candidate prompt phrase with the highest token activation; otherwise falls back to deterministic
+    phrase/subword matching against `text_prompt`. Never invents a label outside `text_prompt` and returns
+    `""` if `raw_label` has no usable phrase.
+    """
+    raw_clean = " ".join(raw_label.strip().lower().split())
+    if not raw_clean or not any(ch.isalnum() for ch in raw_clean):
+        return ""
+    phrases = prompt_phrases(text_prompt)
+    if not phrases:
+        return raw_label.strip()
+    if raw_clean in phrases:
+        return raw_clean
+
+    padded_raw = f" {raw_clean} "
+    whole_matches = [p for p in phrases if f" {p} " in padded_raw]
+
+    fragments = [tok.lstrip("#") for tok in raw_clean.split() if len(tok.lstrip("#")) >= 3]
+    subword_matches = [
+        p for p in phrases
+        if any(w == frag or w.endswith(frag) or w.startswith(frag) for w in p.split() for frag in fragments)
+    ]
+
+    candidates = whole_matches or subword_matches
+    if phrase_scores:
+        pool = candidates if candidates else [p for p in phrases if phrase_scores.get(p, 0.0) >= text_threshold]
+        if pool:
+            above = [p for p in pool if phrase_scores.get(p, 0.0) >= text_threshold]
+            active = above if above else pool
+            return max(active, key=lambda p: (phrase_scores.get(p, 0.0), len(p)))
+
+    if whole_matches:
+        return min(whole_matches, key=lambda p: (padded_raw.find(f" {p} "), -len(p)))
+    if subword_matches:
+        return max(subword_matches, key=len)
+    return raw_label.strip()
+
+
+def _per_box_phrase_scores(processor, outputs, input_ids, text_prompt: str,
+                           scores_tensor) -> list[dict[str, float] | None]:
+    """Extract per-prompt-phrase peak token sigmoid scores for each post-processed box when model logits are present."""
+    n_boxes = len(scores_tensor)
+    if outputs is None or not hasattr(outputs, "logits") or input_ids is None:
+        return [None] * n_boxes
+    phrases = prompt_phrases(text_prompt)
+    if not phrases:
+        return [None] * n_boxes
+    try:
+        tokenizer = getattr(processor, "tokenizer", None)
+        sep_ids: set[int] = {101, 102, 0, 1012}
+        if tokenizer is not None:
+            sep_ids.update(int(i) for i in getattr(tokenizer, "all_special_ids", []) if i is not None)
+            dot_id = tokenizer.convert_tokens_to_ids(".")
+            if isinstance(dot_id, int):
+                sep_ids.add(dot_id)
+        ids_1d = [int(t) for t in input_ids[0].tolist()]
+        spans = phrase_token_spans(ids_1d, sep_ids)
+        if len(spans) != len(phrases):
+            return [None] * n_boxes
+        probs = outputs.logits[0].sigmoid()  # (num_queries, seq_len)
+        max_probs = probs.max(dim=-1).values  # (num_queries,)
+        out: list[dict[str, float] | None] = []
+        used: set[int] = set()
+        for box_score in scores_tensor.tolist():
+            diffs = (max_probs - float(box_score)).abs()
+            order = diffs.argsort().tolist()
+            q_idx = next((q for q in order if q not in used), order[0])
+            used.add(q_idx)
+            q_probs = probs[q_idx]
+            out.append({
+                phrase: float(q_probs[span].max().item())
+                for phrase, span in zip(phrases, spans, strict=True)
+                if span and max(span) < q_probs.shape[0]
+            })
+        return out
+    except Exception:
+        return [None] * n_boxes
 
 
 class GroundingDinoDetector:
@@ -60,9 +172,12 @@ class GroundingDinoDetector:
                                text_threshold=self.text_threshold, target_size=(h, w))
         detections = []
         labels = results["text_labels"] if "text_labels" in results else results["labels"]
-        for box, score, label in zip(results["boxes"], results["scores"], labels, strict=True):
+        box_phrase_scores = _per_box_phrase_scores(self.processor, outputs, inputs["input_ids"], text_prompt, results["scores"])
+        for box, score, label, p_scores in zip(results["boxes"], results["scores"], labels, box_phrase_scores, strict=True):
             x0, y0, x1, y1 = (float(v) for v in box.tolist())
-            detections.append(Detection(label=str(label).strip(), confidence=float(score), box_xyxy=(x0, y0, x1, y1)))
+            raw_str = str(label).strip()
+            canonical = resolve_prompt_phrase(raw_str, text_prompt, phrase_scores=p_scores, text_threshold=self.text_threshold)
+            detections.append(Detection(label=canonical, confidence=float(score), box_xyxy=(x0, y0, x1, y1), raw_label=raw_str))
         return detections
 
 
