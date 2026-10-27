@@ -4,12 +4,26 @@ This procedure validates the iOS app (`apps/ios-ar`; docs/ar.md, "iOS: Swift/ARK
 tracking does not run in the iOS Simulator (`ARWorldTrackingConfiguration.isSupported` is false there). CI can build
 the app and run its simulator tests, but it cannot detect a printed image, localize or draw the route in a room.
 
-**Status: NOT RUN.** The app was written without a Mac, Xcode or iPhone. It compiles and its Simulator tests pass in
-the `ios` CI workflow (first green: run 36734833669, 2026-09-30, Xcode 15.4); it has never run on a device. Since
-`fb7e65f` (2026-10-05) the `ios` app job fails one stale Simulator test (`ReferenceImageTests`; the app still builds;
-docs/TEST_REPRODUCIBILITY.md, "CI status"). Until this
-procedure has passed on at least one device and the record at the bottom has been filled in, iOS AR is not validated.
-Keep `DeviceValidation.status` at `.notValidated`; the app then shows the "NOT DEVICE-VALIDATED" banner.
+**Status: BLOCKED (NOT RUN).** No macOS host, Xcode, or physical iPhone/iPad is attached to this environment. The app
+compiles and its Simulator tests pass in the `ios` CI workflow (first green: run 36734833669, 2026-09-30, Xcode 15.4);
+it has never run on a physical device. Until this procedure has passed on at least one device and the record at the
+bottom has been filled in, iOS AR is not validated. Keep `DeviceValidation.status` at `.notValidated`; the app then
+shows the "NOT DEVICE-VALIDATED" banner.
+
+## Pre-defined Acceptance Tolerances
+
+Before interpreting any physical measurement, the following numerical pass/fail tolerances apply (identical to Android):
+
+| Metric | Pass Tolerance | Enforcement / Measurement |
+|---|---|---|
+| Printed marker physical scale factor | `±20%` of `markerSizeMeters` (`0.80 <= estimatedScaleFactor <= 1.20`) | `MarkerObservations.widthTolerance = 0.20` (`MarkerRegistry.swift`) |
+| Gravity-alignment tilt of solved `deviceToVenue` | `<= 15.0°` between ARKit `+Y` and canonical `+Z` | `VenueFrames.maxGravityTiltDegrees = 15.0` (`VenueFrames.swift`, server `ArDeviceFrame`) |
+| Multi-anchor solve residual (2+ anchors in view) | Translation `<= 0.30 m` and rotation `<= 8.0°` | `AnchorMath.solve(..., maxResidualMeters: 0.3, maxResidualDegrees: 8)` |
+| Initial waypoint placement error at measured checkpoints | `<= 0.20 m` at `2 m`, `<= 0.35 m` at `5 m`, `<= 0.50 m` at `10 m` | Physical tape-measure check from marker to floor tape marks |
+| VIO drift when re-observing a marker while localized | Translation `<= 0.30 m` and rotation `<= 8.0°` (above this, `.driftExceeded` drops transform and relocalizes) | `VenueFrames.driftLimitMeters = 0.30`, `VenueFrames.driftLimitDegrees = 8.0` (`VenueFrames.swift`) |
+| Limited-tracking hold and recovery jump | Hold `<= 3.0 s`; world-anchor jump on recovery `<= 0.30 m` | `RelocalizationStateMachine.maxLimitedSeconds = 3.0`, `recoveryMaxJumpMeters = 0.30` |
+| Relocalization request timeout | `<= 8.0 s` | `RelocalizationStateMachine.maxSolvingSeconds = 8.0` (`RelocalizationStateMachine.swift`) |
+| Floor-transition handoff radius & sightings | Within `<= 2.0 m` of `TRANSITION` waypoint; `>= 2` consecutive sightings on new floor | `RouteGeometry.handoffRadiusMeters = 2.0`, `FloorIdentification.minFloorSightings = 2` |
 
 ## 0. Build
 
@@ -124,17 +138,21 @@ Use three calibrated markers on the floor, 4-8 m apart, at least two in view fro
 | Expired viewer link | Revoke the link from the desktop, lose tracking, point at a marker | `SESSION_EXPIRED`; no further `relocalize` or route requests. |
 | Anchor unavailable | Delete an anchor mid-session, lose tracking, point at its print | `ANCHOR_UNAVAILABLE`; that marker is not sent again; others still localize. |
 | Step-free | Turn on "Step-free route" before starting | The route request carries `"accessibility":"STEP_FREE"`; the constraints applied are listed. |
-| Drift over distance | As on Android (section 6c): aim at an unused marker after 10, 20 and 40 m | Record translation/rotation disagreement at each distance. |
+| Drift over distance | As on Android (section 6c): aim at an unused marker after 10, 20 and 40 m | Record translation/rotation disagreement at each distance (`VenueFrames.markerDrift`). |
+| Destination deleted | Delete the selected destination POI from the desktop mid-session and trigger a route plan/replan | `REFUSED` (`POI_NOT_FOUND`): "The selected destination no longer exists. Choose another destination." The stale route is removed from the scene. |
+| App backgrounding | Swipe to Home / lock the iPhone while localized, then return | `scenePhase == .background` and `sessionWasInterrupted` transition to `TRACKING_LOST` and hide the route immediately; returning to `.active` requires observing a registered marker to relocalize. |
 
 ## Validation record
 
-One row per device run. Attach a screen recording (Control Centre → Screen Recording) and the relocalize/route
-request log.
+One row per device run. Record lighting conditions (lux or qualitative: indoor fluorescent / daylight / dim), anchor
+placement (ids, positions, wall/floor orientation, height, printed width), and attach a screen recording (Control
+Centre → Screen Recording) and the relocalize/route request log for both passed and failed tests.
 
-| Date | Tester | Device model / iOS | Xcode | Anchor layout (ids, positions, walls, heights) | Test route (length, step-free?) | Sections passed | Placement error at 2 / 5 / 10 m | Two-marker residual | Drift at 10 / 20 / 40 m | Relocalization results (count, refusals, set-aside markers) | Known limitations / defects |
+| Date | Tester | Device model / iOS | Xcode | Lighting & Anchor layout (ids, positions, walls, heights, lux) | Test route (length, step-free?) | Sections passed | Placement error at 2 / 5 / 10 m | Two-marker residual | Drift at 10 / 20 / 40 m | Relocalization results (count, refusals, set-aside markers) | Known limitations / defects |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | — | — | — | — | — | — | **not run** | — | — | — | — | No Mac or iPhone available when the app was written |
 | 2026-10-11 | — | — | — | — | — | **not run (pending)** | — | — | — | — | Multi-marker consistency (set-aside/refused markers), validated recovery from limited, failure states and step-free added. `ChayaARCore` tests pass on Linux (55); the ARKit layer and app were only syntax-checked here and compile first in the `ios` CI workflow. No device. |
+| 2026-10-27 | — | — | — | — | — | **BLOCKED (no physical device / macOS host)** | — | — | — | — | Pre-defined tolerances, iOS drift detection (`VenueFrames.markerDrift`), periodic refresh & 600 ms blending, invalid transform rejection, relocalization timeout (8 s), step-free clearance/slope transition checks, `scenePhase` lifecycle handling, and regression tests added. Physical iPhone and macOS/Xcode unavailable on workstation. |
 
 When a run passes, set `DeviceValidation.status` to `.validated(date:device:iOS:)` in
 `App/ChayaAR/Sources/Capability.swift`, in the same change as the filled-in row.

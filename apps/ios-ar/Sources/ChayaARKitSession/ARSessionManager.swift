@@ -100,6 +100,8 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
     /// Bumped by `replan`: a route answer for an earlier request is dropped.
     private var routeGeneration = 0
     private var worldAnchor: (anchor: ARAnchor, poseAtSolve: Pose, addedAt: TimeInterval, seen: Bool)?
+    private var blendFrom: (pose: Pose, startedAt: TimeInterval)?
+    private var lastDrawnTransform: Pose?
     private var lastFailureAt: TimeInterval = -.infinity
     private var lastPublishAt: TimeInterval = 0
     /// Set when retrying cannot help (an expired viewer link): no relocalization or route request is sent after it.
@@ -167,6 +169,13 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
         session.pause()
         renderer.hide()
         dispatch(.sessionEnded)
+    }
+
+    /// Called when the application transitions to the background: freezes/removes unsafe guidance immediately.
+    public func applicationDidEnterBackground() {
+        obstacles?.pause(now: Date())
+        dispatch(.sessionInterrupted)
+        renderer.hide()
     }
 
     private func dispatch(_ event: NavigationEvent) {
@@ -250,7 +259,8 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
 
     private func observeMarkers(in frame: ARFrame) {
         let phase = snapshot.state.phase
-        guard phase == .searching || phase == .recovered || phase == .floorTransition, snapshot.state.deviceTracking == .normal,
+        guard phase == .searching || phase == .recovered || phase == .floorTransition || phase == .localized,
+              snapshot.state.deviceTracking == .normal,
               blocked == nil,
               frame.timestamp - lastFailureAt > Self.retryAfterFailure else { return }
         let detections = frame.anchors.compactMap { $0 as? ARImageAnchor }.map { ImageDetection($0, timestamp: frame.timestamp) }
@@ -263,9 +273,32 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
             return
         }
         snapshot.lastRejectedObservation = nil
+        if phase == .localized, let localization = snapshot.state.localization {
+            let corrected: Pose
+            if let world = worldAnchor, let current = frame.anchors.first(where: { $0.identifier == world.anchor.identifier }) {
+                corrected = VenueFrames.anchorCorrectedDeviceToVenue(localization.deviceToVenue, anchorAtSolve: world.poseAtSolve,
+                                                                     anchorNow: Pose(current.transform))
+            } else {
+                corrected = localization.deviceToVenue
+            }
+            for o in eligible where o.floorId == nil || o.floorId == localization.floorId {
+                guard let m = registry.markers.first(where: { $0.anchor.id == o.anchorId }) else { continue }
+                let drift = VenueFrames.markerDrift(deviceToVenue: corrected, observedPose: o.observedPose, digitalPose: m.anchor.digitalPose)
+                if VenueFrames.driftExceeded(drift) {
+                    dispatch(.driftExceeded(String(format: "%@ is %.2f m / %.1f° from where the transform puts it",
+                                                   o.markerIdentifier, drift.translationMeters, drift.rotationDegrees)))
+                    renderer.hide()
+                    break
+                }
+            }
+            if snapshot.state.phase == .localized && !VenueFrames.refreshDue(snapshot.state.localization, now: frame.timestamp, pending: snapshot.state.pending != nil) {
+                return
+            }
+        }
         dispatch(.markersObserved(eligible))
-        // Not solving: the floor is not identified yet (markers of another floor, or of several), or nothing applied.
-        guard snapshot.state.phase == .solving, let pending = snapshot.state.pending, let floorId = snapshot.state.floorId,
+        // Not solving or refreshing: the floor is not identified yet (markers of another floor, or of several), or nothing applied.
+        guard snapshot.state.phase == .solving || snapshot.state.phase == .localized,
+              let pending = snapshot.state.pending, let floorId = snapshot.state.floorId,
               let first = pending.observations.first else { return }
 
         // The world anchor is added in this frame, at the pose the first marker used was measured at.
@@ -292,6 +325,7 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
     private func solved(requestId: Int, result: RelocalizationResponse, floorId: UUID, anchorIds: [UUID], anchor: ARAnchor,
                         anchorPose: Pose, cameraPose: Pose) {
         let now = ProcessInfo.processInfo.systemUptime
+        let previousFloorId = snapshot.state.localization?.floorId
         let setAside = Set(result.rejectedAnchorIds ?? [])
         snapshot.setAsideMarkers = registry.markers.filter { setAside.contains($0.anchor.id) }.map(\.anchor.markerIdentifier)
         snapshot.failure = nil
@@ -305,6 +339,11 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
             session.remove(anchor: anchor)
             lastFailureAt = session.currentFrame?.timestamp ?? ProcessInfo.processInfo.systemUptime
             return
+        }
+        if previousFloorId == floorId, let drawn = lastDrawnTransform {
+            blendFrom = (drawn, now)
+        } else {
+            blendFrom = nil
         }
         if let previous = worldAnchor { session.remove(anchor: previous.anchor) }
         worldAnchor = (anchor, anchorPose, now, false)
@@ -422,7 +461,15 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
             } catch {
                 guard let self, generation == self.routeGeneration else { return }
                 let failure = ArFailure.classify(error)
-                if failure.kind == .sessionExpired { self.blocked = failure }
+                if failure.kind == .sessionExpired || (!failure.retryable && failure.code == "POI_NOT_FOUND") {
+                    self.blocked = failure
+                }
+                if failure.code == "POI_NOT_FOUND" || (error as? APIError)?.status == 404 {
+                    self.snapshot.route = nil
+                    self.routePoints = []
+                    self.renderer.setRoute([])
+                    self.renderer.hide()
+                }
                 self.routeRequested = false // retried while localized (updateRoute), or at the next localization
                 self.snapshot.failure = failure
                 self.snapshot.routeError = "\(failure.kind.rawValue): \(failure.code): \(failure.detail)"
@@ -487,7 +534,9 @@ public final class ARSessionManager: NSObject, ARSessionDelegate {
             handOff(handoff)
             return
         }
-        renderer.update(venueToWorld: VenueFrames.venueToWorld(deviceToVenue: deviceToVenue),
+        let drawn = VenueFrames.blendedTransform(from: blendFrom?.pose, startedAt: blendFrom?.startedAt, target: deviceToVenue, now: uptime)
+        lastDrawnTransform = drawn
+        renderer.update(venueToWorld: VenueFrames.venueToWorld(deviceToVenue: drawn),
                         nextIndex: snapshot.progress?.nextIndex ?? 0, visible: !routePoints.isEmpty)
         senseObstacles(frame, deviceToVenue: deviceToVenue, localization: localization, device: device, canAdvance: state.canAdvanceRoute)
         publish(force: false)

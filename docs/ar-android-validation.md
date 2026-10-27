@@ -4,10 +4,26 @@ This is the procedure that validates the Android AR client (`/ar`, docs/ar.md "A
 of it can run in CI or on a desktop: desktop Chrome has no `immersive-ar`, and the WebXR emulator extensions do not
 implement image tracking or ARCore anchors.
 
-**Status: NOT RUN.** No physical Android device was available when the client was written. The unit tests cover the
-transforms, observation handling, capability states and state machine. They do not show that a real session delivers
-frames, detects the printed images, creates anchors or draws the route. Do not describe Android AR as working until
-this procedure has passed on at least one device and the record at the bottom has been filled in.
+**Status: BLOCKED (NOT RUN).** No physical Android ARCore device is attached to this environment. The unit and
+regression tests cover the transforms, observation handling, capability states, invalid transforms, stale routes,
+relocalization timeout, expired sessions and state machine. They do not show that a real session delivers frames,
+detects the printed images, creates anchors or draws the route. Do not describe Android AR as working until this
+procedure has passed on at least one device and the record at the bottom has been filled in.
+
+## Pre-defined Acceptance Tolerances
+
+Before interpreting any physical measurement, the following numerical pass/fail tolerances apply:
+
+| Metric | Pass Tolerance | Enforcement / Measurement |
+|---|---|---|
+| Printed marker physical width match | `±20%` of `markerSizeMeters` (`0.80 <= measuredWidth / registeredWidth <= 1.20`) | `WIDTH_TOLERANCE = 0.20` (`lib/ar-marker-tracking.ts`) |
+| Gravity-alignment tilt of solved `deviceToVenue` | `<= 15.0°` between device `+Y` and canonical `+Z` | `MAX_GRAVITY_TILT_DEGREES = 15` (`lib/ar-relocalization.ts`, server `ArDeviceFrame`) |
+| Multi-anchor solve residual (2+ anchors in view) | Translation `<= 0.30 m` and rotation `<= 8.0°` | `solve(..., 0.3, 8)` (`lib/ar-anchor-math.ts`, server `AnchorService`) |
+| Initial waypoint placement error at measured checkpoints | `<= 0.20 m` at `2 m`, `<= 0.35 m` at `5 m`, `<= 0.50 m` at `10 m` | Physical tape-measure check from marker to floor tape marks |
+| VIO drift when re-observing a marker while localized | Translation `<= 0.30 m` and rotation `<= 8.0°` (above this, `DRIFT_EXCEEDED` drops transform and relocalizes) | `DRIFT_LIMIT_METERS = 0.30`, `DRIFT_LIMIT_DEGREES = 8.0` (`lib/ar-navigation.ts`) |
+| Limited-tracking hold and recovery jump | Hold `<= 3.0 s`; world-anchor jump on recovery `<= 0.30 m` | `MAX_LIMITED_MS = 3000`, `RECOVERY_MAX_JUMP_METERS = 0.30` (`lib/ar-relocalization.ts`) |
+| Relocalization request timeout | `<= 8.0 s` | `RELOCALIZATION_TIMEOUT_MS = 8000` (`lib/ar-relocalization.ts`) |
+| Floor-transition handoff radius & sightings | Within `<= 2.0 m` of `TRANSITION` waypoint; `>= 2` consecutive sightings on new floor | `HANDOFF_RADIUS_METERS = 2.0`, `MIN_FLOOR_SIGHTINGS = 2` |
 
 ## 1. Supported browser and device
 
@@ -142,7 +158,9 @@ measured positions, which wall, height) in the record below.
 | Anchor unavailable | Delete one anchor from the desktop mid-session, lose tracking, point at its print | `ANCHOR_UNAVAILABLE`; that marker is not sent again this session (network log); the others still localize. |
 | Step-free route | Tick "Step-free route" before starting, to a destination on another floor reachable by stairs and by an elevator | The route uses the elevator; the overlay lists the step-free constraints applied. Without a step-free connection: a routing error, never a route through stairs. |
 | Same-floor version pin | Destination on the session's floor | The `routes` request body carries `scanVersionId` (the localization's); for another floor's destination it does not. |
-| Drift over distance | Localize at marker A; walk 10, 20 and 40 m along the route; at each point aim at a registered marker you have not used and read "… m from where the transform puts it" in the drift message, or the residual of the refresh | Record translation and rotation at each distance. This is the only measurement of VIO drift; unit tests cannot provide it. |
+|Drift over distance | Localize at marker A; walk 10, 20 and 40 m along the route; at each point aim at a registered marker you have not used and read "… m from where the transform puts it" in the drift message, or the residual of the refresh | Record translation and rotation at each distance. This is the only measurement of VIO drift; unit tests cannot provide it. |
+| Destination deleted | Delete the selected destination POI from the desktop mid-session and trigger a route plan/replan | `REFUSED` (`POI_NOT_FOUND`): "The selected destination no longer exists. Choose another destination." The stale route is removed from the scene. |
+| App backgrounding | Switch away from Chrome or lock the phone while localized, then return | Session visibility changes to `hidden` / `visible-blurred`; state enters `TRACKING_LOST` and hides the route until a registered marker is observed again. |
 
 ## 6d. Camera obstacle sensing (added 2026-10-19)
 
@@ -175,11 +193,14 @@ docs/navigation.md, "Camera obstacle sensing".
 
 ## Validation record
 
-Fill in one row per device run. Attach screen recordings (Chrome → ⋮ → Share → record, or `adb shell screenrecord`)
-and the chrome://inspect network log for steps 4 and 6 and section 6c.
+Fill in one row per device run. Record lighting conditions (lux or qualitative: indoor fluorescent / daylight / dim),
+anchor placement (ids, positions, wall/floor orientation, height, printed width), and attach screen recordings
+(Chrome → ⋮ → Share → record, or `adb shell screenrecord`) and the `chrome://inspect` network log for both passed and
+failed tests.
 
-| Date | Tester | Device model / Android | Chrome version | ARCore version | Anchor layout (ids, positions, walls, heights) | Test route (floors, length, step-free?) | Sections passed | Placement error at 2 / 5 / 10 m | Drift at 10 / 20 / 40 m | Relocalization results (count, residuals, refusals) | Known limitations / defects |
+| Date | Tester | Device model / Android | Chrome version | ARCore version | Lighting & Anchor layout (ids, positions, walls, heights, lux) | Test route (floors, length, step-free?) | Sections passed | Placement error at 2 / 5 / 10 m | Drift at 10 / 20 / 40 m | Relocalization results (count, residuals, refusals) | Known limitations / defects |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | — | — | — | — | — | — | — | **not run** | — | — | — | No device available when the client was written |
 | 2026-10-05 | — | — | — | — | — | — | **not run (pending)** | — | — | — | Version pinning, drift, refresh and floor handoff added (sections 6b). No Android device and no `adb` on the development machine; only the unit tests and the desktop Playwright spec ran. Hardware validation is pending. |
 | 2026-10-11 | — | — | — | — | — | — | **not run (pending)** | — | — | — | Multi-marker consistency, LIMITED hold with validated recovery, failure states, step-free and version-pinned route requests added (section 6c). Verified only by unit and integration tests with synthetic layouts and the desktop Playwright spec; no device was available. |
+| 2026-10-27 | — | — | — | — | — | — | **BLOCKED (no physical device)** | — | — | — | Pre-defined tolerances, invalid transform rejection, relocalization timeout (8 s), deleted-destination handling, and regression tests added (`414` web tests passing). Physical ARCore device and `adb` unavailable on workstation. |

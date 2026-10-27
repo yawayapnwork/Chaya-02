@@ -39,6 +39,7 @@
 
 import type { Pose } from "./ar-anchor-math.ts";
 import { type FloorCheck, MIN_FLOOR_SIGHTINGS, identifyFloor, pushFloorWindow } from "./ar-floor-identification.ts";
+import { gravityTiltDegrees } from "./ar-frame-boundary.ts";
 import type { MarkerObservation } from "./ar-marker-tracking.ts";
 
 export type ArState = "IDLE" | "SEARCHING" | "RELOCALIZING" | "LOCALIZED" | "LIMITED" | "TRACKING_LOST" | "FLOOR_TRANSITION" | "ENDED";
@@ -46,8 +47,33 @@ export type ArState = "IDLE" | "SEARCHING" | "RELOCALIZING" | "LOCALIZED" | "LIM
 /** How long a localized session may stay LIMITED (position emulated) before the localization is considered lost. Same as
  * iOS (RelocalizationStateMachine.maxLimitedSeconds). */
 export const MAX_LIMITED_MS = 3000;
+/** How long a pending relocalization request may stay in flight before timing out on TICK. */
+export const RELOCALIZATION_TIMEOUT_MS = 8000;
+/** Maximum allowed tilt (degrees) between device +Y up and canonical +Z up in a solved deviceToVenue transform. */
+export const MAX_GRAVITY_TILT_DEGREES = 15;
 /** A recovery from LIMITED in which the world anchor moved more than this is not trusted (the platform re-anchored). */
 export const RECOVERY_MAX_JUMP_METERS = 0.3;
+
+export function isValidTransform(pose: Pose): { ok: true } | { ok: false; reason: string } {
+  if (
+    !Number.isFinite(pose.x) || !Number.isFinite(pose.y) || !Number.isFinite(pose.z) ||
+    !Number.isFinite(pose.qx) || !Number.isFinite(pose.qy) || !Number.isFinite(pose.qz) || !Number.isFinite(pose.qw)
+  ) {
+    return { ok: false, reason: "transform contains non-finite numbers" };
+  }
+  const norm = Math.hypot(pose.qx, pose.qy, pose.qz, pose.qw);
+  if (norm < 1e-6) {
+    return { ok: false, reason: "transform orientation has zero quaternion norm" };
+  }
+  const tilt = gravityTiltDegrees(pose);
+  if (!Number.isFinite(tilt) || tilt > MAX_GRAVITY_TILT_DEGREES) {
+    return {
+      ok: false,
+      reason: `transform tilts device up (+Y) by ${tilt.toFixed(1)}° from canonical +Z (limit ${MAX_GRAVITY_TILT_DEGREES}°)`,
+    };
+  }
+  return { ok: true };
+}
 
 /** A server-solved localization (POST .../anchors/relocalize). It is only valid on `floorId` (every floor has its own
  * canonical frame) and in the scan version and coordinate frame the server solved it in. */
@@ -74,7 +100,7 @@ export interface ArSessionState {
   localization: Localization | null;
   /** An outstanding relocalization. resumeTo LOCALIZED is a refresh: the session stays LOCALIZED on the current transform
    * while a re-solve from a newly seen marker is in flight. */
-  pending: { requestId: number; observations: MarkerObservation[]; resumeTo: ResumeTo } | null;
+  pending: { requestId: number; observations: MarkerObservation[]; resumeTo: ResumeTo; startedAtMs?: number | null } | null;
   /** Whether the platform reported 6-DoF device tracking on the last frame. */
   deviceTracking: boolean;
   /** Why device tracking was last reported lost (kept while TRACKING_LOST, cleared on a new localization). */
@@ -129,6 +155,10 @@ const lostFromLimited = (s: ArSessionState, reason: string): ArSessionState =>
 
 /** Why a server answer cannot be used in this session, or null. */
 function refusal(s: ArSessionState, l: Localization): string | null {
+  const valid = isValidTransform(l.deviceToVenue);
+  if (!valid.ok) {
+    return `INVALID_TRANSFORM: ${valid.reason}`;
+  }
   if (s.floorId !== null && l.floorId !== s.floorId) {
     return `FLOOR_MISMATCH: solved on floor ${l.floorId}, but the session is on floor ${s.floorId}`;
   }
@@ -156,27 +186,29 @@ export function reduceArSession(s: ArSessionState, e: ArEvent): ArSessionState {
         const check = identifyFloor(floorWindow, expected, s.state === "FLOOR_TRANSITION" ? MIN_FLOOR_SIGHTINGS : 1);
         if (check.status !== "CONFIRMED") return { ...s, floorWindow, floorCheck: check };
         const observations = e.observations.filter((o) => (o.floorId ?? expected) === expected);
+        const startedAtMs = observations[0]?.timestampMs ?? null;
         return {
           ...s,
           state: "RELOCALIZING",
           floorWindow: [],
           floorCheck: null,
-          pending: { requestId: s.nextRequestId, observations, resumeTo: s.state },
+          pending: { requestId: s.nextRequestId, observations, resumeTo: s.state, startedAtMs },
           nextRequestId: s.nextRequestId + 1,
         };
       }
       // only this floor's markers, and an observation is only a measurement while the device itself is tracked
       const observations = e.observations.filter((o) => s.floorId === null || o.floorId === undefined || o.floorId === s.floorId);
       if (!s.deviceTracking || observations.length === 0) return s;
+      const startedAtMs = observations[0]?.timestampMs ?? null;
       if (s.state === "LOCALIZED") {
         if (s.pending) return s; // one refresh at a time
-        return { ...s, pending: { requestId: s.nextRequestId, observations, resumeTo: "LOCALIZED" }, nextRequestId: s.nextRequestId + 1 };
+        return { ...s, pending: { requestId: s.nextRequestId, observations, resumeTo: "LOCALIZED", startedAtMs }, nextRequestId: s.nextRequestId + 1 };
       }
       if (s.state !== "SEARCHING" && s.state !== "TRACKING_LOST" && s.state !== "FLOOR_TRANSITION") return s;
       return {
         ...s,
         state: "RELOCALIZING",
-        pending: { requestId: s.nextRequestId, observations, resumeTo: s.state },
+        pending: { requestId: s.nextRequestId, observations, resumeTo: s.state, startedAtMs },
         nextRequestId: s.nextRequestId + 1,
       };
     }
@@ -209,6 +241,12 @@ export function reduceArSession(s: ArSessionState, e: ArEvent): ArSessionState {
     case "TICK":
       if (s.state === "LIMITED" && s.limitedSinceMs !== null && e.atMs - s.limitedSinceMs > MAX_LIMITED_MS) {
         return lostFromLimited(s, `tracking was limited for more than ${MAX_LIMITED_MS / 1000} s (${s.limitedReason})`);
+      }
+      if (s.pending && s.pending.startedAtMs != null && e.atMs - s.pending.startedAtMs > RELOCALIZATION_TIMEOUT_MS) {
+        const timeoutError = `RELOCALIZATION_TIMEOUT: relocalization request timed out after ${RELOCALIZATION_TIMEOUT_MS / 1000} s`;
+        return s.state === "RELOCALIZING"
+          ? { ...s, state: s.pending.resumeTo, pending: null, lastError: timeoutError }
+          : { ...s, pending: null, lastError: timeoutError };
       }
       return s;
     case "TRACKING_LOST":

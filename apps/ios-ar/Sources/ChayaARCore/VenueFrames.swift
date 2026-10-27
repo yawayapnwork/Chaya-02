@@ -88,6 +88,71 @@ public enum VenueFrames {
         let c = z / (x * x + y * y + z * z).squareRoot()
         return acos(max(-1, min(1, c))) * 180 / Double.pi
     }
+
+    /// Maximum allowed tilt (degrees) between ARKit's +Y up and canonical +Z up in a solved `deviceToVenue` transform.
+    public static let maxGravityTiltDegrees = 15.0
+
+    /// Beyond these, a marker seen again disagrees with the transform by more than a re-solve should smooth over.
+    /// Mirrors `DRIFT_LIMIT_METERS` / `DRIFT_LIMIT_DEGREES` in `apps/web/lib/ar-navigation.ts`.
+    public static let driftLimitMeters = 0.3
+    public static let driftLimitDegrees = 8.0
+    public static let refreshIntervalSeconds: TimeInterval = 5.0
+    public static let blendSeconds: TimeInterval = 0.6
+
+    public struct Drift: Equatable, Sendable {
+        public var translationMeters: Double
+        public var rotationDegrees: Double
+        public init(translationMeters: Double, rotationDegrees: Double) {
+            self.translationMeters = translationMeters
+            self.rotationDegrees = rotationDegrees
+        }
+    }
+
+    /// Why a solved `deviceToVenue` transform is structurally or physically invalid, or `nil` when valid.
+    public static func transformProblem(_ pose: Pose) -> String? {
+        guard pose.x.isFinite, pose.y.isFinite, pose.z.isFinite,
+              pose.qx.isFinite, pose.qy.isFinite, pose.qz.isFinite, pose.qw.isFinite else {
+            return "transform contains non-finite numbers"
+        }
+        let norm = (pose.qx * pose.qx + pose.qy * pose.qy + pose.qz * pose.qz + pose.qw * pose.qw).squareRoot()
+        guard norm > 1e-6 else {
+            return "transform orientation has zero quaternion norm"
+        }
+        let tilt = gravityTiltDegrees(pose)
+        if !tilt.isFinite || tilt > maxGravityTiltDegrees {
+            return String(format: "transform tilts device up (+Y) by %.1f° from canonical +Z (limit %.0f°)", tilt, maxGravityTiltDegrees)
+        }
+        return nil
+    }
+
+    /// How far `observedPose` (a registered marker's pose in the ARKit world frame, now) lands from its registered canonical
+    /// pose when mapped through `deviceToVenue`. Zero when the transform still explains what the camera sees.
+    public static func markerDrift(deviceToVenue: Pose, observedPose: Pose, digitalPose: Pose) -> Drift {
+        let predicted = AnchorMath.compose(deviceToVenue, observedPose)
+        let dx = predicted.x - digitalPose.x, dy = predicted.y - digitalPose.y, dz = predicted.z - digitalPose.z
+        let translationMeters = (dx * dx + dy * dy + dz * dz).squareRoot()
+        let np = max(1e-12, (predicted.qx * predicted.qx + predicted.qy * predicted.qy + predicted.qz * predicted.qz + predicted.qw * predicted.qw).squareRoot())
+        let nd = max(1e-12, (digitalPose.qx * digitalPose.qx + digitalPose.qy * digitalPose.qy + digitalPose.qz * digitalPose.qz + digitalPose.qw * digitalPose.qw).squareRoot())
+        let dot = abs((predicted.qx * digitalPose.qx + predicted.qy * digitalPose.qy + predicted.qz * digitalPose.qz + predicted.qw * digitalPose.qw) / (np * nd))
+        let rotationDegrees = 2 * acos(min(1, dot)) * 180 / .pi
+        return Drift(translationMeters: translationMeters, rotationDegrees: rotationDegrees)
+    }
+
+    public static func driftExceeded(_ d: Drift) -> Bool {
+        d.translationMeters > driftLimitMeters || d.rotationDegrees > driftLimitDegrees
+    }
+
+    public static func refreshDue(_ localization: Localization?, now: TimeInterval, pending: Bool) -> Bool {
+        guard let localization, !pending else { return false }
+        return now - localization.solvedAt >= refreshIntervalSeconds
+    }
+
+    /// The transform to draw with: `target` (the latest server answer, world-anchor corrected), reached from `from` over
+    /// `blendSeconds` after a refresh, so a re-solve does not make the route jump. For drawing only.
+    public static func blendedTransform(from: Pose?, startedAt: TimeInterval?, target: Pose, now: TimeInterval) -> Pose {
+        guard let from, let startedAt else { return target }
+        return AnchorMath.interpolate(from, target, (now - startedAt) / blendSeconds)
+    }
 }
 
 /// Route geometry on one floor, and progress along it. Pure.
@@ -134,6 +199,9 @@ public enum RouteGeometry {
         guard source.coordinateFrameId == localization.coordinateFrameId else {
             return .refused(.frameMismatch, "floor \(floorId.apiString) was routed in coordinate frame " +
                 "\(source.coordinateFrameId?.apiString ?? "(none)"), but the session is localized in \(localization.coordinateFrameId.apiString)")
+        }
+        for w in leg where !w.x.isFinite || !w.y.isFinite || !w.z.isFinite {
+            return .refused(.frameMismatch, "floor \(floorId.apiString) route leg contains non-finite canonical waypoint coordinates")
         }
         return .drawable(leg)
     }

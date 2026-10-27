@@ -75,6 +75,14 @@ export function routeLegFor(route: RouteResponse, localization: Localization): R
         `session is localized in ${localization.coordinateFrameId}`,
     };
   }
+  for (const w of leg.waypoints) {
+    if (!Number.isFinite(w.x) || !Number.isFinite(w.y) || !Number.isFinite(w.z)) {
+      return {
+        ok: false, problem: "FRAME_MISMATCH",
+        detail: `floor ${localization.floorId} route leg contains non-finite canonical waypoint coordinates`,
+      };
+    }
+  }
   return { ok: true, points: leg.points, waypoints: leg.waypoints };
 }
 

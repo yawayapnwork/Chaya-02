@@ -50,6 +50,36 @@ public struct ArFailure: Equatable, Sendable {
                 return ArFailure(kind: .versionChanged, code: api.code, detail: api.detail, retryable: false, anchorId: nil,
                                  action: "This floor was republished. End AR and start again to load the new version.")
             }
+            if api.code == "NOT_CALIBRATED" || api.code == "METRIC_CALIBRATION_REQUIRED" {
+                return ArFailure(kind: .refused, code: api.code, detail: api.detail, retryable: false, anchorId: nil,
+                                 action: "The floor has no calibrated coordinate frame in metres. Physical AR guidance is unavailable until the venue is calibrated.")
+            }
+            if api.code == "METRIC_EVIDENCE_INSUFFICIENT" {
+                return ArFailure(kind: .refused, code: api.code, detail: api.detail, retryable: false, anchorId: nil,
+                                 action: "The floor was calibrated from hand-entered points rather than measured observations. Physical AR guidance requires calibration from marked observations.")
+            }
+            if api.code == "POI_NOT_FOUND" || (api.status == 404 && (api.detail.localizedCaseInsensitiveContains("poi") || api.detail.localizedCaseInsensitiveContains("destination"))) {
+                return ArFailure(kind: .refused, code: api.code, detail: api.detail, retryable: false, anchorId: nil,
+                                 action: "The selected destination no longer exists. Choose another destination.")
+            }
+            if api.code == "NO_ROUTE" || api.code == "NO_ACCESSIBLE_ROUTE" || api.code == "FLOOR_CONNECTION_UNAVAILABLE" || api.code == "NO_REACHABLE_STOP" {
+                return ArFailure(kind: .refused, code: api.code, detail: api.detail, retryable: false, anchorId: nil,
+                                 action: api.code == "NO_ACCESSIBLE_ROUTE"
+                                     ? "No step-free route exists to the destination."
+                                     : "The destination cannot be reached from your current position on the walkable area.")
+            }
+            if api.code == "START_OFF_NAVMESH" || api.code == "START_OUT_OF_BOUNDS" || api.code == "DESTINATION_OFF_NAVMESH" || api.code == "DESTINATION_OUT_OF_BOUNDS" || api.code == "START_FLOOR_MISMATCH" || api.code == "DESTINATION_FLOOR_MISMATCH" {
+                return ArFailure(kind: .refused, code: api.code, detail: api.detail, retryable: false, anchorId: nil,
+                                 action: "The start or destination is not on the calibrated walkable area for this floor.")
+            }
+            if api.code == "NAVMESH_NOT_READY" || api.code == "NO_PUBLISHED_NAVMESH" || api.code == "VERSION_NOT_FINALIZED" {
+                return ArFailure(kind: .refused, code: api.code, detail: api.detail, retryable: false, anchorId: nil,
+                                 action: "The floor's navigation mesh or scan version is not finalized yet.")
+            }
+            if api.code == "RELOCALIZATION_GRAVITY_MISMATCH" {
+                return ArFailure(kind: .refused, code: api.code, detail: api.detail, retryable: false, anchorId: nil,
+                                 action: "The marker's registered orientation or the device's gravity alignment disagrees with the venue frame.")
+            }
             return ArFailure(kind: .refused, code: api.code, detail: api.detail, retryable: api.status >= 500, anchorId: nil,
                              action: "The server refused the request (\(api.code)).")
         }

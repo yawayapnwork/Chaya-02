@@ -6,12 +6,16 @@ import {
   type Localization,
   MAX_LIMITED_MS,
   RECOVERY_MAX_JUMP_METERS,
+  RELOCALIZATION_TIMEOUT_MS,
   canAdvanceRoute,
   frameTrackingSignal,
   initialArSessionState,
+  isValidTransform,
   reduceArSession,
   routeShown,
 } from "./ar-relocalization.ts";
+import { classifyArFailure } from "./ar-errors.ts";
+import { routeLegFor } from "./ar-navigation.ts";
 
 const OBS: MarkerObservation = {
   anchorId: "anchor-entrance", markerType: "IMAGE_TARGET", markerIdentifier: "entrance",
@@ -295,4 +299,111 @@ test("limited tracking before the first localization is just 'not tracking yet',
   assert.equal(s.state, "SEARCHING");
   assert.equal(s.deviceTracking, false);
   assert.ok(!routeShown(s));
+});
+
+test("invalid transforms (NaN, zero quaternion norm, or gravity tilt > 15 deg) are refused and never localize", () => {
+  assert.equal(isValidTransform(LOC.deviceToVenue).ok, true);
+  assert.equal(isValidTransform({ ...LOC.deviceToVenue, x: Number.NaN }).ok, false);
+  assert.equal(isValidTransform({ x: 0, y: 0, z: 0, qx: 0, qy: 0, qz: 0, qw: 0 }).ok, false);
+  // Identity quaternion maps device +Y to canonical +Y (90 deg tilt from canonical +Z)
+  assert.equal(isValidTransform({ x: 0, y: 0, z: 0, qx: 0, qy: 0, qz: 0, qw: 1 }).ok, false);
+
+  const s = reduceArSession(started(), { type: "MARKERS_OBSERVED", observations: [OBS] });
+  const badTilt = reduceArSession(s, {
+    type: "RELOCALIZATION_SUCCEEDED",
+    requestId: s.pending!.requestId,
+    localization: { ...LOC, deviceToVenue: { x: 1, y: 2, z: 0, qx: 0, qy: 0, qz: 0, qw: 1 } },
+  });
+  assert.equal(badTilt.state, "SEARCHING");
+  assert.equal(badTilt.localization, null);
+  assert.match(badTilt.lastError!, /^INVALID_TRANSFORM/);
+
+  const badNan = reduceArSession(s, {
+    type: "RELOCALIZATION_SUCCEEDED",
+    requestId: s.pending!.requestId,
+    localization: { ...LOC, deviceToVenue: { ...LOC.deviceToVenue, z: Number.POSITIVE_INFINITY } },
+  });
+  assert.equal(badNan.state, "SEARCHING");
+  assert.match(badNan.lastError!, /^INVALID_TRANSFORM/);
+});
+
+test("relocalization timeout cancels a hung request on TICK and returns to the previous state", () => {
+  const s = reduceArSession(started(), { type: "MARKERS_OBSERVED", observations: [OBS] });
+  assert.equal(s.state, "RELOCALIZING");
+  // Before timeout: stays RELOCALIZING
+  const stillPending = reduceArSession(s, { type: "TICK", atMs: OBS.timestampMs + RELOCALIZATION_TIMEOUT_MS - 10 });
+  assert.equal(stillPending.state, "RELOCALIZING");
+  // After timeout: returns to SEARCHING and records RELOCALIZATION_TIMEOUT
+  const timedOut = reduceArSession(s, { type: "TICK", atMs: OBS.timestampMs + RELOCALIZATION_TIMEOUT_MS + 1 });
+  assert.equal(timedOut.state, "SEARCHING");
+  assert.equal(timedOut.pending, null);
+  assert.match(timedOut.lastError!, /^RELOCALIZATION_TIMEOUT/);
+
+  // A timed-out refresh while LOCALIZED keeps the current localization and clears pending
+  const refreshing = reduceArSession(localized(), { type: "MARKERS_OBSERVED", observations: [OBS] });
+  const refreshTimedOut = reduceArSession(refreshing, { type: "TICK", atMs: OBS.timestampMs + RELOCALIZATION_TIMEOUT_MS + 1 });
+  assert.equal(refreshTimedOut.state, "LOCALIZED");
+  assert.equal(refreshTimedOut.localization, LOC);
+  assert.equal(refreshTimedOut.pending, null);
+  assert.match(refreshTimedOut.lastError!, /^RELOCALIZATION_TIMEOUT/);
+});
+
+test("stale routes and non-finite waypoint coordinates are refused before rendering", () => {
+  const validRoute = {
+    waypoints: [
+      { x: 0, y: 0, z: 0, floorId: "floor-1", kind: "START" as const },
+      { x: 5, y: 0, z: 0, floorId: "floor-1", kind: "DESTINATION" as const },
+    ],
+    distanceMeters: 5,
+    estimatedDurationSeconds: 4,
+    floorTransitions: [],
+    accessibilityProfile: "STANDARD" as const,
+    accessibilityConstraintsApplied: [],
+    routingSources: [{
+      floorId: "floor-1", graphId: "g1", source: "RECAST_NAVMESH", navmeshSha256: null,
+      recastnavigationVersion: null, pathMethod: null, scanVersionId: "sv-1", coordinateFrameId: "frame-1",
+    }],
+  };
+  assert.equal(routeLegFor(validRoute, LOC).ok, true);
+  const nonFinite = {
+    ...validRoute,
+    waypoints: [
+      { x: 0, y: 0, z: 0, floorId: "floor-1", kind: "START" as const },
+      { x: Number.NaN, y: 0, z: 0, floorId: "floor-1", kind: "DESTINATION" as const },
+    ],
+  };
+  const check = routeLegFor(nonFinite, LOC);
+  assert.equal(check.ok, false);
+  if (!check.ok) assert.equal(check.problem, "FRAME_MISMATCH");
+});
+
+test("classifyArFailure covers expired sessions, anchor mismatch, deleted destinations, unreachable routes and failed API requests", () => {
+  const expired = classifyArFailure({ status: 401, code: "HTTP_401", message: "token expired" });
+  assert.equal(expired.failure, "SESSION_EXPIRED");
+  assert.equal(expired.retryable, false);
+
+  const deletedPoi = classifyArFailure({ status: 404, code: "POI_NOT_FOUND", message: "destination POI not found" });
+  assert.equal(deletedPoi.failure, "REFUSED");
+  assert.equal(deletedPoi.retryable, false);
+  assert.match(deletedPoi.action, /no longer exists/);
+
+  const noRoute = classifyArFailure({ status: 409, code: "NO_ROUTE", message: "no route" });
+  assert.equal(noRoute.failure, "REFUSED");
+  assert.equal(noRoute.retryable, false);
+  assert.match(noRoute.action, /cannot be reached/);
+
+  const noStepFree = classifyArFailure({ status: 409, code: "NO_ACCESSIBLE_ROUTE", message: "stairs only" });
+  assert.equal(noStepFree.failure, "REFUSED");
+  assert.equal(noStepFree.retryable, false);
+  assert.match(noStepFree.action, /step-free/);
+
+  const offNavmesh = classifyArFailure({ status: 422, code: "DESTINATION_OFF_NAVMESH", message: "too far" });
+  assert.equal(offNavmesh.failure, "REFUSED");
+  assert.equal(offNavmesh.retryable, false);
+  assert.match(offNavmesh.action, /walkable area/);
+
+  const gravity = classifyArFailure({ status: 409, code: "RELOCALIZATION_GRAVITY_MISMATCH", message: "tilted" });
+  assert.equal(gravity.failure, "REFUSED");
+  assert.equal(gravity.retryable, false);
+  assert.match(gravity.action, /gravity/);
 });

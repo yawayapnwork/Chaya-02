@@ -286,8 +286,8 @@ export default function ArWorkspace() {
     Promise.all(registered.map(async (a, index) => ({
       image: await createImageBitmap(await fetchTargetImage(venueId, a.floorId, a.id)),
       marker: {
-        index, anchorId: a.id, markerIdentifier: a.markerIdentifier, widthInMeters: a.markerSizeMeters as number,
-        floorId: a.floorId, scanVersionId: a.scanVersionId ?? undefined, digitalPose: a.digitalPose,
+        index, anchorId: a.id, venueId: a.venueId, markerIdentifier: a.markerIdentifier, widthInMeters: a.markerSizeMeters as number,
+        floorId: a.floorId, scanVersionId: a.scanVersionId ?? undefined, physicalPose: a.physicalPose, digitalPose: a.digitalPose,
       },
     })))
       .then((items) => {
@@ -367,7 +367,18 @@ export default function ArWorkspace() {
                                         reroute?: "OBSTACLE_ON_PATH" | "OBSTACLE_CLEARED") => {
     const localization = stateRef.current.localization;
     const destination = pois.find((p) => p.id === destinationId);
-    if (!localization || !destination || blockedRef.current) return;
+    if (!localization || blockedRef.current) return;
+    if (!destination) {
+      if (destinationId) {
+        routeRef.current = null;
+        legRef.current = null;
+        rendererRef.current?.setRoute(null, 0);
+        const f = classifyArFailure({ status: 404, code: "POI_NOT_FOUND", message: "destination POI not found" }, navigator.onLine);
+        setFailure(f);
+        setError(`Route: ${f.failure}: ${f.action}`);
+      }
+      return;
+    }
     if (reroute) {
       rerouteInFlightRef.current = true;
       rerouteOutcomeRef.current = { kind: "REROUTING" };
@@ -407,6 +418,11 @@ export default function ArWorkspace() {
       }
       const f = classifyArFailure(e, navigator.onLine);
       if (f.failure === "SESSION_EXPIRED") blockedRef.current = f;
+      if (f.code === "POI_NOT_FOUND" || (e instanceof ApiError && e.status === 404)) {
+        routeRef.current = null;
+        legRef.current = null;
+        rendererRef.current?.setRoute(null, 0);
+      }
       if (reroute) rerouteOutcomeRef.current = { kind: "FAILED", detail: f.failure };
       setFailure(f);
       setError(`Route: ${f.failure}: ${message(e)}`);
@@ -518,6 +534,9 @@ export default function ArWorkspace() {
       }
     } else {
       dispatch({ type: "TRACKING_RESTORED" });
+    }
+    if (stateRef.current.pending !== null) {
+      dispatch({ type: "TICK", atMs: frameMs });
     }
     const viewerPose = poseFromXrTransform(viewer.transform);
     lastViewerRef.current = viewerPose;

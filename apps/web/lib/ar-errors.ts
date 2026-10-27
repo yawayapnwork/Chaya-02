@@ -70,5 +70,30 @@ export function classifyArFailure(error: unknown, online: boolean = true): Class
   if (code === "METRIC_EVIDENCE_INSUFFICIENT") {
     return make("REFUSED", false, "The floor was calibrated from hand-entered points rather than measured observations. Physical AR guidance requires calibration from marked observations.");
   }
+  if (code === "POI_NOT_FOUND" || (status === 404 && /poi|destination/i.test(message))) {
+    return make("REFUSED", false, "The selected destination no longer exists. Choose another destination.");
+  }
+  if (code === "NO_ROUTE" || code === "NO_ACCESSIBLE_ROUTE" || code === "FLOOR_CONNECTION_UNAVAILABLE" || code === "NO_REACHABLE_STOP") {
+    return make(
+      "REFUSED",
+      false,
+      code === "NO_ACCESSIBLE_ROUTE"
+        ? "No step-free route exists to the destination."
+        : "The destination cannot be reached from your current position on the walkable area.",
+    );
+  }
+  if (
+    code === "START_OFF_NAVMESH" || code === "START_OUT_OF_BOUNDS" ||
+    code === "DESTINATION_OFF_NAVMESH" || code === "DESTINATION_OUT_OF_BOUNDS" ||
+    code === "START_FLOOR_MISMATCH" || code === "DESTINATION_FLOOR_MISMATCH"
+  ) {
+    return make("REFUSED", false, "The start or destination is not on the calibrated walkable area for this floor.");
+  }
+  if (code === "NAVMESH_NOT_READY" || code === "NO_PUBLISHED_NAVMESH" || code === "VERSION_NOT_FINALIZED") {
+    return make("REFUSED", false, "The floor's navigation mesh or scan version is not finalized yet.");
+  }
+  if (code === "RELOCALIZATION_GRAVITY_MISMATCH") {
+    return make("REFUSED", false, "The marker's registered orientation or the device's gravity alignment disagrees with the venue frame.");
+  }
   return make("REFUSED", status === null || status >= 500, `The server refused the request${code ? ` (${code})` : ""}.`);
 }

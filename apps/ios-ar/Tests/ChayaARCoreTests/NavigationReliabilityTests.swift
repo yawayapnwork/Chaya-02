@@ -111,4 +111,68 @@ final class NavigationReliabilityTests: XCTestCase {
         XCTAssertEqual(r.anchorResiduals?.last?.used, false)
         XCTAssertEqual(r.residualDegrees, 0.4)
     }
+
+    // MARK: - invalid transforms, relocalization timeout, drift, and route/POI failure classification
+
+    func testInvalidTransformsAreRefusedAndNeverLocalize() {
+        var s = SM.reduce(SM.reduce(NavigationState(), .sessionStarted(floorId: floorId)), .trackingChanged(.normal, at: 1))
+        s = SM.reduce(s, .markersObserved([obs]))
+        let badTilt = Localization(deviceToVenue: .identity, anchorIds: [obs.anchorId], residualMeters: nil,
+                                   coordinateFrameId: UUID(), scanVersionId: UUID(), floorId: floorId, solvedAt: 11)
+        let afterTilt = SM.reduce(s, .relocalizationSucceeded(requestId: s.pending!.requestId, badTilt))
+        XCTAssertEqual(afterTilt.phase, .searching)
+        XCTAssertNil(afterTilt.localization)
+        XCTAssertTrue(afterTilt.lastError?.hasPrefix("INVALID_TRANSFORM") ?? false)
+
+        let badNan = Localization(deviceToVenue: Pose(x: .nan, y: 0, z: 0, qx: 0.5.squareRoot(), qw: 0.5.squareRoot()),
+                                  anchorIds: [obs.anchorId], residualMeters: nil,
+                                  coordinateFrameId: UUID(), scanVersionId: UUID(), floorId: floorId, solvedAt: 11)
+        let afterNan = SM.reduce(s, .relocalizationSucceeded(requestId: s.pending!.requestId, badNan))
+        XCTAssertEqual(afterNan.phase, .searching)
+        XCTAssertTrue(afterNan.lastError?.hasPrefix("INVALID_TRANSFORM") ?? false)
+    }
+
+    func testRelocalizationTimeoutCancelsHungRequestAndRestoresPreviousPhase() {
+        var s = SM.reduce(SM.reduce(NavigationState(), .sessionStarted(floorId: floorId)), .trackingChanged(.normal, at: 1))
+        s = SM.reduce(s, .markersObserved([obs]))
+        XCTAssertEqual(s.phase, .solving)
+        XCTAssertEqual(SM.reduce(s, .tick(at: obs.timestamp + SM.maxSolvingSeconds - 0.5)).phase, .solving)
+        let timedOut = SM.reduce(s, .tick(at: obs.timestamp + SM.maxSolvingSeconds + 0.1))
+        XCTAssertEqual(timedOut.phase, .searching)
+        XCTAssertNil(timedOut.pending)
+        XCTAssertTrue(timedOut.lastError?.hasPrefix("RELOCALIZATION_TIMEOUT") ?? false)
+    }
+
+    func testDriftDetectionRefreshAndBlendingWhileLocalized() {
+        let s = localized()
+        let d2v = s.localization!.deviceToVenue
+        let digital = AnchorMath.compose(d2v, obs.observedPose)
+        XCTAssertFalse(VenueFrames.driftExceeded(VenueFrames.markerDrift(deviceToVenue: d2v, observedPose: obs.observedPose, digitalPose: digital)))
+        let shifted = Pose(x: digital.x + 0.5, y: digital.y, z: digital.z, qx: digital.qx, qy: digital.qy, qz: digital.qz, qw: digital.qw)
+        XCTAssertTrue(VenueFrames.driftExceeded(VenueFrames.markerDrift(deviceToVenue: d2v, observedPose: obs.observedPose, digitalPose: shifted)))
+        let drifted = SM.reduce(s, .driftExceeded("entrance drifted 0.50 m"))
+        XCTAssertEqual(drifted.phase, .trackingLost)
+        XCTAssertFalse(drifted.routeVisible)
+
+        // Refresh after 5 s while localized stays localized and blends
+        let laterObs = MarkerObservation(anchorId: obs.anchorId, markerIdentifier: "entrance", observedPose: obs.observedPose,
+                                         timestamp: 20, isTracked: true, estimatedScaleFactor: 1)
+        let refreshing = SM.reduce(s, .markersObserved([laterObs]))
+        XCTAssertEqual(refreshing.phase, .localized)
+        XCTAssertNotNil(refreshing.pending)
+        let blended = VenueFrames.blendedTransform(from: d2v, startedAt: 20, target: Pose(x: 5, y: 4, z: 0, qx: d2v.qx, qw: d2v.qw), now: 20.3)
+        XCTAssertEqual(blended.x, 4, accuracy: 1e-6)
+    }
+
+    func testDeletedDestinationAndUnreachableRoutesHaveActionableClassifications() {
+        let deleted = ArFailure.classify(APIError(status: 404, code: "POI_NOT_FOUND", detail: "destination POI not found"))
+        XCTAssertEqual(deleted.kind, .refused)
+        XCTAssertFalse(deleted.retryable)
+        XCTAssertTrue(deleted.action.contains("no longer exists"))
+
+        let noRoute = ArFailure.classify(APIError(status: 409, code: "NO_ACCESSIBLE_ROUTE", detail: "stairs only"))
+        XCTAssertEqual(noRoute.kind, .refused)
+        XCTAssertFalse(noRoute.retryable)
+        XCTAssertTrue(noRoute.action.contains("step-free"))
+    }
 }

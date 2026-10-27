@@ -105,6 +105,14 @@ public struct NavigationState: Equatable, Sendable {
         public var requestId: Int
         public var observations: [MarkerObservation]
         public var resumeTo: NavigationPhase
+        public var startedAt: TimeInterval?
+
+        public init(requestId: Int, observations: [MarkerObservation], resumeTo: NavigationPhase, startedAt: TimeInterval? = nil) {
+            self.requestId = requestId
+            self.observations = observations
+            self.resumeTo = resumeTo
+            self.startedAt = startedAt ?? observations.first?.timestamp
+        }
     }
 
     public var phase: NavigationPhase = .idle
@@ -169,6 +177,8 @@ public enum NavigationEvent: Equatable, Sendable {
     /// Tracking returned to normal after `limited`, but the recovery could not be validated (the world anchor is missing,
     /// or ARKit moved it more than `recoveryMaxJumpMeters` meanwhile).
     case recoveryRejected(String)
+    /// A registered marker observed while localized disagrees with the current transform beyond `VenueFrames.driftLimit*`.
+    case driftExceeded(String)
     case sessionFailed(String)
     case sessionEnded
 }
@@ -177,6 +187,8 @@ public enum RelocalizationStateMachine {
 
     /// How long a localized session may stay `limited` before the localization is considered lost.
     public static let maxLimitedSeconds: TimeInterval = 3
+    /// How long a pending relocalization request may stay in flight before timing out on `.tick`.
+    public static let maxSolvingSeconds: TimeInterval = 8
     /// A return from `limited` in which the world anchor moved more than this is not trusted (ARKit re-anchored its map).
     /// Same as the web client (RECOVERY_MAX_JUMP_METERS).
     public static let recoveryMaxJumpMeters = 0.3
@@ -225,8 +237,15 @@ public enum RelocalizationStateMachine {
             }
 
         case .tick(let at):
-            guard s.phase == .limited, let since = s.limitedSince, at - since > maxLimitedSeconds else { return s }
-            n = lose(n, reason: "tracking was limited for more than \(Int(maxLimitedSeconds)) s")
+            if s.phase == .limited, let since = s.limitedSince, at - since > maxLimitedSeconds {
+                n = lose(n, reason: "tracking was limited for more than \(Int(maxLimitedSeconds)) s")
+            } else if let pending = s.pending, let started = pending.startedAt, at - started > maxSolvingSeconds {
+                n.pending = nil
+                n.lastError = "RELOCALIZATION_TIMEOUT: relocalization request timed out after \(Int(maxSolvingSeconds)) s"
+                if s.phase == .solving { n.phase = pending.resumeTo }
+            } else {
+                return s
+            }
 
         case .sessionInterrupted:
             n.deviceTracking = .notAvailable
@@ -258,6 +277,12 @@ public enum RelocalizationStateMachine {
                 let own = observations.filter { $0.floorId == nil || $0.floorId == s.floorId }
                 guard !own.isEmpty else { return s }
                 n = solve(n, own, resumeTo: .recovered)
+            case .localized:
+                let own = observations.filter { $0.floorId == nil || $0.floorId == s.floorId }
+                guard s.pending == nil, let loc = s.localization, let latest = own.map(\.timestamp).max(),
+                      latest - loc.solvedAt >= VenueFrames.refreshIntervalSeconds else { return s }
+                n.pending = .init(requestId: s.nextRequestId, observations: own, resumeTo: .localized, startedAt: latest)
+                n.nextRequestId += 1
             default:
                 return s
             }
@@ -283,9 +308,9 @@ public enum RelocalizationStateMachine {
             n.floorWindow = []
 
         case .relocalizationSucceeded(let requestId, let localization):
-            guard s.phase == .solving, let pending = s.pending, pending.requestId == requestId else { return s }
+            guard (s.phase == .solving || s.phase == .localized), let pending = s.pending, pending.requestId == requestId else { return s }
             if let refused = refusal(s, localization) {
-                n.phase = pending.resumeTo
+                if s.phase != .localized { n.phase = pending.resumeTo }
                 n.pending = nil
                 n.lastError = refused
                 return n
@@ -299,8 +324,8 @@ public enum RelocalizationStateMachine {
             n.lastError = nil
 
         case .relocalizationFailed(let requestId, let error):
-            guard s.phase == .solving, let pending = s.pending, pending.requestId == requestId else { return s }
-            n.phase = pending.resumeTo
+            guard (s.phase == .solving || s.phase == .localized), let pending = s.pending, pending.requestId == requestId else { return s }
+            if s.phase != .localized { n.phase = pending.resumeTo }
             n.pending = nil
             n.lastError = error
 
@@ -309,6 +334,10 @@ public enum RelocalizationStateMachine {
             n = lose(n, reason: "ARKit no longer tracks the world anchor the route is attached to")
 
         case .recoveryRejected(let reason):
+            guard s.phase == .localized || s.phase == .limited else { return s }
+            n = lose(n, reason: reason)
+
+        case .driftExceeded(let reason):
             guard s.phase == .localized || s.phase == .limited else { return s }
             n = lose(n, reason: reason)
 
@@ -326,6 +355,9 @@ public enum RelocalizationStateMachine {
 
     /// Why a server answer cannot be used in this session, or nil.
     static func refusal(_ s: NavigationState, _ l: Localization) -> String? {
+        if let problem = VenueFrames.transformProblem(l.deviceToVenue) {
+            return "INVALID_TRANSFORM: \(problem)"
+        }
         if let floorId = s.floorId, l.floorId != floorId {
             return "FLOOR_MISMATCH: solved on floor \(l.floorId.apiString), but the session is on floor \(floorId.apiString)"
         }

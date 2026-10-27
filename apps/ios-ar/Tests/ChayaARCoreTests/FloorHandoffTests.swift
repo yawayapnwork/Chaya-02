@@ -21,8 +21,8 @@ final class FloorHandoffTests: XCTestCase {
     }
 
     func loc(_ floor: UUID, _ version: UUID, _ frame: UUID) -> Localization {
-        Localization(deviceToVenue: .identity, anchorIds: [], residualMeters: nil, coordinateFrameId: frame, scanVersionId: version,
-                     floorId: floor, solvedAt: 1)
+        Localization(deviceToVenue: Pose(qx: 0.5.squareRoot(), qw: 0.5.squareRoot()), anchorIds: [], residualMeters: nil,
+                     coordinateFrameId: frame, scanVersionId: version, floorId: floor, solvedAt: 1)
     }
 
     func reduce(_ s: NavigationState, _ events: NavigationEvent...) -> NavigationState {

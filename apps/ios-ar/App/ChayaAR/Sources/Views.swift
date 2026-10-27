@@ -46,6 +46,7 @@ struct ValidationBanner: View {
 
 struct SetupScreen: View {
     @ObservedObject var model: NavigationViewModel
+    @Environment(\.scenePhase) private var scenePhase
     @State private var link = ""
 
     var body: some View {
@@ -102,12 +103,16 @@ struct SetupScreen: View {
             }
             .navigationTitle("Chaya AR")
             .onAppear { model.refreshCapability() }
+            .onChange(of: scenePhase) { phase in
+                if phase == .active { model.refreshCapability() }
+            }
         }
     }
 }
 
 struct ARNavigationScreen: View {
     @ObservedObject var model: NavigationViewModel
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -125,6 +130,11 @@ struct ARNavigationScreen: View {
             .padding(8)
             .background(Color.black.opacity(0.55))
             .foregroundColor(.white)
+        }
+        .onChange(of: scenePhase) { phase in
+            if phase == .background {
+                model.manager?.applicationDidEnterBackground()
+            }
         }
     }
 }

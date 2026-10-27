@@ -453,11 +453,13 @@ they are first type-checked by the next `ios` CI run, and nothing has run on a d
 images makes ARKit's detection set larger; how detection behaves with many images, and whether 2 frames of one floor's
 markers are enough evidence in a real stairwell or atrium, is unmeasured.
 
-Not on iOS (the Android client has them): drift detection and refresh while localized, and blending between fixes.
-iOS has the same failure states, multi-marker handling (set-aside markers are named), validated recovery from `limited`
-(`VenueFrames.recoveryProblem`, event `recoveryRejected`) and a "Step-free route" toggle as Android. iOS users are never
-sent to the WebXR page: iOS Safari has no `navigator.xr`, so `/ar` shows `WEBXR_UNAVAILABLE`, and the native app is the
-iOS client.
+Both Android and iOS implement the same drift detection while localized (`markerDrift` / `driftExceeded` at `0.30 m` /
+`8.0°`), periodic refresh every `5 s` (`refreshDue`), `600 ms` transform blending between fixes (`blendedTransform`),
+relocalization request timeout (`8 s`), invalid transform rejection (`gravityTiltDegrees > 15°` or non-finite values),
+failure classification (including deleted destinations `POI_NOT_FOUND` and unreachable routes), multi-marker handling
+(set-aside markers are named), validated recovery from `limited` (`recoveryProblem`, `RECOVERY_MAX_JUMP_METERS = 0.30`),
+and a "Step-free route" toggle. iOS users are never sent to the WebXR page: iOS Safari has no `navigator.xr`, so `/ar`
+shows `WEBXR_UNAVAILABLE` with the native ARKit app notice, and the native app is the iOS client.
 
 ### Capability states (app)
 

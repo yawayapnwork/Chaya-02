@@ -28,10 +28,14 @@ export interface XrImageTrackingResultLike {
 export interface TrackedMarker {
   index: number;
   anchorId: string;
+  /** The venue the anchor is registered in. */
+  venueId?: string;
   /** The floor the anchor is registered on: a session tracks every floor's markers, and uses only the current floor's. */
   floorId?: string;
   /** The scan version the anchor's pose was entered against. */
   scanVersionId?: string;
+  /** The anchor's registered physical pose. */
+  physicalPose?: Pose;
   /** The anchor's registered canonical pose (its marker's centre), for the drift check (lib/ar-navigation.ts). */
   digitalPose?: Pose;
   markerIdentifier: string;

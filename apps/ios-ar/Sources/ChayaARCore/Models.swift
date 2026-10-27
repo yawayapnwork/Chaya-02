@@ -172,11 +172,14 @@ public struct FloorConnection: Codable, Equatable, Sendable {
     public var status: Status
     /// When staff last verified the connection step-free (nil: never, or withdrawn by a correction).
     public var accessibilityVerifiedAt: Date?
+    public var minClearanceM: Double?
+    public var maxSlopeDeg: Double?
 
     public init(id: UUID, connectorType: String, fromFloorId: UUID, toFloorId: UUID, bidirectional: Bool, status: Status,
-                accessibilityVerifiedAt: Date?) {
+                accessibilityVerifiedAt: Date?, minClearanceM: Double? = nil, maxSlopeDeg: Double? = nil) {
         self.id = id; self.connectorType = connectorType; self.fromFloorId = fromFloorId; self.toFloorId = toFloorId
         self.bidirectional = bidirectional; self.status = status; self.accessibilityVerifiedAt = accessibilityVerifiedAt
+        self.minClearanceM = minClearanceM; self.maxSlopeDeg = maxSlopeDeg
     }
 }
 

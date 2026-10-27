@@ -115,8 +115,19 @@ public enum FloorTransitions {
             let forward = c.fromFloorId == t.fromFloorId && c.toFloorId == t.toFloorId
             let backward = c.fromFloorId == t.toFloorId && c.toFloorId == t.fromFloorId
             if !forward && !(backward && c.bidirectional) { problems.append("the \(what) on the route no longer runs in this direction") }
-            if route.accessibilityProfile == "STEP_FREE" && c.accessibilityVerifiedAt == nil {
-                problems.append("the \(what) on the route is no longer verified as accessible")
+            if route.accessibilityProfile == "STEP_FREE" {
+                if c.connectorType == "STAIRS" {
+                    problems.append("the \(what) on the route is not step-free")
+                }
+                if c.accessibilityVerifiedAt == nil {
+                    problems.append("the \(what) on the route is no longer verified as accessible")
+                }
+                if let clearance = c.minClearanceM, clearance < 0.9 {
+                    problems.append(String(format: "the %@ on the route has insufficient clearance (%.2f m < 0.9 m) for a step-free route", what, clearance))
+                }
+                if let slope = c.maxSlopeDeg, slope > 4.76 {
+                    problems.append(String(format: "the %@ on the route exceeds the maximum step-free slope (%.2f° > 4.76°)", what, slope))
+                }
             }
             if problems.count > before && !ids.contains(id) { ids.append(id) }
         }
