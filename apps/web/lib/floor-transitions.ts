@@ -27,10 +27,13 @@ export interface TransitionCheck {
   connectionIds: string[];
 }
 
+export const STEP_FREE_MIN_CLEARANCE_M = 0.9;
+export const STEP_FREE_MAX_SLOPE_DEG = 4.76;
+
 /**
  * Whether every floor transition a route was planned over can still be used as it was: the connection still exists, is in
- * service, still runs in the route's direction, and -- for a step-free route -- is still verified accessible. A route
- * whose transition fails this is recalculated; it is never followed onto a closed lift.
+ * service, still runs in the route's direction, and -- for a step-free route -- is still verified accessible with passing
+ * clearance and slope. A route whose transition fails this is recalculated; it is never followed onto a closed lift.
  */
 export function transitionsStillUsable(route: Pick<RouteResponse, "floorTransitions" | "accessibilityProfile">,
                                        connections: readonly FloorConnection[]): TransitionCheck {
@@ -49,8 +52,17 @@ export function transitionsStillUsable(route: Pick<RouteResponse, "floorTransiti
     const forward = c.fromFloorId === t.fromFloorId && c.toFloorId === t.toFloorId;
     const backward = c.fromFloorId === t.toFloorId && c.toFloorId === t.fromFloorId;
     if (!forward && !(backward && c.bidirectional)) problems.push(`the ${what} on the route no longer runs in this direction`);
-    if (route.accessibilityProfile === "STEP_FREE" && !c.accessibilityVerifiedAt) {
-      problems.push(`the ${what} on the route is no longer verified as accessible`);
+    if (route.accessibilityProfile === "STEP_FREE") {
+      if (c.connectorType === "STAIRS" || !c.accessibilityVerifiedAt) {
+        problems.push(`the ${what} on the route is no longer verified as accessible`);
+      } else {
+        if (c.minClearanceM === null || c.minClearanceM < STEP_FREE_MIN_CLEARANCE_M) {
+          problems.push(`the ${what} on the route does not meet the ${STEP_FREE_MIN_CLEARANCE_M.toFixed(2)} m step-free clearance`);
+        }
+        if (c.connectorType === "RAMP" && (c.maxSlopeDeg === null || c.maxSlopeDeg > STEP_FREE_MAX_SLOPE_DEG)) {
+          problems.push(`the ${what} on the route exceeds the ${STEP_FREE_MAX_SLOPE_DEG}° step-free slope limit`);
+        }
+      }
     }
     if (problems.length > before) connectionIds.add(t.connectionId);
   }

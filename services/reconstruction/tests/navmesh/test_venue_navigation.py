@@ -282,7 +282,43 @@ def test_dead_ends_and_disconnected_regions_refuse_routing(navmesh_tool, tmp_pat
 
 
 def test_endpoint_outside_walkable_bounds_fails_snap(venue):
-    """An endpoint far outside the venue's walkable footprint cannot be snapped to any polygon."""
+    """An endpoint far outside the venue's walkable footprint or on the wrong elevation cannot be snapped."""
     with pytest.raises(NavmeshError) as exc:
         venue.detour([-5.0, 2.0, 0.0], [6.0, 2.0, 0.0])
     assert exc.value.code == NO_ROUTE
+    # An endpoint 2.5 m above the floor (exceeding the 0.5 m vertical snap extent) is also rejected
+    with pytest.raises(NavmeshError) as exc_z:
+        venue.detour([1.0, 2.0, 2.5], [6.0, 2.0, 0.0])
+    assert exc_z.value.code == NO_ROUTE
+
+
+def test_smoothed_routes_never_cut_through_obstacles_or_walls(venue):
+    """String-pulled paths across corners, around the column, around the sofa, and around the railing never cut
+    through blocked geometry or violate the eroded agent clearance."""
+    routes = [
+        venue.detour([0.6, 0.6, 0.0], [11.4, 6.4, V.STEP_RISE_M]),
+        venue.detour([1.5, 3.2, 0.0], [1.5, 5.2, 0.0]),
+        venue.detour([5.2, 1.2, 0.0], [7.2, 1.2, 0.0]),  # straight line passes directly through COLUMN (6.0..6.4, 1.0..1.4)
+        venue.detour([8.0, 2.4, 0.0], [8.0, 4.0, 0.08], step_free=True),  # straight line crosses RAILING (7.0..9.5, 3.0..3.3)
+    ]
+    wall_solid_lower = (V.WALL[0], V.WALL[1], 0.0, V.D1[0])
+    wall_solid_mid = (V.WALL[0], V.WALL[1], V.D1[1], V.D2[0])
+    wall_solid_upper = (V.WALL[0], V.WALL[1], V.D2[1], 7.0)
+    obstacles = (wall_solid_lower, wall_solid_mid, wall_solid_upper, V.SOFA, V.COLUMN, V.RAILING)
+    for path in routes:
+        pts = _samples(path, step=0.02)
+        for box in obstacles:
+            assert not V.in_box(pts, box, margin=MARGIN).any(), f"smoothed route cut through obstacle {box}"
+
+
+def test_steep_ramp_above_ada_limit_is_walkable_in_standard_but_excluded_from_step_free(venue):
+    """When the step-free slope threshold is tighter than the 1:14 ramp (~4.09 deg), build_routing_graphs keeps the
+    ramp in STANDARD (<= 45 deg) but excludes it from STEP_FREE so step-free routing fails closed."""
+    graphs_strict = build_routing_graphs(venue.build.polygons, max_ramp_slope_deg=3.0, surface=venue.surface)
+    # With max_ramp_slope_deg=3.0, the 4.09-deg ramp exceeds the step-free slope limit while remaining walkable in STANDARD
+    ramp_edges_std = [e for e in graphs_strict["STANDARD"]["edges"] if e["max_slope_deg"] > 3.0 and not e["level_change"]]
+    assert len(ramp_edges_std) > 0
+    assert all(not e["step_free"] for e in ramp_edges_std)
+    ramp_edges_sf = [e for e in graphs_strict["STEP_FREE"]["edges"] if e["max_slope_deg"] > 3.0]
+    assert ramp_edges_sf == []
+

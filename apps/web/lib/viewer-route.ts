@@ -43,7 +43,7 @@ export function routeOverlay(route: RouteResponse, scene: RouteScene): RouteOver
   // in the floor's current frame, which is also what a non-version reconstruction is shown in.
   const source = route.routingSources?.find((s) => s.floorId === scene.floorId);
   let mismatch: RouteOverlay["mismatch"] = null;
-  if (source && scene.scanVersionId && source.scanVersionId && source.scanVersionId !== scene.scanVersionId) mismatch = "VERSION_MISMATCH";
+  if (source && scene.scanVersionId && source.scanVersionId !== scene.scanVersionId) mismatch = "VERSION_MISMATCH";
   else if (source?.coordinateFrameId && source.coordinateFrameId !== scene.frameId) mismatch = "FRAME_MISMATCH";
   return { waypoints: !mismatch && leg.length >= 2 ? leg : null, runs: mismatch ? [] : runsOnFloor(route, scene.floorId), mismatch, otherFloorIds };
 }
@@ -138,6 +138,10 @@ export function describeRouteFailure(code: string, detail: string, profile: Rout
       return { kind: "not-routable", message: "The floor was calibrated from hand-entered points rather than measured observations; metric routing cannot be advertised until calibrated from marked observations." };
     case "VERSION_MISMATCH":
       return { kind: "not-routable", message: "The destination belongs to a different scan version than the one being routed on." };
+    case "VERSION_NOT_FINALIZED":
+      return { kind: "not-routable", message: "This scan version is not finalized yet, so no route can be planned on it." };
+    case "VERSION_WRONG_FLOOR":
+      return { kind: "not-routable", message: "The requested scan version belongs to a different floor than the route start." };
     case "START_OUT_OF_BOUNDS":
     case "START_OFF_NAVMESH":
       return { kind: "bad-endpoint", message: "The starting point is not on the walkable area mapped for this floor." };

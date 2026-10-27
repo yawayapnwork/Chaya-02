@@ -176,3 +176,23 @@ def test_stage_refuses_to_bake_without_labels_for_the_cloud_it_bakes(harness, na
     order["coordinateFrame"] = FRAME
     report = harness.run(order, toolchain=Toolchain(env={"CHAYA_NAVMESH_BIN": navmesh_tool}))
     assert report["status"] == "FAILED" and report["errorCode"] == "NAVMESH_LABELS_UNAVAILABLE" and report["artifacts"] == []
+
+
+@pytest.mark.parametrize("bad_frame", [
+    None,
+    {**FRAME, "metricStatus": "UNSCALED"},
+    {**FRAME, "gravityStatus": "UNALIGNED"},
+])
+def test_stage_refuses_uncalibrated_coordinate_frame(harness, navmesh_tool, tmp_path, bad_frame):
+    """NAVIGATION_BAKING refuses to bake when the reconstruction's coordinate frame is missing, non-metric, or not
+    gravity-aligned."""
+    splat, planes, labels = _scene(tmp_path)
+    inputs = [_derived(harness, "SPLAT_CLEAN", splat), _derived(harness, "PLANE_MODEL", planes, "application/json"),
+              _derived(harness, "SEMANTIC_LABELS_CLEAN", labels, "application/json")]
+    order = harness.order("NAVIGATION_BAKING", inputs)
+    if bad_frame is not None:
+        order["coordinateFrame"] = bad_frame
+    else:
+        order.pop("coordinateFrame", None)
+    report = harness.run(order, toolchain=Toolchain(env={"CHAYA_NAVMESH_BIN": navmesh_tool}))
+    assert report["status"] == "FAILED" and report["errorCode"] == "NOT_CALIBRATED" and report["artifacts"] == []
