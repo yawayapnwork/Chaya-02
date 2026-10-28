@@ -4,6 +4,7 @@ import {
   DEFAULT_QUALITY_THRESHOLDS,
   assessFrame,
   brightnessStats,
+  evaluateBlurAndMotionThresholds,
   fastFeatureCount,
   frameDifference,
   frameSpacing,
@@ -123,6 +124,14 @@ test("assessFrame: an identical second frame is flagged as a duplicate", () => {
   assert.ok(second.sample.warnings.includes("DUPLICATE_FRAME"));
 });
 
+test("assessFrame: excessive visual frame-to-frame difference flags FAST_MOTION even without 6-DoF pose velocity", () => {
+  const first = assessFrame(checkerboard(64, 64, 8), 1000, { prevGray: null, prevPosition: null });
+  const inverted = frame(64, 64, (x, y) => ((Math.floor(x / 8) + Math.floor(y / 8)) % 2 === 0 ? 235 : 20));
+  const fast = assessFrame(inverted, 1600, { prevGray: first.gray, prevPosition: null });
+  assert.ok(fast.sample.motionScore! > DEFAULT_QUALITY_THRESHOLDS.maxMotionScore);
+  assert.ok(fast.sample.warnings.includes("FAST_MOTION"));
+});
+
 test("assessFrame: a flat, low-texture frame is flagged for blur and low feature count, not a detailed one", () => {
   const flat = assessFrame(uniform(64, 64, 128), 1000, { prevGray: null, prevPosition: null });
   assert.ok(flat.sample.warnings.includes("BLUR"));
@@ -152,4 +161,36 @@ test("assessFrame: spacing warnings only fire when a position is supplied", () =
 
   const tooFar = assessFrame(checkerboard(32, 32), 1000, { prevGray: null, prevPosition: { x: 0, y: 0 } }, { x: 5, y: 0 });
   assert.ok(tooFar.sample.warnings.includes("SPACING_TOO_FAR"));
+});
+
+test("evaluateBlurAndMotionThresholds: records true positives, false positives, true negatives and false negatives", () => {
+  const benchmark = evaluateBlurAndMotionThresholds();
+
+  // Blur classifier (minBlurVariance = 100): 3 TP, 1 FP (sparse plain wall with a single sharp seam), 3 TN, 1 FN (mildly blurred 0/255 blinds).
+  assert.equal(benchmark.blur.truePositives, 3);
+  assert.equal(benchmark.blur.falsePositives, 1);
+  assert.equal(benchmark.blur.trueNegatives, 3);
+  assert.equal(benchmark.blur.falseNegatives, 1);
+  assert.equal(benchmark.blur.falsePositiveRate, 0.25);
+  assert.equal(benchmark.blur.falseNegativeRate, 0.25);
+  assert.equal(benchmark.blur.cases.find((c) => c.id === "sharp-sparse-wall-seam")?.outcome, "FP");
+  assert.equal(benchmark.blur.cases.find((c) => c.id === "blurred-high-contrast-blinds")?.outcome, "FN");
+
+  // Fast-motion classifier (maxMotionScore = 45): 3 TP, 1 FP (anti-phase 2px shift on fine high-contrast stripes), 3 TN, 1 FN (fast pan on low-contrast wall).
+  assert.equal(benchmark.fastMotion.truePositives, 3);
+  assert.equal(benchmark.fastMotion.falsePositives, 1);
+  assert.equal(benchmark.fastMotion.trueNegatives, 3);
+  assert.equal(benchmark.fastMotion.falseNegatives, 1);
+  assert.equal(benchmark.fastMotion.falsePositiveRate, 0.25);
+  assert.equal(benchmark.fastMotion.falseNegativeRate, 0.25);
+  assert.equal(benchmark.fastMotion.cases.find((c) => c.id === "slow-shift-fine-high-contrast-stripes")?.outcome, "FP");
+  assert.equal(benchmark.fastMotion.cases.find((c) => c.id === "fast-pan-over-low-contrast-wall")?.outcome, "FN");
+
+  // Duplicate-frame classifier (duplicateMotionThreshold = 1.5): 2 TP, 1 FP (translating along uniform blank wall), 2 TN, 1 FN (autoexposure step on static camera).
+  assert.equal(benchmark.duplicateFrame.truePositives, 2);
+  assert.equal(benchmark.duplicateFrame.falsePositives, 1);
+  assert.equal(benchmark.duplicateFrame.trueNegatives, 2);
+  assert.equal(benchmark.duplicateFrame.falseNegatives, 1);
+  assert.equal(benchmark.duplicateFrame.falsePositiveRate, 0.3333);
+  assert.equal(benchmark.duplicateFrame.falseNegativeRate, 0.3333);
 });

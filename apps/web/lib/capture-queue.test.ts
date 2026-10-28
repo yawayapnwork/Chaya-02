@@ -517,3 +517,99 @@ test("error classes", () => {
   assert.deepEqual((classifyError(new HttpError(410, "CAPTURE_ERASED")) as { conflict: string }).conflict, "CAPTURE_ERASED");
   assert.equal(classifyError(new HttpError(415, "UNSUPPORTED_MEDIA_TYPE")).kind, "REFUSED");
 });
+
+
+test("backend cold starts (502, 503, 504) during session creation, media init and part upload recover cleanly", async () => {
+  const w = world();
+  const s = await w.queue.createSession({
+    venueId: VENUE,
+    venueName: "HQ",
+    floorId: FLOOR,
+    floorName: "Ground",
+    roomId: "room-lobby",
+    roomName: "Main Lobby",
+    expectedScanVersionId: "v1",
+    device: { source: "browser", screen: "320x568" },
+  });
+  await w.queue.addFiles(s.localId, [
+    { file: video("0123456789ab"), name: "lobby.mp4", type: "video/mp4", kind: "VIDEO" },
+    { file: new Blob(['{"fps":30}'], { type: "application/json" }), name: "meta.json", type: "application/json", kind: "METADATA" },
+  ]);
+
+  // Inject backend cold-start errors (502 Bad Gateway, 503 Service Unavailable, 504 Gateway Timeout)
+  w.server.faults.push({ op: "createCapture", error: () => new HttpError(503, "BACKEND_COLD_START"), times: 1 });
+  w.server.faults.push({ op: "initMedia", error: () => new HttpError(502, "BAD_GATEWAY"), times: 1 });
+  w.server.faults.push({ op: "putPart", error: () => new HttpError(504, "GATEWAY_TIMEOUT"), times: 1 });
+
+  for (let round = 0; round < 6; round++) {
+    w.env.now += BACKOFF_CAP_MS;
+    await w.queue.sync();
+  }
+
+  const [summary] = await w.queue.list();
+  assert.equal(summary.synced, true);
+  assert.equal(summary.accepted, 2);
+  assert.equal(summary.session.roomId, "room-lobby");
+  assert.equal(summary.session.floorId, FLOOR);
+  assert.equal(summary.session.expectedScanVersionId, "v1");
+  assert.equal(w.server.captures.size, 1);
+  assert.equal(w.server.mediaCount(), 2);
+});
+
+test("concurrent duplicate sync calls are coalesced and never duplicate uploads or parts", async () => {
+  const w = world();
+  const s = await newSession(w.queue);
+  await w.queue.addFiles(s.localId, [{ file: video("0123456789"), name: "walk.mp4", type: "video/mp4", kind: "VIDEO" }]);
+
+  // Trigger 5 concurrent sync requests simultaneously (e.g. rapid user taps or simultaneous online events)
+  await Promise.all([
+    w.queue.sync(),
+    w.queue.sync(),
+    w.queue.sync(),
+    w.queue.sync(),
+    w.queue.sync(),
+  ]);
+
+  const f = await onlyFile(w.store);
+  assert.equal(f.state, "ACCEPTED");
+  assert.equal(w.server.captures.size, 1);
+  assert.equal(w.server.mediaCount(), 1);
+  // Verify putPart was called exactly once per part (3 parts for 10 bytes with PART=4)
+  const partPuts = w.server.calls.filter((c) => c.startsWith("putPart"));
+  assert.deepEqual(partPuts, ["putPart:1", "putPart:2", "putPart:3"]);
+});
+
+test("slow uploads interrupted by network loss resume with remaining parts upon reconnection", async () => {
+  const w = world();
+  const s = await newSession(w.queue);
+  await w.queue.addFiles(s.localId, [{ file: video("0123456789abcdef"), name: "large.mp4", type: "video/mp4", kind: "VIDEO" }]);
+
+  // Simulate slow upload where part 1 succeeds, part 2 drops connection mid-flight
+  const orig = w.server.putPart.bind(w.server);
+  let putCount = 0;
+  w.server.putPart = async (...a) => {
+    putCount++;
+    if (putCount === 2) {
+      w.env.online = false; // network drop
+      throw networkError();
+    }
+    return orig(...a);
+  };
+
+  await w.queue.sync();
+  let f = await onlyFile(w.store);
+  assert.equal(f.state, "RETRY_WAIT");
+  assert.equal(f.attempts, 0, "offline mid-transfer uses up zero retry attempts");
+
+  // Network returns, sync triggered
+  w.server.putPart = orig;
+  w.server.calls = [];
+  w.env.online = true;
+  await w.queue.sync();
+
+  f = await onlyFile(w.store);
+  assert.equal(f.state, "ACCEPTED");
+  // Only remaining parts (2, 3, 4) sent on resumption
+  const resumedParts = w.server.calls.filter((c) => c.startsWith("putPart"));
+  assert.deepEqual(resumedParts, ["putPart:2", "putPart:3", "putPart:4"]);
+});

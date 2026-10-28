@@ -25,6 +25,8 @@ export interface QualityThresholds {
   maxHighlightClipFraction: number;
   /** Mean absolute grayscale difference (0..1) at or below this, between consecutive analysed frames, is a duplicate. */
   duplicateMotionThreshold: number;
+  /** Mean absolute grayscale difference (0..1) above this, between consecutive analysed frames, flags visual FAST_MOTION. */
+  maxMotionScore: number;
   minFeatureCount: number;
   minSpacingMeters: number;
   maxSpacingMeters: number;
@@ -37,6 +39,7 @@ export const DEFAULT_QUALITY_THRESHOLDS: QualityThresholds = {
   maxShadowClipFraction: 0.35,
   maxHighlightClipFraction: 0.35,
   duplicateMotionThreshold: 0.006,
+  maxMotionScore: 0.18,
   minFeatureCount: 25,
   minSpacingMeters: 0.15,
   maxSpacingMeters: 1.5,
@@ -47,6 +50,7 @@ export type Warning =
   | "UNDEREXPOSED"
   | "OVEREXPOSED"
   | "DUPLICATE_FRAME"
+  | "FAST_MOTION"
   | "LOW_FEATURE_COUNT"
   | "SPACING_TOO_CLOSE"
   | "SPACING_TOO_FAR";
@@ -235,6 +239,7 @@ export function assessFrame(
   const { mean, shadowClipFraction, highlightClipFraction } = brightnessStats(gray);
   const motionScore = context.prevGray ? frameDifference(context.prevGray, gray) : null;
   const duplicateFrame = motionScore !== null && motionScore <= thresholds.duplicateMotionThreshold;
+  const fastVisualMotion = motionScore !== null && motionScore > thresholds.maxMotionScore;
   const featureCount = fastFeatureCount(gray, frame.width, frame.height);
   const spacingMeters = frameSpacing(context.prevPosition, currentPosition);
 
@@ -243,6 +248,7 @@ export function assessFrame(
   if (mean < thresholds.minBrightnessMean || shadowClipFraction > thresholds.maxShadowClipFraction) warnings.push("UNDEREXPOSED");
   if (mean > thresholds.maxBrightnessMean || highlightClipFraction > thresholds.maxHighlightClipFraction) warnings.push("OVEREXPOSED");
   if (duplicateFrame) warnings.push("DUPLICATE_FRAME");
+  if (fastVisualMotion) warnings.push("FAST_MOTION");
   if (featureCount < thresholds.minFeatureCount) warnings.push("LOW_FEATURE_COUNT");
   if (spacingMeters !== null && spacingMeters < thresholds.minSpacingMeters) warnings.push("SPACING_TOO_CLOSE");
   if (spacingMeters !== null && spacingMeters > thresholds.maxSpacingMeters) warnings.push("SPACING_TOO_FAR");
@@ -252,4 +258,220 @@ export function assessFrame(
     duplicateFrame, featureCount, spacingMeters, warnings,
   };
   return { sample, gray };
+}
+
+// ---- Deterministic calibration & confusion-matrix evaluation (Requirement 6) ----------------------------------------
+
+export interface ConfusionMatrix {
+  truePositives: number;
+  falsePositives: number;
+  trueNegatives: number;
+  falseNegatives: number;
+  falsePositiveRate: number;
+  falseNegativeRate: number;
+  precision: number;
+  recall: number;
+  cases: {
+    id: string;
+    expected: boolean;
+    predicted: boolean;
+    outcome: "TP" | "FP" | "TN" | "FN";
+    metricValue: number;
+    note: string;
+  }[];
+}
+
+export interface QualityClassifierBenchmark {
+  thresholds: QualityThresholds;
+  blur: ConfusionMatrix;
+  fastMotion: ConfusionMatrix;
+  duplicateFrame: ConfusionMatrix;
+}
+
+function summarizeConfusion(cases: ConfusionMatrix["cases"]): ConfusionMatrix {
+  let tp = 0, fp = 0, tn = 0, fn = 0;
+  for (const c of cases) {
+    if (c.outcome === "TP") tp++;
+    else if (c.outcome === "FP") fp++;
+    else if (c.outcome === "TN") tn++;
+    else fn++;
+  }
+  const fpr = fp + tn > 0 ? Math.round((fp / (fp + tn)) * 10000) / 10000 : 0;
+  const fnr = fn + tp > 0 ? Math.round((fn / (fn + tp)) * 10000) / 10000 : 0;
+  const precision = tp + fp > 0 ? Math.round((tp / (tp + fp)) * 10000) / 10000 : 1;
+  const recall = tp + fn > 0 ? Math.round((tp / (tp + fn)) * 10000) / 10000 : 1;
+  return {
+    truePositives: tp,
+    falsePositives: fp,
+    trueNegatives: tn,
+    falseNegatives: fn,
+    falsePositiveRate: fpr,
+    falseNegativeRate: fnr,
+    precision,
+    recall,
+    cases,
+  };
+}
+
+function makeFrame(width: number, height: number, pixel: (x: number, y: number) => number): Frame {
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const v = Math.max(0, Math.min(255, Math.round(pixel(x, y))));
+      const i = (y * width + x) * 4;
+      data[i] = v;
+      data[i + 1] = v;
+      data[i + 2] = v;
+      data[i + 3] = 255;
+    }
+  }
+  return { width, height, data };
+}
+
+function boxBlurFrame(f: Frame, radius: number): Frame {
+  const gray = toGrayscale(f);
+  const w = f.width, h = f.height;
+  return makeFrame(w, h, (x, y) => {
+    let sum = 0, n = 0;
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        const nx = Math.min(w - 1, Math.max(0, x + dx));
+        const ny = Math.min(h - 1, Math.max(0, y + dy));
+        sum += gray[ny * w + nx];
+        n++;
+      }
+    }
+    return sum / n;
+  });
+}
+
+/**
+ * Evaluates the calibrated per-frame blur (`BLUR`), visual fast-motion (`FAST_MOTION`), and duplicate-frame
+ * (`DUPLICATE_FRAME`) classifiers against a deterministic benchmark corpus per classifier, explicitly
+ * recording true positives, false positives, true negatives, and false negatives (including known failure modes
+ * of Laplacian variance and normalized L1 frame difference).
+ */
+export function evaluateBlurAndMotionThresholds(
+  thresholds: QualityThresholds = DEFAULT_QUALITY_THRESHOLDS,
+): QualityClassifierBenchmark {
+  const w = 64, h = 48;
+  const sharpChecker = makeFrame(w, h, (x, y) => ((Math.floor(x / 4) + Math.floor(y / 4)) % 2 === 0 ? 35 : 220));
+  const sharpBrick = makeFrame(w, h, (x, y) => (x % 8 === 0 || y % 6 === 0 ? 40 : 185));
+  const sharpSinusoid = makeFrame(w, h, (x, y) => 128 + 90 * Math.sin(x * 0.9) * Math.cos(y * 0.9));
+
+  // Known false-positive case for Laplacian blur: an in-focus matte wall with only a single thin vertical door seam.
+  // Because 98% of the frame is uniform, the global Laplacian variance is below 60 even though the seam is in focus.
+  const sharpSparseWall = makeFrame(w, h, (x) => (x === 32 ? 140 : 120));
+
+  // True positives for blur: defocus / motion-blurred indoor textures (repeated box blur simulates severe Gaussian/motion blur).
+  const heavyBlurChecker = boxBlurFrame(boxBlurFrame(sharpChecker, 4), 3);
+  const heavyBlurBrick = boxBlurFrame(boxBlurFrame(sharpBrick, 3), 3);
+  const flatOutOfFocus = makeFrame(w, h, (x, y) => 110 + Math.round(4 * Math.sin(x * 0.1 + y * 0.1)));
+
+  // Known false-negative case for Laplacian blur: high-contrast 1-pixel alternating shutter/blind pattern smoothed
+  // with a mild 1px blur still retains high second-derivative variance (> 60) despite losing fine detail.
+  const extremeContrastMildBlur = boxBlurFrame(
+    makeFrame(w, h, (x, y) => ((Math.floor(x / 2) + Math.floor(y / 2)) % 2 === 0 ? 0 : 255)),
+    1,
+  );
+
+  const blurFixtures: { id: string; frame: Frame; expectedBlur: boolean; note: string }[] = [
+    { id: "sharp-checkerboard", frame: sharpChecker, expectedBlur: false, note: "In-focus high-contrast architectural tile" },
+    { id: "sharp-brickwork", frame: sharpBrick, expectedBlur: false, note: "In-focus mortar grid lines" },
+    { id: "sharp-textured-carpet", frame: sharpSinusoid, expectedBlur: false, note: "In-focus high-frequency carpet texture" },
+    { id: "sharp-sparse-wall-seam", frame: sharpSparseWall, expectedBlur: false, note: "FP: in-focus plain wall with a single door seam has low global Laplacian variance" },
+    { id: "defocused-checkerboard-r4", frame: heavyBlurChecker, expectedBlur: true, note: "Severely defocused tile" },
+    { id: "defocused-brickwork-r3", frame: heavyBlurBrick, expectedBlur: true, note: "Severely motion/defocus-blurred brickwork" },
+    { id: "out-of-focus-wash", frame: flatOutOfFocus, expectedBlur: true, note: "Low-gradient out-of-focus wall wash" },
+    { id: "blurred-high-contrast-blinds", frame: extremeContrastMildBlur, expectedBlur: true, note: "FN: mildly blurred 0/255 blind stripes still exceed minBlurVariance" },
+  ];
+
+  const blurCases: ConfusionMatrix["cases"] = blurFixtures.map((f) => {
+    const res = assessFrame(f.frame, 1000, { prevGray: null, prevPosition: null }, null, thresholds);
+    const predicted = res.sample.warnings.includes("BLUR");
+    const outcome = f.expectedBlur ? (predicted ? "TP" : "FN") : (predicted ? "FP" : "TN");
+    return {
+      id: f.id,
+      expected: f.expectedBlur,
+      predicted,
+      outcome,
+      metricValue: res.sample.blurScore,
+      note: f.note,
+    };
+  });
+
+  // Motion pairs for FAST_MOTION (motionScore > thresholds.maxMotionScore, normalized 0..1)
+  const makeShiftedChecker = (dx: number, block = 8, lo = 50, hi = 200) =>
+    makeFrame(w, h, (x, y) => ((Math.floor((x + dx) / block) + Math.floor(y / block)) % 2 === 0 ? lo : hi));
+
+  const motionFixtures: { id: string; prev: Frame; curr: Frame; expectedFast: boolean; note: string }[] = [
+    { id: "steady-walk-1px-shift", prev: makeShiftedChecker(0, 8), curr: makeShiftedChecker(1, 8), expectedFast: false, note: "Slow 1px shift on 8px blocks during steady walk" },
+    { id: "moderate-walk-2px-shift", prev: makeShiftedChecker(0, 8), curr: makeShiftedChecker(2, 8), expectedFast: false, note: "Moderate 2px shift on 8px blocks" },
+    { id: "stationary-sensor-noise", prev: sharpBrick, curr: makeFrame(w, h, (x, y) => (x % 8 === 0 || y % 6 === 0 ? 41 : 184)), expectedFast: false, note: "Stationary camera with 1-level sensor noise" },
+    {
+      id: "slow-shift-fine-high-contrast-stripes",
+      prev: makeShiftedChecker(0, 2, 0, 255),
+      curr: makeShiftedChecker(2, 2, 0, 255),
+      expectedFast: false,
+      note: "FP: a small 2px shift that aligns in anti-phase on a 2px 0/255 stripe pattern flips every pixel",
+    },
+    { id: "rapid-pan-half-period", prev: makeShiftedChecker(0, 8, 20, 235), curr: makeShiftedChecker(8, 8, 20, 235), expectedFast: true, note: "Rapid camera whip-pan inverting full 8px pattern" },
+    { id: "abrupt-scene-cut-or-jerk", prev: sharpBrick, curr: makeFrame(w, h, (x, y) => (x % 8 === 0 || y % 6 === 0 ? 230 : 30)), expectedFast: true, note: "Abrupt camera jerk across contrasting wall/window" },
+    { id: "large-rotation-step", prev: makeFrame(w, h, (x) => (x < w / 2 ? 20 : 230)), curr: makeFrame(w, h, (x) => (x < w / 2 ? 230 : 20)), expectedFast: true, note: "Fast yaw sweep swapping dark and bright halves" },
+    {
+      id: "fast-pan-over-low-contrast-wall",
+      prev: makeFrame(w, h, (x) => 120 + (x % 16 < 8 ? 10 : -10)),
+      curr: makeFrame(w, h, (x) => 120 + ((x + 8) % 16 < 8 ? 10 : -10)),
+      expectedFast: true,
+      note: "FN: rapid pan over a low-contrast painted wall produces small L1 pixel differences below maxMotionScore",
+    },
+  ];
+
+  const fastMotionCases: ConfusionMatrix["cases"] = motionFixtures.map((f) => {
+    const prevGray = toGrayscale(f.prev);
+    const res = assessFrame(f.curr, 1600, { prevGray, prevPosition: null }, null, thresholds);
+    const predicted = res.sample.warnings.includes("FAST_MOTION");
+    const outcome = f.expectedFast ? (predicted ? "TP" : "FN") : (predicted ? "FP" : "TN");
+    return {
+      id: f.id,
+      expected: f.expectedFast,
+      predicted,
+      outcome,
+      metricValue: res.sample.motionScore ?? 0,
+      note: f.note,
+    };
+  });
+
+  // Duplicate-frame pairs (motionScore <= thresholds.duplicateMotionThreshold, normalized 0..1)
+  const dupFixtures: { id: string; prev: Frame; curr: Frame; expectedDuplicate: boolean; note: string }[] = [
+    { id: "identical-static-frame", prev: sharpChecker, curr: sharpChecker, expectedDuplicate: true, note: "Bit-identical consecutive frame" },
+    { id: "static-1lsb-noise", prev: sharpBrick, curr: makeFrame(w, h, (x, y) => (x % 8 === 0 || y % 6 === 0 ? 41 : 184)), expectedDuplicate: true, note: "Static tripod/handheld pause with +/-1 LSB sensor noise" },
+    { id: "static-autoexposure-step", prev: sharpBrick, curr: makeFrame(w, h, (x, y) => (x % 8 === 0 || y % 6 === 0 ? 45 : 190)), expectedDuplicate: true, note: "FN: static camera with +5 luma auto-exposure flicker exceeds duplicateMotionThreshold" },
+    { id: "normal-translation-step", prev: makeShiftedChecker(0, 8), curr: makeShiftedChecker(2, 8), expectedDuplicate: false, note: "Normal walking baseline translation" },
+    { id: "rapid-pan-step", prev: makeShiftedChecker(0, 8, 20, 235), curr: makeShiftedChecker(8, 8, 20, 235), expectedFast: false } as unknown as { id: string; prev: Frame; curr: Frame; expectedDuplicate: boolean; note: string },
+    { id: "moving-along-featureless-wall", prev: makeFrame(w, h, () => 128), curr: makeFrame(w, h, () => 129), expectedDuplicate: false, note: "FP: camera translating past a completely uniform blank wall looks identical in pixel space" },
+  ];
+  dupFixtures[4] = { id: "rapid-pan-step", prev: makeShiftedChecker(0, 8, 20, 235), curr: makeShiftedChecker(8, 8, 20, 235), expectedDuplicate: false, note: "Large camera pan" };
+
+  const dupCases: ConfusionMatrix["cases"] = dupFixtures.map((f) => {
+    const prevGray = toGrayscale(f.prev);
+    const res = assessFrame(f.curr, 1600, { prevGray, prevPosition: null }, null, thresholds);
+    const predicted = res.sample.duplicateFrame;
+    const outcome = f.expectedDuplicate ? (predicted ? "TP" : "FN") : (predicted ? "FP" : "TN");
+    return {
+      id: f.id,
+      expected: f.expectedDuplicate,
+      predicted,
+      outcome,
+      metricValue: res.sample.motionScore ?? 0,
+      note: f.note,
+    };
+  });
+
+  return {
+    thresholds,
+    blur: summarizeConfusion(blurCases),
+    fastMotion: summarizeConfusion(fastMotionCases),
+    duplicateFrame: summarizeConfusion(dupCases),
+  };
 }

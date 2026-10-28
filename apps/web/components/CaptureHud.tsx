@@ -22,6 +22,12 @@ import {
   type TrackingEventWire,
 } from "@/lib/hud-api";
 import { type CaptureMode, type Instruction, guidance } from "@/lib/capture-guidance";
+import {
+  buildOperatorDepartureReview,
+  type DepartureVerdict,
+  type OperatorDepartureReview,
+  type ReviewMediaItem,
+} from "@/lib/capture-review";
 import { cameraHeadingFromEuler, headingToPlanYaw, type LiveTracking } from "@/lib/capture-tracking";
 import { CaptureXrSession, detectCaptureAr, type XrLike } from "@/lib/capture-xr-session";
 import { createCaptureBaseLayer, makeViewerRay } from "@/lib/capture-xr-gl";
@@ -43,6 +49,12 @@ const SEVERITY_TONE: Record<Instruction["severity"], string> = {
   ACTION: "border-blue-300 bg-blue-50 text-blue-900",
   DONE: "border-green-300 bg-green-50 text-green-900",
   INFO: "border-zinc-300 bg-zinc-50 text-zinc-800",
+};
+
+const DEPARTURE_TONE: Record<DepartureVerdict, string> = {
+  ACTION_REQUIRED: "border-red-300 bg-red-50 text-red-900",
+  RESHOOT_RECOMMENDED: "border-amber-300 bg-amber-50 text-amber-900",
+  READY_TO_LEAVE: "border-green-300 bg-green-50 text-green-900",
 };
 
 const BASIS_LABEL: Record<string, string> = {
@@ -69,7 +81,15 @@ function readMode(captureId: string): CaptureMode | null {
   }
 }
 
-export default function CaptureHud({ venueId, captureId }: { venueId: string; captureId: string }) {
+export default function CaptureHud({
+  venueId,
+  captureId,
+  files = [],
+}: {
+  venueId: string;
+  captureId: string;
+  files?: readonly ReviewMediaItem[];
+}) {
   const [status, setStatus] = useState<HudStatus | null>(null);
   const [mode, setModeState] = useState<CaptureMode | null>(() => (typeof window === "undefined" ? null : readMode(captureId)));
   const [arSupport, setArSupport] = useState<{ state: "CHECKING" | "SUPPORTED" | "UNSUPPORTED"; reason: string | null }>({ state: "CHECKING", reason: null });
@@ -90,6 +110,7 @@ export default function CaptureHud({ venueId, captureId }: { venueId: string; ca
   const [importErrors, setImportErrors] = useState<string[]>([]);
   const [alignTarget, setAlignTarget] = useState<{ x: number; y: number; yawDegrees: number } | null>(null);
   const [queueInfo, setQueueInfo] = useState({ pending: 0, dropped: 0, error: null as string | null });
+  const [qualitySamples, setQualitySamples] = useState<QualitySample[]>([]);
   const [nowMs, setNowMs] = useState(0);
   const [aligned, setAligned] = useState(false);
 
@@ -198,7 +219,9 @@ export default function CaptureHud({ venueId, captureId }: { venueId: string; ca
     const position = lastPlanPosition.current ? { x: lastPlanPosition.current.x, y: lastPlanPosition.current.y } : null;
     const { sample, gray } = assessFrame(frame, capturedAtMs, qualityContext.current, position);
     qualityContext.current = { prevGray: gray, prevPosition: position };
-    queues.quality.push(toWireSample(sample, motionRef.current));
+    const wire = toWireSample(sample, motionRef.current);
+    queues.quality.push(wire);
+    setQualitySamples((prev) => (prev.length >= 600 ? [...prev.slice(-599), wire] : [...prev, wire]));
   }, [queues]);
 
   // Manual and import modes: the camera through getUserMedia (the AR session owns the camera in AR mode).
@@ -407,7 +430,13 @@ export default function CaptureHud({ venueId, captureId }: { venueId: string; ca
     void flushAll();
   }
 
-  // ---- guidance ----------------------------------------------------------------------------------------------------------
+  // ---- guidance & operator departure review --------------------------------------------------------------------------
+  const uploadFailedCount = files.filter((f) => f.state === "FAILED" || f.state === "CORRUPTED" || f.state === "CONFLICT").length;
+  const uploadRejectedCount = files.filter((f) => f.state === "REJECTED").length;
+  const uploadQuarantinedCount = files.filter((f) => f.state === "QUARANTINED").length;
+  const uploadRetryingCount = files.filter((f) => f.state === "RETRY_WAIT" || f.state === "RETRY_WAITING").length;
+  const uploadLastError = files.map((f) => f.error).find((e) => !!e) ?? queueInfo.error;
+
   const instructions = guidance(status, {
     mode,
     arSupport: arSupport.state,
@@ -418,7 +447,18 @@ export default function CaptureHud({ venueId, captureId }: { venueId: string; ca
     motionWarnings,
     headingCalibrated: headingAtPlusX !== null,
     nowMs,
+    uploadFailedCount,
+    uploadRejectedCount,
+    uploadQuarantinedCount,
+    uploadRetryingCount,
+    uploadLastError,
   });
+
+  const departureReview = useMemo(
+    () => buildOperatorDepartureReview(files, qualitySamples, status),
+    [files, qualitySamples, status],
+  );
+
   const inAr = xrState !== "OFF";
   // Always allowed outside manual mode: when the evidence is not enough, the server answers NOT_ESTIMABLE with the reasons.
   const canEstimate = mode !== "MANUAL" && !!status;
@@ -607,8 +647,107 @@ export default function CaptureHud({ venueId, captureId }: { venueId: string; ca
           {cameraState === "UNAVAILABLE" && <p role="alert" className="text-sm text-amber-700">Camera unavailable{cameraDetail ? `: ${cameraDetail}` : ""}. Frame quality is paused.</p>}
         </div>
       )}
+
+      <OperatorReviewPanel review={departureReview} />
+
       <canvas ref={analysisCanvasRef} width={ANALYSIS_WIDTH} height={ANALYSIS_HEIGHT} className="hidden" />
     </section>
+  );
+}
+
+function OperatorReviewPanel({ review }: { review: OperatorDepartureReview }) {
+  const { media, frameQuality, coverage, reshoots } = review;
+  return (
+    <div
+      data-testid="operator-departure-review"
+      data-verdict={review.verdict}
+      className={`space-y-3 rounded border p-3 text-sm ${DEPARTURE_TONE[review.verdict]}`}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h4 className="font-semibold">Pre-departure operator review: {review.headline}</h4>
+        <span className="rounded bg-white/75 px-2 py-0.5 font-mono text-xs">{review.verdict}</span>
+      </div>
+      <p className="text-xs">{review.detail}</p>
+
+      <div className="grid grid-cols-1 gap-2 rounded bg-white/80 p-2 text-xs text-zinc-800 sm:grid-cols-3">
+        <div>
+          <p className="font-medium">Media &amp; upload status</p>
+          <p>
+            {media.acceptedFiles}/{media.totalFiles} accepted
+            {media.pendingFiles > 0 && ` · ${media.pendingFiles} pending`}
+            {media.retriedFiles > 0 && ` · retry rate ${(media.uploadRetryRate * 100).toFixed(0)}% (${media.totalRetryAttempts} retry attempts)`}
+          </p>
+        </div>
+        <div>
+          <p className="font-medium">Frame quality</p>
+          {frameQuality.analyzedFrames > 0 ? (
+            <p>
+              {frameQuality.defectiveFrames}/{frameQuality.analyzedFrames} defective (
+              {((frameQuality.rejectedFrameRate ?? 0) * 100).toFixed(0)}% flagged) · blur {frameQuality.counts.BLUR}, motion{" "}
+              {frameQuality.counts.FAST_MOTION}, low texture {frameQuality.counts.LOW_FEATURE_COUNT}
+            </p>
+          ) : (
+            <p className="text-zinc-500">Not measured on this device during capture.</p>
+          )}
+        </div>
+        <div>
+          <p className="font-medium">Coverage &amp; waypoints</p>
+          {coverage.coverageAvailable && coverage.observedCoveragePercent !== null ? (
+            <p>
+              {coverage.observedCoveragePercent.toFixed(0)}% observed ({BASIS_LABEL[coverage.coverageBasis] ?? coverage.coverageBasis}) ·{" "}
+              {coverage.uncoveredZones.length} gap(s)
+              {coverage.plannedWaypoints > 0 && ` · ${coverage.visitedWaypoints}/${coverage.plannedWaypoints} waypoints`}
+            </p>
+          ) : (
+            <p className="text-zinc-500">
+              Coverage not measured ({coverage.coverageUnavailableReason ?? "no room bounds or poses"}).
+            </p>
+          )}
+        </div>
+      </div>
+
+      {media.problems.length > 0 && (
+        <div className="rounded bg-white/80 p-2 text-xs text-red-900" data-testid="review-media-problems">
+          <p className="font-medium">Rejected, quarantined or failed media ({media.problems.length})</p>
+          <ul className="mt-1 list-inside list-disc space-y-0.5">
+            {media.problems.map((p) => (
+              <li key={p.id}>
+                <span className="font-mono">{p.name}</span> ({p.state}): {p.reason} — <span className="font-medium">{p.action}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {coverage.uncoveredZones.length > 0 && (
+        <div className="rounded bg-white/80 p-2 text-xs text-amber-900" data-testid="review-coverage-gaps">
+          <p className="font-medium">
+            Uncovered zones ({coverage.uncoveredZones.length}
+            {coverage.uncoveredAreaM2 != null && `, ${coverage.uncoveredAreaM2.toFixed(1)} m² total`})
+          </p>
+          <ul className="mt-1 list-inside list-disc space-y-0.5">
+            {coverage.uncoveredZones.slice(0, 4).map((z, i) => (
+              <li key={i}>
+                {z.areaM2.toFixed(1)} m² gap near ({z.centroidX.toFixed(1)}, {z.centroidY.toFixed(1)}) m — walk there and sweep the camera across the walls and floor.
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {reshoots.length > 0 && (
+        <div className="rounded bg-white/80 p-2 text-xs text-amber-900" data-testid="review-reshoots">
+          <p className="font-medium">Recommended reshoots before leaving ({reshoots.length})</p>
+          <ul className="mt-1 list-inside list-disc space-y-0.5">
+            {reshoots.map((r, i) => (
+              <li key={i}>
+                <span className="font-mono">{r.reason}</span>: {r.action}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
   );
 }
 

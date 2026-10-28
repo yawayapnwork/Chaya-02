@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { NotSignedInError, currentUser, signIn } from "@/lib/auth";
 import {
@@ -55,6 +55,7 @@ import type { Room } from "@/lib/stitch-view";
 import { followCaptureProcessing } from "@/lib/processing-stream";
 import { type LiveState, isNewer } from "@/lib/processing-live";
 import { floorLabel } from "@/lib/floor-transitions";
+import type { ReviewMediaItem } from "@/lib/capture-review";
 
 /**
  * What this browser actually reports about the device. Nothing is inferred or filled in: camera intrinsics, lens
@@ -347,9 +348,13 @@ export default function CaptureWorkspace() {
       let local = (await q.list()).find((x) => x.session.serverCaptureId === fresh.id);
       if (!local) {
         const floor = floors.find((f) => f.id === fresh.floorId);
+        const room = fresh.roomId ? rooms.find((r) => r.id === fresh.roomId) : undefined;
         const s = await q.createSession({
           venueId: fresh.venueId, venueName: venues.find((v) => v.id === fresh.venueId)?.name ?? fresh.venueId,
-          floorId: fresh.floorId, floorName: floor?.name ?? null, expectedScanVersionId: undefined, device: fresh.device,
+          floorId: fresh.floorId, floorName: floor?.name ?? null,
+          roomId: fresh.roomId ?? null, roomName: room?.name ?? null,
+          expectedScanVersionId: floor?.currentScanVersionId,
+          device: fresh.device,
           serverCaptureId: fresh.id,
         });
         local = { session: s, files: [], pending: 0, failed: 0, accepted: 0, synced: false, overdue: false };
@@ -365,12 +370,35 @@ export default function CaptureWorkspace() {
     }
   }
 
-  const activeFiles = active?.files ?? [];
+  const activeFiles = useMemo(() => active?.files ?? [], [active]);
   const localFiles = new Map(
     activeFiles.filter((f) => f.mediaId && tabFiles.has(f.localId)).map((f) => [f.mediaId as string, tabFiles.get(f.localId) as File]),
   );
-  const queuedMediaIds = new Set(activeFiles.map((f) => f.mediaId).filter(Boolean));
+  const queuedMediaIds = useMemo(() => new Set(activeFiles.map((f) => f.mediaId).filter(Boolean)), [activeFiles]);
   const unfinishedOnServer = serverMedia.filter((m) => ["PENDING", "QUARANTINED"].includes(m.status) && !queuedMediaIds.has(m.id));
+
+  // Combined view of local queue files + any server media uploaded from another tab/device for the operator departure review.
+  const reviewFiles: ReviewMediaItem[] = useMemo(() => {
+    const fromQueue: ReviewMediaItem[] = activeFiles.map((f) => ({
+      id: f.localId,
+      name: f.name,
+      state: f.state,
+      attempts: f.attempts,
+      code: f.code,
+      error: f.message,
+    }));
+    const fromServer: ReviewMediaItem[] = serverMedia
+      .filter((m) => !queuedMediaIds.has(m.id))
+      .map((m) => ({
+        id: m.id,
+        name: m.filename,
+        state: m.status,
+        attempts: 1,
+        code: m.rejectionCode,
+        error: m.rejectionMessage,
+      }));
+    return [...fromQueue, ...fromServer];
+  }, [activeFiles, serverMedia, queuedMediaIds]);
 
   // Finishing needs the server's verdict on every file of the session: queued, uploading or unchecked files block it.
   const settled = activeFiles.length > 0 && activeFiles.every((f) => ["ACCEPTED", "REJECTED"].includes(f.state));
@@ -461,8 +489,8 @@ export default function CaptureWorkspace() {
   }
 
   return (
-    <main className="mx-auto max-w-3xl space-y-8 p-8">
-      <header className="flex items-baseline justify-between">
+    <main className="mx-auto max-w-3xl space-y-8 p-4 sm:p-8">
+      <header className="flex flex-wrap items-baseline justify-between gap-2">
         <h1 className="text-2xl font-semibold">Capture</h1>
         {capture && (
           <span className="rounded bg-zinc-100 px-2 py-1 font-mono text-sm" data-testid="capture-status">
@@ -568,6 +596,43 @@ export default function CaptureWorkspace() {
         </section>
       )}
 
+      {(active || capture) && (
+        <div
+          data-testid="session-metadata-lineage"
+          className="rounded border bg-zinc-50 p-3 text-xs text-zinc-700"
+        >
+          <span className="font-medium">Session lineage:</span>{" "}
+          venue <span className="font-mono">{active?.session.venueName ?? capture?.venueId}</span>
+          {" · "}floor{" "}
+          <span className="font-mono">
+            {active?.session.floorName ??
+              floors.find((f) => f.id === (capture?.floorId ?? active?.session.floorId))?.name ??
+              capture?.floorId ??
+              "none"}
+          </span>
+          {(active?.session.roomName || active?.session.roomId || capture?.roomId) && (
+            <>
+              {" · "}room{" "}
+              <span className="font-mono">
+                {active?.session.roomName ?? active?.session.roomId ?? capture?.roomId}
+              </span>
+            </>
+          )}
+          {" · "}purpose <span className="font-mono">{capture?.purpose ?? (active?.session.roomId ? "ROOM" : "FLOOR")}</span>
+          {active?.session.expectedScanVersionId !== undefined && (
+            <>
+              {" · "}base scan version{" "}
+              <span className="font-mono">{active.session.expectedScanVersionId ?? "initial (none)"}</span>
+            </>
+          )}
+          {capture?.id && (
+            <>
+              {" · "}capture <span className="font-mono">{capture.id.slice(0, 8)}</span>
+            </>
+          )}
+        </div>
+      )}
+
       {active && (!capture || ["CREATED", "UPLOADING"].includes(capture.status)) && (
         <section aria-labelledby="upload" className="space-y-4">
           <h2 id="upload" className="text-lg font-medium">2. Upload media</h2>
@@ -633,17 +698,17 @@ export default function CaptureWorkspace() {
         </section>
       )}
 
-      {capture && ["CREATED", "UPLOADING"].includes(capture.status) && (
-        <CaptureHud venueId={capture.venueId} captureId={capture.id} />
+      {capture && ["CREATED", "UPLOADING", "UPLOADED", "READY_FOR_PROCESSING"].includes(capture.status) && (
+        <CaptureHud venueId={capture.venueId} captureId={capture.id} files={reviewFiles} />
       )}
 
       {capture && ["READY_FOR_PROCESSING", "PROCESSING", "COMPLETED", "FAILED"].includes(capture.status) && (
         <section aria-labelledby="done" className="space-y-4">
           <h2 id="done" className="text-lg font-medium">3. Upload complete</h2>
-          <dl className="grid grid-cols-[10rem_1fr] gap-1 text-sm">
-            <dt>Accepted files</dt><dd>{capture.acceptedMediaCount} of {capture.mediaCount}</dd>
-            <dt>Duration</dt><dd>{capture.durationSeconds == null ? "—" : `${Math.round(capture.durationSeconds)} s`}</dd>
-            <dt>Quality assessment</dt><dd>{capture.qualityState === "NOT_ASSESSED" ? "Not assessed yet" : capture.qualityState}</dd>
+          <dl className="grid grid-cols-1 gap-1 text-sm sm:grid-cols-[10rem_1fr]">
+            <dt className="font-medium sm:font-normal">Accepted files</dt><dd>{capture.acceptedMediaCount} of {capture.mediaCount}</dd>
+            <dt className="font-medium sm:font-normal">Duration</dt><dd>{capture.durationSeconds == null ? "—" : `${Math.round(capture.durationSeconds)} s`}</dd>
+            <dt className="font-medium sm:font-normal">Quality assessment</dt><dd>{capture.qualityState === "NOT_ASSESSED" ? "Not assessed yet" : capture.qualityState}</dd>
           </dl>
           {capture.status === "FAILED" && (
             <p role="alert" className="text-red-700">Capture failed: {capture.failureMessage ?? capture.failureCode}</p>

@@ -71,3 +71,65 @@ test("contract and calibration failures are explained with what to do next", () 
   assert.match(explainStageError("DETECTED_OBJECTS_INVALID", "m", null), /Nothing was dropped silently/);
   assert.match(explainStageError("NAVIGATION_GRAPH_INVALID", "m", null), /no routable graph/);
 });
+
+import { privacyImpactNotice } from "./pipeline-view.ts";
+
+test("PRIVACY_SFM_DEGRADED error and privacyImpactNotice warn when privacy masking degrades SfM features", () => {
+  const errText = explainStageError("PRIVACY_SFM_DEGRADED", null, {
+    usable_frames_before_mask: 8,
+    usable_frames_after_mask: 1,
+  });
+  assert.match(errText, /1 of 8 textured frames remained usable/);
+  assert.match(errText, /passing destroyed input to SfM/);
+
+  const warnNotice = privacyImpactNotice([
+    {
+      stage: "PRIVACY_PREPROCESS",
+      state: "SUCCEEDED",
+      attempts: 1,
+      lastRun: {
+        artifacts: [],
+        command: {
+          config: {
+            privacy_review_required: true,
+            privacy_degraded_frames: 2,
+            privacy_degraded_frame_names: ["000004.jpg", "000009.jpg"],
+            mean_retained_feature_ratio: 0.42,
+            mean_sfm_masked_fraction: 0.51,
+            privacy_warnings: [
+              "Heuristic quadrilateral screen/document detection masked large rectangular surfaces.",
+            ],
+          },
+        },
+      },
+    },
+  ]);
+  assert.ok(warnNotice);
+  assert.equal(warnNotice.severity, "warning");
+  assert.equal(warnNotice.degradedFrameCount, 2);
+  assert.deepEqual(warnNotice.degradedFrameNames, ["000004.jpg", "000009.jpg"]);
+  assert.equal(warnNotice.meanRetainedFeatureRatio, 0.42);
+  assert.equal(warnNotice.warnings.length, 1);
+
+  const failNotice = privacyImpactNotice([
+    {
+      stage: "PRIVACY_PREPROCESS",
+      state: "FAILED",
+      attempts: 1,
+      lastRun: {
+        artifacts: [],
+        errorCode: "PRIVACY_SFM_DEGRADED",
+        errorDetails: {
+          degraded_frame_count: 4,
+          degraded_frames: ["000001.jpg", "000002.jpg", "000003.jpg", "000004.jpg"],
+          mean_retained_feature_ratio: 0.08,
+          mean_sfm_masked_fraction: 0.68,
+          warnings: ["Privacy masking materially degraded SfM feature coverage in 4 of 4 frame(s)."],
+        },
+      },
+    },
+  ]);
+  assert.ok(failNotice);
+  assert.equal(failNotice.severity, "error");
+  assert.equal(failNotice.degradedFrameCount, 4);
+});

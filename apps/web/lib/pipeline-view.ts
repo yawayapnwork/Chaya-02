@@ -65,6 +65,12 @@ export function explainStageError(code: string | null, message: string | null, d
     case "PRIVACY_VERIFICATION_FAILED":
     case "PRIVACY_FRAME_UNREADABLE":
       return "Privacy preprocessing could not be completed, so nothing was passed on. Retry, or capture again.";
+    case "PRIVACY_SFM_DEGRADED": {
+      const before = typeof details?.usable_frames_before_mask === "number" ? details.usable_frames_before_mask : null;
+      const after = typeof details?.usable_frames_after_mask === "number" ? details.usable_frames_after_mask : null;
+      const countText = before != null && after != null ? ` (${after} of ${before} textured frames remained usable)` : "";
+      return `Privacy masking removed too much building texture for camera pose estimation${countText}, so processing stopped rather than passing destroyed input to SfM. Review rectangular screens/posters/doors in the scene or re-capture with wider framing of surrounding wall/floor texture.`;
+    }
     case "POSE_ESTIMATION_INSUFFICIENT":
       return "Camera positions could not be recovered for enough frames. Capture again with more overlap between views.";
     case "NOT_CALIBRATED":
@@ -151,7 +157,78 @@ export interface StageLike {
   stage: string;
   state: "PENDING" | "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED" | "NOT_RUN";
   attempts: number;
-  lastRun: { artifacts: { kind: string; sizeBytes: number; partial: boolean }[] } | null;
+  lastRun: {
+    artifacts: { kind: string; sizeBytes: number; partial: boolean }[];
+    command?: Record<string, unknown>;
+    errorCode?: string | null;
+    errorDetails?: Record<string, unknown> | null;
+  } | null;
+}
+
+export interface PrivacyImpactNotice {
+  severity: "warning" | "error";
+  headline: string;
+  degradedFrameCount: number;
+  degradedFrameNames: string[];
+  meanRetainedFeatureRatio: number | null;
+  meanSfmMaskedFraction: number | null;
+  warnings: string[];
+  action: string;
+}
+
+/**
+ * Inspects the PRIVACY_PREPROCESS stage record and returns an explicit review notice when privacy masking
+ * materially degrades keypoint coverage required for Structure-from-Motion (SfM).
+ */
+export function privacyImpactNotice(stages: StageLike[]): PrivacyImpactNotice | null {
+  const stage = stages.find((s) => s.stage === "PRIVACY_PREPROCESS");
+  if (!stage?.lastRun) return null;
+
+  const rawCmd = stage.lastRun.command ?? {};
+  const cmd = (typeof rawCmd.config === "object" && rawCmd.config !== null ? (rawCmd.config as Record<string, unknown>) : rawCmd);
+  const err = stage.lastRun.errorDetails ?? {};
+
+  if (stage.state === "FAILED" && stage.lastRun.errorCode === "PRIVACY_SFM_DEGRADED") {
+    const degradedFrames = Array.isArray(err.degraded_frames) ? (err.degraded_frames as unknown[]).map(String) : [];
+    const degradedCount = typeof err.degraded_frame_count === "number" ? err.degraded_frame_count : degradedFrames.length;
+    const warnings = Array.isArray(err.warnings) ? (err.warnings as unknown[]).map(String) : [];
+    const ratio = typeof err.mean_retained_feature_ratio === "number" ? err.mean_retained_feature_ratio : null;
+    const maskedFrac = typeof err.mean_sfm_masked_fraction === "number" ? err.mean_sfm_masked_fraction : null;
+    return {
+      severity: "error",
+      headline: "Privacy masking blocked SfM: too much building texture was removed.",
+      degradedFrameCount: degradedCount,
+      degradedFrameNames: degradedFrames,
+      meanRetainedFeatureRatio: ratio,
+      meanSfmMaskedFraction: maskedFrac,
+      warnings,
+      action:
+        "Heuristic screen/document or face masking covered most keypoints across the capture. Re-capture with wider framing of floors, corners, and non-rectangular wall texture before leaving the venue.",
+    };
+  }
+
+  const reviewRequired = cmd.privacy_review_required === true;
+  const degradedCount = typeof cmd.privacy_degraded_frames === "number" ? cmd.privacy_degraded_frames : 0;
+  if (!reviewRequired && degradedCount <= 0) return null;
+
+  const degradedFrames = Array.isArray(cmd.privacy_degraded_frame_names)
+    ? (cmd.privacy_degraded_frame_names as unknown[]).map(String)
+    : [];
+  const warnings = Array.isArray(cmd.privacy_warnings) ? (cmd.privacy_warnings as unknown[]).map(String) : [];
+  const ratio = typeof cmd.mean_retained_feature_ratio === "number" ? cmd.mean_retained_feature_ratio : null;
+  const maskedFrac = typeof cmd.mean_sfm_masked_fraction === "number" ? cmd.mean_sfm_masked_fraction : null;
+
+  return {
+    severity: "warning",
+    headline: `Privacy masking materially degraded ${degradedCount} frame(s) used for SfM.`,
+    degradedFrameCount: degradedCount,
+    degradedFrameNames: degradedFrames,
+    meanRetainedFeatureRatio: ratio,
+    meanSfmMaskedFraction: maskedFrac,
+    warnings,
+    action:
+      "Review PRIVACY_REPORT before relying on sparse pose coverage in affected areas. Rectangular doors, windows, or wall panels may have been masked by the quadrilateral screen/document detector.",
+  };
 }
 
 export interface PipelineProgress {

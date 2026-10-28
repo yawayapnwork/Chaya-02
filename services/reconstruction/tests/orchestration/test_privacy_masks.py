@@ -233,3 +233,63 @@ def test_detections_and_geometry_do_not_come_from_masked_pixels():
     visible = np.array([True, True, False])
     assert visible_through_valid(px, visible, valid).tolist() == [False, True, False]
     assert visible_through_valid(px, visible, None) is visible
+
+
+def _wall_with_rectangular_panel(panel_box: tuple[int, int, int, int], background_textured: bool, seed: int = 0) -> np.ndarray:
+    """A 240x320 frame with a high-contrast rectangular panel (like a door, sign, or screen) that ScreenDocumentDetector flags."""
+    h, w = 240, 320
+    if background_textured:
+        img = _textured(h, w, seed=seed)
+    else:
+        img = np.full((h, w, 3), 235, dtype=np.uint8)
+    x0, y0, x1, y1 = panel_box
+    # Draw a bright rectangular panel with a strong dark border so Canny + approxPolyDP finds a 4-vertex contour
+    cv2.rectangle(img, (x0, y0), (x1, y1), (250, 250, 250), thickness=-1)
+    cv2.rectangle(img, (x0, y0), (x1, y1), (10, 10, 10), thickness=3)
+    # Put rich high-frequency checkerboard/corner texture inside the panel
+    panel_Tex = _textured(y1 - y0 - 12, x1 - x0 - 12, seed=seed + 100)
+    img[y0 + 6:y1 - 6, x0 + 6:x1 - 6] = panel_Tex
+    return img
+
+
+def test_privacy_report_records_sfm_feature_retention_and_warns_when_rectangular_surfaces_degrade_frames(harness, tmp_path):
+    frames = [
+        _textured(240, 320, seed=1),
+        _textured(240, 320, seed=2),
+        _textured(240, 320, seed=3),
+        # 4th frame: plain wall where all texture is on a rectangular panel/door that gets masked by ScreenDocumentDetector
+        _wall_with_rectangular_panel((40, 30, 280, 210), background_textured=False, seed=4),
+    ]
+    selected = frame_archive(harness, tmp_path, frames, "FRAME_ARCHIVE_SELECTED")
+    report = harness.run(harness.order("PRIVACY_PREPROCESS", [selected]))
+    assert report["status"] == "SUCCEEDED", report["errorMessage"]
+    cfg = report["command"]["config"]
+    assert cfg["privacy_degraded_frames"] == 1
+    assert cfg["privacy_review_required"] is True
+    assert len(cfg["privacy_warnings"]) >= 1
+
+    doc = json.loads(download(harness, artifact(report, "PRIVACY_REPORT")["key"], tmp_path).read_text())
+    impact = doc["sfm_impact"]
+    assert impact["usable_frames_before_mask"] == 4
+    assert impact["usable_frames_after_mask"] == 3
+    assert impact["degraded_frame_count"] == 1
+    assert impact["review_required"] is True
+    assert any("rectangular" in w.lower() or "degraded" in w.lower() for w in impact["warnings"])
+    degraded_entries = [e for e in doc["per_frame"] if e["sfm_degraded"]]
+    assert len(degraded_entries) == 1
+    assert degraded_entries[0]["retained_feature_ratio"] < 0.5
+
+
+def test_privacy_preprocess_fails_closed_when_masking_destroys_sfm_keypoint_coverage(harness, tmp_path):
+    frames = [
+        _wall_with_rectangular_panel((35, 25, 285, 215), background_textured=False, seed=10 + i)
+        for i in range(4)
+    ]
+    selected = frame_archive(harness, tmp_path, frames, "FRAME_ARCHIVE_SELECTED")
+    report = harness.run(harness.order("PRIVACY_PREPROCESS", [selected]))
+    assert report["status"] == "FAILED"
+    assert report["errorCode"] == "PRIVACY_SFM_DEGRADED"
+    assert report["errorDetails"]["usable_frames_before_mask"] == 4
+    assert report["errorDetails"]["usable_frames_after_mask"] == 0
+    assert report["errorDetails"]["review_required"] is True
+    assert report["artifacts"] == []

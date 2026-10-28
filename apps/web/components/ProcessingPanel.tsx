@@ -8,6 +8,7 @@ import {
   explainStageError,
   failureKind,
   pipelineProgress,
+  privacyImpactNotice,
   retryBlockedText,
   shortSha,
   stageAttempt,
@@ -88,6 +89,7 @@ export default function ProcessingPanel({
   const kind = failureKind(run);
   const blocked = retryBlockedText(run);
   const stale = staleLeaseMessage(status.activeJobs ?? []);
+  const privacyNotice = privacyImpactNotice(run.stages);
   const artifacts = availableArtifacts(run.stages);
   const since = status.progress?.activeStageSince;
 
@@ -140,6 +142,30 @@ export default function ProcessingPanel({
       </div>
 
       {stale && <p role="alert" className="rounded border border-amber-400 bg-amber-50 p-2 text-sm text-amber-900" data-testid="stale-lease">{stale}</p>}
+
+      {privacyNotice && (
+        <div
+          role="alert"
+          data-testid="privacy-degradation-warning"
+          data-severity={privacyNotice.severity}
+          className={`space-y-1 rounded border p-3 text-sm ${TONE[privacyNotice.severity]}`}
+        >
+          <p className="font-medium">{privacyNotice.headline}</p>
+          {privacyNotice.warnings.map((w, i) => (
+            <p key={i} className="text-xs">{w}</p>
+          ))}
+          {privacyNotice.meanRetainedFeatureRatio !== null && (
+            <p className="text-xs">
+              Retained SfM keypoint ratio: {(privacyNotice.meanRetainedFeatureRatio * 100).toFixed(0)}%
+              {privacyNotice.meanSfmMaskedFraction !== null &&
+                ` · SfM-masked frame area: ${(privacyNotice.meanSfmMaskedFraction * 100).toFixed(1)}%`}
+              {privacyNotice.degradedFrameNames.length > 0 &&
+                ` · Affected frames: ${privacyNotice.degradedFrameNames.slice(0, 5).join(", ")}${privacyNotice.degradedFrameNames.length > 5 ? "…" : ""}`}
+            </p>
+          )}
+          <p className="text-xs font-medium">{privacyNotice.action}</p>
+        </div>
+      )}
 
       <div className="flex gap-3">
         {summary.canRetry && (

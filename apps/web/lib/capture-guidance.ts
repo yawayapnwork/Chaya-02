@@ -29,6 +29,12 @@ export interface LocalState {
   /** Manual mode: whether the device heading has been calibrated to the plan's +x axis. */
   headingCalibrated: boolean;
   nowMs: number;
+  /** Optional upload-queue counts for the active session, surfacing upload failures directly in operator guidance. */
+  uploadFailedCount?: number;
+  uploadRejectedCount?: number;
+  uploadQuarantinedCount?: number;
+  uploadRetryingCount?: number;
+  uploadLastError?: string | null;
 }
 
 const WARNING_TEXT: Record<string, { title: string; detail: string }> = {
@@ -76,6 +82,33 @@ const AT_WAYPOINT_METERS = 0.5;
 export function guidance(status: HudStatus | null, local: LocalState): Instruction[] {
   const out: Instruction[] = [];
   const push = (code: string, severity: GuidanceSeverity, title: string, detail: string) => out.push({ code, severity, title, detail });
+
+  // ---- upload health -----------------------------------------------------------------------------------------------
+  const failedUploads = (local.uploadFailedCount ?? 0) + (local.uploadRejectedCount ?? 0);
+  if (failedUploads > 0) {
+    push(
+      "UPLOAD_FAILURE",
+      "BLOCKING",
+      `${failedUploads} media upload(s) failed or were rejected`,
+      `${local.uploadLastError ? `${local.uploadLastError} ` : ""}Review the upload queue before leaving the venue: retry failed files or replace rejected media.`,
+    );
+  }
+  if ((local.uploadQuarantinedCount ?? 0) > 0) {
+    push(
+      "UPLOAD_QUARANTINED",
+      "WARNING",
+      `${local.uploadQuarantinedCount} file(s) held in quarantine`,
+      "The malware/integrity scanner could not verify the file yet. Use \"Retry validation\" in the upload queue before finishing.",
+    );
+  }
+  if ((local.uploadRetryingCount ?? 0) > 0) {
+    push(
+      "UPLOAD_RETRYING",
+      "WARNING",
+      `${local.uploadRetryingCount} upload(s) waiting to retry`,
+      "Keep the browser tab open or stay on a stable connection so queued parts finish uploading.",
+    );
+  }
 
   // ---- the device itself -------------------------------------------------------------------------------------------
   if (local.mode === "AR" && local.arSupport === "UNSUPPORTED") {
@@ -154,6 +187,14 @@ export function guidance(status: HudStatus | null, local: LocalState): Instructi
 
   // ---- reconnaissance and bounds -----------------------------------------------------------------------------------
   const recon = status.reconnaissance;
+  if (recon && (recon.segments > 1 || recon.trackingLosses > 0) && !out.some((i) => i.code === "TRACKING_LOST")) {
+    push(
+      "MISSING_OVERLAP_GAPS",
+      "WARNING",
+      "Trajectory has tracking breaks",
+      `The path is split across ${recon.segments} segment(s) (${recon.trackingLosses} tracking loss(es), ${recon.lostSeconds.toFixed(1)} s lost). Re-walk across the break with steady framing so neighbouring views overlap for SfM.`,
+    );
+  }
   if (!status.sceneSet) {
     if (recon && recon.verdict !== "READY") {
       for (const i of recon.issues.filter((i) => i.severity === "BLOCKING")) {
@@ -222,6 +263,15 @@ export function guidance(status: HudStatus | null, local: LocalState): Instructi
   if (unreachable > 0) {
     push("UNREACHABLE_WAYPOINTS", "WARNING", `${unreachable} waypoint(s) can no longer be reached`,
       "The room bounds changed since the plan was made. Re-plan to get a route that fits them.");
+  }
+  if (!next && status.completion !== "COVERAGE_TARGET_REACHED" && status.uncoveredZones.length > 0) {
+    const gap = status.uncoveredZones[0];
+    push(
+      "INCOMPLETE_ROOM_COVERAGE",
+      "ACTION",
+      `Incomplete room coverage (${status.coveragePercent?.toFixed(0) ?? 0}%)`,
+      `${status.uncoveredZones.length} uncovered zone(s) remain (largest ${gap.areaM2.toFixed(1)} m² near (${gap.centroidX.toFixed(1)}, ${gap.centroidY.toFixed(1)})). Walk towards the gap or tap "Re-plan scan path".`,
+    );
   }
   return sortInstructions(out);
 }

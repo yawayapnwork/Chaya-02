@@ -126,3 +126,28 @@ test("manual marks without a heading calibration say so instead of inventing a f
   assert.ok(codes(g).includes("HEADING_UNCALIBRATED"));
   assert.match(g.find((i) => i.code === "GO_TO_WAYPOINT")!.detail, /towards \(2\.0, 5\.0\) on the map/);
 });
+
+test("actionable guidance for upload failure, quarantine, retry backpressure, missing overlap and incomplete coverage", () => {
+  const uploadProblem = guidance(status({
+    qualityFlags: ["LOW_FEATURE_COUNT", "SPACING_TOO_FAR"],
+    reconnaissance: recon({ segments: 3, trackingLosses: 2, lostSeconds: 4.5 }),
+    nextWaypoint: null,
+    uncoveredZones: [{ centroidX: 6.2, centroidY: 1.8, areaM2: 8.4, reason: "NOT_OBSERVED" }],
+  }), local({
+    uploadFailedCount: 1,
+    uploadQuarantinedCount: 1,
+    uploadRetryingCount: 2,
+    uploadLastError: "Connection reset during part 3.",
+  }));
+
+  assert.equal(uploadProblem[0].code, "UPLOAD_FAILURE");
+  assert.equal(uploadProblem[0].severity, "BLOCKING");
+  assert.match(uploadProblem[0].detail, /Connection reset during part 3/);
+  assert.ok(codes(uploadProblem).includes("UPLOAD_QUARANTINED"));
+  assert.ok(codes(uploadProblem).includes("UPLOAD_RETRYING"));
+  assert.ok(codes(uploadProblem).includes("LOW_FEATURE_COUNT"));
+  assert.ok(codes(uploadProblem).includes("SPACING_TOO_FAR"));
+  assert.ok(codes(uploadProblem).includes("MISSING_OVERLAP_GAPS"));
+  assert.ok(codes(uploadProblem).includes("INCOMPLETE_ROOM_COVERAGE"));
+  assert.match(uploadProblem.find((i) => i.code === "INCOMPLETE_ROOM_COVERAGE")!.detail, /near \(6\.2, 1\.8\)/);
+});
