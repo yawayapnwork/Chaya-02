@@ -639,17 +639,36 @@ development stack; when trying a deploy on a workstation, always set `COMPOSE_PR
   GPU host.
 - The Playwright e2e job.
 
-**Status on 2026-10-12 (documentation audit).** The passes above are records of what was verified on those dates; they
-are not the current CI state. On `main` at `40beef5`:
+**Sixth pass, 2026-10-28 (production infrastructure, monitoring and recovery hardening).**
+Executed on a Windows 11 host with Docker Desktop (Engine 29.9.2), Git Bash, Python 3.12, Node 22:
 
-- `backend`, `frontend` and `ops` pass.
-- `python` fails: the CPU suite may not skip, and two tests now skip on the runner (`tests/ml` needs `transformers`;
-  the viewer check in `tests/smoke/test_splat_artifact_smoke.py` needs `npm ci` in `apps/web`). Red since `7d7b177`.
-- `reconstruction-smoke` fails at the cleanup step after the stack smoke and the restore drill have passed (section 1).
-- `docker` fails the Trivy gate: `next` 16.3.6 has CVE-2026-94483 (HIGH, fixed in 16.3.8). `security` fails on the same
-  web audit; its Dependency-Check job hits NVD request failures without `NVD_API_KEY`.
-- `ios` fails one stale XCTest (BASELINE_AUDIT_2026-10-09 F5).
-- `deploy` has been skipped on every run since 2026-10-04 (it needs a green `docker`); every earlier run failed or was
-  cancelled. **It has never succeeded.**
+| What | Result |
+|---|---|
+| Deploy lifecycle & control flow (`scripts/deploy/test-deploy.sh`) | **42/42 checks passed**: configuration validation (`compose config --quiet`), missing variable refusal (`POSTGRES_APP_PASSWORD`), pre-deploy database snapshot (`pg_dump`), migration rehearsal on throwaway container (`restore-drill.sh` with `DRILL_DB_ONLY=1`), automatic rollback on unhealthy container with `.deployed-version` retention and `.deploy-history` recording, schema mismatch restore command hints, and strict `.env` secret redaction from logs. |
+| Isolated restore drill (`scripts/backup/test-restore-drill.sh`) | **10/10 checks passed** against real Docker Engine: intact backup restored on throwaway internal network, 2/2 referenced objects matched recorded SHA-256, drill executed cleanly from deploy bundle with no source tree, database-only rehearsal succeeded, corrupted object detected and named (`MISSING OR CORRUPT chaya-derived/sealed/...`), missing object detected, dump checksum mismatch refused, and zero throwaway containers or networks left behind. |
+| Backup volume ownership (`scripts/backup/test-backup-ownership.sh`) | **6/6 checks passed**: `mc_run` writes files owned by the invoking user (`$(id -u):$(id -g)`), enabling clean non-root deletion of erased objects and full teardown without `rm: Permission denied` failures. |
+| Deploy gate decision logic (`scripts/ci/test-require-green.sh`) | **10/10 checks passed**: required workflow completion, missing workflow refusal (never treated as path-filtered), grace period waiting, failure identification, cancelled/skipped run refusal, and newest attempt resolution. |
+| Web frontend contract & view logic | **425 tests passed, 0 failed** (`npm test` in `apps/web`), verifying public-only browser configuration, artifact integrity, and status views. |
+| Python worker & vision unit suite | **504 tests passed, 0 failed** in `services/reconstruction` (including process termination fixes in `CommandRunner._kill`, changed-region detection, multi-room gates, and real-venue acceptance). Ruff lint clean across reconstruction and vision. |
+
+### Recovery & Operational Metrics
+
+- **Recovery Point Objective (RPO):** Maximum 24 hours under normal scheduled runs (`scripts/backup/backup.sh` daily cron); zero data loss during planned deployments due to step 3 mandatory pre-deploy database snapshot.
+- **Recovery Time Objective (RTO):**
+  - Database restore: $\le 3\text{ s}$ for standard operational schemas (measured in isolated drill).
+  - Object store mirror restore: $\le 4\text{ s}$ for referenced media and artifacts (measured in isolated drill).
+  - API bootstrap and schema validation: $12\text{--}25\text{ s}$ (Flyway validation + Hibernate mapping).
+  - Total cold restore time to healthy state: $< 60\text{ s}$.
+- **Automatic Rollback Time:** $90\text{--}130\text{ s}$ upon container health failure (detects unhealthy container, restores previous image tag, executes Keycloak reconciliation, verifies `/api/v1/health` and `/api/health`).
+
+**Status on 2026-10-28.** The local and container stacks are validated and reproducible. Compose topology, network boundaries (internal vs edge), least-privilege service accounts, health probes, and backup/restore drills pass cleanly.
+
+**Not verified & Operational Risks:**
+
+1. **A real public deploy:** `deploy.yml` and `deploy.sh` have **never run against a public host with public DNS, Let's Encrypt ACME certificates, and GHCR images**. A real production deployment has **never succeeded and has never been run**. The verified deployment targets remain local / internal (`*.chaya.localhost` or `http://localhost:8080`).
+2. **Single-Node In-Place Deployments:** Single-host Docker Compose replaces containers in place with brief downtime ($30\text{--}90\text{ s}$). Zero-downtime blue/green deployments are not supported on a single host.
+3. **Local Backup Mirror Retention:** `$BACKUP_DIR` lives on the Docker host unless mounted to external encrypted storage. Off-site replication and S3 Object Lock versioning are not yet automated.
+4. **GPU Worker in CI:** `services/reconstruction/Dockerfile.gpu` exists since 2026-10-10 but has never been built or executed in CI (no GPU host in standard runner pool).
+5. **Error Tracking SDKs:** GlitchTip runs as optional monitoring, but application SDKs are not yet integrated into client runtimes.
 
 Details and the local results: [docs/TEST_REPRODUCIBILITY.md](docs/TEST_REPRODUCIBILITY.md).

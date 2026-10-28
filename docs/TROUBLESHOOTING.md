@@ -81,3 +81,30 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" https://<api>/api/v1/venues/<v
 
 Or "Retry" in `/capture` or `/ops`. A retry re-queues only the failed stage (attempt n+1, bounded by `max_retries`,
 default 3); earlier successful stages are not repeated. The failed attempt's record stays visible.
+
+## 6. Deployment, infrastructure and backup failures
+
+### Deploy script failures (`deploy.sh`)
+
+| Symptom | Cause | Remedy |
+|---|---|---|
+| Step 1 exits non-zero: missing variable | A required variable in `/srv/chaya/.env` is missing or empty | Check `/srv/chaya/.env` against `infra/deploy/.env.production.example`. Secrets are never printed. |
+| Step 4 stops: `rehearsal-failed` | Flyway migration or Hibernate mapping failed on a restored copy of production data | The live containers were untouched. Review `.deploy-logs/<time>-<version>.log`. Fix the migration in the release, or set `DEPLOY_SKIP_REHEARSAL=1` only for emergency non-schema rollouts. |
+| Step 6/8 fails: automatic rollback triggered | Web, API, or worker failed health checks (`/actuator/health/readiness` or `/api/health`) | Rollback automatically restored the previous image tag in `.deployed-version`. Check `.deploy-logs/` for the unhealthy container's log. If the schema migrated before failure, restore the pre-deploy dump with `scripts/backup/restore.sh <dump>`. |
+| `keycloak-configure.sh` exits 1: `Invalid user credentials` | The bootstrap admin was deleted and `CHAYA_DEPLOY_CLIENT_SECRET` is misconfigured | Ensure `CHAYA_DEPLOY_CLIENT_SECRET` in `.env` matches client `chaya-deploy` in Keycloak realm `chaya`. To recover bootstrap admin: run `kc.sh bootstrap-admin user` in the Keycloak container. |
+
+### Upload and malware scanner degradation
+
+| Symptom | Cause | Remedy |
+|---|---|---|
+| Upload status is `QUARANTINED`, code `SCANNER_UNAVAILABLE` | ClamAV scanner container is stopped, initializing signatures, or disabled (`CLAMAV_ENABLED=false`) | Uploads are quarantined to prevent unvalidated file intake. Completing capture responds `409 UPLOADS_NOT_SETTLED`. Check ClamAV health (`clamdcheck.sh`). Once scanner is UP, complete upload to trigger automatic re-validation. |
+| Upload status is `REJECTED`, code `MALWARE_DETECTED` | ClamAV detected infected or malicious payload (e.g. EICAR test string) | Object is immediately deleted from S3 raw bucket. Audit event `media.reject` is logged. Client must upload clean source media. |
+
+### Restore drill and backup failures (`restore-drill.sh`)
+
+| Symptom | Cause | Remedy |
+|---|---|---|
+| `checksum mismatch` | Dump file does not match `.dump.sha256` | Backup file is corrupted or was edited. Do not restore. Use the previous intact daily dump. |
+| `MISSING OR CORRUPT <key>` | Database references an accepted medium or non-PII artifact not present in MinIO mirror or with mismatched SHA-256 | Verify that the MinIO mirror completed without errors. Ensure the read-only backup account has permission across all buckets. |
+| `rm: Permission denied` on backup cleanup | Mirror files were created by root rather than the backup runner | `mc_run` in `scripts/backup/common.sh` maps container UID/GID to the invoking user (`$(id -u):$(id -g)`). Ensure backup scripts run as the designated host deploy user. |
+
