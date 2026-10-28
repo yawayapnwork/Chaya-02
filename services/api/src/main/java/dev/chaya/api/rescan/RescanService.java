@@ -265,6 +265,20 @@ public class RescanService {
         return listVersions(actor, venueId, floorId).stream().filter(v -> v.id().equals(versionId)).findFirst().orElseThrow();
     }
 
+    /**
+     * Rolls back a floor to a previous finalized scan version.
+     */
+    @Transactional
+    public RescanDtos.ScanVersionView rollback(Actor actor, UUID venueId, UUID floorId, UUID targetVersionId, String reason) {
+        guard.requireVenue(actor, venueId);
+        requireFloor(venueId, floorId);
+        versions.rollback(actor, venueId, floorId, targetVersionId, reason);
+        return listVersions(actor, venueId, floorId).stream()
+            .filter(v -> v.id().equals(targetVersionId))
+            .findFirst()
+            .orElseThrow();
+    }
+
     // ---- validation -------------------------------------------------------------------------------
 
     private void requireFloor(UUID venueId, UUID floorId) {

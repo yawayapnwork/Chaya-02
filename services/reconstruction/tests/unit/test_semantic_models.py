@@ -25,7 +25,7 @@ from chaya_worker.evaluation import (
     retrieval_metrics,
     top1_accuracy,
 )
-from chaya_worker.grounding_dino import phrase_token_spans, prompt_phrases, resolve_prompt_phrase, post_process
+from chaya_worker.grounding_dino import phrase_token_spans, post_process, prompt_phrases, resolve_prompt_phrase
 from chaya_worker.model_provenance import (
     CARD_SCHEMA,
     MODEL_CARD,

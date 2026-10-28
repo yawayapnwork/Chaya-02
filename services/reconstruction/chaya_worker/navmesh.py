@@ -933,14 +933,18 @@ def room_connectivity(graphs: dict[str, dict[str, list]], footprints: dict[str, 
         if a is None or b is None or room_of[a] is None or room_of[b] is None or room_of[a] == room_of[b]:
             continue
         key = tuple(sorted((room_of[a], room_of[b])))
-        c = connections.setdefault(key, {"rooms": list(key), "edges": 0, "max_edge_clearance_m": 0.0, "step_free": False,
-                                         "portal_midpoint": None})
+        c = connections.setdefault(key, {"portal_id": f"portal:{key[0]}-{key[1]}",
+                                         "rooms": list(key), "edges": 0, "max_edge_clearance_m": 0.0,
+                                         "clear_width_m": 0.0, "step_free": False,
+                                         "portal": None, "portal_midpoint": None})
         c["edges"] += 1
         c["step_free"] = c["step_free"] or bool(e.get("step_free"))
         clearance = float(e.get("min_clearance_m") or 0.0)
         if clearance >= c["max_edge_clearance_m"]:
             c["max_edge_clearance_m"] = clearance
+            c["clear_width_m"] = clearance
             portal = e.get("portal")
+            c["portal"] = portal
             c["portal_midpoint"] = np.mean(np.array(portal, dtype=np.float64), axis=0).round(3).tolist() if portal else None
 
     widths = []

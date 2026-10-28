@@ -20,6 +20,9 @@ public final class RescanDtos {
      * changed region to recapture. */
     public record RescanRequest(@NotNull UUID parentVersionId, @NotNull @Valid RegionGeometry region, Map<String, Object> device) {}
 
+    /** Optional reason supplied when rolling back a floor to a previous finalized scan version. */
+    public record RollbackRequest(String reason) {}
+
     /** What the operator gets back to drive the rest of the flow: upload media to {@code captureId}
      * exactly like any other capture (docs/rescan.md), then start processing as usual -- the control
      * plane recognizes this capture as a re-scan from its recorded parent version and region.

@@ -2,6 +2,7 @@ package dev.chaya.api.rescan;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.chaya.api.audit.AuditService;
 import dev.chaya.api.frame.CoordinateFrameService;
 import dev.chaya.api.frame.FrameDtos.FrameView;
 import dev.chaya.api.security.Actor;
@@ -50,12 +51,15 @@ public class ScanVersionService {
     private final TenantGuard guard;
     private final CoordinateFrameService frames;
     private final ObjectMapper mapper;
+    private final AuditService audit;
 
-    public ScanVersionService(JdbcClient jdbc, TenantGuard guard, CoordinateFrameService frames, ObjectMapper mapper) {
+    public ScanVersionService(JdbcClient jdbc, TenantGuard guard, CoordinateFrameService frames, ObjectMapper mapper,
+                              AuditService audit) {
         this.jdbc = jdbc;
         this.guard = guard;
         this.frames = frames;
         this.mapper = mapper;
+        this.audit = audit;
     }
 
     // ---- reading ----------------------------------------------------------------------------------------------------
@@ -115,6 +119,7 @@ public class ScanVersionService {
     public static final String VERSION_MISMATCH = "VERSION_MISMATCH";
     public static final String VERSION_SUPERSEDED = "VERSION_SUPERSEDED";
     public static final String PARENT_NOT_CURRENT = "PARENT_NOT_CURRENT";
+    public static final String VERSION_ALREADY_CURRENT = "VERSION_ALREADY_CURRENT";
 
     // ---- numbering --------------------------------------------------------------------------------------------------
 
@@ -265,6 +270,79 @@ public class ScanVersionService {
 
     /** Runs the V28 commit-time checks now, so a promotion that would leave a floor inconsistent fails here -- inside the
      * caller's savepoint -- rather than at commit, where it would take the whole transaction with it. */
+    /**
+     * Rolls back a floor to a previously published FINALIZED version (docs/rescan.md, "Publication").
+     * Unlike promote(), which enforces monotonic version ordering to prevent stale overwrites during normal runs,
+     * rollback allows an operator to intentionally revert to an earlier finalized version number.
+     * It retires active graphs of the floor, activates the target version's navigation graphs,
+     * adopts the target version's coordinate frame for the floor, and updates floor.current_scan_version_id.
+     * The database commit-time checks verify publication consistency.
+     */
+    public Promotion rollback(Actor actor, UUID venueId, UUID floorId, UUID targetVersionId, String reason) {
+        guard.requireVenue(actor, venueId);
+        record Version(UUID floorId, UUID parent, UUID runId, String status, UUID frameId, int number) {}
+        Version v = jdbc.sql("SELECT floor_id, parent_version_id, pipeline_run_id, status, coordinate_frame_id, version_number "
+                + "FROM scan_version WHERE id = :v AND venue_id = :venue AND organization_id = :org FOR UPDATE")
+            .param("v", targetVersionId).param("venue", venueId).param("org", actor.organizationId())
+            .query((rs, i) -> new Version(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class), rs.getObject(3, UUID.class),
+                rs.getString(4), rs.getObject(5, UUID.class), rs.getInt(6)))
+            .optional().orElseThrow(() -> new NotFoundException("scan version not found"));
+
+        if (!floorId.equals(v.floorId())) {
+            throw new ApiException(HttpStatus.CONFLICT, "VERSION_WRONG_FLOOR",
+                "scan version " + targetVersionId + " belongs to a different floor than " + floorId);
+        }
+        if (!"FINALIZED".equals(v.status())) {
+            throw new ApiException(HttpStatus.CONFLICT, VERSION_NOT_FINALIZED,
+                "scan version " + targetVersionId + " is " + v.status() + "; only a FINALIZED version can be rolled back to");
+        }
+        if (roomOf(targetVersionId).isPresent()) {
+            throw new ApiException(HttpStatus.CONFLICT, ROOM_VERSION_NOT_PUBLISHABLE,
+                "scan version " + targetVersionId + " reconstructs one room; a floor publishes a reconstruction of the whole floor");
+        }
+        if (v.frameId() == null) {
+            throw new ApiException(HttpStatus.CONFLICT, "VERSION_INCOMPLETE",
+                "scan version " + targetVersionId + " has no recorded coordinate frame and cannot be rolled back to");
+        }
+
+        UUID previous = jdbc.sql("SELECT current_scan_version_id FROM floor WHERE id = :f FOR NO KEY UPDATE").param("f", v.floorId())
+            .query((rs, i) -> Optional.ofNullable(rs.getObject(1, UUID.class))).single().orElse(null);
+
+        if (targetVersionId.equals(previous)) {
+            throw new ApiException(HttpStatus.CONFLICT, VERSION_ALREADY_CURRENT,
+                "scan version " + targetVersionId + " is already the current published version of floor " + floorId);
+        }
+
+        UUID frameRun = jdbc.sql("SELECT source_run_id FROM coordinate_frame WHERE id = :f").param("f", v.frameId())
+            .query(UUID.class).single();
+
+        int retired = jdbc.sql("UPDATE navigation_graph SET status = 'RETIRED' WHERE floor_id = :f AND status = 'ACTIVE'")
+            .param("f", v.floorId()).update();
+        int activated = jdbc.sql("""
+                UPDATE navigation_graph SET status = 'ACTIVE'
+                 WHERE id IN (SELECT DISTINCT ON (profile) id FROM navigation_graph
+                               WHERE scan_version_id = :sv AND floor_id = :f AND coordinate_frame_id = :frame
+                               ORDER BY profile, created_at DESC)
+                """).param("sv", targetVersionId).param("f", v.floorId()).param("frame", v.frameId()).update();
+
+        FrameView floorFrame = frames.activeForRun(frameRun).filter(FrameView::canonical)
+            .orElseGet(() -> frames.load(v.frameId()).orElseThrow());
+        Map<String, Object> frameChange = frames.adoptForFloor(v.floorId(), floorFrame);
+        jdbc.sql("UPDATE floor SET current_scan_version_id = :sv WHERE id = :f").param("sv", targetVersionId).param("f", v.floorId()).update();
+        checkPublicationNow();
+        if (audit != null) {
+            audit.success(actor, venueId, "scan_version.rollback", "scan_version", targetVersionId, Map.of(
+                "floorId", floorId.toString(),
+                "targetVersionId", targetVersionId.toString(),
+                "previousVersionId", previous == null ? "" : previous.toString(),
+                "coordinateFrameId", String.valueOf(v.frameId()),
+                "navigationGraphsActivated", activated,
+                "navigationGraphsRetired", retired,
+                "reason", reason == null ? "" : reason));
+        }
+        return new Promotion(targetVersionId, v.floorId(), previous, v.frameId(), activated, retired, 0, 0, frameChange);
+    }
+
     public void checkPublicationNow() {
         jdbc.sql("SET CONSTRAINTS " + PUBLICATION_CONSTRAINTS + " IMMEDIATE").update();
         deferPublicationChecks();

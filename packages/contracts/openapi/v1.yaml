@@ -6200,6 +6200,76 @@ paths:
       - ADMIN
       - VENUE_MANAGER
       - OPERATOR
+  /api/v1/venues/{venueId}/floors/{floorId}/scan-versions/{versionId}/rollback:
+    post:
+      operationId: rescanRollback
+      parameters:
+      - in: path
+        name: venueId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: floorId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: versionId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RollbackRequest"
+        required: false
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScanVersionView"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Malformed request"
+        "401":
+          description: "Missing, invalid or expired credentials"
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Forbidden"
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Scan version or floor not found"
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "VERSION_NOT_FINALIZED, ROOM_VERSION_NOT_PUBLISHABLE, VERSION_ALREADY_CURRENT, VERSION_INCOMPLETE"
+      security:
+      - bearerAuth: []
+      summary: Roll back the floor to a previous finalized scan version
+      tags:
+      - rescan-controller
+      x-chaya-roles:
+      - ADMIN
+      - VENUE_MANAGER
+      - OPERATOR
   /api/v1/venues/{venueId}/floors/{floorId}/stitches:
     get:
       operationId: stitchListStitches
@@ -12160,6 +12230,11 @@ components:
         scanVersionId:
           type: string
           format: uuid
+    RollbackRequest:
+      type: object
+      properties:
+        reason:
+          type: string
     RescanRequest:
       type: object
       properties:

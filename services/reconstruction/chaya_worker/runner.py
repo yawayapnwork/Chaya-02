@@ -75,12 +75,13 @@ class CommandRunner:
     @staticmethod
     def _kill(proc: subprocess.Popen) -> None:
         try:
+            proc.kill()
             if os.name == "nt":
                 subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
             else:
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
         except (OSError, ProcessLookupError):
-            proc.kill()
+            pass
 
     def commands(self) -> list[list[str]]:
         return [c.argv for c in self.history]

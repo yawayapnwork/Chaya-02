@@ -2,6 +2,7 @@ package dev.chaya.api.rescan;
 
 import dev.chaya.api.rescan.RescanDtos.RescanInitiated;
 import dev.chaya.api.rescan.RescanDtos.RescanRequest;
+import dev.chaya.api.rescan.RescanDtos.RollbackRequest;
 import dev.chaya.api.rescan.RescanDtos.ScanVersionView;
 import dev.chaya.api.security.ActorAuthentication;
 import dev.chaya.api.web.ProblemResponse;
@@ -63,5 +64,16 @@ public class RescanController {
     @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR')")
     public ScanVersionView finalizeCurrent(@PathVariable UUID venueId, @PathVariable UUID floorId) {
         return rescan.finalizeCurrent(ActorAuthentication.currentActor(), venueId, floorId);
+    }
+
+    @Operation(summary = "Roll back the floor to a previous finalized scan version")
+    @ProblemResponse(status = 404, description = "Scan version or floor not found")
+    @ProblemResponse(status = 409, description = "VERSION_NOT_FINALIZED, ROOM_VERSION_NOT_PUBLISHABLE, VERSION_ALREADY_CURRENT, VERSION_INCOMPLETE")
+    @PostMapping("/scan-versions/{versionId}/rollback")
+    @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER','OPERATOR')")
+    public ScanVersionView rollback(@PathVariable UUID venueId, @PathVariable UUID floorId,
+                                    @PathVariable UUID versionId, @RequestBody(required = false) RollbackRequest body) {
+        String reason = body != null ? body.reason() : null;
+        return rescan.rollback(ActorAuthentication.currentActor(), venueId, floorId, versionId, reason);
     }
 }
