@@ -44,7 +44,6 @@ import {
   type LocalSession,
   type QueueApi,
   type QueueStore,
-  type ServerMedia,
 } from "./capture-queue.ts";
 import { assessFrame, type Frame, type QualityContext } from "./capture-quality.ts";
 import { type LocalState, guidance } from "./capture-guidance.ts";
@@ -79,7 +78,6 @@ import { classifyViewerError } from "./viewer-errors.ts";
 import { detectArEnvironment, isAppleMobile } from "./webxr-support.ts";
 import type { MarkerObservation } from "./ar-marker-tracking.ts";
 import {
-  type ArSessionState,
   type Localization,
   MAX_LIMITED_MS,
   canAdvanceRoute,
@@ -87,7 +85,7 @@ import {
   reduceArSession,
   routeShown,
 } from "./ar-relocalization.ts";
-import { formatAge, formatDuration, formatMeasured, formatMoney, formatPercent } from "./ops-view.ts";
+import { formatAge, formatMeasured, formatMoney, formatPercent } from "./ops-view.ts";
 
 // =================================================================================================
 // JOURNEY A: FIRST-TIME OPERATOR
@@ -309,7 +307,7 @@ test("Journey B1: Persistent run ID & real stage progress without simulated time
   const run = makeRun("RUNNING", 4);
   assert.equal(run.id, "run-b-1");
 
-  const progress = pipelineProgress(run as any);
+  const progress = pipelineProgress(run as unknown as RunLike);
   assert.equal(progress.completed, 4);
   assert.equal(progress.total, 12);
   assert.equal(progress.activeStage, "POSE_ESTIMATION");
@@ -318,7 +316,7 @@ test("Journey B1: Persistent run ID & real stage progress without simulated time
 
 test("Journey B2: Worker unavailable detects stale lease and explains error", () => {
   const run = makeRun("FAILED", 4);
-  const kind = failureKind(run as any);
+  const kind = failureKind(run as unknown as RunLike);
   assert.equal(kind, "INTERRUPTED");
 
   const stale = staleLeaseMessage([

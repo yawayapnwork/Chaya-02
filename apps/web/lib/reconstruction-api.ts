@@ -2,7 +2,6 @@
 
 import { ApiError, api } from "./capture-api";
 import {
-  type ArtifactFormat,
   type ArtifactManifest,
   type ArtifactRef,
   ArtifactIntegrityError,
