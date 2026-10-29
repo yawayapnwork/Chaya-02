@@ -56,8 +56,8 @@
       <!-- 3.2.2+: fixes the critical XXE advisory CVE-2025-66516 affecting tika-core 1.13-3.2.1. Only magic-byte
            detection is used here (no PDF/XML parsing), but the vulnerable range is not kept.
            3.3.2+: fixes CVE-2026-66755 (CVSS 7.5) in tika-core 3.2.2, which failed the security workflow's
-           Dependency-Check (run 39817751013). 3.3.3 is the newest 3.x patch release. -->
-      <version>3.3.3</version>
+           Dependency-Check (run 39817751013). 4.2.0 is the newest 3.x patch release. -->
+      <version>4.2.0</version>
     </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
