@@ -55,7 +55,7 @@ import {
   privacyImpactNotice,
   staleLeaseMessage,
 } from "./pipeline-view.ts";
-import { type RunLike, workflowStatus } from "./workflow-status.ts";
+import { workflowStatus } from "./workflow-status.ts";
 import {
   canNavigate,
   distanceNote,
@@ -270,7 +270,7 @@ const STAGES = [
   "PLANE_FITTING", "ARTIFACT_GENERATION", "SEMANTIC_INDEXING", "NAVIGATION_BAKING",
 ];
 
-function makeRun(status: "RUNNING" | "SUCCEEDED" | "FAILED", upTo: number, quality: "FINAL" | "PARTIAL" | null = null): RunLike {
+function makeRun(status: "RUNNING" | "SUCCEEDED" | "FAILED", upTo: number, quality: "FINAL" | "PARTIAL" | null = null) {
   return {
     id: "run-b-1",
     status,
@@ -278,27 +278,30 @@ function makeRun(status: "RUNNING" | "SUCCEEDED" | "FAILED", upTo: number, quali
     failureStage: status === "FAILED" ? STAGES[upTo] : null,
     failureCode: status === "FAILED" ? "WORKER_LOST" : null,
     failureMessage: status === "FAILED" ? "The stage worker lease expired." : null,
+    retryable: status === "FAILED",
     stages: STAGES.map((stage, i) => {
       if (i < upTo) {
         return {
           stage,
-          state: "SUCCEEDED",
+          state: "SUCCEEDED" as const,
+          attempts: 1,
           lastRun: {
             status: "SUCCEEDED",
             errorCode: null,
             errorMessage: null,
-            artifacts: [{ kind: stage === "ARTIFACT_GENERATION" ? "KSPLAT" : "OTHER" }],
+            artifacts: [{ kind: stage === "ARTIFACT_GENERATION" ? "KSPLAT" : "OTHER", sizeBytes: 100, partial: false }],
           },
         };
       }
       if (i === upTo) {
         return {
           stage,
-          state: status === "RUNNING" ? "RUNNING" : status === "FAILED" ? "FAILED" : "SUCCEEDED",
+          state: (status === "RUNNING" ? "RUNNING" : status === "FAILED" ? "FAILED" : "SUCCEEDED") as "RUNNING" | "FAILED" | "SUCCEEDED",
+          attempts: 1,
           lastRun: status === "FAILED" ? { status: "FAILED", errorCode: "WORKER_LOST", errorMessage: "lost", artifacts: [] } : null,
         };
       }
-      return { stage, state: "PENDING", lastRun: null };
+      return { stage, state: "PENDING" as const, attempts: 0, lastRun: null };
     }),
   };
 }
@@ -307,7 +310,7 @@ test("Journey B1: Persistent run ID & real stage progress without simulated time
   const run = makeRun("RUNNING", 4);
   assert.equal(run.id, "run-b-1");
 
-  const progress = pipelineProgress(run as unknown as RunLike);
+  const progress = pipelineProgress(run);
   assert.equal(progress.completed, 4);
   assert.equal(progress.total, 12);
   assert.equal(progress.activeStage, "POSE_ESTIMATION");
@@ -316,7 +319,7 @@ test("Journey B1: Persistent run ID & real stage progress without simulated time
 
 test("Journey B2: Worker unavailable detects stale lease and explains error", () => {
   const run = makeRun("FAILED", 4);
-  const kind = failureKind(run as unknown as RunLike);
+  const kind = failureKind(run);
   assert.equal(kind, "INTERRUPTED");
 
   const stale = staleLeaseMessage([

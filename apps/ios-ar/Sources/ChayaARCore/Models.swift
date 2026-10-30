@@ -12,7 +12,7 @@ public struct Pose: Codable, Equatable, Sendable {
     public var qz: Double
     public var qw: Double
 
-    public init(x: Double, y: Double, z: Double, qx: Double = 0, qy: Double = 0, qz: Double = 0, qw: Double = 1) {
+    public init(x: Double = 0, y: Double = 0, z: Double = 0, qx: Double = 0, qy: Double = 0, qz: Double = 0, qw: Double = 1) {
         self.x = x; self.y = y; self.z = z
         self.qx = qx; self.qy = qy; self.qz = qz; self.qw = qw
     }

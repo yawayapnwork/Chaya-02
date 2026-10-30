@@ -226,11 +226,12 @@ test("Adversarial 3: Display a fixture as a real venue must be flagged and rejec
 
 test("Adversarial 4: Artifact integrity check fails closed on checksum or size mismatch", async () => {
   const ref: ArtifactRef = {
-    id: "art-1",
     kind: "OTHER",
-    name: "poses.json",
+    contentType: "application/json",
     sizeBytes: 100,
     sha256: "0".repeat(64),
+    url: "/artifacts/poses.json",
+    format: null,
   };
   const mismatchedSize = new Uint8Array(50).buffer;
   await assert.rejects(
