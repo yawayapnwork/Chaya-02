@@ -112,7 +112,7 @@ public class PipelineService {
     }
 
     private record JobRow(UUID id, UUID orgId, UUID venueId, UUID scanId, UUID runId, JobStage stage, String status,
-                          int retryCount, String workerId, Instant startedAt) {}
+                          int retryCount, String workerId, Instant startedAt, Instant leaseExpiresAt) {}
 
     private final JdbcClient jdbc;
     private final ProcessingJobRepository jobs;
@@ -650,6 +650,9 @@ public class PipelineService {
         if (!claimed.status().equals("RUNNING")) {
             throw new ApiException(HttpStatus.CONFLICT, "JOB_NOT_RUNNING", "job is " + claimed.status() + "; the report was not applied");
         }
+        if (claimed.leaseExpiresAt() != null && claimed.leaseExpiresAt().isBefore(Instant.now())) {
+            throw new ApiException(HttpStatus.CONFLICT, "LEASE_MISMATCH", "lease expired");
+        }
         Map<String, ArtifactSealer.Sealed> sealed = new LinkedHashMap<>();
         Runnable afterCommit;
         try {
@@ -666,6 +669,9 @@ public class PipelineService {
                     throw new ApiException(HttpStatus.CONFLICT, "JOB_NOT_RUNNING", "job is " + job.status() + "; the report was not applied");
                 }
                 requireLease(jobId, leaseToken); // still this worker's, now under the row lock
+                if (job.leaseExpiresAt() != null && job.leaseExpiresAt().isBefore(Instant.now())) {
+                    throw new ApiException(HttpStatus.CONFLICT, "LEASE_MISMATCH", "lease expired");
+                }
                 RunRow run = lockRun(job.runId());
                 if (!run.status().equals("RUNNING")) {
                     throw new ApiException(HttpStatus.CONFLICT, "RUN_NOT_ACTIVE", "the pipeline run is " + run.status());
@@ -2452,12 +2458,13 @@ public class PipelineService {
     }
 
     private JobRow job(UUID jobId, boolean lock) {
-        return jdbc.sql("SELECT id, organization_id, venue_id, scan_id, run_id, stage, status, retry_count, worker_id, started_at "
+        return jdbc.sql("SELECT id, organization_id, venue_id, scan_id, run_id, stage, status, retry_count, worker_id, started_at, lease_expires_at "
                 + "FROM processing_job WHERE id = :j" + (lock ? " FOR UPDATE" : "")).param("j", jobId)
             .query((rs, i) -> new JobRow(rs.getObject("id", UUID.class), rs.getObject("organization_id", UUID.class),
                 rs.getObject("venue_id", UUID.class), rs.getObject("scan_id", UUID.class), rs.getObject("run_id", UUID.class),
                 JobStage.valueOf(rs.getString("stage")), rs.getString("status"), rs.getInt("retry_count"), rs.getString("worker_id"),
-                rs.getTimestamp("started_at") == null ? null : rs.getTimestamp("started_at").toInstant()))
+                rs.getTimestamp("started_at") == null ? null : rs.getTimestamp("started_at").toInstant(),
+                rs.getTimestamp("lease_expires_at") == null ? null : rs.getTimestamp("lease_expires_at").toInstant()))
             .optional().orElseThrow(() -> new NotFoundException("job not found"));
     }
 

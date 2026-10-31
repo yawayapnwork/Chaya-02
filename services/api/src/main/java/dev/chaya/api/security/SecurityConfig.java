@@ -65,6 +65,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/v1/internal/**").hasRole(Role.SERVICE.name())
                 .anyRequest().authenticated())
             .oauth2ResourceServer(o -> o.jwt(j -> j.jwtAuthenticationConverter(new JwtActorConverter())))
+            .addFilterBefore(new dev.chaya.api.web.CorrelationIdFilter(), SecurityContextHolderFilter.class)
             .addFilterBefore(new DependencyFailureFilter(), SecurityContextHolderFilter.class)
             .addFilterBefore(new PublicViewerTokenFilter(viewerAuthenticator), BearerTokenAuthenticationFilter.class)
             // after authentication, before authorization: roles narrowed to the venue a path is about (review S-8)

@@ -21,6 +21,7 @@ from .settings import Settings
 log = logging.getLogger(__name__)
 
 LEASE_HEADER = "X-Chaya-Lease-Token"
+CORRELATION_HEADER = "X-Correlation-ID"
 
 
 class ApiError(Exception):
@@ -46,6 +47,7 @@ class HttpControlPlane:
         self._token: str | None = None
         self._expires_at = 0.0
         self._leases: dict[str, str] = {}
+        self._correlations: dict[str, str] = {}
 
     def _bearer(self) -> str:
         if self._token is None or time.time() > self._expires_at - 30:
@@ -58,12 +60,15 @@ class HttpControlPlane:
             self._expires_at = time.time() + int(body.get("expires_in", 60))
         return self._token
 
-    def _call(self, method: str, path: str, json: Any = None, lease: str | None = None) -> requests.Response:
+    def _call(self, method: str, path: str, json: Any = None, lease: str | None = None,
+              correlation_id: str | None = None) -> requests.Response:
         url = f"{self._s.api_url}/api/v1/internal/jobs{path}"
         for attempt in range(3):
             headers = {"Authorization": f"Bearer {self._bearer()}"}
             if lease:
                 headers[LEASE_HEADER] = lease
+            if correlation_id:
+                headers[CORRELATION_HEADER] = correlation_id
             try:
                 res = self._http.request(method, url, json=json, headers=headers, timeout=60)
             except requests.RequestException as exc:
@@ -98,13 +103,18 @@ class HttpControlPlane:
         order = res.json()
         if order.get("leaseToken"):
             self._leases[order["id"]] = order["leaseToken"]
+        corr = getattr(res, "headers", {}).get(CORRELATION_HEADER) or order.get("correlationId") or order.get("runId") or order["id"]
+        self._correlations[order["id"]] = str(corr)
         return order
 
     def heartbeat(self, job_id: str, worker_id: str) -> dict[str, Any]:
-        res = self._call("POST", f"/{job_id}/heartbeat", {"workerId": worker_id}, lease=self._leases.get(job_id))
+        res = self._call("POST", f"/{job_id}/heartbeat", {"workerId": worker_id},
+                         lease=self._leases.get(job_id), correlation_id=self._correlations.get(job_id))
         self._raise(res)
         return res.json()
 
     def report(self, job_id: str, report: dict[str, Any]) -> None:
-        self._raise(self._call("POST", f"/{job_id}/report", report, lease=self._leases.get(job_id)))
+        self._raise(self._call("POST", f"/{job_id}/report", report,
+                               lease=self._leases.get(job_id), correlation_id=self._correlations.get(job_id)))
         self._leases.pop(job_id, None)  # the job is finished; the lease is of no further use
+        self._correlations.pop(job_id, None)

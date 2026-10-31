@@ -83,7 +83,15 @@ public class InternalJobController {
         private void requireLease(UUID jobId, String leaseToken) {
             if (!jobs.holdsLease(jobId, JobLease.hash(leaseToken))) {
                 throw new ApiException(HttpStatus.CONFLICT, "LEASE_MISMATCH",
-                    "this worker does not hold the job's lease; only the worker that claimed it may finish it");
+                    "this worker does not hold the job's lease; only the worker holding the active lease may report on it");
+            }
+            dev.chaya.api.processing.JobStatus current = jobs.status(jobId).orElseThrow(() -> new NotFoundException("job not found"));
+            if (current != dev.chaya.api.processing.JobStatus.RUNNING) {
+                throw new ApiException(HttpStatus.CONFLICT, "INVALID_JOB_TRANSITION",
+                    "job is already " + current);
+            }
+            if (!jobs.holdsValidLease(jobId, JobLease.hash(leaseToken))) {
+                throw new ApiException(HttpStatus.CONFLICT, "LEASE_MISMATCH", "lease expired");
             }
         }
 

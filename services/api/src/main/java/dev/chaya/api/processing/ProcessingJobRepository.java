@@ -21,6 +21,14 @@ public class ProcessingJobRepository {
     }
 
     public UUID enqueue(UUID organizationId, UUID venueId, UUID scanId, UUID scanVersionId, JobStage stage) {
+        Optional<UUID> existing = jdbc.sql("""
+                SELECT id FROM processing_job
+                 WHERE scan_id = :scan AND stage = :stage AND status IN ('QUEUED', 'RUNNING')
+                 ORDER BY created_at DESC LIMIT 1
+                """).param("scan", scanId).param("stage", stage.name()).query(UUID.class).optional();
+        if (existing.isPresent()) {
+            return existing.get();
+        }
         return jdbc.sql("""
                 INSERT INTO processing_job (organization_id, venue_id, scan_id, scan_version_id, stage)
                 VALUES (:org, :venue, :scan, :version, :stage) RETURNING id""")
@@ -51,7 +59,8 @@ public class ProcessingJobRepository {
                                           lease_token_sha256 = :leaseHash
                  WHERE id = (SELECT j.id FROM processing_job j
                               WHERE j.status = 'QUEUED' AND j.stage IN (:stages)
-                                AND NOT EXISTS (SELECT 1 FROM pipeline_run r WHERE r.id = j.run_id AND r.deadline_at < now())
+                                AND (j.queued_at IS NULL OR j.queued_at <= now())
+                                AND (j.run_id IS NULL OR EXISTS (SELECT 1 FROM pipeline_run r WHERE r.id = j.run_id AND r.status = 'RUNNING' AND r.deadline_at >= now()))
                               ORDER BY j.queued_at FOR UPDATE SKIP LOCKED LIMIT 1)
                 RETURNING id, organization_id, venue_id, scan_id, scan_version_id, stage, run_id, retry_count""")
             .param("stages", stages.stream().map(Enum::name).toList())
@@ -68,8 +77,18 @@ public class ProcessingJobRepository {
     /** Extends the lease. False unless the job is RUNNING under this lease (not finished, cancelled, expired and swept,
      * or re-claimed by another worker). */
     public boolean heartbeat(UUID jobId, String leaseTokenSha256, int leaseSeconds) {
-        return jdbc.sql("UPDATE processing_job SET lease_expires_at = now() + make_interval(secs => :lease) "
-                + "WHERE id = :id AND status = 'RUNNING' AND lease_token_sha256 = :leaseHash")
+        return jdbc.sql("""
+                UPDATE processing_job j
+                   SET lease_expires_at = now() + make_interval(secs => :lease)
+                 WHERE j.id = :id
+                   AND j.status = 'RUNNING'
+                   AND j.lease_token_sha256 = :leaseHash
+                   AND j.lease_expires_at >= now()
+                   AND (j.run_id IS NULL OR EXISTS (
+                       SELECT 1 FROM pipeline_run r
+                        WHERE r.id = j.run_id AND r.status = 'RUNNING'
+                   ))
+                """)
             .param("id", jobId).param("leaseHash", leaseTokenSha256).param("lease", leaseSeconds).update() == 1;
     }
 
@@ -81,6 +100,22 @@ public class ProcessingJobRepository {
             .param("id", jobId).param("leaseHash", leaseTokenSha256).query(Integer.class).single() == 1;
     }
 
+    /** Checks that the worker holds an active, unexpired lease and that any associated pipeline run remains active. */
+    public boolean holdsValidLease(UUID jobId, String leaseTokenSha256) {
+        return leaseTokenSha256 != null && jdbc.sql("""
+                SELECT count(*) FROM processing_job j
+                 WHERE j.id = :id
+                   AND j.status = 'RUNNING'
+                   AND j.lease_token_sha256 = :leaseHash
+                   AND j.lease_expires_at >= now()
+                   AND (j.run_id IS NULL OR EXISTS (
+                       SELECT 1 FROM pipeline_run r
+                        WHERE r.id = j.run_id AND r.status = 'RUNNING'
+                   ))
+                """)
+            .param("id", jobId).param("leaseHash", leaseTokenSha256).query(Integer.class).single() == 1;
+    }
+
     public UUID enqueueForRun(UUID organizationId, UUID venueId, UUID scanId, UUID runId, JobStage stage) {
         return enqueueForRun(organizationId, venueId, scanId, null, runId, stage);
     }
@@ -88,6 +123,14 @@ public class ProcessingJobRepository {
     /** Same, but tags the job with the ScanVersion an incremental re-scan run is building (null for an
      * ordinary full-venue run). Threaded onto the job so the worker's WorkOrder carries it. */
     public UUID enqueueForRun(UUID organizationId, UUID venueId, UUID scanId, UUID scanVersionId, UUID runId, JobStage stage) {
+        Optional<UUID> existing = jdbc.sql("""
+                SELECT id FROM processing_job
+                 WHERE run_id = :run AND stage = :stage AND status IN ('QUEUED', 'RUNNING')
+                 ORDER BY created_at DESC LIMIT 1
+                """).param("run", runId).param("stage", stage.name()).query(UUID.class).optional();
+        if (existing.isPresent()) {
+            return existing.get();
+        }
         return jdbc.sql("""
                 INSERT INTO processing_job (organization_id, venue_id, scan_id, scan_version_id, run_id, stage)
                 VALUES (:org, :venue, :scan, :version, :run, :stage) RETURNING id""")
@@ -120,6 +163,9 @@ public class ProcessingJobRepository {
 
     public void cancel(UUID jobId) {
         JobStatus current = status(jobId).orElseThrow(() -> notFound(jobId));
+        if (current == JobStatus.CANCELLED) {
+            return;
+        }
         if (!current.canTransitionTo(JobStatus.CANCELLED)) {
             throw invalid(jobId, current, JobStatus.CANCELLED);
         }

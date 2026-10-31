@@ -402,11 +402,16 @@ public class ScanVersionService {
             throw new IllegalStateException("scan version " + versionId + " is " + v.status() + " / run " + v.runId());
         }
         // merged: the run's cloud is a venue-wide merge, SPLAT_MERGED -- a re-scan's splice or a stitch of rooms.
-        record Run(UUID frameRun, boolean merged) {}
-        Run run = jdbc.sql("SELECT coalesce(reconstruction_frame_run_id, id), stages FROM pipeline_run WHERE id = :r")
+        record Run(UUID frameRun, boolean merged, String status) {}
+        Run run = jdbc.sql("SELECT coalesce(reconstruction_frame_run_id, id), stages, status FROM pipeline_run WHERE id = :r")
             .param("r", v.runId())
             .query((rs, i) -> new Run(rs.getObject(1, UUID.class),
-                contains(rs.getArray(2), "REGION_SPLICE") || contains(rs.getArray(2), "ROOM_STITCH"))).single();
+                contains(rs.getArray(2), "REGION_SPLICE") || contains(rs.getArray(2), "ROOM_STITCH"),
+                rs.getString(3))).single();
+        if ("PARTIAL".equals(run.status()) || "FAILED".equals(run.status()) || "CANCELLED".equals(run.status())) {
+            throw new ApiException(HttpStatus.CONFLICT, "RUN_NOT_SUCCEEDED",
+                "pipeline run " + v.runId() + " is " + run.status() + "; a partial or incomplete reconstruction version cannot be marked FINAL");
+        }
         FrameView frame = frames.activeForRun(run.frameRun()).filter(FrameView::canonical)
             .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, CoordinateFrameService.NOT_CALIBRATED,
                 "the reconstruction has no calibrated canonical coordinate frame; a version's POIs, anchors and navigation are "
@@ -418,7 +423,7 @@ public class ScanVersionService {
                 INSERT INTO scan_version_artifact (scan_version_id, artifact_id, kind, owner_version_id)
                 SELECT DISTINCT ON (a.kind) :v, a.id, a.kind, :v
                   FROM processing_artifact a JOIN pipeline_stage_run sr ON sr.id = a.stage_run_id
-                 WHERE sr.run_id = :r AND sr.status = 'SUCCEEDED' AND NOT a.contains_pii AND a.kind IN (:kinds)
+                 WHERE sr.run_id = :r AND sr.status = 'SUCCEEDED' AND NOT a.contains_pii AND NOT a.partial AND a.kind IN (:kinds)
                  ORDER BY a.kind, sr.finished_at DESC, a.created_at DESC
                 """)
             .param("v", versionId).param("r", v.runId()).param("kinds", kinds).update();

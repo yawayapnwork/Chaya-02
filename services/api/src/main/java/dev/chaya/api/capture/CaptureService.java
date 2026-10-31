@@ -346,6 +346,9 @@ public class CaptureService {
 
     public ProcessingStatus startProcessing(Actor actor, UUID venueId, UUID captureId, Boolean privacyEnabled, Integer timeBudgetSeconds) {
         CaptureView c = get(actor, venueId, captureId);
+        if (c.status() == CaptureStatus.PROCESSING || c.status() == CaptureStatus.COMPLETED) {
+            return processingStatus(actor, venueId, captureId);
+        }
         if (c.status() != CaptureStatus.READY_FOR_PROCESSING) {
             throw invalid(c.status(), CaptureStatus.PROCESSING);
         }
@@ -354,6 +357,19 @@ public class CaptureService {
             .query((rs, i) -> new RescanLink(rs.getObject("parent_scan_version_id", UUID.class), rs.getString("region_geometry")))
             .single();
         tx.executeWithoutResult(s -> {
+            String currentStatus = jdbc.sql("SELECT status FROM capture_session WHERE id = :c FOR UPDATE")
+                .param("c", captureId).query(String.class).single();
+            if (CaptureStatus.PROCESSING.name().equals(currentStatus) || CaptureStatus.COMPLETED.name().equals(currentStatus)) {
+                return;
+            }
+            if (!CaptureStatus.READY_FOR_PROCESSING.name().equals(currentStatus)) {
+                throw invalid(CaptureStatus.valueOf(currentStatus), CaptureStatus.PROCESSING);
+            }
+            boolean scanExists = jdbc.sql("SELECT EXISTS(SELECT 1 FROM scan WHERE capture_session_id = :c)")
+                .param("c", captureId).query(Boolean.class).single();
+            if (scanExists) {
+                return;
+            }
             transition(captureId, CaptureStatus.READY_FOR_PROCESSING, CaptureStatus.PROCESSING, null, null);
             UUID scan = jdbc.sql("INSERT INTO scan (organization_id, venue_id, capture_session_id) VALUES (:o, :v, :c) RETURNING id")
                 .param("o", actor.organizationId()).param("v", venueId).param("c", captureId).query(UUID.class).single();

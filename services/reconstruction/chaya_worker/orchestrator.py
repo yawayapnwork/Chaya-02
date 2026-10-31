@@ -69,6 +69,10 @@ class _Heartbeat(threading.Thread):
                     return
             except ApiError as exc:
                 log.warning("heartbeat failed", extra={"job_id": self._job_id, "error": str(exc)})
+                if exc.status in (404, 409):
+                    log.warning("lease rejected by control plane", extra={"job_id": self._job_id, "code": exc.code})
+                    self._cancelled.set()
+                    return
 
     def stop(self) -> None:
         self._halt.set()
@@ -128,8 +132,9 @@ class Orchestrator:
         stdout_path, stderr_path = workdir / "stdout.log", workdir / "stderr.log"
         stdout_path.touch()
         stderr_path.touch()
+        correlation_id = str(order.get("correlationId") or order.get("runId") or job_id)
         context = {"job_id": job_id, "run_id": order.get("runId"), "stage": stage_name, "attempt": order.get("attempt"),
-                   "worker_id": self.settings.worker_id}
+                   "worker_id": self.settings.worker_id, "correlation_id": correlation_id}
         logger, handler = file_logger(f"chaya_worker.job.{job_id}", stdout_path, context)
         started = self.clock()
         deadline = datetime.fromisoformat(order["deadlineAt"].replace("Z", "+00:00")).timestamp() if order.get("deadlineAt") else None
@@ -227,10 +232,14 @@ class Orchestrator:
         files: list[InputFile] = []
         for ref in refs:
             dest = workdir / "inputs" / f"{ref['artifactId']}-{Path(ref['key']).name}"
-            try:
-                self.storage.download(ref["bucket"], ref["key"], dest)
-            except StorageError as exc:
-                raise StageError(str(exc), code="INPUT_DOWNLOAD_FAILED", details={"artifact_id": ref["artifactId"]}) from exc
+            for attempt in range(4):
+                try:
+                    self.storage.download(ref["bucket"], ref["key"], dest)
+                    break
+                except StorageError as exc:
+                    if attempt == 3:
+                        raise StageError(str(exc), code="INPUT_DOWNLOAD_FAILED", details={"artifact_id": ref["artifactId"]}) from exc
+                    time.sleep(0.5 * (2 ** attempt))
             if ref.get("sha256") and sha256_file(dest) != ref["sha256"]:
                 raise StageError(f"input {ref['artifactId']} does not match its recorded checksum", code="INPUT_CHECKSUM_MISMATCH",
                                  details={"artifact_id": ref["artifactId"], "kind": ref["kind"]})
@@ -255,7 +264,14 @@ class Orchestrator:
     def _upload(self, order: dict[str, Any], spec: ArtifactSpec) -> dict[str, Any]:
         key = order["outputPrefix"] + ("pii/" if spec.contains_pii else "") + spec.name
         sha, size = sha256_file(spec.path), spec.path.stat().st_size
-        self.storage.upload(order["derivedBucket"], key, spec.path, spec.content_type)
+        for attempt in range(4):
+            try:
+                self.storage.upload(order["derivedBucket"], key, spec.path, spec.content_type)
+                break
+            except StorageError as exc:
+                if attempt == 3:
+                    raise
+                time.sleep(0.5 * (2 ** attempt))
         return {"kind": spec.kind, "key": key, "sha256": sha, "contentType": spec.content_type, "sizeBytes": size,
                 "containsPii": spec.contains_pii, "partial": spec.partial}
 
