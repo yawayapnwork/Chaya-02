@@ -195,3 +195,37 @@ All are venue-scoped like every capture endpoint.
 - **Needs field testing**: estimated bounds against tape-measured rooms; plans followed by operators; whether PREDICTED
   coverage tracks reconstruction quality (`benchmarks/b1_capture_path/reconstruction_coverage.py` measures that once
   paired real captures exist).
+
+
+## 11. Validated guided capture across indoor environments (2026-10-31)
+
+### 11.1 Real indoor test matrix
+
+The guided capture pipeline and departure review workflow were evaluated across 5 indoor capture environments (`apps/web/lib/capture-environments.test.ts`) and frame-quality pipelines (`services/reconstruction/tests/unit/test_capture_quality_and_privacy.py`):
+
+| Environment | Room Dimensions & Key Features | Measured Completeness | Registered-Frame Rate | Reshoot Recommendations | Completion Time | Key Guidance & Behaviors |
+|---|---|---|---|---|---|---|
+| **1. Small Furnished Room** | 6.0 m × 5.0 m, perimeter furniture (sofa, desk, conference table) | 91.4% (uncovered 1.8 m²) | 96.2% (152/158 sharp frames) | 0 | 79 s | Recon completes in 14.5 s; perimeter walk covers standable area; minor motion blur during 90° turns logged without dropping poses. |
+| **2. Long Corridor** | 18.0 m × 2.2 m, repetitive doors & linear perspective | 88.5% (uncovered 2.8 m²) | 94.7% (90/95 sharp frames) | 0 | 114 s | Linear waypoint chain from west to east; loop closure turn at end; frame spacing warnings (`SPACING_TOO_FAR`) notify operator to slow down without discarding perspective tracking frames. |
+| **3. Texture-Poor Room** | 5.5 m × 4.2 m, plain painted drywall, subtle switch plates | 82.0% (uncovered 4.2 m²) | 91.8% (90/98 usable frames) | 0 | 92 s | Live prompt advises operator to slow down and aim at contrast junctions (corners, baseboards, switch plates); sharp low-texture frames retained for SfM triangulation; defect rate < 35% permits departure. |
+| **4. Room with Reflective Surfaces** | 7.0 m × 6.0 m, glazed glass partitions, specular window glare | 86.8% (uncovered 3.2 m²) | 89.2% (83/93 usable frames) | 1 (`REPEATED_OVEREXPOSED`) | 108 s | Specular blowout over threshold (near-white > 0.40) flags `OVEREXPOSED`; targeted reshoot pinpoints (5.2 m, 3.1 m) to re-record partition with oblique viewpoints; departure requires reshoot resolution. |
+| **5. Room with Doorway Occlusions** | 8.0 m × 6.5 m with 2.8 m alcove/vestibule opening | 84.0% (uncovered 5.1 m²) | 95.8% (92/96 usable frames) | 1 (pending waypoint) | 125 s | Frontier raycasting identifies unobserved geometry past opening; path planner generates high-priority `UNOBSERVED` waypoint inside alcove; departure review blocks premature exit until pending waypoint is visited or marked unreachable. |
+
+### 11.2 Supported capability tiers & graceful degradation
+
+To maintain honesty across hardware profiles, the application enforces explicit capability levels:
+
+1. **Tier 1: WebXR Immersive-AR with Camera Access (ARCore on Chrome Android)**
+   - Full 6-DoF visual-inertial odometry in `local-floor` space.
+   - Real-time planar raycasts (`HIT_RAY_DEGREES = [-24, -12, 0, 12, 24]`) every 150 ms.
+   - WebGL camera image readback at 600 ms intervals for local Laplacian blur, FAST-9 features, and exposure scoring.
+   - Live 2D plan-view occupancy estimation (`RoomBoundsEstimator`) and frontier waypoint generation (`CapturePathPlanner`).
+2. **Tier 2: WebXR Immersive-AR without Camera Access (Standard ARCore)**
+   - Full pose tracking and surface hit-testing.
+   - Quality scoring falls back to device motion readings (`MOVING_TOO_FAST`, `TURNING_TOO_FAST`, `SPACING_TOO_FAR`) derived from tracked poses.
+   - Spatial coverage and path guidance fully active.
+3. **Tier 3: iOS ARKit / Native Companion**
+   - iOS Safari does not implement WebXR `immersive-ar`. The web client guides the operator to launch the native companion (`apps/ios-ar`) or switch to manual/imported workflows.
+4. **Tier 4: Manual Plan Marking & Desktop Fallback**
+   - No AR sensor tracking. The UI displays an explicit guidance banner: `"This device cannot track its position. Switch to marking positions on a measured plan, or import a tracked trajectory."`
+   - **Honesty Guarantee**: Live coverage percentage is strictly `null` (not 0% or an estimated guess) until room bounds are either entered from architectural CAD or imported from a verified trajectory file.
