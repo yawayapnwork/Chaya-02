@@ -148,3 +148,40 @@ def test_validate_dataset_reports_an_annotation_with_no_matching_image(tmp_path)
     append_annotations(d / "annotations.jsonl", [orphan])
     problems = validate_dataset(d)
     assert len(problems) == 1 and "missing-image" in problems[0]
+
+
+def test_cluster_by_distance_repeated_chairs_in_row_stay_distinct_destinations():
+    """Repeated chairs along a conference table (each separated by 0.9 m > 0.75 m) must remain distinct navigable
+    objects, while multiple camera viewpoints of each chair merge into a single verified POI."""
+    detections = []
+    # 4 distinct chairs spaced along X axis at x = 0.0, 0.9, 1.8, 2.7 m
+    for chair_idx, x_pos in enumerate([0.0, 0.9, 1.8, 2.7]):
+        # Two viewpoints for each chair (e.g. frame A and frame B with slight measurement noise < 0.15 m)
+        detections.append(_det("chair", [x_pos - 0.05, 0.0, 0.0], [1.0, 0.0], confidence=0.85,
+                              frame=f"frame_a_{chair_idx}.jpg", support=15, bbox={"x": chair_idx * 100}))
+        detections.append(_det("chair", [x_pos + 0.05, 0.0, 0.0], [0.95, 0.3], confidence=0.88,
+                              frame=f"frame_b_{chair_idx}.jpg", support=18, bbox={"x": chair_idx * 100 + 5}))
+
+    clusters = cluster_by_distance(detections, distance=0.75)
+    assert len(clusters) == 4, f"Expected 4 distinct chairs, got {len(clusters)}"
+    # Every cluster must be a MULTI_VIEW fusion of 2 viewpoints
+    for c in clusters:
+        assert c["detections_merged"] == 2
+        assert c["localization"]["status"] == "MULTI_VIEW"
+        assert c["localization"]["views"] == 2
+        assert len(c["source_frames"]) == 2
+    # Verify centroids match expected coordinates
+    sorted_clusters = sorted(clusters, key=lambda c: c["position"][0])
+    for idx, expected_x in enumerate([0.0, 0.9, 1.8, 2.7]):
+        assert sorted_clusters[idx]["position"][0] == pytest.approx(expected_x, abs=0.01)
+
+
+def test_cluster_by_distance_identical_doors_at_different_locations_stay_distinct():
+    """Identical doors at opposite ends of a corridor (e.g., North Door at y=10.0 and South Door at y=-10.0)
+    share the identical prompt phrase 'door' but must never merge."""
+    north_door = [_det("door", [0.0, 10.0, 1.2], [0.7, 0.7], confidence=0.92, frame="north_cam.jpg")]
+    south_door = [_det("door", [0.0, -10.0, 1.2], [0.7, 0.7], confidence=0.91, frame="south_cam.jpg")]
+    clusters = cluster_by_distance(north_door + south_door, distance=0.75)
+    assert len(clusters) == 2
+    y_coords = {round(c["position"][1]) for c in clusters}
+    assert y_coords == {10, -10}
