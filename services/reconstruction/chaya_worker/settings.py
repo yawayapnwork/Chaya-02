@@ -61,6 +61,10 @@ class Settings:
     max_frame_height: int = 1080
     max_frames_per_video: int = 900
     blur_threshold: float = 40.0
+    blur_method: str = "hybrid"
+    min_edge_sharpness: float = 18.0
+    motion_blur_threshold: float = 4.5
+    min_feature_count: int = 15
     dark_fraction_max: float = 0.6
     bright_fraction_max: float = 0.6
     duplicate_distance: float = 2.0
@@ -70,7 +74,11 @@ class Settings:
     # worker each extraction thread holds ~450 MiB for a 1600x1200 frame, so an 18-core host wants ~8.5 GiB; bound it
     # to fit the worker's memory limit. GPU hosts extract on the GPU and do not need this.
     colmap_num_threads: int = -1
+    privacy_face_detector: str = "opencv-haar-faces"
+    privacy_face_min_confidence: float = 2.5
+    privacy_face_max_fraction: float = 0.40
     privacy_screen_detector: str = "heuristic-quad"
+    privacy_screen_min_entropy: float = 4.0
     # Privacy masks (chaya_worker.privacy.masks). POSE_ESTIMATION keeps SIFT keypoints this many pixels away from any
     # privacy-masked pixel, so no descriptor window reads a blurred or filled pixel. SEMANTIC_INDEXING drops a detection
     # whose box is more than this fraction privacy-masked: what it "sees" there is the fill, not the scene.
@@ -380,13 +388,21 @@ class Settings:
             max_frame_height=_int(e, "MAX_FRAME_HEIGHT", d.max_frame_height),
             max_frames_per_video=_int(e, "MAX_FRAMES_PER_VIDEO", d.max_frames_per_video),
             blur_threshold=_float(e, "BLUR_THRESHOLD", d.blur_threshold),
+            blur_method=e.get("BLUR_METHOD", d.blur_method),
+            min_edge_sharpness=_float(e, "MIN_EDGE_SHARPNESS", d.min_edge_sharpness),
+            motion_blur_threshold=_float(e, "MOTION_BLUR_THRESHOLD", d.motion_blur_threshold),
+            min_feature_count=_int(e, "MIN_FEATURE_COUNT", d.min_feature_count),
             dark_fraction_max=_float(e, "DARK_FRACTION_MAX", d.dark_fraction_max),
             bright_fraction_max=_float(e, "BRIGHT_FRACTION_MAX", d.bright_fraction_max),
             duplicate_distance=_float(e, "DUPLICATE_DISTANCE", d.duplicate_distance),
             min_frames=_int(e, "MIN_FRAMES", d.min_frames),
             min_registered_ratio=_float(e, "MIN_REGISTERED_RATIO", d.min_registered_ratio),
             colmap_num_threads=_int(e, "COLMAP_NUM_THREADS", d.colmap_num_threads),
+            privacy_face_detector=e.get("PRIVACY_FACE_DETECTOR", d.privacy_face_detector),
+            privacy_face_min_confidence=_float(e, "PRIVACY_FACE_MIN_CONFIDENCE", d.privacy_face_min_confidence),
+            privacy_face_max_fraction=_float(e, "PRIVACY_FACE_MAX_FRACTION", d.privacy_face_max_fraction),
             privacy_screen_detector=e.get("PRIVACY_SCREEN_DETECTOR", d.privacy_screen_detector),
+            privacy_screen_min_entropy=_float(e, "PRIVACY_SCREEN_MIN_ENTROPY", d.privacy_screen_min_entropy),
             privacy_sfm_mask_margin_px=_int(e, "PRIVACY_SFM_MASK_MARGIN_PX", d.privacy_sfm_mask_margin_px),
             privacy_detection_max_masked_fraction=_float(e, "PRIVACY_DETECTION_MAX_MASKED_FRACTION",
                                                          d.privacy_detection_max_masked_fraction),
@@ -555,10 +571,16 @@ class Settings:
         return {
             "frame_fps": self.frame_fps, "max_frame_height": self.max_frame_height,
             "max_frames_per_video": self.max_frames_per_video, "blur_threshold": self.blur_threshold,
+            "blur_method": self.blur_method, "min_edge_sharpness": self.min_edge_sharpness,
+            "motion_blur_threshold": self.motion_blur_threshold, "min_feature_count": self.min_feature_count,
             "dark_fraction_max": self.dark_fraction_max, "bright_fraction_max": self.bright_fraction_max,
             "duplicate_distance": self.duplicate_distance, "min_frames": self.min_frames,
             "min_registered_ratio": self.min_registered_ratio, "colmap_num_threads": self.colmap_num_threads,
+            "privacy_face_detector": self.privacy_face_detector,
+            "privacy_face_min_confidence": self.privacy_face_min_confidence,
+            "privacy_face_max_fraction": self.privacy_face_max_fraction,
             "privacy_screen_detector": self.privacy_screen_detector,
+            "privacy_screen_min_entropy": self.privacy_screen_min_entropy,
             "privacy_sfm_mask_margin_px": self.privacy_sfm_mask_margin_px,
             "privacy_detection_max_masked_fraction": self.privacy_detection_max_masked_fraction,
             "gsplat_iterations": self.gsplat_iterations, "gsplat_lr_position": self.gsplat_lr_position,

@@ -59,10 +59,12 @@ class PrivacyPreprocess:
         fast = cv2.FastFeatureDetector_create(threshold=20, nonmaxSuppression=True)
         sfm_margin_px = max(0, int(ctx.settings.privacy_sfm_mask_margin_px))
         per_frame, totals = [], {"face": 0, "screen_or_document": 0, "frames_with_regions": 0, "escalated_frames": 0,
-                             "masked_pixels": 0, "pixels": 0, "sfm_masked_pixels": 0,
-                             "total_features": 0, "unmasked_features": 0,
-                             "usable_before_mask": 0, "usable_after_mask": 0, "degraded_frames": 0}
+                                 "masked_pixels": 0, "pixels": 0, "sfm_masked_pixels": 0,
+                                 "total_features": 0, "unmasked_features": 0,
+                                 "usable_before_mask": 0, "usable_after_mask": 0, "degraded_frames": 0,
+                                 "uncertain_regions": 0}
         degraded_frame_names: list[str] = []
+        total_uncertain = 0
 
         for path in frames:
             img = cv2.imdecode(np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_COLOR)
@@ -111,6 +113,9 @@ class PrivacyPreprocess:
             if sfm_degraded:
                 degraded_frame_names.append(path.name)
 
+            uncertain_in_frame = [r for r in current if getattr(r, "uncertain", False)]
+            total_uncertain += len(uncertain_in_frame)
+
             totals["masked_pixels"] += masked
             totals["pixels"] += int(mask.size)
             totals["sfm_masked_pixels"] += sfm_masked
@@ -119,12 +124,15 @@ class PrivacyPreprocess:
             totals["usable_before_mask"] += 1 if usable_before else 0
             totals["usable_after_mask"] += 1 if usable_after else 0
             totals["degraded_frames"] += 1 if sfm_degraded else 0
+            totals["uncertain_regions"] = total_uncertain
             for r in regions:
                 totals[r.label] = totals.get(r.label, 0) + 1
             totals["frames_with_regions"] += 1 if regions else 0
             totals["escalated_frames"] += 1 if escalated else 0
-            per_frame.append({"frame": path.name, "regions": [{"label": r.label, "x": r.x, "y": r.y, "w": r.w, "h": r.h} for r in regions],
+            per_frame.append({"frame": path.name,
+                              "regions": [{"label": r.label, "x": r.x, "y": r.y, "w": r.w, "h": r.h, "confidence": getattr(r, "confidence", 1.0), "uncertain": getattr(r, "uncertain", False)} for r in regions],
                               "covered_regions": [{"label": r.label, "x": r.x, "y": r.y, "w": r.w, "h": r.h} for r in current],
+                              "uncertain_regions": len(uncertain_in_frame),
                               "masked_fraction": round(masked_fraction, 6),
                               "sfm_masked_fraction": round(sfm_masked_fraction, 6),
                               "total_features": total_features,
@@ -151,7 +159,12 @@ class PrivacyPreprocess:
                 "Heuristic quadrilateral screen/document detection masked large rectangular surfaces (such as doors, windows, "
                 "posters, or wall panels) that carry structural keypoints needed for camera pose estimation."
             )
-        review_required = len(degraded_frame_names) > 0 or mean_retained_ratio < 0.65
+        if total_uncertain > 0:
+            warnings.append(
+                f"Privacy preprocessing identified {total_uncertain} uncertain detection(s); "
+                "operator review is recommended to verify whether confidential screens or documents are present."
+            )
+        review_required = len(degraded_frame_names) > 0 or mean_retained_ratio < 0.65 or total_uncertain > 0
 
         sfm_impact = {
             "sfm_margin_px": sfm_margin_px,
@@ -160,6 +173,7 @@ class PrivacyPreprocess:
             "usable_frames_after_mask": totals["usable_after_mask"],
             "degraded_frame_count": len(degraded_frame_names),
             "degraded_frames": degraded_frame_names,
+            "uncertain_regions_count": total_uncertain,
             "mean_retained_feature_ratio": mean_retained_ratio,
             "mean_sfm_masked_fraction": mean_sfm_masked_fraction,
             "review_required": review_required,
