@@ -35,7 +35,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from benchmarks.b2_geometry_cleanup.synthetic_scene import (  # noqa: E402
+from benchmarks.b2_geometry_cleanup.synthetic_scene import (
     BUCKET,
     NOISE,
     SCENE_PARAMS,
@@ -43,7 +43,7 @@ from benchmarks.b2_geometry_cleanup.synthetic_scene import (  # noqa: E402
     build,
     nearest_structure_bucket,
 )
-from benchmarks.common.results import Metric, Run, sha256_file  # noqa: E402
+from benchmarks.common.results import Metric, Run, sha256_file
 
 BUCKETS = ("floor", "wall", "furniture", "clutter", "stairs")
 
@@ -85,6 +85,8 @@ def evaluate(scene, keep: np.ndarray) -> dict[str, float]:
 def run_methods(scene, labels_by_scenario: dict[str, np.ndarray]) -> dict[str, dict[str, float]]:
     from chaya_worker.geometry_cleanup import (
         characteristic_spacing,
+        density_conditioned_opacity_mask,
+        disconnected_cluster_mask,
         opacity_threshold_mask,
         radius_min_neighbors,
         radius_outlier_mask,
@@ -108,6 +110,12 @@ def run_methods(scene, labels_by_scenario: dict[str, np.ndarray]) -> dict[str, d
 
     timed("no cleanup", lambda: np.ones(len(cloud), bool))
     timed(f"opacity threshold {s.cleanup_opacity_threshold}", lambda: opacity_threshold_mask(cloud, s.cleanup_opacity_threshold))
+    dense_op = timed("density-conditioned opacity", lambda: density_conditioned_opacity_mask(
+        cloud, min_opacity=s.cleanup_opacity_threshold, radius=radius,
+        min_neighbors=s.cleanup_density_opacity_min_neighbors)[0])
+    floater = timed("floating cluster removal", lambda: disconnected_cluster_mask(
+        cloud.positions, radius=s.cleanup_floater_radius_factor * characteristic_spacing(cloud.positions),
+        min_cluster_size=s.cleanup_floater_min_cluster_size)[0])
     stat = timed("statistical outlier", lambda: statistical_outlier_mask(cloud, nb_neighbors=s.cleanup_stat_nb_neighbors,
                                                                         std_ratio=s.cleanup_stat_std_ratio)[0])
     rad = timed("radius outlier (production radius)", lambda: radius_outlier_mask(cloud, nb_points=nb_points, radius=radius)[0])
@@ -116,15 +124,15 @@ def run_methods(scene, labels_by_scenario: dict[str, np.ndarray]) -> dict[str, d
             cloud, labels, radius=radius, min_same_class_neighbors=s.cleanup_semantic_min_neighbors)[0])
 
         def chain(labels=labels):
-            keep = stat & rad
+            keep = stat & rad & dense_op & floater
             sub = cloud.subset(keep)
             sem, _ = semantic_aware_mask(sub, labels[keep], radius=radius, min_same_class_neighbors=s.cleanup_semantic_min_neighbors)
             full = np.ones(len(cloud), bool)
             full[np.where(keep)[0]] = sem
             return keep & full
-        timed(f"production chain (statistical -> radius -> semantic) | {scenario}", chain)
-    keep = stat & rad
-    results["production chain without labels (statistical -> radius)"] = evaluate(scene, keep)
+        timed(f"production chain (statistical -> radius -> dense_op -> floater -> semantic) | {scenario}", chain)
+    keep = stat & rad & dense_op & floater
+    results["production chain without labels (statistical -> radius -> dense_op -> floater)"] = evaluate(scene, keep)
     return results
 
 

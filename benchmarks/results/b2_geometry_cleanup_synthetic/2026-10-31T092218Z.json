@@ -1,0 +1,2062 @@
+{
+  "benchmark": "b2_geometry_cleanup_synthetic",
+  "title": "Geometry cleanup methods on controlled synthetic scenes with ground truth",
+  "started": "2026-10-31T09:22:18+00:00",
+  "finished": "2026-10-31T09:22:33+00:00",
+  "git": {
+    "commit": "b1ffd61094ceb357b771417a88d11fbc603371b4",
+    "dirty_files": 8
+  },
+  "environment": {
+    "python": "3.12.10",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "cpus": 18
+  },
+  "inputs": {
+    "confusion": {
+      "file": "benchmarks\\results\\b6_semantic_models\\latest.json",
+      "sha256": "6a73eb4fc00901878a09cecda765e6a59aa1171a33e223ad09d5d64f146e448d",
+      "mapping": "class_mapping: reviewed:ade20k-150@2026-10-11.1 (after)",
+      "dataset": {
+        "path": "/data/coco-indoor-eval",
+        "name": "coco-indoor-eval",
+        "version": "1.0.0",
+        "sha256": "ff843cb160565e2a5fbce405b74ea5d3b04dd8956e44826a107b95851a8be827",
+        "images_evaluated": 102,
+        "split": "test"
+      }
+    },
+    "scene": {
+      "points": 163318,
+      "params": {
+        "room_m": [
+          8.0,
+          6.0,
+          3.0
+        ],
+        "spacing_m": 0.03,
+        "jitter_m": 0.004,
+        "mezzanine": {
+          "x": [
+            5.5,
+            8.0
+          ],
+          "y": [
+            0.0,
+            2.5
+          ],
+          "z": 1.02
+        },
+        "stairs": {
+          "steps": 6,
+          "rise_m": 0.17,
+          "tread_m": 0.28,
+          "y": [
+            0.0,
+            1.2
+          ]
+        },
+        "ramp": {
+          "x": [
+            1.0,
+            4.0
+          ],
+          "y": [
+            4.5,
+            5.5
+          ],
+          "slope": 0.08333333333333333,
+          "dais_z": 0.25
+        },
+        "floater_fraction": 0.015,
+        "halo_fraction": 0.01,
+        "floater_clusters": 40,
+        "points_per_cluster": [
+          4,
+          10
+        ],
+        "surface_opacity": "90% U(0.5, 1.0), 10% U(0.01, 0.08) (semi-transparent detail)",
+        "noise_opacity": "60% U(0.005, 0.06), 40% U(0.1, 0.9)"
+      },
+      "parts": {
+        "floor": 56750,
+        "upper_floor": 7056,
+        "ramp": 3400,
+        "stairs": 3840,
+        "wall": 68516,
+        "furniture": 15916,
+        "thin_furniture": 952,
+        "clutter": 2646,
+        "floater": 2386,
+        "halo": 1590,
+        "floater_cluster": 266
+      }
+    }
+  },
+  "metrics": [
+    {
+      "metric": "removed",
+      "value": 0.0,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | no cleanup",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "noise_recall",
+      "value": 0.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | no cleanup",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept floor",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | no cleanup",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept upper_floor",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | no cleanup",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept ramp",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | no cleanup",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept stairs",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | no cleanup",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept wall",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | no cleanup",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept furniture",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | no cleanup",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept thin_furniture",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | no cleanup",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept clutter",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | no cleanup",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "removed",
+      "value": 11194.0,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | opacity threshold 0.05",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 40.4228",
+      "command": null
+    },
+    {
+      "metric": "noise_recall",
+      "value": 0.4882,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | opacity threshold 0.05",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0014",
+      "command": null
+    },
+    {
+      "metric": "noise_precision",
+      "value": 0.1843,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | opacity threshold 0.05",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0008",
+      "command": null
+    },
+    {
+      "metric": "kept floor",
+      "value": 0.9427,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | opacity threshold 0.05",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0005",
+      "command": null
+    },
+    {
+      "metric": "kept upper_floor",
+      "value": 0.9435,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | opacity threshold 0.05",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0032",
+      "command": null
+    },
+    {
+      "metric": "kept ramp",
+      "value": 0.9403,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | opacity threshold 0.05",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0023",
+      "command": null
+    },
+    {
+      "metric": "kept stairs",
+      "value": 0.9443,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | opacity threshold 0.05",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0039",
+      "command": null
+    },
+    {
+      "metric": "kept wall",
+      "value": 0.9418,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | opacity threshold 0.05",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0008",
+      "command": null
+    },
+    {
+      "metric": "kept furniture",
+      "value": 0.9447,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | opacity threshold 0.05",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0002",
+      "command": null
+    },
+    {
+      "metric": "kept thin_furniture",
+      "value": 0.9492,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | opacity threshold 0.05",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0078",
+      "command": null
+    },
+    {
+      "metric": "kept clutter",
+      "value": 0.9439,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | opacity threshold 0.05",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0026",
+      "command": null
+    },
+    {
+      "metric": "removed",
+      "value": 1491.0,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | density-conditioned opacity",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 19.8158",
+      "command": null
+    },
+    {
+      "metric": "noise_recall",
+      "value": 0.3529,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | density-conditioned opacity",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0054",
+      "command": null
+    },
+    {
+      "metric": "noise_precision",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | density-conditioned opacity",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept floor",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | density-conditioned opacity",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept upper_floor",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | density-conditioned opacity",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept ramp",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | density-conditioned opacity",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept stairs",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | density-conditioned opacity",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept wall",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | density-conditioned opacity",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept furniture",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | density-conditioned opacity",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept thin_furniture",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | density-conditioned opacity",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept clutter",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | density-conditioned opacity",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "removed",
+      "value": 2808.6667,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | floating cluster removal",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 26.4113",
+      "command": null
+    },
+    {
+      "metric": "noise_recall",
+      "value": 0.6647,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | floating cluster removal",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0044",
+      "command": null
+    },
+    {
+      "metric": "noise_precision",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | floating cluster removal",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept floor",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | floating cluster removal",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept upper_floor",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | floating cluster removal",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept ramp",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | floating cluster removal",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept stairs",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | floating cluster removal",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept wall",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | floating cluster removal",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept furniture",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | floating cluster removal",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept thin_furniture",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | floating cluster removal",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept clutter",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | floating cluster removal",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "removed",
+      "value": 2347.6667,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | statistical outlier",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 24.9043",
+      "command": null
+    },
+    {
+      "metric": "noise_recall",
+      "value": 0.5556,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | statistical outlier",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0046",
+      "command": null
+    },
+    {
+      "metric": "noise_precision",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | statistical outlier",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept floor",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | statistical outlier",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept upper_floor",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | statistical outlier",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept ramp",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | statistical outlier",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept stairs",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | statistical outlier",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept wall",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | statistical outlier",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept furniture",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | statistical outlier",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept thin_furniture",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | statistical outlier",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept clutter",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | statistical outlier",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "removed",
+      "value": 3482.3333,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | radius outlier (production radius)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 19.0146",
+      "command": null
+    },
+    {
+      "metric": "noise_recall",
+      "value": 0.8242,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | radius outlier (production radius)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0062",
+      "command": null
+    },
+    {
+      "metric": "noise_precision",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | radius outlier (production radius)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept floor",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | radius outlier (production radius)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept upper_floor",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | radius outlier (production radius)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept ramp",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | radius outlier (production radius)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept stairs",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | radius outlier (production radius)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept wall",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | radius outlier (production radius)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept furniture",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | radius outlier (production radius)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept thin_furniture",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | radius outlier (production radius)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept clutter",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | radius outlier (production radius)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "removed",
+      "value": 59.3333,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | oracle, noise = background",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 2.8674",
+      "command": null
+    },
+    {
+      "metric": "noise_recall",
+      "value": 0.014,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | oracle, noise = background",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0007",
+      "command": null
+    },
+    {
+      "metric": "noise_precision",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | oracle, noise = background",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept floor",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | oracle, noise = background",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept upper_floor",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | oracle, noise = background",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept ramp",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | oracle, noise = background",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept stairs",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | oracle, noise = background",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept wall",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | oracle, noise = background",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept furniture",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | oracle, noise = background",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept thin_furniture",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | oracle, noise = background",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept clutter",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | oracle, noise = background",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "removed",
+      "value": 3557.3333,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | oracle, noise = background",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 13.7194",
+      "command": null
+    },
+    {
+      "metric": "noise_recall",
+      "value": 0.8419,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | oracle, noise = background",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0021",
+      "command": null
+    },
+    {
+      "metric": "noise_precision",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | oracle, noise = background",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept floor",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | oracle, noise = background",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept upper_floor",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | oracle, noise = background",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept ramp",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | oracle, noise = background",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept stairs",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | oracle, noise = background",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept wall",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | oracle, noise = background",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept furniture",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | oracle, noise = background",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept thin_furniture",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | oracle, noise = background",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept clutter",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | oracle, noise = background",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "removed",
+      "value": 0.0,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | oracle, noise = unknown",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "noise_recall",
+      "value": 0.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | oracle, noise = unknown",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept floor",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | oracle, noise = unknown",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept upper_floor",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | oracle, noise = unknown",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept ramp",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | oracle, noise = unknown",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept stairs",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | oracle, noise = unknown",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept wall",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | oracle, noise = unknown",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept furniture",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | oracle, noise = unknown",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept thin_furniture",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | oracle, noise = unknown",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept clutter",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | oracle, noise = unknown",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "removed",
+      "value": 3557.3333,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | oracle, noise = unknown",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 13.7194",
+      "command": null
+    },
+    {
+      "metric": "noise_recall",
+      "value": 0.8419,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | oracle, noise = unknown",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0021",
+      "command": null
+    },
+    {
+      "metric": "noise_precision",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | oracle, noise = unknown",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept floor",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | oracle, noise = unknown",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept upper_floor",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | oracle, noise = unknown",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept ramp",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | oracle, noise = unknown",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept stairs",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | oracle, noise = unknown",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept wall",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | oracle, noise = unknown",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept furniture",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | oracle, noise = unknown",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept thin_furniture",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | oracle, noise = unknown",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept clutter",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | oracle, noise = unknown",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "removed",
+      "value": 6366.3333,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | measured confusion (B6)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 60.1461",
+      "command": null
+    },
+    {
+      "metric": "noise_recall",
+      "value": 0.0622,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | measured confusion (B6)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0043",
+      "command": null
+    },
+    {
+      "metric": "noise_precision",
+      "value": 0.0412,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | measured confusion (B6)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0025",
+      "command": null
+    },
+    {
+      "metric": "kept floor",
+      "value": 0.9828,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | measured confusion (B6)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0006",
+      "command": null
+    },
+    {
+      "metric": "kept upper_floor",
+      "value": 0.9818,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | measured confusion (B6)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0011",
+      "command": null
+    },
+    {
+      "metric": "kept ramp",
+      "value": 0.9849,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | measured confusion (B6)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0022",
+      "command": null
+    },
+    {
+      "metric": "kept stairs",
+      "value": 0.9593,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | measured confusion (B6)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0021",
+      "command": null
+    },
+    {
+      "metric": "kept wall",
+      "value": 0.9443,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | measured confusion (B6)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0001",
+      "command": null
+    },
+    {
+      "metric": "kept furniture",
+      "value": 0.9441,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | measured confusion (B6)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0013",
+      "command": null
+    },
+    {
+      "metric": "kept thin_furniture",
+      "value": 0.9104,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | measured confusion (B6)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0041",
+      "command": null
+    },
+    {
+      "metric": "kept clutter",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | semantic-aware alone | measured confusion (B6)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "removed",
+      "value": 9690.6667,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | measured confusion (B6)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 39.6176",
+      "command": null
+    },
+    {
+      "metric": "noise_recall",
+      "value": 0.8487,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | measured confusion (B6)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0020",
+      "command": null
+    },
+    {
+      "metric": "noise_precision",
+      "value": 0.3701,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | measured confusion (B6)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0024",
+      "command": null
+    },
+    {
+      "metric": "kept floor",
+      "value": 0.9828,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | measured confusion (B6)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0006",
+      "command": null
+    },
+    {
+      "metric": "kept upper_floor",
+      "value": 0.9818,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | measured confusion (B6)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0011",
+      "command": null
+    },
+    {
+      "metric": "kept ramp",
+      "value": 0.9849,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | measured confusion (B6)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0022",
+      "command": null
+    },
+    {
+      "metric": "kept stairs",
+      "value": 0.9593,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | measured confusion (B6)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0021",
+      "command": null
+    },
+    {
+      "metric": "kept wall",
+      "value": 0.9443,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | measured confusion (B6)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0001",
+      "command": null
+    },
+    {
+      "metric": "kept furniture",
+      "value": 0.9441,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | measured confusion (B6)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0013",
+      "command": null
+    },
+    {
+      "metric": "kept thin_furniture",
+      "value": 0.9104,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | measured confusion (B6)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0041",
+      "command": null
+    },
+    {
+      "metric": "kept clutter",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain (statistical -> radius -> dense_op -> floater -> semantic) | measured confusion (B6)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "removed",
+      "value": 3557.3333,
+      "unit": "count",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain without labels (statistical -> radius -> dense_op -> floater)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 13.7194",
+      "command": null
+    },
+    {
+      "metric": "noise_recall",
+      "value": 0.8419,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain without labels (statistical -> radius -> dense_op -> floater)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0021",
+      "command": null
+    },
+    {
+      "metric": "noise_precision",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain without labels (statistical -> radius -> dense_op -> floater)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept floor",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain without labels (statistical -> radius -> dense_op -> floater)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept upper_floor",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain without labels (statistical -> radius -> dense_op -> floater)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept ramp",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain without labels (statistical -> radius -> dense_op -> floater)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept stairs",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain without labels (statistical -> radius -> dense_op -> floater)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept wall",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain without labels (statistical -> radius -> dense_op -> floater)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept furniture",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain without labels (statistical -> radius -> dense_op -> floater)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept thin_furniture",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain without labels (statistical -> radius -> dense_op -> floater)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    },
+    {
+      "metric": "kept clutter",
+      "value": 1.0,
+      "unit": "fraction",
+      "kind": "measured",
+      "condition": "synthetic scene x 3 seeds | production chain without labels (statistical -> radius -> dense_op -> floater)",
+      "source": "benchmarks/b2_geometry_cleanup/synthetic.py",
+      "note": "std over seeds 0.0000",
+      "command": null
+    }
+  ],
+  "details": {
+    "per_seed": [
+      {
+        "no cleanup": {
+          "removed": 0,
+          "noise_recall": 0.0,
+          "noise_precision": NaN,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0,
+          "seconds": 6.459999713115394e-05
+        },
+        "opacity threshold 0.05": {
+          "removed": 11235,
+          "noise_recall": 0.48656294200848654,
+          "noise_precision": 0.18371161548731643,
+          "kept floor": 0.9434185022026431,
+          "kept upper_floor": 0.9426020408163265,
+          "kept ramp": 0.9376470588235294,
+          "kept stairs": 0.946875,
+          "kept wall": 0.9407291727479713,
+          "kept furniture": 0.9448353857753204,
+          "kept thin_furniture": 0.9390756302521008,
+          "kept clutter": 0.9463340891912321,
+          "seconds": 0.0014535000082105398
+        },
+        "density-conditioned opacity": {
+          "removed": 1471,
+          "noise_recall": 0.34677039132484677,
+          "noise_precision": 1.0,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0,
+          "seconds": 0.12810970001737587
+        },
+        "floating cluster removal": {
+          "removed": 2846,
+          "noise_recall": 0.6709099481376709,
+          "noise_precision": 1.0,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0,
+          "seconds": 1.0950880000018515
+        },
+        "statistical outlier": {
+          "removed": 2378,
+          "noise_recall": 0.5605846298915605,
+          "noise_precision": 1.0,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0,
+          "seconds": 0.8584260999923572
+        },
+        "radius outlier (production radius)": {
+          "removed": 3466,
+          "noise_recall": 0.817067421027817,
+          "noise_precision": 1.0,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0,
+          "seconds": 0.8821918000176083
+        },
+        "semantic-aware alone | oracle, noise = background": {
+          "removed": 56,
+          "noise_recall": 0.013201320132013201,
+          "noise_precision": 1.0,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0,
+          "seconds": 0.030999100010376424
+        },
+        "production chain (statistical -> radius -> dense_op -> floater -> semantic) | oracle, noise = background": {
+          "removed": 3572,
+          "noise_recall": 0.8420556341348421,
+          "noise_precision": 1.0,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0,
+          "seconds": 0.049169200006872416
+        },
+        "semantic-aware alone | oracle, noise = unknown": {
+          "removed": 0,
+          "noise_recall": 0.0,
+          "noise_precision": NaN,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0,
+          "seconds": 0.025808499980485067
+        },
+        "production chain (statistical -> radius -> dense_op -> floater -> semantic) | oracle, noise = unknown": {
+          "removed": 3572,
+          "noise_recall": 0.8420556341348421,
+          "noise_precision": 1.0,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0,
+          "seconds": 0.04031729997950606
+        },
+        "semantic-aware alone | measured confusion (B6)": {
+          "removed": 6290,
+          "noise_recall": 0.0586987270155587,
+          "noise_precision": 0.03958664546899841,
+          "kept floor": 0.9828193832599119,
+          "kept upper_floor": 0.9832766439909297,
+          "kept ramp": 0.9861764705882353,
+          "kept stairs": 0.9619791666666667,
+          "kept wall": 0.9443925506451047,
+          "kept furniture": 0.9456521739130435,
+          "kept thin_furniture": 0.9159663865546218,
+          "kept clutter": 1.0,
+          "seconds": 0.04155120000359602
+        },
+        "production chain (statistical -> radius -> dense_op -> floater -> semantic) | measured confusion (B6)": {
+          "removed": 9643,
+          "noise_recall": 0.8488920320603489,
+          "noise_precision": 0.3734315047184486,
+          "kept floor": 0.9828193832599119,
+          "kept upper_floor": 0.9832766439909297,
+          "kept ramp": 0.9861764705882353,
+          "kept stairs": 0.9619791666666667,
+          "kept wall": 0.9443925506451047,
+          "kept furniture": 0.9455893440562956,
+          "kept thin_furniture": 0.9159663865546218,
+          "kept clutter": 1.0,
+          "seconds": 0.056833800015738234
+        },
+        "production chain without labels (statistical -> radius -> dense_op -> floater)": {
+          "removed": 3572,
+          "noise_recall": 0.8420556341348421,
+          "noise_precision": 1.0,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0
+        }
+      },
+      {
+        "no cleanup": {
+          "removed": 0,
+          "noise_recall": 0.0,
+          "noise_precision": NaN,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0,
+          "seconds": 0.0001613999775145203
+        },
+        "opacity threshold 0.05": {
+          "removed": 11208,
+          "noise_recall": 0.4882617974863647,
+          "noise_precision": 0.18370806566738043,
+          "kept floor": 0.942237885462555,
+          "kept upper_floor": 0.9400510204081632,
+          "kept ramp": 0.9432352941176471,
+          "kept stairs": 0.9471354166666667,
+          "kept wall": 0.9420719248058848,
+          "kept furniture": 0.9443955767780849,
+          "kept thin_furniture": 0.957983193277311,
+          "kept clutter": 0.9402872260015117,
+          "seconds": 0.0010031999845523387
+        },
+        "density-conditioned opacity": {
+          "removed": 1484,
+          "noise_recall": 0.3519089400047427,
+          "noise_precision": 1.0,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0,
+          "seconds": 0.13100939997821115
+        },
+        "floating cluster removal": {
+          "removed": 2789,
+          "noise_recall": 0.6613706426369457,
+          "noise_precision": 1.0,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0,
+          "seconds": 0.7942652000056114
+        },
+        "statistical outlier": {
+          "removed": 2317,
+          "noise_recall": 0.5494427317998577,
+          "noise_precision": 1.0,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0,
+          "seconds": 0.8481457000016235
+        },
+        "radius outlier (production radius)": {
+          "removed": 3472,
+          "noise_recall": 0.8233341237846811,
+          "noise_precision": 1.0,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0,
+          "seconds": 0.9089306000096258
+        },
+        "semantic-aware alone | oracle, noise = background": {
+          "removed": 59,
+          "noise_recall": 0.013990988854635997,
+          "noise_precision": 1.0,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0,
+          "seconds": 0.03133410000009462
+        },
+        "production chain (statistical -> radius -> dense_op -> floater -> semantic) | oracle, noise = background": {
+          "removed": 3539,
+          "noise_recall": 0.839222195873844,
+          "noise_precision": 1.0,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0,
+          "seconds": 0.04648190000443719
+        },
+        "semantic-aware alone | oracle, noise = unknown": {
+          "removed": 0,
+          "noise_recall": 0.0,
+          "noise_precision": NaN,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0,
+          "seconds": 0.02785429998766631
+        },
+        "production chain (statistical -> radius -> dense_op -> floater -> semantic) | oracle, noise = unknown": {
+          "removed": 3539,
+          "noise_recall": 0.839222195873844,
+          "noise_precision": 1.0,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0,
+          "seconds": 0.04840430000331253
+        },
+        "semantic-aware alone | measured confusion (B6)": {
+          "removed": 6372,
+          "noise_recall": 0.059520986483281954,
+          "noise_precision": 0.039391086001255494,
+          "kept floor": 0.9834185022026432,
+          "kept upper_floor": 0.9807256235827665,
+          "kept ramp": 0.981764705882353,
+          "kept stairs": 0.9567708333333333,
+          "kept wall": 0.9443633603829762,
+          "kept furniture": 0.9425106810756472,
+          "kept thin_furniture": 0.9065126050420168,
+          "kept clutter": 1.0,
+          "seconds": 0.05011410001316108
+        },
+        "production chain (statistical -> radius -> dense_op -> floater -> semantic) | measured confusion (B6)": {
+          "removed": 9689,
+          "noise_recall": 0.846099122599004,
+          "noise_precision": 0.3682526576530086,
+          "kept floor": 0.9834185022026432,
+          "kept upper_floor": 0.9807256235827665,
+          "kept ramp": 0.981764705882353,
+          "kept stairs": 0.9567708333333333,
+          "kept wall": 0.9443633603829762,
+          "kept furniture": 0.9425106810756472,
+          "kept thin_furniture": 0.9065126050420168,
+          "kept clutter": 1.0,
+          "seconds": 0.05479250001371838
+        },
+        "production chain without labels (statistical -> radius -> dense_op -> floater)": {
+          "removed": 3539,
+          "noise_recall": 0.839222195873844,
+          "noise_precision": 1.0,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0
+        }
+      },
+      {
+        "no cleanup": {
+          "removed": 0,
+          "noise_recall": 0.0,
+          "noise_precision": NaN,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0,
+          "seconds": 2.190002123825252e-05
+        },
+        "opacity threshold 0.05": {
+          "removed": 11139,
+          "noise_recall": 0.4899217453165758,
+          "noise_precision": 0.18547445910763982,
+          "kept floor": 0.9424669603524229,
+          "kept upper_floor": 0.9477040816326531,
+          "kept ramp": 0.94,
+          "kept stairs": 0.9388020833333334,
+          "kept wall": 0.9426557300484558,
+          "kept furniture": 0.9447725559185725,
+          "kept thin_furniture": 0.9506302521008403,
+          "kept clutter": 0.9452003023431594,
+          "seconds": 0.000989099993603304
+        },
+        "density-conditioned opacity": {
+          "removed": 1518,
+          "noise_recall": 0.3599715437514821,
+          "noise_precision": 1.0,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0,
+          "seconds": 0.1515959000098519
+        },
+        "floating cluster removal": {
+          "removed": 2791,
+          "noise_recall": 0.6618449134455774,
+          "noise_precision": 1.0,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0,
+          "seconds": 0.75630030001048
+        },
+        "statistical outlier": {
+          "removed": 2348,
+          "noise_recall": 0.5567939293336495,
+          "noise_precision": 1.0,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0,
+          "seconds": 0.9636657999944873
+        },
+        "radius outlier (production radius)": {
+          "removed": 3509,
+          "noise_recall": 0.832108133744368,
+          "noise_precision": 1.0,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0,
+          "seconds": 0.9984840000106487
+        },
+        "semantic-aware alone | oracle, noise = background": {
+          "removed": 63,
+          "noise_recall": 0.014939530471899455,
+          "noise_precision": 1.0,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0,
+          "seconds": 0.030972599983215332
+        },
+        "production chain (statistical -> radius -> dense_op -> floater -> semantic) | oracle, noise = background": {
+          "removed": 3561,
+          "noise_recall": 0.8444391747687929,
+          "noise_precision": 1.0,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0,
+          "seconds": 0.04503010000917129
+        },
+        "semantic-aware alone | oracle, noise = unknown": {
+          "removed": 0,
+          "noise_recall": 0.0,
+          "noise_precision": NaN,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0,
+          "seconds": 0.025845800002571195
+        },
+        "production chain (statistical -> radius -> dense_op -> floater -> semantic) | oracle, noise = unknown": {
+          "removed": 3561,
+          "noise_recall": 0.8444391747687929,
+          "noise_precision": 1.0,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0,
+          "seconds": 0.04432629997609183
+        },
+        "semantic-aware alone | measured confusion (B6)": {
+          "removed": 6437,
+          "noise_recall": 0.06829499644296894,
+          "noise_precision": 0.044741339133136555,
+          "kept floor": 0.9820440528634361,
+          "kept upper_floor": 0.9812925170068028,
+          "kept ramp": 0.986764705882353,
+          "kept stairs": 0.9591145833333333,
+          "kept wall": 0.9442320042033977,
+          "kept furniture": 0.9442070872078412,
+          "kept thin_furniture": 0.9086134453781513,
+          "kept clutter": 1.0,
+          "seconds": 0.050336800020886585
+        },
+        "production chain (statistical -> radius -> dense_op -> floater -> semantic) | measured confusion (B6)": {
+          "removed": 9740,
+          "noise_recall": 0.8510789660896372,
+          "noise_precision": 0.36848049281314166,
+          "kept floor": 0.9820440528634361,
+          "kept upper_floor": 0.9812925170068028,
+          "kept ramp": 0.986764705882353,
+          "kept stairs": 0.9591145833333333,
+          "kept wall": 0.9442028139412691,
+          "kept furniture": 0.9442070872078412,
+          "kept thin_furniture": 0.9086134453781513,
+          "kept clutter": 1.0,
+          "seconds": 0.06519719999050722
+        },
+        "production chain without labels (statistical -> radius -> dense_op -> floater)": {
+          "removed": 3561,
+          "noise_recall": 0.8444391747687929,
+          "noise_precision": 1.0,
+          "kept floor": 1.0,
+          "kept upper_floor": 1.0,
+          "kept ramp": 1.0,
+          "kept stairs": 1.0,
+          "kept wall": 1.0,
+          "kept furniture": 1.0,
+          "kept thin_furniture": 1.0,
+          "kept clutter": 1.0
+        }
+      }
+    ],
+    "what_this_is": "Synthetic scenes with assumed geometry, opacities and noise (SCENE_PARAMS); not real splats."
+  }
+}

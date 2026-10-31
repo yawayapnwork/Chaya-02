@@ -193,7 +193,10 @@ class NavigationBaking:
                 raise NavmeshError("a PLANE_MODEL plane references Gaussians the splat does not have", code=INVALID_GEOMETRY)
             normal = to_canonical.apply_direction(np.array(p["equation"][:3], dtype=np.float64))
             normal = normal if normal[2] >= 0 else -normal
-            planes.append(CanonicalPlane(normal, float(np.median(positions[idx, 2])), idx))
+            p_class = p.get("classification", "floor")
+            inlier_labels = labels[idx] if labels is not None else None
+            ground_support = float(np.isin(inlier_labels, GROUND_LABELS).mean()) if inlier_labels is not None and len(inlier_labels) > 0 else 1.0
+            planes.append(CanonicalPlane(normal, float(np.median(positions[idx, 2])), idx, classification=p_class, ground_support=ground_support))
         floor = select_floor_plane(planes, max_tilt_deg=s.navmesh_floor_max_tilt_deg)
         if floor is None:
             raise NavmeshError(f"no fitted plane is within {s.navmesh_floor_max_tilt_deg} degrees of horizontal in the calibrated "

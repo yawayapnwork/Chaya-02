@@ -38,7 +38,12 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from benchmarks.common.results import Metric, Run, sha256_file, unavailable  # noqa: E402
+from benchmarks.common.results import (
+    Metric,
+    Run,
+    sha256_file,
+    unavailable,
+)
 
 RADIUS_RELATIVE_K = 3.0
 
@@ -66,6 +71,8 @@ def jaccard(a: np.ndarray, b: np.ndarray) -> float:
 
 def splat_benchmark(run: Run, ply: Path, labels_path: Path | None) -> None:
     from chaya_worker.geometry_cleanup import (
+        density_conditioned_opacity_mask,
+        disconnected_cluster_mask,
         opacity_threshold_mask,
         radius_min_neighbors,
         radius_outlier_mask,
@@ -76,7 +83,7 @@ def splat_benchmark(run: Run, ply: Path, labels_path: Path | None) -> None:
     from chaya_worker.settings import Settings
 
     s = Settings()
-    cloud, load_s = timed(lambda: read_ply(ply))
+    cloud, _load_s = timed(lambda: read_ply(ply))
     n = len(cloud)
     nn = median_nn(cloud.positions)
     production_nb, _ = radius_min_neighbors(cloud.positions, s.cleanup_radius_spacing_factor * nn, cap=s.cleanup_radius_nb_points,
@@ -97,6 +104,12 @@ def splat_benchmark(run: Run, ply: Path, labels_path: Path | None) -> None:
     masks: dict[str, np.ndarray] = {"baseline": np.ones(n, dtype=bool)}
     runs = {
         "opacity_filtering": lambda: opacity_threshold_mask(cloud, s.cleanup_opacity_threshold),
+        "density_conditioned_opacity": lambda: density_conditioned_opacity_mask(
+            cloud, min_opacity=s.cleanup_opacity_threshold, radius=s.cleanup_radius_spacing_factor * nn,
+            min_neighbors=s.cleanup_density_opacity_min_neighbors)[0],
+        "floating_cluster_removal": lambda: disconnected_cluster_mask(
+            cloud.positions, radius=s.cleanup_floater_radius_factor * nn,
+            min_cluster_size=s.cleanup_floater_min_cluster_size)[0],
         "outlier_filtering (statistical)": lambda: statistical_outlier_mask(
             cloud, nb_neighbors=s.cleanup_stat_nb_neighbors, std_ratio=s.cleanup_stat_std_ratio)[0],
         "outlier_filtering (radius, production spacing factor)": lambda: radius_outlier_mask(
@@ -156,7 +169,10 @@ def read_points3d(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.nd
 
 
 def sfm_proxy(run: Run, points: Path) -> None:
-    from chaya_worker.geometry_cleanup import radius_outlier_mask, statistical_outlier_mask
+    from chaya_worker.geometry_cleanup import (
+        radius_outlier_mask,
+        statistical_outlier_mask,
+    )
     from chaya_worker.ply import GaussianCloud
     from chaya_worker.settings import Settings
 

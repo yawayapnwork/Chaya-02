@@ -156,6 +156,9 @@ class Settings:
     cleanup_radius_spacing_factor: float = 3.0
     cleanup_opacity_threshold: float = 0.05
     cleanup_semantic_min_neighbors: int = 3  # clutter points with fewer same-class neighbours within the cleanup radius are dropped
+    cleanup_floater_min_cluster_size: int = 15  # components with fewer than this many connected points are filtered as floaters
+    cleanup_floater_radius_factor: float = 3.5  # connectivity radius for floater detection, as multiple of median NN spacing
+    cleanup_density_opacity_min_neighbors: int = 4  # low-opacity points with fewer neighbours than this are removed as haze
     # PLANE_FITTING. Same reason: the RANSAC inlier distance is a multiple of the median nearest-neighbour spacing.
     plane_ransac_distance_spacing_factor: float = 1.0
     plane_ransac_n: int = 3
@@ -450,6 +453,10 @@ class Settings:
             cleanup_radius_spacing_factor=_float(e, "CLEANUP_RADIUS_SPACING_FACTOR", d.cleanup_radius_spacing_factor),
             cleanup_opacity_threshold=_float(e, "CLEANUP_OPACITY_THRESHOLD", d.cleanup_opacity_threshold),
             cleanup_semantic_min_neighbors=_int(e, "CLEANUP_SEMANTIC_MIN_NEIGHBORS", d.cleanup_semantic_min_neighbors),
+            cleanup_floater_min_cluster_size=_int(e, "CLEANUP_FLOATER_MIN_CLUSTER_SIZE", d.cleanup_floater_min_cluster_size),
+            cleanup_floater_radius_factor=_float(e, "CLEANUP_FLOATER_RADIUS_FACTOR", d.cleanup_floater_radius_factor),
+            cleanup_density_opacity_min_neighbors=_int(e, "CLEANUP_DENSITY_OPACITY_MIN_NEIGHBORS",
+                                                       d.cleanup_density_opacity_min_neighbors),
             plane_ransac_distance_spacing_factor=_float(e, "PLANE_RANSAC_DISTANCE_SPACING_FACTOR",
                                                         d.plane_ransac_distance_spacing_factor),
             plane_ransac_n=_int(e, "PLANE_RANSAC_N", d.plane_ransac_n),
@@ -614,6 +621,9 @@ class Settings:
             "cleanup_radius_spacing_factor": self.cleanup_radius_spacing_factor,
             "cleanup_opacity_threshold": self.cleanup_opacity_threshold,
             "cleanup_semantic_min_neighbors": self.cleanup_semantic_min_neighbors,
+            "cleanup_floater_min_cluster_size": self.cleanup_floater_min_cluster_size,
+            "cleanup_floater_radius_factor": self.cleanup_floater_radius_factor,
+            "cleanup_density_opacity_min_neighbors": self.cleanup_density_opacity_min_neighbors,
             "plane_ransac_distance_spacing_factor": self.plane_ransac_distance_spacing_factor, "plane_ransac_n": self.plane_ransac_n,
             "plane_ransac_iterations": self.plane_ransac_iterations, "plane_max_planes": self.plane_max_planes,
             "plane_min_inliers": self.plane_min_inliers, "ksplat_compression_level": self.ksplat_compression_level,

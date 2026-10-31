@@ -24,6 +24,8 @@ import numpy as np
 from ..contract import ArtifactSpec, StageContext, StageError, StageResult
 from ..geometry_cleanup import (
     characteristic_spacing,
+    density_conditioned_opacity_mask,
+    disconnected_cluster_mask,
     radius_min_neighbors,
     radius_outlier_mask,
     semantic_aware_mask,
@@ -62,6 +64,22 @@ class GeometricCleanup:
         radius_cfg["threshold_basis"] = threshold_basis
         steps.append({"step": "radius_outlier_removal", "config": radius_cfg, "removed": int((keep & ~radius_mask).sum())})
         keep &= radius_mask
+
+        # Density-conditioned opacity filtering: removes hazy sparse Gaussians without destroying semi-transparent surfaces
+        dense_op_mask, dense_op_cfg = density_conditioned_opacity_mask(
+            cloud, min_opacity=s.cleanup_opacity_threshold, radius=radius,
+            min_neighbors=s.cleanup_density_opacity_min_neighbors
+        )
+        steps.append({"step": "density_conditioned_opacity_filtering", "config": dense_op_cfg, "removed": int((keep & ~dense_op_mask).sum())})
+        keep &= dense_op_mask
+
+        # Disconnected floating cluster removal: filters isolated debris and floater islands
+        floater_radius = s.cleanup_floater_radius_factor * spacing
+        floater_mask, floater_cfg = disconnected_cluster_mask(
+            cloud.positions, radius=floater_radius, min_cluster_size=s.cleanup_floater_min_cluster_size
+        )
+        steps.append({"step": "floating_cluster_removal", "config": floater_cfg, "removed": int((keep & ~floater_mask).sum())})
+        keep &= floater_mask
 
         labels = None
         if labels_inputs:

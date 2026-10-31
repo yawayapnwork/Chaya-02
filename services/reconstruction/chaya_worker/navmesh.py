@@ -170,18 +170,33 @@ class CanonicalPlane:
     normal: np.ndarray
     height: float
     inlier_indices: np.ndarray
+    classification: str = "floor"
+    ground_support: float = 1.0
 
 
-def select_floor_plane(planes: list[CanonicalPlane], *, max_tilt_deg: float, min_relative_support: float = 0.25) -> CanonicalPlane | None:
+def select_floor_plane(
+    planes: list[CanonicalPlane],
+    *,
+    max_tilt_deg: float,
+    min_relative_support: float = 0.25,
+    min_ground_support: float = 0.20,
+) -> CanonicalPlane | None:
     """Pure: the walkable floor among fitted planes. Horizontal means within `max_tilt_deg` of canonical +Z.
     Among horizontal planes with at least `min_relative_support` of the best-supported one's inliers, the floor is
-    the lowest -- a ceiling or a table top is above it. None when no plane is horizontal."""
+    the lowest that is not classified as furniture/ceiling and has sufficient ground support. None when no plane is horizontal."""
     cos_limit = np.cos(np.radians(max_tilt_deg))
     horizontal = [p for p in planes if abs(float(np.asarray(p.normal) @ CANONICAL_UP)) >= cos_limit]
     if not horizontal:
         return None
-    largest = max(len(p.inlier_indices) for p in horizontal)
-    candidates = [p for p in horizontal if len(p.inlier_indices) >= min_relative_support * largest]
+
+    ground_candidates = [
+        p for p in horizontal
+        if getattr(p, "classification", "floor") not in ("furniture", "clutter", "ceiling")
+        and getattr(p, "ground_support", 1.0) >= min_ground_support
+    ]
+    pool = ground_candidates if ground_candidates else horizontal
+    largest = max(len(p.inlier_indices) for p in pool)
+    candidates = [p for p in pool if len(p.inlier_indices) >= min_relative_support * largest]
     return min(candidates, key=lambda p: p.height)
 
 

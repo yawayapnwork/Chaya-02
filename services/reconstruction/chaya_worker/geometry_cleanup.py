@@ -59,13 +59,110 @@ def opacity_threshold_mask(cloud: GaussianCloud, threshold: float) -> np.ndarray
     return cloud.opacities() >= threshold
 
 
+def density_conditioned_opacity_mask(cloud: GaussianCloud, *, min_opacity: float = 0.05,
+                                     radius: float, min_neighbors: int = 4) -> tuple[np.ndarray, dict[str, Any]]:
+    """Improved opacity filtering conditioned on local point density.
+
+    Rather than blindly deleting all low-opacity Gaussians (which destroys semi-transparent
+    glass, thin wires, and fine architectural edges), this filter removes a Gaussian only if
+    its opacity is below `min_opacity` AND its local neighbor count within `radius` is below
+    `min_neighbors`. Low-opacity Gaussians that belong to dense, coherent surfaces are preserved.
+    """
+    from scipy.spatial import cKDTree  # noqa: PLC0415
+
+    opacities = cloud.opacities()
+    low_opacity_mask = opacities < min_opacity
+    if not low_opacity_mask.any():
+        return np.ones(len(cloud), dtype=bool), {
+            "min_opacity": min_opacity, "radius": radius, "min_neighbors": min_neighbors,
+            "low_opacity_count": 0, "removed": 0
+        }
+
+    tree = cKDTree(cloud.positions)
+    low_idx = np.where(low_opacity_mask)[0]
+    counts = tree.query_ball_point(cloud.positions[low_idx], r=radius, return_length=True)
+    sparse_low_opacity = counts < min_neighbors
+
+    mask = np.ones(len(cloud), dtype=bool)
+    mask[low_idx[sparse_low_opacity]] = False
+    return mask, {
+        "min_opacity": min_opacity,
+        "radius": radius,
+        "min_neighbors": min_neighbors,
+        "low_opacity_count": int(low_opacity_mask.sum()),
+        "removed": int(sparse_low_opacity.sum()),
+    }
+
+
+def disconnected_cluster_mask(positions: np.ndarray, *, radius: float,
+                              min_cluster_size: int = 15) -> tuple[np.ndarray, dict[str, Any]]:
+    """Detects and removes disconnected floating clusters of geometry (floaters).
+
+    Builds an undirected spatial adjacency graph connecting points within `radius`
+    (expressed as a multiple of characteristic_spacing). Connected components with
+    fewer than `min_cluster_size` points represent floating artifacts/debris disconnected
+    from real structural geometry and are filtered out.
+    """
+    from scipy.sparse import coo_matrix  # noqa: PLC0415
+    from scipy.sparse.csgraph import connected_components  # noqa: PLC0415
+    from scipy.spatial import cKDTree  # noqa: PLC0415
+
+    p = np.asarray(positions, dtype=np.float64)
+    if len(p) == 0:
+        return np.ones(0, dtype=bool), {"min_cluster_size": min_cluster_size, "radius": radius, "removed": 0}
+
+    tree = cKDTree(p)
+    pairs = tree.query_pairs(r=radius, output_type="ndarray")
+    if len(pairs) == 0:
+        mask = np.ones(len(p), dtype=bool) if min_cluster_size <= 1 else np.zeros(len(p), dtype=bool)
+        return mask, {
+            "min_cluster_size": min_cluster_size,
+            "radius": radius,
+            "total_components": len(p),
+            "removed_components": len(p) if min_cluster_size > 1 else 0,
+            "removed": int((~mask).sum()),
+        }
+
+    row = np.concatenate([pairs[:, 0], pairs[:, 1]])
+    col = np.concatenate([pairs[:, 1], pairs[:, 0]])
+    data = np.ones(len(row), dtype=bool)
+    adj = coo_matrix((data, (row, col)), shape=(len(p), len(p)))
+    n_components, comp_labels = connected_components(adj, directed=False)
+    counts = np.bincount(comp_labels, minlength=n_components)
+    mask = counts[comp_labels] >= min_cluster_size
+    removed_count = int((~mask).sum())
+    removed_components = int((counts < min_cluster_size).sum())
+    return mask, {
+        "min_cluster_size": min_cluster_size,
+        "radius": radius,
+        "total_components": int(n_components),
+        "removed_components": removed_components,
+        "removed": removed_count,
+    }
+
+
 def statistical_outlier_mask(cloud: GaussianCloud, *, nb_neighbors: int, std_ratio: float) -> tuple[np.ndarray, dict[str, Any]]:
-    """Open3D's statistical outlier removal: a point is kept if its mean distance to its `nb_neighbors`
-    nearest neighbours is within `std_ratio` standard deviations of the dataset's mean neighbour distance."""
-    pcd = _o3d_pointcloud(cloud.positions)
-    _, kept_idx = pcd.remove_statistical_outlier(nb_neighbors=nb_neighbors, std_ratio=std_ratio)
-    mask = np.zeros(len(cloud), dtype=bool)
-    mask[np.asarray(kept_idx, dtype=int)] = True
+    """Open3D's statistical outlier removal (with SciPy KDTree fallback when Open3D is unavailable):
+    a point is kept if its mean distance to its `nb_neighbors` nearest neighbours is within `std_ratio`
+    standard deviations of the dataset's mean neighbour distance."""
+    try:
+        pcd = _o3d_pointcloud(cloud.positions)
+        _, kept_idx = pcd.remove_statistical_outlier(nb_neighbors=nb_neighbors, std_ratio=std_ratio)
+        mask = np.zeros(len(cloud), dtype=bool)
+        mask[np.asarray(kept_idx, dtype=int)] = True
+    except (ImportError, ModuleNotFoundError):
+        from scipy.spatial import cKDTree  # noqa: PLC0415
+        p = np.asarray(cloud.positions, dtype=np.float64)
+        if len(p) <= nb_neighbors:
+            mask = np.ones(len(cloud), dtype=bool)
+        else:
+            tree = cKDTree(p)
+            dists, _ = tree.query(p, k=nb_neighbors)
+            mean_dists = np.mean(dists, axis=1)
+            mean = float(np.mean(mean_dists))
+            std = float(np.std(mean_dists))
+            threshold = mean + std_ratio * std
+            mask = mean_dists <= threshold
     return mask, {"nb_neighbors": nb_neighbors, "std_ratio": std_ratio}
 
 
@@ -91,12 +188,18 @@ def radius_min_neighbors(positions: np.ndarray, radius: float, *, cap: int, shar
 
 
 def radius_outlier_mask(cloud: GaussianCloud, *, nb_points: int, radius: float) -> tuple[np.ndarray, dict[str, Any]]:
-    """Open3D's radius outlier removal: a point is kept only if at least `nb_points` other points lie
-    within `radius` of it -- catches sparse floating debris that statistical removal can miss."""
-    pcd = _o3d_pointcloud(cloud.positions)
-    _, kept_idx = pcd.remove_radius_outlier(nb_points=nb_points, radius=radius)
-    mask = np.zeros(len(cloud), dtype=bool)
-    mask[np.asarray(kept_idx, dtype=int)] = True
+    """Open3D's radius outlier removal (with SciPy KDTree fallback when Open3D is unavailable):
+    a point is kept only if at least `nb_points` points (itself included) lie within `radius` of it."""
+    try:
+        pcd = _o3d_pointcloud(cloud.positions)
+        _, kept_idx = pcd.remove_radius_outlier(nb_points=nb_points, radius=radius)
+        mask = np.zeros(len(cloud), dtype=bool)
+        mask[np.asarray(kept_idx, dtype=int)] = True
+    except (ImportError, ModuleNotFoundError):
+        from scipy.spatial import cKDTree  # noqa: PLC0415
+        p = np.asarray(cloud.positions, dtype=np.float64)
+        counts = cKDTree(p).query_ball_point(p, r=radius, return_length=True)
+        mask = counts >= nb_points
     return mask, {"nb_points": nb_points, "radius": radius}
 
 
@@ -109,19 +212,27 @@ def semantic_aware_mask(cloud: GaussianCloud, labels: np.ndarray, *, radius: flo
     """
     if len(labels) != len(cloud):
         raise ValueError(f"labels length {len(labels)} does not match cloud length {len(cloud)}")
-    import open3d as o3d  # noqa: PLC0415
 
     mask = np.ones(len(cloud), dtype=bool)
     clutter_idx = np.where(labels == CLUTTER)[0]
     removed = 0
     if len(clutter_idx) > 0:
-        pcd = _o3d_pointcloud(cloud.positions[clutter_idx])
-        tree = o3d.geometry.KDTreeFlann(pcd)
-        for local_i, point in enumerate(np.asarray(pcd.points)):
-            count, _, _ = tree.search_radius_vector_3d(point, radius)
-            if count - 1 < min_same_class_neighbors:  # -1: a point is its own neighbour in the search
-                mask[clutter_idx[local_i]] = False
-                removed += 1
+        try:
+            import open3d as o3d  # noqa: PLC0415
+            pcd = _o3d_pointcloud(cloud.positions[clutter_idx])
+            tree = o3d.geometry.KDTreeFlann(pcd)
+            for local_i, point in enumerate(np.asarray(pcd.points)):
+                count, _, _ = tree.search_radius_vector_3d(point, radius)
+                if count - 1 < min_same_class_neighbors:  # -1: a point is its own neighbour in the search
+                    mask[clutter_idx[local_i]] = False
+                    removed += 1
+        except (ImportError, ModuleNotFoundError):
+            from scipy.spatial import cKDTree  # noqa: PLC0415
+            p = np.asarray(cloud.positions[clutter_idx], dtype=np.float64)
+            counts = cKDTree(p).query_ball_point(p, r=radius, return_length=True)
+            isolated = (counts - 1) < min_same_class_neighbors
+            mask[clutter_idx[isolated]] = False
+            removed = int(np.sum(isolated))
     return mask, {"radius": radius, "min_same_class_neighbors": min_same_class_neighbors, "clutter_points": len(clutter_idx),
                  "clutter_removed": removed}
 
@@ -174,14 +285,19 @@ def fit_planes(positions: np.ndarray, *, distance_threshold: float, ransac_n: in
 
     up = _estimate_up_axis(positions, raw)
     for normal, global_idx in raw:
-        classification = _classify(normal, up)
+        inlier_labels = labels[global_idx] if labels is not None else None
+        classification = _classify(normal, up, inlier_labels)
         planes.append(FittedPlane(tuple(float(v) for v in (*normal, -float(np.dot(normal, positions[global_idx].mean(axis=0))))),
                                   global_idx, classification, _agreement(classification, global_idx, labels)))
     return planes
 
 
-def _classify(normal: np.ndarray, up: np.ndarray) -> str:
+def _classify(normal: np.ndarray, up: np.ndarray, inlier_labels: np.ndarray | None = None) -> str:
     angle_to_up = np.degrees(np.arccos(np.clip(abs(float(np.dot(normal, up))), 0.0, 1.0)))
+    if inlier_labels is not None and len(inlier_labels) > 0:
+        furniture_ratio = float((inlier_labels == FURNITURE).mean())
+        if furniture_ratio > 0.40 and angle_to_up <= 35.0:
+            return FURNITURE
     if angle_to_up <= 25.0:
         return FLOOR
     if angle_to_up >= 65.0:
@@ -193,7 +309,7 @@ def _agreement(classification: str, inlier_idx: np.ndarray, labels: np.ndarray |
     if labels is None:
         return 1.0
     plane_labels = labels[inlier_idx]
-    agree_with = {FLOOR: FLOOR, WALL: WALL}.get(classification)
+    agree_with = {FLOOR: FLOOR, WALL: WALL, FURNITURE: FURNITURE}.get(classification)
     return float((plane_labels == agree_with).mean()) if agree_with else float((plane_labels == UNKNOWN).mean())
 
 
@@ -206,7 +322,8 @@ def reclassify_planes(planes: list[FittedPlane], positions: np.ndarray, up: np.n
     out = []
     for p in planes:
         normal = np.asarray(p.equation[:3], dtype=np.float64)
-        classification = _classify(normal, up)
+        inlier_labels = labels[p.inlier_indices] if labels is not None else None
+        classification = _classify(normal, up, inlier_labels)
         if classification == FLOOR:
             centre = positions[p.inlier_indices].mean(axis=0)
             classification = FLOOR if float((np.asarray(reference_point) - centre) @ up) > 0 else CEILING
