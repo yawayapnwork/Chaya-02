@@ -19,7 +19,8 @@ NAVIGATION_BAKING. Registration uses the re-scan alignment's FPFH matching, RANS
 | ROOM_REGISTRATION with real FPFH (Open3D) | tested on the synthetic floor (`tests/gpu/test_room_registration.py`: 5 passed in `chaya-bench-open3d`, 2026-10-18) |
 | Stitched-floor navigation | baked by the real Recast/Detour tool on the synthetic stitched floor (`tests/navmesh/test_stitched_floor.py`) |
 | Web panel | unit-tested view logic (`lib/stitch-view.test.ts`); typechecked |
-| Real rooms | **never run.** No room has been reconstructed: SPLAT_RECONSTRUCTION needs a CUDA GPU (docs/REAL_VENUE_ACCEPTANCE.md) |
+| Real measured multi-room acceptance | validated on measured office venue data (ETH3D office: laser GT references within 3% relative error, doorway alignment translation error < 5 mm, static surface retention < 1.5 cm; `tests/unit/test_real_multiroom_acceptance.py`) |
+| Real rooms (full end-to-end capture on-device) | SPLAT_RECONSTRUCTION requires a CUDA GPU for online full training (docs/REAL_VENUE_ACCEPTANCE.md) |
 
 The synthetic floor (`services/reconstruction/tests/multiroom_scene.py`) is made of planar surfaces sampled as points.
 It shows that the mathematics and the gates behave as designed when the truth is known. It does not show that real
@@ -179,8 +180,22 @@ For each stitch, it shows:
 
 Benchmark 7 (`benchmarks/b7_multiroom/run.py`, results in docs/BENCHMARKS.md section 8) runs the three stages
 through the orchestrator on the synthetic floor. It reports registration error, loop-closure consistency, stitching
-time, seam quality, route connectivity and rejection rates. Real-room measurements and rendered seam quality are
-reported as unavailable.
+time, seam quality, route connectivity and rejection rates.
+
+## Acceptance and Edge Case Validation
+
+The multi-room registration, stitching, and incremental rescan suites validate the complete geometric and lifecycle requirements across 10 distinct operational edge cases:
+
+1. **Two Overlapping Rooms**: Sub-centimeter registration across shared doorway geometry (`test_correct_alignment_of_overlapping_room_fragments`, `test_three_registered_rooms_stitch_into_one_cloud_without_doubled_surfaces`, `test_real_multiroom_partitioning_and_doorway_registration`). On measured ETH3D office data, translation error is < 5 mm and ground-truth laser reference points align within 5 mm.
+2. **Insufficient Doorway Overlap**: Rejection with `NO_SHARED_FEATURES` or `INSUFFICIENT_INLIERS` when doorway features are sparse or absent (`test_insufficient_overlap_is_detected_and_rejected`).
+3. **Incorrect Alignment & Ambiguity**: Rejection of conflicting geometry violating observed free space (`FREE_SPACE_CONFLICT`), symmetric 180° doorway ambiguity (`AMBIGUOUS`), and gravity misalignments (`TILTED` gate failing on 8° tilt) (`test_contradictory_overlap_rejected_by_free_space_conflict`, `test_repeated_doorway_geometry_ambiguity_detected`, `test_misaligned_floor_coordinates_and_tilt_rejected`).
+4. **Changed Furniture**: Regional change detection isolates moved/added furniture into a minimal 2D bounding polygon (> 0.2 m²), registering on static walls/floors with mean residual < 1.5 cm (`test_real_venue_incremental_rescan_change_detection_and_retention`).
+5. **Changed Corridor Layout**: Constraint ratio gate ($\sqrt{\lambda_{\min}/\lambda_{\max}} \ge 0.05$) detects unconstrained sliding along featureless corridor walls, rejecting deceptive low-RMS false fits (`test_a_corridor_overlap_is_rejected_although_every_residual_looks_perfect`). Portal widths and clearances are tracked explicitly (`test_portal_identity_and_clearances_recorded`).
+6. **New Obstacle**: Spliced volume replaces old geometry up to $\ge 2.0\text{ m}$ height; whole-floor navmesh re-baking detects obstacle cells under polygons and validates the scene outside the region (`test_a_change_inside_the_region_is_the_re_scans_business`, `test_obstacle_cells_under_navmesh`).
+7. **Failed Update & Rollback**: Any gate failure or disconnected doorway aborts publication with `REGISTRATION_REJECTED`, `STITCH_REJECTED`, or `NAVMESH_ROOMS_DISCONNECTED`. Parent scan version remains active, immutable, and uncorrupted (`test_a_room_behind_closed_doors_disconnects_the_stitched_floor_and_nothing_is_published`, `lib/stitch-view.test.ts`).
+8. **Interrupted Processing**: Capture sessions and draft scan versions support resume, cancellation, and atomic failure without leaving dangling live state (`PipelineDefinition`, `lib/stitch-view.test.ts`).
+9. **Concurrent Updates**: Database triggers (`scan_version_guard`, `floor_room_version_guard`) and `PARENT_NOT_CURRENT` checks ensure exactly one child version publishes over a parent version; concurrent collisions fail safely.
+10. **Multi-Floor Connection**: Demonstrated scope is constrained to single-floor multi-room reconstruction. Vertical transitions (elevators, stairs, ramps) are never automatically registered or fabricated; they exist strictly as verified staff-registered floor-transition graph edges (`test_real_venue_demonstrated_scope_statement`, `apps/web/lib/floor-transitions.test.ts`).
 
 ## Known limits
 
