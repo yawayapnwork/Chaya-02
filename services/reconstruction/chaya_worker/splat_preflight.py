@@ -136,6 +136,17 @@ def environment_report(toolchain: Toolchain, *, min_compute_capability: float, a
         if not torch_build.get("error") and not torch_build.get("cuda"):
             problems.append(Problem("TORCH_WITHOUT_CUDA", f"torch {torch_build['version']} is a CPU-only build",
                                     "install the CUDA build of torch from the pinned index (requirements-gpu.txt)", "cuda"))
+            driver = toolchain.nvidia_driver()
+            if not driver["present"]:
+                why = f": {driver['detail']}" if driver.get("detail") else ""
+                run_on_gpu = ("run on an NVIDIA GPU host with a driver supporting CUDA (>= "
+                              f"{min_driver_version or '560.28'}), with the GPU passed to the container "
+                              "(docker run --gpus all) and the NVIDIA Container Toolkit installed")
+                problems.append(Problem("GPU_NOT_PRESENT", "no NVIDIA GPU is visible to this process (no nvidia-smi answer, no "
+                                        f"/proc/driver/nvidia, no /dev/nvidia0){why}", run_on_gpu, "cuda"))
+            elif _driver_too_old(driver.get("version"), min_driver_version):
+                problems.append(Problem("CUDA_DRIVER_INCOMPATIBLE", f"NVIDIA driver {driver.get('version')} cannot run CUDA "
+                                        f"(needs >= {min_driver_version})", f"upgrade the host's NVIDIA driver to {min_driver_version} or newer", "cuda-driver"))
         else:
             cuda = toolchain.cuda()
             if not cuda.available:
