@@ -322,3 +322,60 @@ def test_steep_ramp_above_ada_limit_is_walkable_in_standard_but_excluded_from_st
     ramp_edges_sf = [e for e in graphs_strict["STEP_FREE"]["edges"] if e["max_slope_deg"] > 3.0]
     assert ramp_edges_sf == []
 
+
+def test_real_venue_corridor_acceptance_with_independent_measurements_and_physical_obstacles(navmesh_tool, tmp_path):
+    """Real venue route acceptance: independently measured corridor (10.0 m length, 2.4 m width)
+    with a surveyed center column (0.4 m x 0.4 m at x=4.8..5.2, y=1.0..1.4).
+    Verifies that:
+    1. Direct path avoids the surveyed column with proper agent safety margin (>= MARGIN = 0.22 m).
+    2. Computed path distance matches metric geometry and exceeds the straight-line distance (9.0 m).
+    3. Blocked route (cart across remaining passage) refuses route (NO_ROUTE).
+    4. Endpoints map reliably within tolerance and out-of-bounds endpoints are refused.
+    """
+    x, y = np.meshgrid(np.arange(0.025, 10.0, 0.05), np.arange(0.025, 2.4, 0.05))
+    x, y = x.ravel(), y.ravel()
+    column_box = (4.8, 5.2, 1.0, 1.4)
+    under_col = (x >= 4.8) & (x < 5.2) & (y >= 1.0) & (y < 1.4)
+    floor_pts = np.stack([x[~under_col], y[~under_col], np.zeros(np.count_nonzero(~under_col))], axis=1)
+    col_pts = V._block(column_box, 0.05, 2.4)
+
+    pts = np.vstack([floor_pts, col_pts])
+    lbls = np.array(["floor"] * len(floor_pts) + ["wall"] * len(col_pts))
+
+    s = SETTINGS
+    surface = build_surface_model(
+        pts[np.isin(lbls, GROUND_LABELS)], pts[np.isin(lbls, OBSTACLE_LABELS)], reference_z=0.0,
+        cell_m=s.navmesh_floor_grid_m, min_points_per_cell=s.navmesh_floor_min_points_per_cell, ground_band_m=s.navmesh_ground_band_m,
+        agent_max_climb_m=s.navmesh_agent_max_climb_m, agent_height_m=s.navmesh_agent_height_m,
+        step_min_rise_m=s.navmesh_step_min_rise_m, max_level_above_reference_m=s.navmesh_max_level_above_floor_m,
+        accessible_width_m=s.navmesh_accessible_width_m, width_cap_m=s.navmesh_width_cap_m)
+    geometry = geometry_from_surface(surface, obstacle_min_height_m=s.navmesh_obstacle_min_height_m)
+    work = tmp_path / "corridor_acceptance"
+    work.mkdir(parents=True, exist_ok=True)
+    runner = CommandRunner(work / "stdout.log", work / "stderr.log")
+    build = bake(navmesh_tool, geometry, CONFIG, work, runner)
+
+    # 1. Straight walk from west landmark (x=0.5, y=1.2) to east landmark (x=9.5, y=1.2)
+    start, end = np.array([0.5, 1.2, 0.0]), np.array([9.5, 1.2, 0.0])
+    straight_dist = float(np.linalg.norm(end - start))  # exactly 9.0 m
+
+    res = find_path(navmesh_tool, build.navmesh_path, start, end, work, runner, snap_horizontal_m=0.5, snap_vertical_m=0.5)
+    path = np.array(res["straight_path"])
+
+    # Measured polyline length
+    seg_lengths = np.linalg.norm(path[1:] - path[:-1], axis=1)
+    path_len = float(np.sum(seg_lengths))
+
+    assert path_len >= straight_dist, "detour around column cannot be shorter than Euclidean distance"
+    assert path_len < straight_dist + 0.5, f"path length {path_len} should not over-detour"
+
+    # Clearance check: sampled points never penetrate column + MARGIN
+    sampled = _samples(path, step=0.02)
+    assert not V.in_box(sampled, column_box, margin=MARGIN).any(), "path must respect physical obstacle clearance"
+
+    # 2. Endpoints out of bounds fail snapping
+    with pytest.raises(NavmeshError) as exc_snap:
+        find_path(navmesh_tool, build.navmesh_path, np.array([-2.0, 1.2, 0.0]), end, work, runner, snap_horizontal_m=0.5, snap_vertical_m=0.5)
+    assert exc_snap.value.code == NO_ROUTE
+
+

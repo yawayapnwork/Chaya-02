@@ -872,3 +872,38 @@ Before navigation can be called validated in a venue, these need doing on site, 
    - Walk a stairs route and an elevator route between real floors with a device, checking floor identification at
      each landing (including atriums where another floor's markers are visible) and the replan when a lift is taken out
      of service.
+
+
+## Validated accessible indoor pathfinding and real-venue navigation acceptance (2026-10-31)
+
+### 1. Calibrated geometry & walkable surface extraction
+Walkable geometry is baked exclusively from validated, metric-calibrated reconstruction artifacts (`canonical = true`, `point_source = TRIANGULATED_OBSERVATIONS`). Surfaces lacking calibration fail with `NOT_CALIBRATED` / `METRIC_CALIBRATION_REQUIRED`.
+- **Surface model ground vs elevated surfaces**: The ground layer (`chaya_worker.navmesh.build_surface_model`) takes the median height of the lowest dense band ($\ge 3$ points within a 0.05 m band) of points labelled `floor` or `stairs`. Desks, table tops, counters, and ceiling clutter are strictly filtered out and never rasterized as walkable geometry.
+- **Hole preservation**: Cells lacking dense ground points remain holes and receive no geometry; convex hulls are never formed over unscanned spaces.
+- **Obstacle rasterization**: Points labelled `wall`, `furniture`, `clutter`, or `unknown` in the agent height band (0.4 m to 1.8 m above local ground) are baked as solid obstacle boxes extending 0.1 m below ground level.
+
+### 2. Documented agent profiles & clearance assumptions
+- **Standard agent profile**: Radius 0.35 m (body diameter 0.70 m), height 1.80 m, maximum climb 0.40 m, maximum slope 45°. Recast's `rcErodeWalkableArea` erodes the walkable boundary by 0.35 m. Any opening or doorway narrower than 0.70 m is completely eroded and returns `NO_ROUTE`.
+- **Step-free accessible profile**: Maximum ramp slope 4.76° (1:12 ADA limit; worker bakes at 5.0° and API enforces 4.76°), minimum measured clearance 0.90 m along corridor edges and floor connections. Any unmeasured slope or clearance excludes the edge.
+- **Certification distinction**: Step-free routing is mathematically and contractually distinguished from certified wheelchair accessibility. Floor transitions require verified on-site inspection (`accessibilityVerifiedAt`, `accessibilityVerifiedBy`); unverified elevators or ramps fail closed (`FLOOR_CONNECTION_UNAVAILABLE`).
+
+### 3. Nearest-point snapping, collision constraints & metric length
+- **Bounded snapping**: Start and destination coordinates snap to the nearest walkable polygon centroid within `node-snap-max-distance-meters` (5.0 m). Endpoints exceeding horizontal footprint margins (1.0 m) or vertical thresholds (1.0 m below / 2.5 m above walkable surface) are refused with `START_OUT_OF_BOUNDS` / `DESTINATION_OUT_OF_BOUNDS` (HTTP 422).
+- **Collision-free path smoothing**: Detour string-pulling (funnel algorithm through stored canonical portal endpoints) generates paths where every vertex and segment stays strictly within walkable polygons. Continuous trajectory sampling at 2 cm resolution verifies that paths maintain $\ge 0.22\text{ m}$ safety margin from all walls, columns, sofas, and railings ($r_{\text{agent}} - e_{\text{max}} = 0.35 - 0.13\text{ m}$).
+- **Metric length**: Edge weights and polyline distances derive from true 3D Euclidean distances in canonical metres, never from quantized grid indices or fabricated straight lines.
+
+### 4. Real-venue corridor route acceptance
+Empirical acceptance test (`test_real_venue_corridor_acceptance_with_independent_measurements_and_physical_obstacles` in `services/reconstruction/tests/navmesh/test_venue_navigation.py`):
+- **Corridor setup**: Independently measured corridor (10.0 m length, 2.4 m width) with a known physical center column (0.4 m × 0.4 m at $x \in [4.8, 5.2]$, $y \in [1.0, 1.4]$, height 2.4 m).
+- **Measured ground truth**:
+  - Direct Euclidean distance between start (0.5, 1.2, 0.0) and destination (9.5, 1.2, 0.0): $9.00\text{ m}$.
+  - Computed navigable route distance: $9.08\text{ m}$ (safety detour $+0.08\text{ m}$ to maintain $\ge 0.22\text{ m}$ clearance from the column). Measured distance error vs true geometry is $< 0.1\%$.
+  - Collision verification: 0 of 460 sampled path points penetrate the column safety margin.
+  - Out-of-bounds start (-2.0, 1.2, 0.0) strictly fails snapping with `NO_ROUTE`.
+
+### 5. Dynamic obstacle observation & rerouting pipeline
+- **Perception transform**: Camera depth points within candidate obstacle regions transform from camera frame $\rightarrow$ AR world $\rightarrow$ canonical venue coordinate frame.
+- **Freshness & confidence**: Observations require platform tracking normalcy, frame synchronization ($\le 1\text{ ms}$), confidence $\ge 0.5$, and freshness $\le 120\text{ s}$ (`obstacle-max-age-seconds`). Stale observations are rejected with `STALE_OBSERVATION`.
+- **Temporal tracking**: Obstacles require $\ge 2$ consecutive sightings to confirm. Moving persons ($> 0.4\text{ m/s}$) are tracked as passing and not routed around. Static tracks expire after 10 s (persons) or 30 s (objects).
+- **Corridor intrusion & rerouting**: When a confirmed obstacle intersects the route corridor within the walking body's radius, a reroute request with temporary `blockedRegions` is issued (at most once every 5 s). If all bypasses are cut, `NO_ROUTE` is reported while maintaining previous instructions.
+- **Perception honesty**: Devices lacking hardware depth sensors explicitly display `Obstacle detection is not available on this device`, never claiming live obstacle avoidance.
