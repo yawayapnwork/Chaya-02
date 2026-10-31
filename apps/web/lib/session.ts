@@ -5,7 +5,7 @@
 // is ever active in a given tab. The public token lives in memory only, same policy as the OIDC token in
 // lib/auth.ts: never localStorage, so it does not survive a reload (the link must be exchanged again).
 
-import { NotSignedInError, accessToken as oidcAccessToken } from "./auth";
+import { NotSignedInError, accessToken as oidcAccessToken } from "./auth.ts";
 
 interface PublicSession {
   token: string;

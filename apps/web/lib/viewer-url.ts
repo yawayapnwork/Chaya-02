@@ -21,8 +21,13 @@ export function viewerQuery(current: string, sel: ViewerSelection): string {
   return s ? `?${s}` : "";
 }
 
-/** The AR page for the viewer's venue and floor (app/ar reads ?venue= and ?floor=), or null without a venue. */
-export function arHref(venueId: string, floorId: string): string | null {
+/** The AR page for the viewer's venue and floor (app/ar reads ?venue= and ?floor= or ?link= and ?floor=), or null without a venue. */
+export function arHref(venueId: string, floorId: string, linkSecret?: string | null): string | null {
+  if (linkSecret) {
+    const q = new URLSearchParams({ link: linkSecret });
+    if (floorId) q.set("floor", floorId);
+    return `/ar?${q.toString()}`;
+  }
   if (!venueId) return null;
   const q = new URLSearchParams({ venue: venueId });
   if (floorId) q.set("floor", floorId);

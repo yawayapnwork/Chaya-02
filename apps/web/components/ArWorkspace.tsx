@@ -41,6 +41,8 @@ import { useSearchParams } from "next/navigation";
 import { ApiError, type Floor, type Venue, listFloors, listVenues } from "@/lib/capture-api";
 import { NotSignedInError, signIn } from "@/lib/auth";
 import { type Anchor, fetchTargetImage, listAnchors, relocalize } from "@/lib/ar-api";
+import { exchangePublicLink } from "@/lib/reconstruction-api";
+import { publicViewerVenueId, setPublicViewerSession } from "@/lib/session";
 import { type Poi, listPois } from "@/lib/poi-api";
 import { type RouteResponse, type RouteWaypoint, planRoute } from "@/lib/navigation-api";
 import {
@@ -147,6 +149,9 @@ type ImageTrackingFrame = XRFrame & { getImageTrackingResults?: () => XrImageTra
 
 export default function ArWorkspace() {
   const searchParams = useSearchParams();
+  const linkSecret = searchParams.get("link");
+  const [isPublicLink, setIsPublicLink] = useState(false);
+  const [publicLinkError, setPublicLinkError] = useState<string | null>(null);
   const [venues, setVenues] = useState<Venue[]>([]);
   const [venueId, setVenueId] = useState(searchParams.get("venue") ?? "");
   const [floors, setFloors] = useState<Floor[]>([]);
@@ -247,12 +252,58 @@ export default function ArWorkspace() {
       window.removeEventListener("offline", update);
     };
   }, []);
+  // Bootstrap session: exchange public link secret if present, or use active in-memory public session,
+  // or fall back to Keycloak operator session (listing venues).
   useEffect(() => {
-    listVenues().then(setVenues).catch((e) => (e instanceof NotSignedInError ? setSignedOut(true) : setError(message(e))));
-  }, []);
+    let cancelled = false;
+    if (linkSecret) {
+      exchangePublicLink(linkSecret)
+        .then((token) => {
+          if (cancelled) return;
+          setPublicViewerSession(token.token, token.expiresAt, token.venueId);
+          setIsPublicLink(true);
+          setVenueId(token.venueId);
+          setSignedOut(false);
+        })
+        .catch((e) => {
+          if (cancelled) return;
+          setIsPublicLink(true);
+          setPublicLinkError(message(e));
+        });
+      return () => { cancelled = true; };
+    }
+    const existingPublicVenue = publicViewerVenueId();
+    if (existingPublicVenue) {
+      setIsPublicLink(true);
+      setVenueId(existingPublicVenue);
+      setSignedOut(false);
+      return;
+    }
+    listVenues()
+      .then((vs) => {
+        if (!cancelled) setVenues(vs);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        if (e instanceof NotSignedInError) setSignedOut(true);
+        else setError(message(e));
+      });
+    return () => { cancelled = true; };
+  }, [linkSecret]);
+
   useEffect(() => {
     if (!venueId) return;
-    listFloors(venueId).then(setFloors).catch((e) => setError(message(e)));
+    listFloors(venueId)
+      .then((fs) => {
+        setFloors(fs);
+        const requestedFloor = searchParams.get("floor");
+        if (requestedFloor && fs.some((f) => f.id === requestedFloor)) {
+          setFloorId(requestedFloor);
+        } else if (!floorId && fs.length === 1) {
+          setFloorId(fs[0].id);
+        }
+      })
+      .catch((e) => setError(message(e)));
     listPois(venueId).then(setPois).catch((e) => setError(message(e)));
   }, [venueId]);
   useEffect(() => {
@@ -791,8 +842,14 @@ export default function ArWorkspace() {
   const detectedFloorId = s.floorCheck?.status === "UNEXPECTED" ? s.floorCheck.detectedFloorId : null;
   return (
     <main className="p-6 space-y-4 max-w-2xl">
-      <h1 className="text-xl font-semibold">AR navigation (Android, WebXR)</h1>
-      {signedOut && (
+      <h1 className="text-xl font-semibold">AR navigation (Android, WebXR){isPublicLink ? " · Public Viewer" : ""}</h1>
+      {publicLinkError && (
+        <div className="border border-red-500 rounded p-4 space-y-2" data-testid="ar-link-error">
+          <p className="font-medium text-red-700">Invalid or expired viewing link</p>
+          <p className="text-sm">{publicLinkError}</p>
+        </div>
+      )}
+      {signedOut && !isPublicLink && (
         <div className="space-y-2" data-testid="ar-signed-out">
           <p className="text-zinc-600">Sign in to choose a venue and a destination.</p>
           <button className="rounded bg-black px-4 py-2 text-white" onClick={() => void signIn()}>Sign in</button>
@@ -816,10 +873,16 @@ export default function ArWorkspace() {
       {!blocking && (
         <>
           <div className="flex flex-wrap gap-3">
-            <select className="border p-2" aria-label="Venue" value={venueId} onChange={(e) => { setVenueId(e.target.value); setFloorId(""); setAnchors([]); setDestinationId(""); }}>
-              <option value="">Select venue…</option>
-              {venues.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-            </select>
+            {!isPublicLink ? (
+              <select className="border p-2" aria-label="Venue" value={venueId} onChange={(e) => { setVenueId(e.target.value); setFloorId(""); setAnchors([]); setDestinationId(""); }}>
+                <option value="">Select venue…</option>
+                {venues.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+              </select>
+            ) : (
+              <div className="border bg-zinc-50 px-3 py-2 rounded text-sm font-medium text-zinc-700" data-testid="ar-public-venue">
+                Public Venue
+              </div>
+            )}
             <select className="border p-2" aria-label="Floor" value={floorId} onChange={(e) => { setFloorId(e.target.value); setAnchors([]); setDestinationId(""); }} disabled={!venueId}>
               <option value="">Select floor…</option>
               {floors.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}

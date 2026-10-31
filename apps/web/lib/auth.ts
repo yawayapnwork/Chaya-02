@@ -1,7 +1,7 @@
 "use client";
 
 import { InMemoryWebStorage, type User, UserManager, WebStorageStateStore } from "oidc-client-ts";
-import { publicConfig } from "./env";
+import { publicConfig } from "./env.ts";
 
 // Authorization-code flow with PKCE against Keycloak. Tokens live in memory only (not in localStorage), so a page load
 // starts without them: currentUser() restores the Keycloak session with a silent sign-in (prompt=none in a hidden iframe,

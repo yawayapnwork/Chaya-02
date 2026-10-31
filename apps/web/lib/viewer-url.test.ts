@@ -26,3 +26,9 @@ test("the AR link carries the venue and, when chosen, the floor", () => {
   assert.equal(arHref("v1", ""), "/ar?venue=v1");
   assert.equal(arHref("", "f1"), null);
 });
+
+test("the AR link for a public link carries the secret and floor, never the venue id", () => {
+  assert.equal(arHref("v1", "f1", "sec-123"), "/ar?link=sec-123&floor=f1");
+  assert.equal(arHref("v1", "", "sec-123"), "/ar?link=sec-123");
+  assert.equal(arHref("", "", "sec-123"), "/ar?link=sec-123");
+});

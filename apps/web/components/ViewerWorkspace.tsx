@@ -727,9 +727,13 @@ export default function ViewerWorkspace() {
           </select>
         </label>
 
-        {/* AR needs a signed-in account (its marker, POI and route calls are authenticated): not offered on a public link. */}
-        {!isPublicLink && arHref(venueId, floorId) && (
-          <Link className="min-h-9 content-center rounded border px-3 text-sm" href={arHref(venueId, floorId)!} data-testid="open-ar">
+        {/* AR wayfinding is open to both signed-in operators and public viewer links (authenticated via X-Chaya-Viewer-Token). */}
+        {arHref(venueId, floorId, isPublicLink ? linkSecret : null) && (
+          <Link
+            className="min-h-9 content-center rounded border px-3 text-sm"
+            href={arHref(venueId, floorId, isPublicLink ? linkSecret : null)!}
+            data-testid="open-ar"
+          >
             Open in AR
           </Link>
         )}

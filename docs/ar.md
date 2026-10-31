@@ -524,3 +524,4 @@ Test tiers, from pure functions to physical devices:
 | `/ar` on desktop Chromium: explicit unsupported state, no start button, no canvas; with an iPhone user agent, the native ARKit app is named and no AR is offered | `e2e/ar.spec.ts` (Playwright) | No — real Chromium; two cases replace WebXR globals to reach the image-tracking/anchors states |
 | WebXR device integration (image tracking, world anchor, rendering, tracking loss) | [ar-android-validation.md](ar-android-validation.md), manual | **Yes** — an ARCore Android device with Chrome; **not yet run** |
 | ARKit device integration (image detection, relocalization, route placement, tracking states) | [ar-ios-validation.md](ar-ios-validation.md), manual | **Yes** — a physical iPhone/iPad; the Simulator cannot run ARKit world tracking. **Not yet run.** |
+| Public viewer token exchange, venue binding & deep link | `ar-public-session.test.ts`, `viewer-url.test.ts` | No — pure functions |
