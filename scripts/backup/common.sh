@@ -15,7 +15,7 @@ export MSYS_NO_PATHCONV=1   # Git Bash on Windows: do not rewrite container path
 # (chaya_internal), see DEPLOYMENT.md.
 COMPOSE_FILE_PATH=${CHAYA_COMPOSE_FILE:-$REPO_ROOT/infra/docker/docker-compose.yml}
 # A function, not a command string: paths with spaces (a Windows home directory, for example) must stay one argument.
-compose() { docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE_PATH" "$@"; }
+compose() { docker compose --env-file "$(native_path "$ENV_FILE")" -f "$(native_path "$COMPOSE_FILE_PATH")" "$@"; }
 NETWORK=${COMPOSE_NETWORK:-chaya_default}
 MC_IMAGE=${MC_IMAGE:-ghcr.io/yawayapnwork/mirror/mc:RELEASE.2025-08-13T08-35-41Z-linux-amd64@sha256:eb4ea9884b77704230e2423e9004d2fa738dc272876b9cc41a297d29443b8780}
 
@@ -30,9 +30,13 @@ trap 'rm -rf "$PRIVATE_TMP"' EXIT
 
 : "${POSTGRES_USER:?}" "${POSTGRES_DB:?}" "${S3_BUCKET_RAW:=chaya-raw}" "${S3_BUCKET_DERIVED:=chaya-derived}"
 
-# Host paths handed to docker.exe on Git Bash for Windows must be Windows paths: MSYS_NO_PATHCONV (above) stops the
-# automatic translation, and docker cannot open /tmp/... or /c/... itself. Elsewhere this is the identity.
-native_path() { if command -v cygpath > /dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
+# Host paths handed to docker.exe on Git Bash or WSL for Windows must be Windows paths: MSYS_NO_PATHCONV (above) stops the
+# automatic translation, and docker cannot open /tmp/... or /c/... or /mnt/c/... itself. Elsewhere this is the identity.
+native_path() {
+  if command -v cygpath > /dev/null 2>&1; then cygpath -m "$1"
+  elif command -v wslpath > /dev/null 2>&1; then wslpath -m "$1"
+  else printf '%s' "$1"; fi
+}
 
 # mc_run ALIAS ACCESS SECRET -- mc args...   (credentials go through a 600 env file, never the command line)
 mc_run() {

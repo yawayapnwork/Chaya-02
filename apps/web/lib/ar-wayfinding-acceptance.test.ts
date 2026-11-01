@@ -296,7 +296,7 @@ test("AR Wayfinding: Insufficient tracking freezes overlay and requires validate
   assert.equal(canAdvanceRoute(session), true, "Route progression resumes after valid recovery");
 
   // Severe tracking loss (e.g. camera covered or AR tracking lost)
-  session = reduceArSession(session, { type: "TRACKING_LOST" });
+  session = reduceArSession(session, { type: "TRACKING_LOST", reason: "camera occluded" });
   assert.equal(session.state, "TRACKING_LOST");
   assert.equal(canAdvanceRoute(session), false);
   assert.equal(routeShown(session), false, "Route overlay must be hidden on tracking loss");
