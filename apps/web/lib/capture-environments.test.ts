@@ -178,7 +178,7 @@ test("environment 1: small furnished room (6m x 5m with desk, sofa, table)", () 
   // Registered-frame rate >= 96%
   const summary = summarizeFrameSamples(samples, null);
   assert.equal(summary.analyzedFrames, 158);
-  assert.ok(summary.rejectedFrameRate <= 0.05, `Defect rate ${summary.rejectedFrameRate} must be <= 5%`);
+  assert.ok(summary.rejectedFrameRate !== null && summary.rejectedFrameRate <= 0.05, `Defect rate ${summary.rejectedFrameRate} must be <= 5%`);
 });
 
 // 2. Long Corridor
