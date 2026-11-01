@@ -4,7 +4,7 @@ import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { NotSignedInError, currentUser, signIn } from "@/lib/auth";
-import { ApiError, type Venue, listVenues } from "@/lib/capture-api";
+import { ApiError, type Venue, listVenues, createVenue } from "@/lib/capture-api";
 import {
   type Audit,
   type Coverage,
@@ -346,6 +346,9 @@ export default function OpsDashboard() {
   const [pageError, setPageError] = useState<string | null>(null);
   const [venues, setVenues] = useState<Venue[]>([]);
   const [venueId, setVenueId] = useState("");
+  const [showCreateVenue, setShowCreateVenue] = useState(false);
+  const [newVenueName, setNewVenueName] = useState("");
+  const [newVenueSlug, setNewVenueSlug] = useState("");
   const [refresh, setRefresh] = useState(0);
   const [refreshedAt, setRefreshedAt] = useState<Date | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
@@ -501,6 +504,13 @@ export default function OpsDashboard() {
               ))}
             </select>
           </label>
+          <button
+            type="button"
+            className="rounded border px-2 py-1 hover:bg-zinc-100 text-xs"
+            onClick={() => setShowCreateVenue(!showCreateVenue)}
+          >
+            {showCreateVenue ? "Cancel" : "+ Create Venue"}
+          </button>
           <button className="rounded border px-2 py-1 disabled:opacity-50" disabled={!venueId} onClick={reload}>Refresh</button>
           <label className="flex items-center gap-1">
             <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} /> every 30 s
@@ -508,6 +518,51 @@ export default function OpsDashboard() {
           {refreshedAt && <span className="text-xs text-zinc-500">requested {refreshedAt.toLocaleTimeString()}</span>}
         </div>
       </header>
+
+      {showCreateVenue && (
+        <form
+          onSubmit={async (e) => {
+            e.preventDefault();
+            try {
+              const v = await createVenue({ name: newVenueName.trim(), slug: newVenueSlug.trim() });
+              const updated = await listVenues();
+              setVenues(updated);
+              setVenueId(v.id);
+              setShowCreateVenue(false);
+              setNewVenueName("");
+              setNewVenueSlug("");
+            } catch (err) {
+              setPageError(err instanceof Error ? err.message : String(err));
+            }
+          }}
+          className="rounded border border-dashed p-3 space-y-2 text-sm bg-zinc-50"
+        >
+          <h3 className="font-medium text-xs uppercase text-zinc-500">Create New Venue</h3>
+          <div className="flex flex-wrap gap-2">
+            <input
+              placeholder="Venue Name (e.g. Innovation Center)"
+              required
+              className="rounded border p-1.5 flex-1 min-w-[140px] text-sm bg-white"
+              value={newVenueName}
+              onChange={(e) => {
+                setNewVenueName(e.target.value);
+                if (!newVenueSlug) setNewVenueSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-"));
+              }}
+            />
+            <input
+              placeholder="slug (e.g. innovation-center)"
+              pattern="^[a-z0-9][a-z0-9-]{1,62}$"
+              required
+              className="rounded border p-1.5 w-44 text-sm bg-white font-mono"
+              value={newVenueSlug}
+              onChange={(e) => setNewVenueSlug(e.target.value)}
+            />
+            <button type="submit" className="rounded bg-black text-white px-3 py-1 text-xs font-medium">
+              Create Venue
+            </button>
+          </div>
+        </form>
+      )}
 
       {venues.length === 0 && (
         <p className="rounded border p-4 text-sm text-zinc-600" data-testid="ops-no-venues">

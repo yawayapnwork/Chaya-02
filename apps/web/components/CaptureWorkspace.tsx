@@ -7,15 +7,20 @@ import {
   ApiError,
   type Capture,
   type Floor,
+  type Organization,
   type ProcessingStatus,
   type Venue,
   cancelProcessing,
   completeUpload,
+  createOrganization,
+  createVenue,
   getCapture,
+  getCurrentOrganization,
   getProcessing,
   listCaptures,
   listFloors,
   listMedia,
+  listOrganizations,
   listVenues,
   type MediaItem,
   retryProcessing,
@@ -96,6 +101,13 @@ function message(e: unknown): string {
 
 export default function CaptureWorkspace() {
   const [signedIn, setSignedIn] = useState<boolean | null>(null);
+  const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
+  const [showNewVenue, setShowNewVenue] = useState(false);
+  const [newVenueName, setNewVenueName] = useState("");
+  const [newVenueSlug, setNewVenueSlug] = useState("");
+  const [showNewOrg, setShowNewOrg] = useState(false);
+  const [newOrgName, setNewOrgName] = useState("");
+  const [newOrgSlug, setNewOrgSlug] = useState("");
   const [venues, setVenues] = useState<Venue[]>([]);
   const [floors, setFloors] = useState<Floor[]>([]);
   const [venueId, setVenueId] = useState("");
@@ -155,6 +167,7 @@ export default function CaptureWorkspace() {
         }
         setQueueOwner(await currentOwnerKey());
         setSignedIn(true);
+        getCurrentOrganization().then((org) => !cancelled && setCurrentOrg(org), () => undefined);
         // Signing in (again) resumes whatever an expired sign-in paused.
         await captureQueue().resumeAfterSignIn();
         void syncNow();
@@ -522,17 +535,142 @@ export default function CaptureWorkspace() {
 
       {!capture && !active && (
         <section aria-labelledby="new-session" className="space-y-4">
-          <h2 id="new-session" className="text-lg font-medium">1. New capture session</h2>
-          <label className="block">
-            <span className="text-sm">Venue</span>
-            <select className="mt-1 block w-full rounded border p-2" value={venueId} onChange={(e) => {
-              if (e.target.value === venueId) return; // re-selecting the same venue keeps its floors
-              setVenueId(e.target.value); setFloorId(""); setFloors([]); setRoomId("");
-            }}>
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-2">
+            <h2 id="new-session" className="text-lg font-medium">1. New capture session</h2>
+            {currentOrg && (
+              <span className="text-xs text-zinc-600 bg-zinc-100 rounded px-2 py-1">
+                Org: <strong className="text-zinc-900">{currentOrg.name}</strong> ({currentOrg.slug})
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium">Organization</span>
+            <button
+              type="button"
+              className="text-xs text-zinc-600 underline hover:text-black"
+              onClick={() => setShowNewOrg(!showNewOrg)}
+            >
+              {showNewOrg ? "Cancel" : "+ New Organization"}
+            </button>
+          </div>
+          {showNewOrg && (
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                try {
+                  const o = await createOrganization({ name: newOrgName.trim(), slug: newOrgSlug.trim() });
+                  setCurrentOrg(o);
+                  setShowNewOrg(false);
+                  setNewOrgName("");
+                  setNewOrgSlug("");
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : String(err));
+                }
+              }}
+              className="rounded border border-dashed p-3 space-y-2 text-sm bg-zinc-50"
+            >
+              <h3 className="font-medium text-xs uppercase text-zinc-500">Create Organization</h3>
+              <div className="flex flex-wrap gap-2">
+                <input
+                  placeholder="Org Name"
+                  required
+                  className="rounded border p-1.5 flex-1 min-w-[140px] text-sm bg-white"
+                  value={newOrgName}
+                  onChange={(e) => {
+                    setNewOrgName(e.target.value);
+                    if (!newOrgSlug) setNewOrgSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-"));
+                  }}
+                />
+                <input
+                  placeholder="slug (e.g. org-name)"
+                  pattern="^[a-z0-9][a-z0-9-]{1,62}$"
+                  required
+                  className="rounded border p-1.5 w-36 text-sm bg-white font-mono"
+                  value={newOrgSlug}
+                  onChange={(e) => setNewOrgSlug(e.target.value)}
+                />
+                <button type="submit" className="rounded bg-black text-white px-3 py-1 text-xs font-medium">
+                  Create
+                </button>
+              </div>
+            </form>
+          )}
+
+          <div>
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium">Venue</span>
+              <button
+                type="button"
+                className="text-xs text-zinc-600 underline hover:text-black"
+                onClick={() => setShowNewVenue(!showNewVenue)}
+              >
+                {showNewVenue ? "Cancel" : "+ Create Venue"}
+              </button>
+            </div>
+            {showNewVenue && (
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  try {
+                    const v = await createVenue({ name: newVenueName.trim(), slug: newVenueSlug.trim() });
+                    const updated = await listVenues();
+                    setVenues(updated);
+                    setVenueId(v.id);
+                    setShowNewVenue(false);
+                    setNewVenueName("");
+                    setNewVenueSlug("");
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : String(err));
+                  }
+                }}
+                className="mt-2 rounded border border-dashed p-3 space-y-2 text-sm bg-zinc-50"
+              >
+                <h3 className="font-medium text-xs uppercase text-zinc-500">Create New Venue</h3>
+                <div className="flex flex-wrap gap-2">
+                  <input
+                    placeholder="Venue Name (e.g. West Wing)"
+                    required
+                    className="rounded border p-1.5 flex-1 min-w-[140px] text-sm bg-white"
+                    value={newVenueName}
+                    onChange={(e) => {
+                      setNewVenueName(e.target.value);
+                      if (!newVenueSlug) setNewVenueSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-"));
+                    }}
+                  />
+                  <input
+                    placeholder="slug (e.g. west-wing)"
+                    pattern="^[a-z0-9][a-z0-9-]{1,62}$"
+                    required
+                    className="rounded border p-1.5 w-36 text-sm bg-white font-mono"
+                    value={newVenueSlug}
+                    onChange={(e) => setNewVenueSlug(e.target.value)}
+                  />
+                  <button type="submit" className="rounded bg-black text-white px-3 py-1 text-xs font-medium">
+                    Create Venue
+                  </button>
+                </div>
+              </form>
+            )}
+            <select
+              className="mt-1 block w-full rounded border p-2"
+              value={venueId}
+              onChange={(e) => {
+                if (e.target.value === venueId) return; // re-selecting the same venue keeps its floors
+                setVenueId(e.target.value);
+                setFloorId("");
+                setFloors([]);
+                setRoomId("");
+              }}
+            >
               <option value="">Select a venue…</option>
-              {venues.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+              {venues.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.name}
+                </option>
+              ))}
             </select>
-          </label>
+          </div>
           {venues.length === 0 && <p className="text-sm text-zinc-600">No venues are assigned to your account.</p>}
           <label className="block">
             <span className="text-sm">Floor (optional)</span>

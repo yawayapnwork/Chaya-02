@@ -39,9 +39,9 @@ public class VenueController {
         return venues.list(ActorAuthentication.currentActor());
     }
 
-    @Operation(summary = "Create a venue (organization admin)")
+    @Operation(summary = "Create a venue (admin, venue-manager)")
     @PostMapping
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN','VENUE_MANAGER')")
     public Venue create(@Valid @RequestBody CreateVenue body) {
         return venues.create(ActorAuthentication.currentActor(), body.slug(), body.name(), body.timezone());
     }

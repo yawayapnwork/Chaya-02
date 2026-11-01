@@ -191,7 +191,15 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (text ? JSON.parse(text) : undefined) as T;
 }
 
+export interface Organization { id: string; slug: string; name: string; createdAt: string; }
+export const getCurrentOrganization = () => api<Organization>("/organizations/current");
+export const listOrganizations = () => api<Organization[]>("/organizations");
+export const createOrganization = (body: { slug: string; name: string }) =>
+  api<Organization>("/organizations", { method: "POST", body: JSON.stringify(body) });
+
 export const listVenues = () => api<Venue[]>("/venues");
+export const createVenue = (body: { slug: string; name: string; timezone?: string }) =>
+  api<Venue>("/venues", { method: "POST", body: JSON.stringify(body) });
 export const listFloors = (venueId: string) => api<Floor[]>(`/venues/${venueId}/floors`);
 export const createFloor = (venueId: string, body: { level: number; name: string }) =>
   api<Floor>(`/venues/${venueId}/floors`, { method: "POST", body: JSON.stringify(body) });

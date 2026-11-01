@@ -161,12 +161,14 @@ def main():
     else:
         print("dev-operator credentials already valid")
 
-    # Assign operator role
-    role = kc_request("/roles/operator")
-    try:
-        kc_request(f"/users/{user_id}/role-mappings/realm", method="POST", body=[role])
-    except Exception:
-        pass
+    # Assign operator, admin, and venue-manager roles
+    for role_name in ["operator", "admin", "venue-manager"]:
+        try:
+            r = kc_request(f"/roles/{role_name}")
+            kc_request(f"/users/{user_id}/role-mappings/realm", method="POST", body=[r])
+            print(f"Assigned {role_name} role to dev-operator")
+        except Exception:
+            pass
 
     # Verify user token
     token_data = urllib.parse.urlencode({
