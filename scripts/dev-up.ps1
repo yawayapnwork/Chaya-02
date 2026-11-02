@@ -36,7 +36,7 @@ try {
 } catch {
     Write-Error "Failed to connect to Docker daemon: $_"
 }
-Write-Host "  ✓ Docker daemon is running" -ForegroundColor Green
+Write-Host "  [OK] Docker daemon is running" -ForegroundColor Green
 
 # Node.js & npm
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
@@ -46,13 +46,13 @@ if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
     Write-Error "npm is not found in PATH."
 }
 $nodeVer = node -v
-Write-Host "  ✓ Node.js ($nodeVer) and npm are available" -ForegroundColor Green
+Write-Host "  [OK] Node.js ($nodeVer) and npm are available" -ForegroundColor Green
 
 # Python
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
     Write-Warning "Python not found in PATH. Keycloak auto-seeding will be skipped if already seeded."
 } else {
-    Write-Host "  ✓ Python is available" -ForegroundColor Green
+    Write-Host "  [OK] Python is available" -ForegroundColor Green
 }
 
 # 2. Check & Prepare Environment (.env and apps/web/.env.local)
@@ -91,32 +91,32 @@ if (-not (Test-Path ".env")) {
     $envContent = $envContent -replace "(?m)^CHAYA_API_BASE_URL=.*$", "CHAYA_API_BASE_URL=http://localhost:18080"
     $envContent = $envContent -replace "(?m)^NEXT_PUBLIC_API_BASE_URL=.*$", "NEXT_PUBLIC_API_BASE_URL=http://localhost:18080"
     Set-Content -Path ".env" -Value $envContent -NoNewline
-    Write-Host "  ✓ Generated new .env configuration" -ForegroundColor Green
+    Write-Host "  [OK] Generated new .env configuration" -ForegroundColor Green
 } else {
-    Write-Host "  ✓ Using existing .env file" -ForegroundColor Green
+    Write-Host "  [OK] Using existing .env file" -ForegroundColor Green
 }
 
 # Frontend .env.local
 if (-not (Test-Path "apps/web/.env.local")) {
     Write-Host "  Creating apps/web/.env.local..." -ForegroundColor Cyan
-    $webEnv = @"
-CHAYA_API_BASE_URL=http://localhost:18080
-CHAYA_PUBLIC_API_BASE_URL=http://localhost:18080
-CHAYA_PUBLIC_OIDC_ISSUER=http://localhost:8081/realms/chaya
-CHAYA_PUBLIC_OIDC_CLIENT_ID=chaya-web
-NEXT_PUBLIC_API_BASE_URL=http://localhost:18080
-NEXT_PUBLIC_OIDC_ISSUER=http://localhost:8081/realms/chaya
-NEXT_PUBLIC_OIDC_CLIENT_ID=chaya-web
-PORT=3000
-"@
+    $webEnv = @(
+        'CHAYA_API_BASE_URL=http://localhost:18080',
+        'CHAYA_PUBLIC_API_BASE_URL=http://localhost:18080',
+        'CHAYA_PUBLIC_OIDC_ISSUER=http://localhost:8081/realms/chaya',
+        'CHAYA_PUBLIC_OIDC_CLIENT_ID=chaya-web',
+        'NEXT_PUBLIC_API_BASE_URL=http://localhost:18080',
+        'NEXT_PUBLIC_OIDC_ISSUER=http://localhost:8081/realms/chaya',
+        'NEXT_PUBLIC_OIDC_CLIENT_ID=chaya-web',
+        'PORT=3000'
+    ) -join "`n"
     Set-Content -Path "apps/web/.env.local" -Value $webEnv
-    Write-Host "  ✓ Created apps/web/.env.local" -ForegroundColor Green
+    Write-Host "  [OK] Created apps/web/.env.local" -ForegroundColor Green
 } else {
-    Write-Host "  ✓ Using existing apps/web/.env.local" -ForegroundColor Green
+    Write-Host "  [OK] Using existing apps/web/.env.local" -ForegroundColor Green
 }
 
 # 3. Start Infrastructure & Backend API
-Write-Host "`n[3/6] Starting Docker containers (Postgres, MinIO, Keycloak, ClamAV, API)..." -ForegroundColor Yellow
+Write-Host "[3/6] Starting Docker containers..." -ForegroundColor Yellow
 $composeArgs = @(
     "--env-file", ".env",
     "-f", "infra/docker/docker-compose.yml",
@@ -160,7 +160,7 @@ Write-Host "`n[5/6] Verifying development tenant data and operator user..." -For
 if (Test-Path "scripts/seed-dev.py") {
     try {
         & python scripts/seed-dev.py
-        Write-Host "  ✓ Dev tenant and operator user verified" -ForegroundColor Green
+        Write-Host "  [OK] Dev tenant and operator user verified" -ForegroundColor Green
     } catch {
         Write-Warning "Could not run seed script: $_"
     }
@@ -173,7 +173,7 @@ try {
     $feCheck = Invoke-WebRequest -Uri "http://localhost:3000/api/health" -Method Get -TimeoutSec 3 -UseBasicParsing -ErrorAction SilentlyContinue
     if ($feCheck -and $feCheck.StatusCode -eq 200) {
         $frontendRunning = $true
-        Write-Host "  ✓ Frontend is already running and healthy at http://localhost:3000" -ForegroundColor Green
+        Write-Host "  [OK] Frontend is already running and healthy at http://localhost:3000" -ForegroundColor Green
     }
 } catch {
     $frontendRunning = $false
@@ -181,11 +181,12 @@ try {
 
 if (-not $frontendRunning -and $StartFrontend) {
     Write-Host "  Starting frontend Next.js server in the background..." -ForegroundColor Cyan
-    Start-Process -FilePath "npm" -ArgumentList "run start -- -p 3000" -WorkingDirectory (Join-Path $repoRoot "apps/web") -WindowStyle Hidden
+    $env:PORT = "3000"
+    Start-Process -FilePath "node" -ArgumentList "server.js" -WorkingDirectory (Join-Path $repoRoot "apps/web") -WindowStyle Hidden
     Start-Sleep -Seconds 3
     $feReady = Wait-Endpoint "http://localhost:3000/api/health" "Frontend Web App" 10 2
     if ($feReady) {
-        Write-Host "  ✓ Frontend is now running at http://localhost:3000" -ForegroundColor Green
+        Write-Host "  [OK] Frontend is now running at http://localhost:3000" -ForegroundColor Green
     }
 }
 
